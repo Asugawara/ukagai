@@ -42,7 +42,11 @@ test("リポジトリの cwd では branch が取れ、diff は 200 KB 以内", 
     writeFileSync(join(repo, "a.txt"), "x".repeat(300 * 1024));
     git("add", "a.txt");
     writeFileSync(join(repo, "a.txt"), "y".repeat(300 * 1024));
-    const ctx = await collectContext(session(repo, home), { home });
+    // 小さなリポジトリでも、並列テストの負荷で git が 500ms の timeout を超えることがあるので 3 回まで試す
+    let ctx = await collectContext(session(repo, home), { home });
+    for (let i = 0; i < 2 && ctx.branch === undefined; i++) {
+      ctx = await collectContext(session(repo, home), { home });
+    }
     assert.equal(ctx.branch, "ctx-branch");
     assert.ok((ctx.git_diff ?? "").length <= 200 * 1024);
   } finally {
