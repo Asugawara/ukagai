@@ -540,7 +540,7 @@ gui("long inline code wraps at the column width and --port is not split", async 
   const path = "src/serve/handlers/some-very-long-directory-name/another-quite-long-segment-name/file-name-long.ts-x";
   const long = `src/${"a-long-dir-name/".repeat(7)}file.ts`;
   assert.ok(long.length >= 120);
-  const rec = `Start with \`--port\`. The target path is \`${long}\`.${path.length > 0 ? "" : ""}`;
+  const rec = `I recommend B. Start with \`--port\`. The target path is \`${long}\`.${path.length > 0 ? "" : ""}`;
   await seedQuestion({ markdown: v2md("A code question?", "Code decision", ROWS, "", rec), options: [{ label: "A" }, { label: "B (Recommended)" }, { label: "C" }] });
   ab("set", "viewport", "1440", "900");
   await reopen();
@@ -638,7 +638,7 @@ gui("v2 cards still render when a label contains <b> (only options that do not m
   assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent.includes("A happens")`), true); // from the table
   assert.equal(ev<boolean>(`document.body.innerText.includes("Raw description Z")`), true); // an option that does not match stays raw
   assert.equal(ev<boolean>(`document.body.innerText.includes("Raw description A")`), false);
-  assert.equal(ev<boolean>(`!!document.querySelector("#decision .rec-cap")`), true);
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .headline")`), true); // the one-sentence recommendation is the headline (no box)
 });
 
 gui("1000x700 with two pending: →, answering and cancel do not blank the screen or throw", async () => {
@@ -756,8 +756,6 @@ gui("ja: main UI strings are Japanese after data-lang is set to ja", async () =>
     assert.equal(ev<boolean>(`document.querySelector("#decision .hint").textContent.includes("次の保留")`), true);
     assert.equal(ev<boolean>(`document.querySelector(".free-text").placeholder === "自由記述"`), true);
     assert.equal(ev<string>(`document.documentElement.lang`), "ja");
-    // The headings shown in the right column are the file's own (English here), not translated
-    assert.equal(ev<string>(`document.querySelector("#decision .rec-cap").textContent`), "Recommendation");
   } finally {
     ev(`document.documentElement.dataset.lang = "en", "ok"`);
   }
@@ -797,7 +795,7 @@ gui("a Japanese-headed explanation renders the same card as an English one", asy
   // Same structure as the English seed: 3 option cards + free text, B preselected, recommendation box present
   assert.deepEqual(view(), { cursor: 1, checked: 1 });
   assert.equal(ev<number>(`document.querySelectorAll("#decision .opt").length`), 4);
-  assert.equal(ev<string>(`document.querySelector("#decision .rec-cap").textContent`), "推奨"); // the file's own heading
+  assert.equal(ev<string>(`document.querySelector("#decision .headline").textContent.length > 0`), true);
   assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent === "A が選ばれる"`), true);
   assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes("なぜ今この判断が要るか")`), true);
   assert.equal(ev<boolean>(`!document.querySelector("#background").textContent.includes("選択肢")`), true); // the options section moved to the right
@@ -806,7 +804,6 @@ gui("a Japanese-headed explanation renders the same card as an English one", asy
 gui("an English-headed explanation puts the options table on the cards, not in the left column", async () => {
   await seedQuestion();
   await reopen();
-  assert.equal(ev<string>(`document.querySelector("#decision .rec-cap").textContent`), "Recommendation");
   assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent === "A is selected"`), true);
   assert.equal(ev<boolean>(`!document.querySelector("#background").textContent.includes("Options")`), true);
   assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes("Why this decision is needed now")`), true);
@@ -830,13 +827,12 @@ const q1 = (sel: string) => ev<string>(`"t:" + ((document.querySelector(${JSON.s
 const count = (sel: string) => ev<number>(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
 const RICH_READY = "document.querySelector('#decision .headline') && document.querySelector('#background .mermaid-ok svg')";
 
-gui("layers: the headline copies the first sentence of the recommendation, the box keeps the whole text", async () => {
+gui("layers: the headline is the first sentence of the recommendation, the box keeps the rest", async () => {
   await seedRich();
   await reopen(RICH_READY);
   assert.equal(q1("#decision .headline"), "I recommend Sqlite because it keeps reads fast without a server.");
-  // the recommendation box keeps the whole text (the headline is a copy of its first sentence)
-  assert.equal(q1("#decision .rec-body").startsWith("I recommend Sqlite"), true);
-  assert.equal(q1("#decision .rec-body").includes("It also fits"), true);
+  // the recommendation box holds the rest (the headline is moved out of it, see Q5-05)
+  assert.equal(q1("#decision .rec-body").startsWith("It also fits"), true);
   // 1-second layer order: title, headline, meta line, affected, you decide, option chips
   const order = ev<string[]>(`JSON.stringify([...document.querySelector("#decision .head").children].map(e => e.className.split(" ")[0]))`);
   assert.deepEqual(order.filter((c) => ["title-row", "headline", "meta-line", "affects", "unknowns", "optrow"].includes(c)), ["title-row", "headline", "meta-line", "affects", "unknowns", "optrow"]);
@@ -1138,4 +1134,147 @@ gui("ja: the shape, You decide, Against, None of these and the confirmation foll
   } finally {
     ev(`document.documentElement.dataset.lang = "en", "ok"`);
   }
+});
+
+// ---- Q5 fixes (N2) ----
+
+const rectIn = (sel: string) => ev<{ top: number; bottom: number; left: number; right: number; vh: number; vw: number }>(
+  `JSON.stringify((r => ({ top: r.top, bottom: r.bottom, left: r.left, right: r.right, vh: innerHeight, vw: innerWidth }))(document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect()))`,
+);
+const visible = (sel: string) => { const r = rectIn(sel); return r.top >= 0 && r.bottom <= r.vh && r.left >= 0 && r.right <= r.vw; };
+
+gui("Q5-01: the cursor card and the Answer button are in the viewport at 1440x900, 1280x800 and 1000x700", async () => {
+  await seedRich();
+  try {
+    for (const [w, h] of [["1440", "900"], ["1280", "800"], ["1000", "700"]]) {
+      ab("set", "viewport", w, h);
+      await reopen(RICH_READY);
+      assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: cursor card ${JSON.stringify(rectIn("#decision .opt.cursor"))}`);
+      assert.equal(visible("#submit"), true, `${w}x${h}: submit ${JSON.stringify(rectIn("#submit"))}`);
+      // moving to the last card (free text) and back keeps the cursor card in view; the cards area is what scrolls
+      press("G");
+      assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: last card`);
+      assert.equal(ev<boolean>(`document.getElementById("decision").scrollTop === 0`), true);
+      press("g", "g");
+      assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: first card`);
+      // the hint line is one line at 1000x700
+      if (w === "1000") assert.ok(ev<number>(`document.querySelector("#decision .hint").getBoundingClientRect().height`) < 26, "hint is one line");
+      // You decide stays visible; Assumptions / Against / Affected are folded to one line each
+      assert.equal(visible("#decision .unknowns"), true);
+    }
+  } finally {
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+gui("Q5-01: Assumptions / Against fold to a summary row and `.` expands them (Affected is one line of chips)", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.equal(q1("#decision .assumptions .sect-cap"), "Assumptions 2");
+  assert.equal(q1("#decision .assumptions .sect-sum"), "☐☐");
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .assumptions .sect-body")).display === "none"`), true);
+  assert.equal(q1("#decision .against .sect-sum").startsWith("Postgres would scale further"), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .against .sect-body")).display === "none"`), true);
+  assert.equal(ev<boolean>(`document.querySelector("#decision .affects").getBoundingClientRect().height < 32`), true); // one row
+  press(".");
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .assumptions .sect-body")).display !== "none"`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .against .sect-body")).display !== "none"`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .assumptions .sect-sum")).display === "none"`), true);
+  assert.equal(visible("#decision .opt.cursor"), true); // expanding keeps the cursor card in view
+  press(".");
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .assumptions .sect-body")).display === "none"`), true);
+});
+
+gui("Q5-05: the headline is moved out of the Recommendation box (once on the screen); a one-sentence recommendation has no box", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  const head = q1("#decision .headline");
+  assert.equal(head, "I recommend Sqlite because it keeps reads fast without a server.");
+  assert.equal(q1("#decision .rec-body").includes("I recommend Sqlite"), false);
+  assert.equal(q1("#decision .rec-body").startsWith("It also fits"), true);
+  assert.equal(ev<number>(`document.getElementById("decision").textContent.split(${JSON.stringify(head)}).length - 1`), 1);
+  await cancelAll();
+  await seedQuestion(); // "I recommend B because this is only a check."
+  await reopen();
+  assert.equal(q1("#decision .headline"), "I recommend B because this is only a check.");
+  assert.equal(count("#decision .rec-cap"), 0);
+  assert.equal(ev<number>(`document.getElementById("decision").textContent.split("only a check").length - 1`), 1);
+});
+
+gui("Q5-06: known headings follow the display language whichever language the file uses; unknown ones stay as written", async () => {
+  const md = SEED_MD.replace("## Recommendation", "## 推奨").replace("\n## Options", "\n## Extra notes\n\nSome notes.\n\n## Options")
+    .replace("I recommend B because this is only a check.", "I recommend B. It is only a check. Another option is right if A is wanted.");
+  await seedQuestion({ markdown: md });
+  await reopen();
+  assert.equal(q1("#decision .rec-cap"), "Recommendation"); // ja heading in the file, en display
+  assert.equal(q1("#background").includes("Extra notes"), true);
+  try {
+    await setLang("ja", `document.querySelector("#decision .rec-cap")?.textContent === "推奨"`);
+    assert.equal(q1("#decision .rec-cap"), "推奨");
+    assert.equal(q1("#background").includes("Extra notes"), true);
+  } finally {
+    ev(`document.documentElement.dataset.lang = "en", "ok"`);
+  }
+  await cancelAll();
+  await seedRich();
+  await reopen(RICH_READY);
+  try {
+    await setLang("ja", `document.querySelector("#decision .rec-cap")?.textContent === "推奨"`);
+    assert.equal(q1("#decision .assumptions .sect-cap"), "前提 2");
+    assert.equal(ev<boolean>(`[...document.querySelectorAll("#background h2")].some(h => h.textContent === "確かめたこと")`), true); // What I checked
+  } finally {
+    ev(`document.documentElement.dataset.lang = "en", "ok"`);
+  }
+});
+
+gui("Q5-04: 'cannot be restored' is red only (restored is not green); a way back is green", async () => {
+  const rows = [["A", "A happens", "The history cannot be restored."], ["B", "B happens", "It can't be undone, so be careful. Revert by hand."], ["C", "C happens", "元に戻せない。復元できない。"]];
+  await seedQuestion({ markdown: v2md("Risk words?", "Risk words", rows, "", "I recommend B. It is a check. Another option is right if A."), options: [{ label: "A" }, { label: "B (Recommended)" }, { label: "C" }] });
+  await reopen();
+  const spans = (cls: string) => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt .${cls}")].map(e => e.textContent))`);
+  assert.deepEqual(spans("risk-bad"), ["cannot be restored", "can't be undone", "元に戻せない", "復元できない"]);
+  assert.deepEqual(spans("risk-undo"), ["Revert"]); // neither "restored" nor "undone" turns green
+});
+
+gui("Q5-07: the blocker band and the pending pill do not overlap (1440x900, 1100px, 1000x700)", async () => {
+  await seedBlocker();
+  await seedQuestion({ title: "Second" });
+  await seedQuestion({ title: "Third" });
+  try {
+    for (const [w, h] of [["1440", "900"], ["1100", "800"], ["1000", "700"]]) {
+      ab("set", "viewport", w, h);
+      await reopen("document.querySelector('#decision .blocker-band')");
+      const r = ev<{ band: number[]; pill: number[] }>(`JSON.stringify({ band: (r => [r.left, r.top, r.right, r.bottom])(document.querySelector("#decision .blocker-band").getBoundingClientRect()), pill: (r => [r.left, r.top, r.right, r.bottom])(document.getElementById("pending-btn").getBoundingClientRect()) })`);
+      const [b, p] = [r.band, r.pill];
+      const overlap = b[0] < p[2] && p[0] < b[2] && b[1] < p[3] && p[1] < b[3];
+      assert.equal(overlap, false, `${w}x${h}: ${JSON.stringify(r)}`);
+    }
+  } finally {
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+gui("Q5-08: None of these needs no second Enter even on an irreversible decision", async () => {
+  const { id } = await seedRich({ reversibility: "irreversible", scope: "machine" });
+  await reopen(RICH_READY);
+  press("Enter");
+  assert.equal(ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`), true); // a card answer still asks
+  press("j"); // moving releases the confirmation
+  press("n", "Enter");
+  assert.equal(ev<boolean>(`!document.querySelector("#decision .confirm-bar") || document.querySelector("#decision .confirm-bar").hidden`), true);
+  assert.equal(count("#decision .grace-bar"), 1); // the grace period (5 s) is unchanged
+  press("u");
+  await sleep(300);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+});
+
+gui("Q5-11: a section with an unknown H2 heading is shown (with its heading) at the end of the left column", async () => {
+  const md = RICH_MD.replace("## Diagram", "## What it looks like\n\nA sketch of the call:\n\n```ts\nconst x = read();\n```\n\n## Diagram");
+  await seedQuestion({ options: RICH_OPTIONS, reversibility: "costly", scope: "repo", title: "Unknown section", markdown: md.replace("__QUESTION__", "Rich question: which store?").replace("__TITLE__", "Unknown section") });
+  await reopen(RICH_READY);
+  const heads = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background h2")].map(h => h.textContent))`);
+  assert.ok(heads.includes("What it looks like"), JSON.stringify(heads));
+  assert.equal(q1("#background").includes("A sketch of the call"), true);
+  assert.equal(ev<boolean>(`!!document.querySelector("#background").textContent.includes("const x = read();")`), true);
+  assert.equal(heads.at(-1), "What it looks like"); // at the end of the left column
 });

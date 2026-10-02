@@ -31,10 +31,13 @@ const BLOCKER_LABELS = {
 // Table column detection (header cell text). The first column is always the option label.
 const COLUMN_HAPPENS = /happens|outcome|起きること/i;
 const COLUMN_RISK = /risk|リスク/i;
-// Words in a risk cell. Same lists as the `undo` check in src/hook/explain.ts (BAD = "cannot be undone" family, UNDO = how to undo)
-const RISK_BAD = /cannot be undone|can't be undone|irreversible|unrecoverable|戻せない|元に戻らない/gi;
-const RISK_UNDO = /undo|revert|roll ?back|restore|reinstall|delete the|remove the|戻|消せ|やり直|再実行/gi;
-const hasBad = (s) => new RegExp(RISK_BAD.source, "i").test(s ?? "");
+// Words in a risk cell. Same lists as UNDO_BAD_WORDS / UNDO_WORDS in src/hook/explain.ts (N0): checked in that order, so
+// "cannot be restored" is red only. English is matched at word boundaries, Japanese anywhere.
+const UNDO_BAD_WORDS =
+  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i;
+const UNDO_WORDS =
+  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i;
+const hasBad = (s) => UNDO_BAD_WORDS.test(s ?? "");
 // Option colors: --opt-0..3 in app.css; the recommended option uses the accent
 const optColor = (i, recommended) => (recommended ? "var(--accent)" : `var(--opt-${i % 4})`);
 // Confirmation / grace (seconds). `reversible` + `file` is sent at once; a decision without metadata too
@@ -394,6 +397,16 @@ async function copyCode(pre) {
   }
 }
 
+// Scroll the cards area (only it, never the page or the top part) so that the card is fully in view
+function revealCard(card) {
+  const box = card?.closest(".q-cards");
+  if (!box) return;
+  const c = card.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  if (c.top < b.top + 2) box.scrollTop += c.top - b.top - 4;
+  else if (c.bottom > b.bottom - 2) box.scrollTop += c.bottom - b.bottom + 4;
+}
+
 // Folding of long recommendations and card bodies (6 / 3 lines in CSS). Only elements that overflow get a "Show all ." chip.
 // The expanded state lives in the per-decision draft; `.` or a chip click toggles everything
 function toggleExpand(dr) {
@@ -401,6 +414,7 @@ function toggleExpand(dr) {
   const root = $("decision");
   root.classList.toggle("expanded", dr.expanded);
   for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = `${dr.expanded ? t("collapse") : t("show_all")} `;
+  revealCard(root.querySelector(".opt.cursor"));
 }
 function markClamps(root, dr) {
   root.classList.remove("expanded");
@@ -434,7 +448,7 @@ function impactBox(d) {
   const body = el("div", { class: "clampable impact-body md" }, ...nodes);
   callouts(body);
   softHyphens(body);
-  return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: headingText(sec) }), body);
+  return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: t("sec_impact") }), body);
 }
 
 // The meta-line wraps. Rows from the third on are hidden and the end becomes …
@@ -669,14 +683,19 @@ function overlayKey(ev) {
 
 // ---- Right column pieces for the 1-second layer ----
 
-const affectsRow = (v2) => {
+// Fold rows: a heading line with a one-line summary; the body shows when the screen is expanded (`.` / click, same switch as the recommendation)
+const foldRow = (dr, ...kids) => el("div", { class: "sect-row", onclick: () => toggleExpand(dr) }, ...kids);
+
+// Affected: one line of chips (they shrink), "+N" for the rest; expanded, the chips wrap
+const affectsRow = (v2, dr) => {
   if (!v2?.affects.length) return null;
-  const row = el("div", { class: "affects", title: t("affected") }, el("span", { class: "aff-cap", text: `${t("affected")}:` }));
-  for (const a of v2.affects.slice(0, 6)) row.append(el("span", { class: "chip aff", text: a }));
+  const row = el("div", { class: "affects", title: t("affected"), onclick: () => toggleExpand(dr) }, el("span", { class: "aff-cap", text: `${t("affected")}:` }));
+  for (const a of v2.affects.slice(0, 6)) row.append(el("span", { class: "chip aff", text: a, title: a }));
   if (v2.affects.length > 6) row.append(el("span", { class: "chip aff more", text: `+${v2.affects.length - 6}`, title: v2.affects.slice(6).join(", ") }));
   return row;
 };
 
+// You decide: always shown (1-3 bullets)
 const unknownsRow = (v2) => {
   if (!v2?.unknowns.length) return null;
   const list = el("ul", {});
@@ -691,17 +710,30 @@ const optRow = (v2) => {
   return row;
 };
 
-function assumptionsBox(v2) {
+// Assumptions: "Assumptions 2 ☐☐" until expanded
+function assumptionsBox(v2, dr) {
   if (!v2?.assumptions.length) return null;
   const list = el("ul", {});
   for (const li of v2.assumptions) list.append(el("li", {}, ...[...li.cloneNode(true).childNodes]));
-  return el("div", { class: "assumptions" }, el("div", { class: "assumptions-hint", text: t("assumptions_hint") }), list);
+  const n = v2.assumptions.length;
+  return el("div", { class: "assumptions sect" },
+    foldRow(dr, el("b", { class: "sect-cap", text: `${t("sec_assumptions")} ${n}` }), el("span", { class: "sect-sum boxes", text: "☐".repeat(Math.min(n, 8)) })),
+    el("div", { class: "sect-body" }, el("div", { class: "assumptions-hint", text: t("assumptions_hint") }), list));
+}
+
+// Against: the caption and the first line until expanded
+function againstBox(v2, dr) {
+  if (!v2?.against) return null;
+  const first = (v2.against.textContent ?? "").replace(/\s+/g, " ").trim();
+  return el("div", { class: "against sect" },
+    foldRow(dr, el("b", { class: "against-cap", text: t("against_cap") }), el("span", { class: "sect-sum one-line", text: first })),
+    el("div", { class: "sect-body" }, v2.against));
 }
 
 function renderRightBody(d) {
   const root = $("decision");
   stashPending();
-  root.classList.remove("expanded");
+  root.classList.remove("expanded", "split");
   if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
@@ -718,29 +750,33 @@ function renderRightBody(d) {
     let freeTextEl = null;
     let noneNote = null;
     const qsBox = el("div", { class: "qs" });
+    root.classList.toggle("split", single); // one question: the top part stays, only the cards scroll
     qs.forEach((q, qi) => {
       const sel = dr.sel.get(qi) ?? dr.sel.set(qi, new Set()).get(qi);
       const free = dr.free.get(qi) ?? dr.free.set(qi, { on: false, text: "" }).get(qi);
-      const box = el("div", { class: "q" });
+      const box = el("div", { class: "q" + (single ? " split" : "") });
+      // top = everything above the cards; cardsBox = the scrolling cards (with several questions both are the plain box)
+      const top = single ? el("div", { class: "q-top" }) : box;
+      const cardsBox = single ? el("div", { class: "q-cards" }) : box;
+      if (single) box.append(top, cardsBox);
       let items;
       if (v2) {
-        box.append(el("div", { class: "head" },
+        top.append(el("div", { class: "head" },
           isBlocker(d) ? el("div", { class: "blocker-band", text: t("blocker_band") }) : null,
           titleRow(el("div", { class: "v2-title", text: titleOf(d) })),
           v2.headline ?? null,
-          metaLine(d), affectsRow(v2), unknownsRow(v2), optRow(v2)));
-        if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
-        if (v2.recBox || v2.assumptions.length) {
+          metaLine(d), affectsRow(v2, dr), unknownsRow(v2), optRow(v2)));
+        if (v2.todoBox) top.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
+        if (v2.recBox) {
           // Callouts (CAUTION / WARNING ...) are exempt from folding. Show them inside the recommendation frame, right under the folded body
-          const callouts = v2.recBox ? [...v2.recBox.querySelectorAll(".callout")].filter((c) => !c.parentElement.closest(".callout")) : [];
+          const callouts = [...v2.recBox.querySelectorAll(".callout")].filter((c) => !c.parentElement.closest(".callout"));
           for (const c of callouts) c.remove();
-          box.append(el("div", { class: "rec" },
-            el("div", { class: "rec-cap", text: v2.recCap ?? SECTION.recommendation[0] }),
-            v2.recBox ? el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)) : null,
-            assumptionsBox(v2),
+          top.append(el("div", { class: "rec" },
+            el("div", { class: "rec-cap", text: v2.recCap ?? t("sec_recommendation") }),
+            v2.recBox.textContent.trim() || v2.recBox.querySelector("pre, table, ul, ol, img") ? el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)) : null,
             callouts.length ? el("div", { class: "md rec-callouts" }, ...callouts) : null));
         }
-        if (v2.against) box.append(el("div", { class: "against" }, el("div", { class: "against-cap", text: t("against_cap") }), v2.against));
+        top.append(...[assumptionsBox(v2, dr), againstBox(v2, dr)].filter(Boolean));
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk })),
           ...v2.extras.map(rawItem),
@@ -753,10 +789,10 @@ function renderRightBody(d) {
       } else {
         const title = titleOf(d);
         // Show title once when it equals the question. When they differ (session.title), show the question under the title
-        box.append(el("div", { class: "head" },
+        top.append(el("div", { class: "head" },
           title === q.question ? el("div", { class: "header", text: q.header }) : null,
           titleRow(el("div", { class: "question", text: title })), metaLine(d)));
-        if (title !== q.question) box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
+        if (title !== q.question) top.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
         items = q.options.map(rawItem);
       }
       if (single) {
@@ -764,7 +800,7 @@ function renderRightBody(d) {
         // For single select, moving = selecting. Pre-select the initial position (the recommended one, else the first)
         if (!closed && !q.multiSelect && sel.size === 0 && !free.on && items.length) sel.add(items[dr.cursor].value);
       }
-      if (single) box.append(keyLine([["↑", "↓"], t("hint_move")], [["Enter"], t("hint_answer")], ...(v2?.todoBox?.querySelector("pre") ? [[["c"], t("key_copy_command")]] : []), ...(q.multiSelect ? [[["Space"], t("hint_toggle")]] : [])));
+      if (single) top.append(keyLine([["↑", "↓"], t("hint_move")], [["Enter"], t("hint_answer")], ...(v2?.todoBox?.querySelector("pre") ? [[["c"], t("key_copy_command")]] : []), ...(q.multiSelect ? [[["Space"], t("hint_toggle")]] : [])));
       for (const it of items) {
         const input = el("input", {
           type: q.multiSelect ? "checkbox" : "radio",
@@ -789,11 +825,11 @@ function renderRightBody(d) {
         const card = el("label", { class: "opt" + (it.badge ? " rec" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null }, input,
           el("span", { class: "grow" }, lab, ...descs));
         if (single) { const idx = cards.length; cards.push({ input, card, risk: it.risk ?? "" }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
-        box.append(card);
+        cardsBox.append(card);
       }
       if (single) {
         const none = dr.none;
-        box.append(el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
+        cardsBox.append(el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
           el("span", { text: t("none_of_these") }), kbd("n")));
         if (none && !closed) {
           const panel = el("div", { class: "none-panel" });
@@ -806,7 +842,7 @@ function renderRightBody(d) {
             oninput: (ev) => { none.note = ev.target.value; },
           });
           panel.append(noneNote);
-          box.append(panel);
+          cardsBox.append(panel);
         }
       }
       const freeInput = el("input", {
@@ -829,7 +865,7 @@ function renderRightBody(d) {
       const freeCard = el("label", { class: "opt free" }, freeInput,
         el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("free_text") }), single ? kbd("Enter") : null), freeText));
       if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
-      box.append(freeCard);
+      cardsBox.append(freeCard);
       qsBox.append(box);
     });
     root.append(qsBox);
@@ -861,6 +897,7 @@ function renderRightBody(d) {
     function updateSubmit() { submit.disabled = closed || !complete(); }
     const actions = el("div", { class: "actions" }, confirmBar(dr), dr.grace ? graceBar(d, dr) : submit);
     if (single) {
+      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", d.explanation && hasExplanation(d) ? "y" : "", "n"].filter(Boolean);
       const extraHints = [
         v2?.terms.length ? `? ${t("hint_terms")} · ` : "",
         modelFor(d).fnCount ? `e ${t("hint_evidence")} · ` : "",
@@ -868,7 +905,10 @@ function renderRightBody(d) {
         d.explanation && hasExplanation(d) ? `y ${t("hint_copy_badge")} · ` : "",
         `n ${t("hint_none")} · `,
       ].join("");
-      actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}Enter ${t("hint_answer")} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}←→ ${t("hint_next")} · Esc ${t("hint_back")}`, " ", buildTag()));
+      // The full line, and a short one that CSS swaps in below 1100px / 800px so that the hint stays on one line
+      const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}Enter ${t("hint_answer")} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}←→ ${t("hint_next")} · Esc ${t("hint_back")}`;
+      const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}Enter ${t("hint_short_answer")} · ${letters.join(" ")} ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
+      actions.append(el("div", { class: "hint" }, el("span", { class: "hint-full", text: full }), el("span", { class: "hint-short", text: short }), " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
@@ -881,7 +921,7 @@ function renderRightBody(d) {
         if (i !== dr.cursor) clearConfirm(dr);
         dr.cursor = i;
         cards.forEach((c, k) => c.card.classList.toggle("cursor", k === i));
-        if (select) cards[i].card.scrollIntoView({ block: "nearest" }); // not on first render: the top (headline) stays in view
+        revealCard(cards[i].card);
         if (select && !multi && !closed) cards[i].input.click();
       },
       get cursor() { return dr.cursor ?? 0; },
@@ -890,11 +930,12 @@ function renderRightBody(d) {
         if (!dr.none) return;
         const [type] = NONE_TYPES[dr.none.cursor];
         const note = dr.none.note.trim();
-        attempt(d, dr, "none", { answers: { [qs[0].question]: `${NONE_PREFIX} — ${type}${note ? `: ${note}` : ""}` } }, reversibilityOf(d) === "irreversible");
+        attempt(d, dr, "none", { answers: { [qs[0].question]: `${NONE_PREFIX} — ${type}${note ? `: ${note}` : ""}` } }, false); // a type answer chooses nothing irreversible: no Enter twice (the grace period stays)
       },
     };
     if (single && !closed) ui.setCursor(dr.cursor, false);
     markClamps(root, dr);
+    if (single && !closed) revealCard(cards[clamp(dr.cursor, cards.length)]?.card);
     return;
   }
 
@@ -1217,8 +1258,8 @@ function optMarks(root, opts) {
 
 // Risk words: the "cannot be undone" family red, the "how to undo" family green with an underline
 function riskMarks(root) {
-  wrapText(root, new RegExp(RISK_BAD.source, "gi"), (m) => el("span", { class: "risk-bad", text: m[0] }));
-  wrapText(root, new RegExp(RISK_UNDO.source, "gi"), (m) => el("span", { class: "risk-undo", text: m[0] }));
+  wrapText(root, new RegExp(UNDO_BAD_WORDS.source, "gi"), (m) => el("span", { class: "risk-bad", text: m[0] })); // .risk-bad is skipped by the next pass
+  wrapText(root, new RegExp(UNDO_WORDS.source, "gi"), (m) => el("span", { class: "risk-undo", text: m[0] }));
 }
 
 // A number with a unit gets a light emphasis
@@ -1294,8 +1335,8 @@ function parseTerms(sec) {
 // Top-level bullets of a section (elements holding the inline content)
 const bulletsOf = (sec) => sec.nodes.flatMap((n) => [...(n.querySelectorAll?.(":scope > li") ?? [])]);
 
-// Copy the first sentence of the first paragraph into a new element (the headline). The recommendation text itself stays whole.
-// null when there is none
+// Move the first sentence of the first paragraph out of the box into a new element (the headline), so the box does not repeat it.
+// null when there is none (the box is left whole)
 function splitHeadline(box) {
   const p = box.firstElementChild;
   if (!p || p.tagName !== "P") return null;
@@ -1313,9 +1354,14 @@ function splitHeadline(box) {
     acc += len;
   }
   if (!placed) range.setEnd(p, p.childNodes.length);
+  if (!text.slice(0, upTo).trim()) return null;
   const head = el("div", { class: "headline" });
-  head.append(range.cloneContents());
-  return (head.textContent ?? "").trim() ? head : null;
+  head.append(range.extractContents());
+  // what is left of the paragraph starts at the next sentence
+  const first = document.createTreeWalker(p, NodeFilter.SHOW_TEXT).nextNode();
+  if (first) first.textContent = first.textContent.replace(/^\s+/, "");
+  if (!(p.textContent ?? "").trim() && !p.querySelector("img")) p.remove();
+  return head;
 }
 
 // Apply pre folding, diff and mermaid together (safe to call repeatedly)
@@ -1357,8 +1403,29 @@ const normLabel = (s) => stripSuffix(s.normalize("NFKC")).replace(/\s/g, "").toL
 const labelText = (s) => new DOMParser().parseFromString(s, "text/html").body.textContent ?? s;
 const sameLabel = (a, b) => normLabel(a) === normLabel(b) || normLabel(labelText(a)) === normLabel(b);
 const normHeading = (s) => s.normalize("NFKC").replace(/\s/g, "").replace(/[と・]/g, "").toLowerCase();
-// A section's heading text as written in the file (shown as is in the right column)
-const headingText = (sec) => (sec.head.textContent ?? "").trim();
+// Known sections are captioned in the display language (i18n keys sec_*) whichever language the file's heading is in; unknown ones stay as written
+const isKnown = (sec, names) => names.map(normHeading).includes(sec.norm);
+const KNOWN_HEADS = [
+  [SECTION.recommendation, "sec_recommendation"], [SECTION.options, "sec_options"], [SECTION.checked, "sec_checked"], [SECTION.blockerTodo, "sec_todo"],
+  [SECTION.impact, "sec_impact"], [SECTION.terms, "sec_terms"], [SECTION.assumptions, "sec_assumptions"], [SECTION.against, "sec_against"],
+  [SECTION.affects, "sec_affects"], [SECTION.unknowns, "sec_unknowns"],
+];
+// A section whose heading the GUI does not know is never dropped: it is shown as written at the end of the left column
+function keepUnknownSections(container) {
+  const known = Object.values(SECTION).flat();
+  for (const sec of sectionsOf(container)) {
+    if (/^H1$/.test(sec.head.tagName) || isKnown(sec, known) || findSection([sec], known)) continue;
+    for (const n of sec.nodes) if (n.parentElement === container) container.append(n);
+  }
+}
+
+// Headings of the known sections that stay in the left column, in the display language
+function localizeHeads(container) {
+  for (const sec of sectionsOf(container)) {
+    const known = KNOWN_HEADS.find(([names]) => isKnown(sec, names));
+    if (known) sec.head.textContent = t(known[1]);
+  }
+}
 
 // Split into sections at h1-h3. A section runs up to just before the next heading of the same or shallower level
 function sectionsOf(container) {
@@ -1426,7 +1493,7 @@ function buildModel(d) {
       if (againstSec) {
         const box = el("div", { class: "md" });
         for (const n of againstSec.nodes.slice(1)) box.append(n);
-        if (box.children.length) { v2.against = box; v2.againstCap = headingText(againstSec); }
+        if (box.children.length) v2.against = box;
       }
       for (const sec of [termsSec, unknownsSec, assumptionsSec, againstSec, affectsSec]) {
         if (!sec) continue;
@@ -1436,7 +1503,7 @@ function buildModel(d) {
       const todoSec = (fm.type === "blocker" || d.explanation.type === "blocker") ? findSection(secs, SECTION.blockerTodo) : undefined;
       if (todoSec && todoSec !== optSec) {
         const todoBox = el("div", { class: "md" });
-        v2.todoCap = headingText(todoSec);
+        v2.todoCap = t("sec_todo");
         for (const n of todoSec.nodes.slice(1)) todoBox.append(n);
         todoSec.head.remove();
         for (const pre of todoBox.querySelectorAll("pre")) {
@@ -1448,7 +1515,7 @@ function buildModel(d) {
       }
       if (recSec) {
         const recBox = el("div", { class: "md" });
-        v2.recCap = headingText(recSec);
+        v2.recCap = t("sec_recommendation");
         for (const n of recSec.nodes.slice(1)) recBox.append(n);
         recSec.head.remove();
         v2.headline = splitHeadline(recBox);
@@ -1473,6 +1540,8 @@ function buildModel(d) {
       m.v2 = v2;
     }
   }
+  if (m.v2) keepUnknownSections(left);
+  localizeHeads(left);
   enhance(left, m.v2?.ctx.opts ?? []).catch(() => {});
   return m;
 }

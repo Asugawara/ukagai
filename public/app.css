@@ -33,7 +33,7 @@ body {
 .badge.reversible { color: var(--fg); }
 .badge.none { color: var(--yellow); border-color: var(--yellow); }
 .head { margin-bottom: 10px; }
-@media (min-width: 1100px) { .has-pending-btn .blocker-band, .has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } } /* Width of the fixed top-right pending button (Pending N + ← →). Below 1100px it is inline at the right end of the heading */
+@media (min-width: 1100px) { .has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } .has-pending-btn .blocker-band { margin-right: 150px; } } /* Width of the fixed top-right pending button (Pending N + ← →). Below 1100px it is inline at the right end of the heading */
 .title-row { display: flex; align-items: flex-start; gap: 8px; }
 .title-row > :first-child { flex: 1; min-width: 0; }
 .title-row .pending-btn { position: static; flex: none; margin-top: 2px; }
@@ -298,3 +298,55 @@ table.cmp thead th { cursor: pointer; }
 .diff .file { background: var(--file); display: block; font-weight: 700; }
 .diff .hunk { color: var(--muted); }
 pre code.hljs { background: none; padding: 0; }
+
+/* ---- Q5: the cards stay in view ---- */
+
+/* One question: the top part keeps its height and the cards scroll on their own (the cursor card follows). #decision itself does not scroll */
+#decision.split { overflow: hidden; }
+#decision.split .qs { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.q.split { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; margin-bottom: 0; }
+.q-top { flex: 0 1 auto; min-height: 0; max-height: 52vh; overflow-y: auto; scrollbar-width: thin; }
+.q-cards { flex: 1 1 0; min-height: 150px; overflow-y: auto; padding: 4px 4px 4px 2px; scrollbar-width: thin; }
+.q-top .rec, .q-top .impact { margin-bottom: 8px; }
+@media (max-width: 899px) {
+  #decision.split { overflow: visible; }
+  .q-top { max-height: none; overflow: visible; }
+  .q-cards { overflow: visible; }
+}
+@media (max-height: 820px) {
+  .q-top { max-height: 58vh; }
+  .q-top .keys { display: none; } /* the hint line below repeats it */
+  .rec-body { max-height: calc(4 * 1.6em); }
+  .headline { font-size: 15px; }
+  .q .question, .v2-title { font-size: 16px; }
+}
+
+/* Fold rows: Assumptions, Against, Affected (`.` or a click toggles all of them, like the recommendation) */
+.sect { margin: 0 0 8px; }
+.sect-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; cursor: pointer; font-size: 13px; line-height: 1.5; }
+.sect-cap { flex: none; font-size: 12px; font-weight: 700; color: var(--muted); }
+.sect-sum { min-width: 0; color: var(--muted); }
+.sect-sum.boxes { color: var(--accent); letter-spacing: 1px; }
+.sect-sum.one-line { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sect-body { display: none; }
+.expanded .sect-body { display: block; }
+.expanded .sect-sum { display: none; }
+.assumptions.sect { margin-top: 0; padding-top: 0; border-top: 0; }
+.against.sect { border: 0; background: none; padding: 0; margin: 0 0 8px; }
+.against.sect .sect-body { border: 1px solid var(--line); background: color-mix(in srgb, var(--fg) 4%, transparent); border-radius: 8px; padding: 4px 12px; margin-top: 2px; }
+.assumptions.sect .sect-body { margin-top: 2px; }
+.affects { flex-wrap: nowrap; overflow: hidden; cursor: pointer; }
+.affects .aff-cap { flex: none; }
+.affects .chip.aff { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.affects .chip.aff.more { flex: none; }
+.expanded .affects { flex-wrap: wrap; }
+.expanded .affects .chip.aff { flex: none; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+/* Hint line: the full text from 1100px up and 820px tall; one short line otherwise */
+.hint-short { display: none; }
+@media (max-width: 1099px), (max-height: 820px) {
+  .hint-full { display: none; }
+  .hint-short { display: inline; }
+  .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+.unknowns { margin-top: 6px; padding-top: 4px; padding-bottom: 4px; }
