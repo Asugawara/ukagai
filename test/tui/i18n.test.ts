@@ -34,6 +34,6 @@ test("--lang wins over config.json; without --lang the config decides", async ()
   assert.equal(await resolveLang({ dataDir: join(dir, "missing") }), "en");
   assert.equal(await resolveLang({ dataDir: join(dir, "missing"), lang: "ja" }), "ja");
   assert.equal(parseArgs(["--lang", "ja"]).lang, "ja");
-  assert.equal(parseArgs(["--lang", "xx"]).lang, undefined);
+  assert.throws(() => parseArgs(["--lang", "fr"]), /--lang must be one of: en, ja/);
   assert.equal(parseArgs([]).lang, undefined);
 });

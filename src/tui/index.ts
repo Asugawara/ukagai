@@ -6,7 +6,7 @@ import { refetch as syncOnce, streamLoop } from "./sync.js";
 import { App, type Effect } from "./app.js";
 import { ESC_TIMEOUT_MS, KeyParser } from "./keys.js";
 import { renderFrame } from "./render.js";
-import { isLang, readConfig, type Lang } from "../settings/config.js";
+import { LANGS, isLang, readConfig, type Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 
 const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h";
@@ -37,7 +37,8 @@ export function parseArgs(argv: string[]): Options {
       if (v) opts.dataDir = v;
     } else if (a === "--lang") {
       const v = argv[++i];
-      if (isLang(v)) opts.lang = v;
+      if (!isLang(v)) throw new Error(`--lang must be one of: ${LANGS.join(", ")}`);
+      opts.lang = v;
     }
   }
   return opts;

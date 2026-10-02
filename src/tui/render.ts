@@ -120,7 +120,7 @@ export const chipsText = (chips: Chip[]): string => chips.map(chip).join(" ");
 
 /** Affected names on one line: at most 6, the rest as +N */
 function affectsText(m: ScreenModel): string {
-  const shown = m.affects.slice(0, 6);
+  const shown = m.affects.slice(0, 6).map((x) => x.replace(/`/g, ""));
   const rest = m.affects.length - shown.length;
   return `⌁ ${shown.join(" · ")}${rest > 0 ? ` +${rest}` : ""}`;
 }

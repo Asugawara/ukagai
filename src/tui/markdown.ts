@@ -280,7 +280,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       const mark = /^\d/.test(li[2]!) ? li[2]! : "•";
       const item: string[] = [li[3]!];
       i++;
-      while (i < lines.length && lines[i]!.trim() !== "" && !/^(\s*)([-*+]|\d+[.)])\s+/.test(lines[i]!) && !inFence[i] && !/^ {0,3}(#{1,6}\s|>)/.test(lines[i]!)) {
+      while (i < lines.length && lines[i]!.trim() !== "" && !/^(\s*)([-*+]|\d+[.)])\s+/.test(lines[i]!) && !inFence[i] && !/^ {0,3}(#{1,6}\s|>)/.test(lines[i]!) && !/^ {0,3}\[\^[^\]\s]+\]:/.test(lines[i]!)) {
         item.push(lines[i]!);
         i++;
       }

@@ -3,6 +3,8 @@ import {
   COLUMN_HAPPENS,
   COLUMN_RISK,
   SECTION,
+  UNDO_BAD_WORDS,
+  UNDO_WORDS,
   findSection,
   findTables,
   normalizeLabel,
@@ -35,9 +37,9 @@ export interface CardLine {
   name?: string;
 }
 
-/** Words saying how to undo (green) and words saying it cannot be undone (red). Irreversible wins on overlap */
-export const UNDO_RE = /undo|revert|roll ?back|restore|reinstall|delete the|remove the|戻|消せ|やり直|再実行/giu;
-export const IRREVERSIBLE_RE = /cannot be undone|can't be undone|irreversible|permanent(?:ly)?|戻せない|元に戻らない/giu;
+/** Words saying it cannot be undone (red), then words saying how to undo (green): the hook's shared vocabulary, with the g flag for matchAll */
+export const IRREVERSIBLE_RE = new RegExp(UNDO_BAD_WORDS.source, "giu");
+export const UNDO_RE = new RegExp(UNDO_WORDS.source, "giu");
 
 export interface Card {
   /** The value placed in the answer: the original option.label */
