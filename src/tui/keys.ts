@@ -122,6 +122,7 @@ export type Action =
   | { type: "submit" }
   | { type: "free" }
   | { type: "copy" }
+  | { type: "rec" }
   | { type: "prev" }
   | { type: "next" }
   | { type: "list" }
@@ -257,5 +258,6 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ch === " ") return done({ type: "toggle" });
   if (ch === "i") return done({ type: "free" });
   if (ch === "c") return done({ type: "copy" });
+  if (ch === ".") return done({ type: "rec" });
   return done(null);
 }

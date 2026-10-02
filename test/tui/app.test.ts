@@ -424,3 +424,30 @@ test("列幅: 判断は clamp(round(cols*0.34), 44, 58)、背景は残り(区切
   assert.equal(200 - split(200), 58);
   assert.equal(split(147) - 3, 94 + 0, "147 桁: 判断 50 / 背景 94 + 区切り 3 桁");
 });
+
+test("長い推奨: 列の高さの半分を超えるときは 8 行で切って「. で全文」を出し、. で全文 / 折りたたみを切り替える", () => {
+  const sentences = Array.from({ length: 14 }, (_, i) => `これは長い推奨を再現するための ${i} 番目の文です。`).join("");
+  const app = new App();
+  app.upsert(decision(withExplanation(V2_MD.replace("SSE を推します。実装が小さく済みます。", sentences))), t);
+  const size = { cols: 140, rows: 30 };
+  const draw = () => {
+    const f = renderFrame(app.view(t), size);
+    app.syncFrame(f);
+    return stripAnsi(f.text);
+  };
+  let text = draw();
+  assert.ok(text.includes("… (. で全文)"), "切って案内を出す");
+  assert.ok(!text.includes("13 番目"), "末尾の文は隠れる");
+  press(app, ch("."));
+  text = draw();
+  
+  assert.equal(app.view(t).recFull, true);
+  assert.ok(!text.includes("… (. で全文)"));
+  press(app, ch("."));
+  assert.equal(app.view(t).recFull, false);
+  assert.ok(draw().includes("… (. で全文)"));
+  // 短い推奨(V2_MD 既定)は切らない
+  const short = new App();
+  short.upsert(decision(withExplanation(V2_MD)), t);
+  assert.ok(!stripAnsi(renderFrame(short.view(t), size).text).includes("(. で全文)"));
+});

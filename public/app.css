@@ -178,3 +178,14 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .todo-cap { font-size: 12px; font-weight: 700; color: var(--blocker); }
 .codewrap { position: relative; }
 .copy-btn { position: absolute; top: 12px; right: 6px; font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }
+
+/* 長い説明の折りたたみ(`.` で展開): 推奨は約 6 行、カード本文は各 3 行 */
+.rec { position: relative; }
+.rec-body { max-height: calc(6 * 1.6em); overflow: hidden; }
+.rec.has-more .rec-body { -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.opt .desc.clampable { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.expanded .rec-body { max-height: none; -webkit-mask-image: none; mask-image: none; }
+.expanded .opt .desc.clampable { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
+.more-chip { font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.rec .more-chip { position: absolute; right: 8px; bottom: 6px; }
+.opt .grow > .more-chip { display: block; margin: 2px 0 0 auto; }

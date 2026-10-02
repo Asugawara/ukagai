@@ -28,6 +28,8 @@ export interface View {
   toast: string | null;
   /** クリップボードに送れるか */
   copy: boolean;
+  /** 長い推奨ボックスを全文で表示(`.`) */
+  recFull: boolean;
   /** 一覧を開いているとき */
   list: { items: ListItem[]; index: number } | null;
   /** 背景(上下配置では画面全体)の先頭行 */
@@ -122,15 +124,23 @@ function cardLines(card: Card, w: number, o: { cursor: boolean; selected: boolea
   return out;
 }
 
-function recBox(text: string, w: number): string[] {
+/** 推奨ボックスが列の高さの半分を超えるとき、本文を何行で切るか */
+const REC_CUT_ROWS = 8;
+
+function recBox(text: string, w: number, o: { rows: number; full: boolean }): string[] {
   const inner = Math.max(10, w - 4);
-  const body = renderMarkdown(text, inner);
+  let body = renderMarkdown(text, inner);
+  if (body.length + 2 > o.rows / 2) {
+    body = o.full
+      ? [...body, `${DIM}… (. で折りたたむ)${RESET}`]
+      : [...body.slice(0, REC_CUT_ROWS), `${DIM}… (. で全文)${RESET}`];
+  }
   const top = `${DIM}┌─${RESET} ${BOLD}推奨${RESET} ${DIM}${"─".repeat(Math.max(0, w - 9))}┐${RESET}`;
   const bottom = `${DIM}└${"─".repeat(Math.max(0, w - 2))}┘${RESET}`;
   return [top, ...body.map((l) => `${DIM}│${RESET} ${padEnd(l, inner)} ${DIM}│${RESET}`), bottom];
 }
 
-function rightColumn(v: View, m: ScreenModel, w: number): Column {
+function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   const lines: string[] = [];
   let focus: [number, number] = [0, 0];
 
@@ -169,7 +179,7 @@ function rightColumn(v: View, m: ScreenModel, w: number): Column {
     }
   }
   if (m.todo) lines.push(`${BOLD}${YELLOW}人にしてほしいこと${RESET}`, ...renderMarkdown(m.todo, w), "");
-  if (m.recommendation) lines.push(...recBox(m.recommendation, w), "");
+  if (m.recommendation) lines.push(...recBox(m.recommendation, w, { rows, full: v.recFull }), "");
 
   q.cards.forEach((c, i) => {
     const start = lines.length;
@@ -331,13 +341,13 @@ export function renderFrame(v: View, size: Size): Frame {
     }
 
     // 右: 溢れるときはカーソルのカードが見える位置まで送る(手でスクロールしたらその位置)。ヒントは最下段に固定
-    let right = rightColumn(v, m, rightW);
+    let right = rightColumn(v, m, rightW, winRows);
     const rightOver = right.lines.length + 2 > winRows;
     let rcol: string[];
     let rightMax = 0;
     let rightOff = 0;
     if (rightOver) {
-      right = rightColumn(v, m, rightW - 1);
+      right = rightColumn(v, m, rightW - 1, winRows);
       const size = Math.max(1, winRows - 2);
       rightMax = Math.max(0, right.lines.length - size);
       const [fs, fe] = right.focus;
@@ -354,7 +364,7 @@ export function renderFrame(v: View, size: Size): Frame {
   }
 
   // 狭い: 上下。判断を先に置き(いつも届くように)、背景を下に続ける
-  const right = rightColumn(v, m, cols - 1);
+  const right = rightColumn(v, m, cols - 1, bodyRows);
   const leftR = leftColumn(m, cols - 1, false);
   const sh = shifted(leftR, cols - 1, v.hscroll);
   const leftAll = sh.lines;
