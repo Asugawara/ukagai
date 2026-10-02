@@ -81,7 +81,7 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
     SessionStart: group(mk(opts.autostart === false ? ["--no-autostart"] : [], 5)),
     SubagentStart: group(mk([], 5)),
     UserPromptSubmit: group(mk([], 5, { async: true })),
-    Stop: group(mk([], 5, { async: true })),
+    Stop: group(mk([], 5)),
     SubagentStop: group(mk([], 5, { async: true })),
     PostToolUse: group(post, postMatcher),
     SessionEnd: group(mk([], 2)),

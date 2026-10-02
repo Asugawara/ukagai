@@ -54,7 +54,7 @@
 }
 ```
 
-`kind` は `answer_question`(AskUserQuestion)か `approve_plan`(ExitPlanMode)。`request` は hook の `tool_input` をそのまま入れる。`explanation` は任意(形は計画 3 節の `Decision.explanation`)。
+`kind` は `answer_question`(AskUserQuestion)か `approve_plan`(ExitPlanMode)。`request` は hook の `tool_input` をそのまま入れる。`explanation` は任意(形は計画 3 節の `Decision.explanation`)。`explanation.type`(`decision` / `blocker`、省略 = decision)は説明ファイルの front matter の `type` で、server は保存して返すだけ。
 
 応答: **新規は 201、同じ `tool_use_id` が既にあれば 200**(本文はどちらも `Decision` 全体)。`status` は `pending`。
 

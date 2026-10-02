@@ -24,6 +24,7 @@
 |---|---|---|---|
 | `ukagai` | 必須 | `1` | 形式のバージョン。`1` 以外は不正 |
 | `question` | 必須 | 文字列 | `AskUserQuestion` の `questions[0].question` を**一字一句そのまま**。照合は完全一致(空白・全角半角の正規化はしない)。質問が複数のときも `questions[0]` だけを使う |
+| `type` | 任意 | `decision` / `blocker` | 説明の種類。無い・`decision` = 人に判断を求める(従来)。`blocker` = 人にしかできない作業(認証・権限付与・2 要素認証・鍵の配置・物理操作)で進めなくなった(3.2 節の blocker の必須節、12 節)。これ以外の値は不正(`type` を missing) |
 | `title` | 必須 | 文字列 | 人向けの「決めてほしいこと」1 文(例: `判断ログの保存形式を JSONL と SQLite のどちらにするか`)。GUI の判断見出し。`question` は照合用で GUI には出さない |
 | `reversibility` | 必須 | `reversible` / `costly` / `irreversible` | 決めた後に戻せるか。`reversible` = 簡単に戻せる、`costly` = 戻せるが手間かコストがかかる、`irreversible` = 戻せない |
 | `scope` | 必須 | `file` / `repo` / `machine` / `external` | 影響の範囲。`file` = 数ファイル、`repo` = リポジトリ全体、`machine` = この機械(リポジトリ外のファイル・設定・プロセス)、`external` = 他人・他システム(push、公開、課金、メッセージ送信) |
@@ -64,6 +65,17 @@
 | 確かめたこと | 任意。file:line、コマンドの結果。推測は「推測」と書く。検査しない |
 | 関係する差分 | コード変更が絡むときに書く。hook は判定できないので**検査しない**(任意)。` ```diff ` で 20 行以内 |
 
+**`type: blocker` のとき**(選択肢は固定の 3 つ: `対応した。続けて (Recommended)` / `この手順は飛ばして続けて` / `ここで中断`。`recommended` は `対応した。続けて`。`reversibility` / `scope` は通常どおり、たいてい `reversible` / `machine`):
+
+| 節 | 条件 |
+|---|---|
+| なぜ止まったか | 必須(コード `why`)。節に空でない行が 1 行以上。失敗したコマンドとエラーの抜粋(` ``` ` で 10 行以内)を含める(内容は検査しない)。「なぜ今この判断が要るか」の代わり |
+| 人にしてほしいこと | **blocker では必須**(コード `todo`)。番号付きの手順と、人がそのまま打てるコマンドの fenced code block。節の中に ` ``` ` のコードブロックが 1 つ以上あることを検査する(内容は検査しない) |
+| 選択肢 | 通常どおり(3.3 の表。先頭列 = 上の 3 ラベル) |
+| 推奨 / 図 | **要求しない** |
+
+`type` が無い・`decision` のときは従来どおりで、`todo` は要求しない。
+
 ### 3.3 表の最低条件
 
 「選択肢」の節の中に、GFM の表(ヘッダ行 + 区切り行 `|---|` + データ行)が次を満たすこと。
@@ -101,16 +113,18 @@
 | `file` | 説明ファイルが見つからない(この場合は他のコードを評価しない) | 説明ファイル本体 |
 | `front_matter` | front matter が無い、閉じていない、または `ukagai` が `1` でない | front matter(`ukagai: 1`) |
 | `question` | `question` が無い、または空 | `question` |
+| `type` | `type` があるのに `decision` / `blocker` のどちらでもない(以降は decision として評価) | `type`(decision / blocker) |
 | `title` | `title` が無い、または空 | `title`(決めてほしいこと 1 文) |
 | `reversibility` | 無い、または値が集合外 | `reversibility` |
 | `scope` | 無い、または値が集合外 | `scope` |
 | `recommended` | 無い・空、またはラベル照合で `options[].label` のどれにも一致しない(labels が分かるとき) | `recommended`(推す選択肢のラベル) |
-| `why` | 「なぜ今この判断が要るか」の節が無い、または空 | 「なぜ今この判断が要るか」の節 |
+| `why` | 「なぜ今この判断が要るか」(blocker では「なぜ止まったか」)の節が無い、または空 | 「なぜ今この判断が要るか」の節 |
 | `options` | 「選択肢」の節が無い | 「選択肢」の節 |
 | `table` | `options` があるのに 3.3 の表が無い(`options` が無いときは評価しない) | 選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行) |
-| `recommend` | 「推奨」の節が無い、または空 | 「推奨」の節 |
+| `todo` | `type: blocker` なのに、「人にしてほしいこと」の節が無い・空、または節の中にコードブロックが無い | 「人にしてほしいこと」の節(コマンドのコードブロック付き) |
+| `recommend` | (blocker では評価しない)「推奨」の節が無い、または空 | 「推奨」の節 |
 | `multi` | (検査ではなく 5 節の手順 0 で使う)`questions` が 2 つ以上 | 質問は 1 回に 1 問 |
-| `diagram` | 図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
+| `diagram` | (blocker では評価しない)図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
 
 - front matter が無いときは `front_matter` だけを追加し、`question` `title` `reversibility` `scope` `recommended` は評価しない(図の必須判定は安全側で「必須」)。
 - 検査の入力は「ファイル全文」と、任意の `labels`(`questions[0].options[].label` の配列。`validateExplanation(markdown, kind, labels?)`)。
@@ -138,7 +152,7 @@
 
 - `{path}`: 保存先の絶対パス(`<scratchpad_dir>/ukagai/explain.md`。名前は自由だが例を 1 つ示す)
 - `{question}`: `questions[0].question` の原文
-- `{missing}`: 4 節の「呼び名」(`recommended` `title` なども含む。呼び名が長いため 600 文字の切り詰めが効きやすい)を `、` で連結したもの
+- `{missing}`: 4 節の「呼び名」(`recommended` `title` なども含む。呼び名が長いため 600 文字の切り詰めが効きやすい)を `、` で連結したもの(`todo` = 「人にしてほしいこと」の節(コマンドのコードブロック付き)、`type` = `type`(decision / blocker))
 
 共通の制約: **GUI の URL・ポート・API パスを書かない**(Claude 自身に `curl` で回答させないため)。展開後の全文は **600 文字以内**。超えるときは `{missing}` を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。`{question}` は原文でなければ照合できないので切り詰めない。
 
@@ -164,13 +178,14 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 
 ## 8. SessionStart / SubagentStart の additionalContext
 
-どちらも sync で返す。4 行以内。`{置き場の絶対パス}` は 1 節で決まる `<scratchpad_dir>/ukagai/` または `~/.ukagai/explain/<session_id>/`。URL は書かない。列挙値を書く(E5 で、書かないと `reversibility` / `scope` が自由文になると分かった)。
+どちらも sync で返す。5 行以内。`{置き場の絶対パス}` は 1 節で決まる `<scratchpad_dir>/ukagai/` または `~/.ukagai/explain/<session_id>/`。URL は書かない。列挙値を書く(E5 で、書かないと `reversibility` / `scope` が自由文になると分かった)。
 
 ```
 人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。
 聞くときは、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
 front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。構造や流れは Mermaid の図にする。
 文章で質問せず AskUserQuestion を使い、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
+認証・権限など人の作業で止まるときは、文章で終えず blocker 形式の説明を書いて AskUserQuestion(対応した / 飛ばして続ける / 中断)で聞く。人が対応したら同じ作業を再試行する。
 ```
 
 サブエージェント内では AskUserQuestion が提供されないため判断は発生しない(Claude Code 2.1.287 で確認)。SubagentStart の additionalContext は届くが、使われる場面はない。
@@ -197,7 +212,7 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 
 ## 11. fixture
 
-`test/explain-fixtures/` に 10。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表は `labels` を渡さない前提(データ行 2 以上、ラベル照合なし)で判定する。
+`test/explain-fixtures/` に 13。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表は `labels` を渡さない前提(データ行 2 以上、ラベル照合なし)で判定する。
 
 | ファイル | valid | missing |
 |---|---|---|
@@ -211,6 +226,20 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 | `fail-no-question.md` | false | `question` |
 | `fail-no-diagram-when-required.md` | false | `diagram` |
 | `plan-heading-variant.md` | true | なし |
+| `pass-blocker.md` | true | なし(`type: blocker`、`todo` にコードブロック、3 行の表、推奨節・図なし) |
+| `fail-blocker-no-todo.md` | false | `todo` |
+| `fail-bad-type.md` | false | `type`(`type: foo`) |
+
+## 12. Stop hook の保険(文章で止まった blocker)
+
+エージェントが blocker 形式を使わず、文章で「認証してください」と言って turn を終えたときの保険。
+
+- `Stop` は **sync**(`async: false`、timeout 5)。`SubagentStop` は async のまま。
+- 次のとき何も返さない: `stop_hook_active === true`(Claude Code は Stop hook で続行させた後の Stop に付ける。**続行は 1 回限り**でループしない)、`permission_mode === "plan"`、`--observe`、`last_assistant_message` が無い、ブロッカー語彙に一致しない。
+- `stop_hook_active` が false で `last_assistant_message` がブロッカー語彙に一致したら、stdout に `{"decision":"block","reason":"<理由文>"}` を返す。理由文(600 文字以内、URL なし。`src/hook/blocker.ts` の `BLOCKER_REASON`):
+  `人の作業(認証・権限など)が要るなら、文章で終えずに ukagai の blocker 形式で聞いてください: skill ukagai-explain の「人の作業で止まったとき」に従って説明ファイル(type: blocker、「なぜ止まったか」「人にしてほしいこと」「選択肢」)を書き、AskUserQuestion を選択肢「対応した。続けて (Recommended)」「この手順は飛ばして続けて」「ここで中断」で出してください。人の作業が要らないなら、そのまま終えて構いません。`
+- ブロッカー語彙(`BLOCKER_VOCABULARY`、大小無視): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|not logged in|login required|auth(entication)? (required|failed)|進められません|進めません|できませんでした.*(してください|お願いします)|cannot proceed|blocked by`。`escaped_question`(末尾が ？)の判定とは独立。
+- 観測 event(`POST /api/events`)は今までどおり送り、語彙に一致したら `blocker_detected: true` を足す(`stop_hook_active` に関係なく)。POST は 1000 ms で打ち切り、hook 全体は 1.9 秒以内に返す。失敗しても何も出力しない(フェイルオープン)。
 
 ## 既知の制約
 

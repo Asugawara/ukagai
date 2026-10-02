@@ -1,9 +1,11 @@
 import { PreToolUseInput } from "../contract.js";
 import { Client } from "./client.js";
-import { observeDecisionTool, observedEvent, permissionRequest, sessionContext } from "./context-hooks.js";
+import { observeDecisionTool, observedEvent, permissionRequest, sessionContext, stopDecision } from "./context-hooks.js";
 import { handleDecision } from "./decision.js";
 import { parseArgs } from "./options.js";
 
+/** Stop hook 全体の上限 */
+const STOP_TOTAL_MS = 1900;
 const DECISION_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 
 async function readStdin(): Promise<string> {
@@ -39,6 +41,10 @@ export async function run(argv: string[]): Promise<number> {
       write(await permissionRequest(input, client));
     } else if (ev === "SessionStart" || ev === "SubagentStart") {
       write(await sessionContext(input, opts));
+    } else if (ev === "Stop") {
+      const out = opts.observe ? null : stopDecision(input);
+      await Promise.race([observedEvent(input, client), new Promise<void>((r) => setTimeout(r, STOP_TOTAL_MS).unref())]);
+      write(out);
     } else {
       await observedEvent(input, client);
     }

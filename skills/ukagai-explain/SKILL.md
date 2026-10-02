@@ -75,6 +75,69 @@ scope: file | repo | machine | external
 > 保存形式を変えると、既存のログを読めなくなる人が出る。
 ```
 
+## 人の作業で止まったとき(blocker)
+
+認証・ログイン・権限付与・2 要素認証・鍵の配置・物理的な操作など、**人にしかできない作業**で進めなくなったときに使う。**文章で「認証してください」と言って turn を終えるのは禁止。** 終えると ukagai の GUI には何も出ず、人が気づいて「進めて」と打つまで止まる。
+
+説明ファイルを `type: blocker` で書き、AskUserQuestion を **1 問、選択肢は次の固定の 3 つ**で出す:
+
+1. `対応した。続けて (Recommended)`
+2. `この手順は飛ばして続けて`
+3. `ここで中断`
+
+人が「対応した」を選んだら、**同じ作業を再試行する**。
+
+front matter: `ukagai: 1`、`question`(一字一句)、`type: blocker`、`title`(何が必要か 1 文)、`recommended: 対応した。続けて`、`reversibility` / `scope`(たいてい `reversible` / `machine`)。
+
+本文の必須節(**推奨と図は要らない**):
+
+| 節 | 書くこと |
+|---|---|
+| なぜ止まったか | 失敗したコマンドとエラーの抜粋(コードブロックで 10 行以内) |
+| 人にしてほしいこと | 番号付きの手順と、人がそのまま打てるコマンドのコードブロック(1 つ以上。無いと hook が deny する) |
+| 選択肢 | 表。先頭列 = 上の 3 ラベル、列は「選ぶと起きること」「リスクと戻し方」 |
+
+良い例(gcloud の認証切れ):
+
+````markdown
+---
+ukagai: 1
+question: gcloud の認証が切れています。対応できましたか？
+type: blocker
+title: gcloud の認証が切れているので `gcloud auth login` をしてほしい
+recommended: 対応した。続けて
+reversibility: reversible
+scope: machine
+---
+
+## なぜ止まったか
+
+`gcloud run deploy` が認証エラーで失敗しました。ブラウザでのログインが要り、私にはできません。
+
+```
+ERROR: (gcloud.run.deploy) You do not currently have an active account selected.
+Please run: $ gcloud auth login
+```
+
+## 人にしてほしいこと
+
+1. ターミナルで次を実行し、ブラウザでログインする。
+2. アプリケーションのデフォルト認証も更新する。
+
+```sh
+gcloud auth login
+gcloud auth application-default login
+```
+
+## 選択肢
+
+| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+|---|---|---|
+| 対応した。続けて | 同じデプロイを再試行して続ける。 | 認証が通っていなければ、また同じ表示で止まる。 |
+| この手順は飛ばして続けて | デプロイを飛ばして残りの作業を進める。 | デプロイされないまま進む。あとで手動でデプロイすれば戻せる。 |
+| ここで中断 | 作業をここで止める。 | 途中までの変更は残る。再開すれば続けられる。 |
+````
+
 ## やってはいけないこと
 
 - **推奨を決めずに聞く。**

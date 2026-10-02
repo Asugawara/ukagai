@@ -150,6 +150,7 @@ export type DecisionContext = z.infer<typeof DecisionContext>;
 
 export const Explanation = z.object({
   path: z.string(),
+  type: z.enum(["decision", "blocker"]).optional(),
   title: z.string().optional(),
   question: z.string().optional(),
   reversibility: z.enum(["reversible", "costly", "irreversible"]).optional(),
@@ -222,6 +223,7 @@ export type WaitResponse = z.infer<typeof WaitResponse>;
 export const EventInput = HookInputBase.extend({
   received_at: z.string(),
   escaped_question: z.boolean().optional(),
+  blocker_detected: z.boolean().optional(),
   observe: z.object({ phase: z.enum(["start", "end"]) }).optional(),
 });
 export type EventInput = z.infer<typeof EventInput>;
