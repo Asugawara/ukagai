@@ -471,9 +471,9 @@ export async function markUsed(path: string): Promise<string> {
 
 // ---- deny reason (spec sections 7 and 9) ----
 
-const MAX_REASON = 600;
+const MAX_REASON = 1000;
 /** Upper bound for a deny reason that embeds the minimal template (the template itself is about 400 characters) */
-const MAX_REASON_TEMPLATE = 1200;
+const MAX_REASON_TEMPLATE = 1600;
 
 export interface DenyParams {
   /** AskUserQuestion only; omitted for plans */
@@ -563,7 +563,7 @@ function composeReason(template: DenyTemplate, p: DenyParams, missingText: strin
   );
 }
 
-/** At most 600 characters (1200 with the template). Beyond that, missing is cut to "... and N more", then the last sentence is dropped. question is never cut */
+/** At most 1000 characters (1600 with the template). Beyond that, missing is cut to "... and N more", then the last sentence is dropped. question is never cut */
 export function denyReason(template: DenyTemplate, p: DenyParams): string {
   const max = needsTemplate(p) ? MAX_REASON_TEMPLATE : MAX_REASON;
   for (let keep = p.missing.length; keep >= 0; keep--) {
@@ -575,7 +575,7 @@ export function denyReason(template: DenyTemplate, p: DenyParams): string {
   return composeReason(template, p, `... and ${p.missing.length} more`, false);
 }
 
-/** Deny reason for two or more questions (spec section 5, step 0). No URL, at most 600 characters */
+/** Deny reason for two or more questions (spec section 5, step 0). No URL, at most 1000 characters */
 export function multiDenyReason(count: number): string {
   return (
     `Ask one question per AskUserQuestion call (this call had ${count}). The GUI shows one question at a time, with its explanation file. ` +

@@ -180,22 +180,22 @@ test("markUsed renames to .used.md", async () => {
   assert.deepEqual(readdirSync(dir), ["a.used.md"]);
 });
 
-test("denyReason: has the save path, the verbatim question and the missing items; at most 600 characters; no URL", () => {
+test("denyReason: has the save path, the verbatim question and the missing items; at most 1000 characters; no URL", () => {
   for (const t of ["A", "B"] as const) {
     const r = denyReason(t, { path: "/tmp/x/ukagai/explain.md", question: "Which one?", missing: ["a", "b"] });
     assert.match(r, /\/tmp\/x\/ukagai\/explain\.md/);
     assert.match(r, /Which one\?/);
     assert.match(r, /a; b/);
-    assert.ok(r.length <= 600);
+    assert.ok(r.length <= 1000);
     assert.doesNotMatch(r, /https?:|localhost|127\.0\.0\.1|\/api\//);
   }
   const many = Array.from({ length: 80 }, (_, i) => `item${i}`);
   const long = denyReason("A", { path: "/p/ukagai/explain.md", question: "Q", missing: many });
-  assert.ok(long.length <= 600);
+  assert.ok(long.length <= 1000);
   assert.match(long, /\.\.\. and \d+ more/);
 });
 
-test("denyReason: no file / missing front matter gives the minimal template (ukagai: 1, the real question, English headings, save path) within 1200 characters", () => {
+test("denyReason: no file / missing front matter gives the minimal template (ukagai: 1, the real question, English headings, save path) within 1600 characters", () => {
   for (const t of ["A", "B"] as const) {
     for (const codes of [["file"], ["front_matter", "question"]] as const) {
       const r = denyReason(t, {
@@ -212,7 +212,7 @@ test("denyReason: no file / missing front matter gives the minimal template (uka
       assert.match(r, new RegExp(`## ${SECTION.recommendation[0]}`));
       assert.match(r, /\| Option \| What happens if chosen \| Risks and how to undo \|/);
       assert.match(r, /\/tmp\/x\/ukagai\/explain\.md/);
-      assert.ok(r.length <= 1200);
+      assert.ok(r.length <= 1600);
       assert.doesNotMatch(r, /https?:|localhost|127\.0\.0\.1|\/api\//);
       assert.doesNotMatch(r, /[ぁ-んァ-ン一-龥]/);
     }
@@ -225,7 +225,7 @@ test("denyReason: the template placeholder under Recommendation does not satisfy
   assert.doesNotMatch(rec, RECOMMEND_COND);
 });
 
-test("denyReason: a table-only defect has no template and stays within 600 characters", () => {
+test("denyReason: a table-only defect has no template and stays within 1000 characters", () => {
   const r = denyReason("A", {
     path: "/tmp/x/ukagai/explain.md",
     question: "Q",
@@ -235,7 +235,7 @@ test("denyReason: a table-only defect has no template and stays within 600 chara
   assert.doesNotMatch(r, /ukagai: 1\n/);
   assert.doesNotMatch(r, /```/);
   assert.match(r, /The full format is in skill ukagai-explain/);
-  assert.ok(r.length <= 600);
+  assert.ok(r.length <= 1000);
 });
 
 test("denyReason: a blocker defect gives a template with the fixed 3 labels and the table header", () => {
@@ -254,7 +254,7 @@ test("denyReason: a blocker defect gives a template with the fixed 3 labels and 
   assert.match(r, /\| Option \| What happens if chosen \| Risks and how to undo \|/);
   assert.match(r, new RegExp(`## ${SECTION.blockerWhy[0]}`));
   assert.match(r, new RegExp(`## ${SECTION.blockerTodo[0]}`));
-  assert.ok(r.length <= 1200);
+  assert.ok(r.length <= 1600);
 });
 
 test("denyReason for a plan: English, no template, mentions ExitPlanMode", () => {
@@ -266,10 +266,10 @@ test("denyReason for a plan: English, no template, mentions ExitPlanMode", () =>
   }
 });
 
-test("multiDenyReason: has the question count; at most 600 characters; no URL", () => {
+test("multiDenyReason: has the question count; at most 1000 characters; no URL", () => {
   const r = multiDenyReason(3);
   assert.match(r, /this call had 3/);
-  assert.ok(r.length <= 600);
+  assert.ok(r.length <= 1000);
   assert.doesNotMatch(r, /https?:|localhost|127\.0\.0\.1|\/api\//);
   assert.doesNotMatch(r, /[ぁ-んァ-ン一-龥]/);
 });

@@ -7,7 +7,7 @@ import { contextText, isEscapedQuestion } from "../../src/hook/context-hooks.js"
 import { dataDirWithToken, fakeServer, json, runHook, tmpDir, writeFile, type Fake, type Handler } from "./helpers.js";
 
 const fx = (n: string) => JSON.parse(readFileSync(fileURLToPath(new URL(`../fixtures/${n}`, import.meta.url)), "utf8"));
-const Q = "A と B のどちらにしますか？";
+const Q = "Which do you choose, A or B?";
 const NOW = () => new Date().toISOString();
 
 const explanationFor = (q: string) => `---
