@@ -9,6 +9,7 @@ export interface Target {
   observe: boolean;
   dryRun: boolean;
   noSkill: boolean;
+  noAutostart: boolean;
   server: string;
   dataDir: string;
   /** hook の args に足す(既定値と違うときだけ) */
@@ -25,6 +26,7 @@ export function parseTarget(argv: string[]): Target {
     observe: false,
     dryRun: false,
     noSkill: false,
+    noAutostart: false,
     server: DEFAULT_SERVER,
     dataDir: join(homedir(), ".ukagai"),
   };
@@ -41,6 +43,7 @@ export function parseTarget(argv: string[]): Target {
     else if (a === "--dry-run") t.dryRun = true;
     else if (a === "--observe") t.observe = true;
     else if (a === "--no-skill") t.noSkill = true;
+    else if (a === "--no-autostart") t.noAutostart = true;
     else if (a === "--timeout") {
       const n = Number(val());
       if (!Number.isInteger(n) || n < 15) throw new Error("--timeout は 15 以上の整数(秒)");

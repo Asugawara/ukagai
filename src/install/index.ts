@@ -15,7 +15,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   try {
     const before = await readSettings(t.settingsFile);
-    const entries = buildHookEntries({ node: process.execPath, cli: CLI_PATH, timeout: t.timeout, observe: t.observe, hookArgs: t.hookArgs });
+    const entries = buildHookEntries({ node: process.execPath, cli: CLI_PATH, timeout: t.timeout, observe: t.observe, hookArgs: t.hookArgs, autostart: !t.noAutostart });
     const after = mergeHooks(before, entries);
     const skillDest = join(t.skillDir, "SKILL.md");
 
@@ -37,6 +37,7 @@ export async function run(argv: string[]): Promise<number> {
     out.push(`node:     ${process.execPath}`, `cli:      ${CLI_PATH}`);
     out.push(`timeout:  ${t.timeout}s(PreToolUse の --budget ${t.timeout - 10})${t.observe ? " [observe]" : ""}`);
     out.push(`events:   ${HOOK_EVENTS.join(", ")}`);
+    out.push(t.noAutostart ? "autostart: off(--no-autostart)" : "autostart: on");
     out.push(t.noSkill ? "skill:    (--no-skill)" : `skill:    ${skillDest}`);
     process.stdout.write(out.join("\n") + "\n");
     return 0;

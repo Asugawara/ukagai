@@ -1,3 +1,4 @@
+import { autostart, defaultDeps, type AutostartDeps } from "./autostart.js";
 import { EventInput, HookInputBase } from "../contract.js";
 import type { Client } from "./client.js";
 import { explainDir } from "./explain.js";
@@ -26,11 +27,16 @@ export function contextText(dir: string): string {
   ].join("\n");
 }
 
-export function sessionContext(raw: Record<string, unknown>, opts: HookOptions): Out | null {
+export async function sessionContext(
+  raw: Record<string, unknown>,
+  opts: HookOptions,
+  deps: AutostartDeps = defaultDeps,
+): Promise<Out | null> {
   const base = HookInputBase.safeParse(raw);
   if (!base.success) return null;
   const ev = base.data.hook_event_name;
   if (ev !== "SessionStart" && ev !== "SubagentStart") return null;
+  if (ev === "SessionStart") await autostart(opts, deps);
   const dir = explainDir(base.data.scratchpad_dir, opts.dataDir, base.data.session_id);
   return { hookSpecificOutput: { hookEventName: ev, additionalContext: contextText(dir) } };
 }
