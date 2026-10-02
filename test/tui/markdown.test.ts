@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderMarkdown } from "../../src/tui/markdown.js";
-import { stripAnsi, width, wrap } from "../../src/tui/width.js";
+import { renderMarkdown, renderMarkdownRich } from "../../src/tui/markdown.js";
+import { sliceCols, stripAnsi, width, wrap } from "../../src/tui/width.js";
 
 const plain = (md: string, w = 60) => renderMarkdown(md, w).map(stripAnsi);
 
@@ -54,12 +54,21 @@ test("mermaid は罫線の図に描く(ノード名を含み、幅は列幅以�
   assert.equal(width(row), width(lines.find((l) => l.includes("┌"))!));
 });
 
-test("mermaid: 幅が足りないときは退避文と定義", () => {
-  const raw = renderMarkdown("```mermaid\nflowchart LR\n  A[調査] --> B[判断] --> C[実装]\n```\n", 20);
-  const lines = raw.map(stripAnsi);
-  assert.match(lines[0]!, /^\(図は幅 \d+ 列が必要。端末を広げるか GUI で表示\)$/);
-  assert.ok(lines.includes("  flowchart LR"));
-  assert.ok(raw[1]!.includes("\x1b[2m"));
+test("mermaid: 幅が足りなくても描く(列幅で切り詰め、注記が付き、全体は wide に残る)", () => {
+  const r = renderMarkdownRich("```mermaid\nflowchart LR\n  A[調査] --> B[判断] --> C[実装]\n```\n", 20);
+  const lines = r.lines.map(stripAnsi);
+  const top = lines.findIndex((l) => l.includes("┌"));
+  assert.match(lines.slice(0, top).join("").replace(/ /g, ""), /^\(図:幅\d+桁。←→で横スクロール·fで全幅\)$/);
+  assert.ok(r.lines[0]!.includes("\x1b[2m"));
+  assert.ok(lines.some((l) => l.includes("┌")));
+  assert.ok(!lines.some((l) => l.includes("描画に失敗")));
+  for (const l of r.lines) assert.ok(width(l) <= 20, l);
+  const k = r.wide.findIndex(Boolean);
+  assert.ok(k > 0 && width(r.wide[k]!) > 20, "超過行は全体を持つ");
+  assert.ok(r.wide.slice(0, top).every((x) => x === null), "注記行は動かさない");
+  // 全幅に切り替えられないときは注記から「f で全幅」を外す
+  const nf = renderMarkdownRich("```mermaid\nflowchart LR\n  A[調査] --> B[判断]\n```\n", 12, { fullHint: false }).lines.map(stripAnsi);
+  assert.match(nf.slice(0, nf.findIndex((l) => l.includes("┌"))).join("").replace(/ /g, ""), /^\(図:幅\d+桁。←→で横スクロール\)$/);
 });
 
 test("mermaid: 描けない定義は失敗の退避文と定義", () => {

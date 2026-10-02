@@ -21,6 +21,10 @@ interface Draft {
 export const TOAST_MS = 2000;
 /** ホイール 1 ノッチの行数 */
 export const WHEEL_LINES = 3;
+/** ← → 1 回の横スクロール量(桁) */
+export const HSCROLL_STEP = 8;
+/** 「f で全幅表示」の案内を出しておく時間 */
+export const FULL_HINT_MS = 6000;
 
 const STATUS_TEXT: Record<string, string> = {
   answer_submitted: "届けています…",
@@ -40,10 +44,17 @@ export class App {
   /** 判断列の先頭行。null ならカーソルに追従 */
   rscroll: number | null = null;
   focus: Focus = "decision";
+  /** 幅超過の図の横位置(桁) */
+  hscroll = 0;
+  /** 背景を全幅で表示(判断の列を隠す) */
+  full = false;
   /** 直近に描いた画面の寸法(スクロールの量と範囲に使う) */
-  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows"> = {
-    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20,
+  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax"> = {
+    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0,
   };
+  /** 「f で全幅表示」の案内は判断ごとに 1 回。出した判断と、いつまで出すか */
+  private hinted = new Set<string>();
+  private hintUntil = 0;
   /** クリップボードに送れるか(pbcopy の有無。index.ts が決める) */
   copySupported = true;
   private models = new Map<string, ScreenModel>();
@@ -98,6 +109,9 @@ export class App {
     this.shownId = id;
     this.scroll = 0;
     this.rscroll = null;
+    this.hscroll = 0;
+    this.full = false;
+    this.hintUntil = 0;
     this.input = null;
     if (this.mode === "input") this.mode = "normal";
   }
@@ -161,20 +175,30 @@ export class App {
       scroll: this.scroll,
       rscroll: this.rscroll,
       focus: this.focus,
+      hscroll: this.hscroll,
+      full: this.full,
+      fullHint: this.hintUntil > now,
       now,
     };
   }
 
-  /** 描いた画面の寸法を受け取り、スクロール位置を範囲に収める */
-  syncFrame(f: Frame): void {
+  /** 描いた画面の寸法を受け取り、スクロール位置を範囲に収める。案内を出し始めたら true(描き直す) */
+  syncFrame(f: Frame, now = Date.now()): boolean {
     this.frame = f;
     this.scroll = Math.max(0, Math.min(this.scroll, f.scrollMax));
     if (this.rscroll != null) this.rscroll = Math.max(0, Math.min(this.rscroll, f.rightMax));
+    this.hscroll = Math.max(0, Math.min(this.hscroll, f.hMax));
+    if (f.figOver && this.shownId && !this.hinted.has(this.shownId)) {
+      this.hinted.add(this.shownId);
+      this.hintUntil = now + FULL_HINT_MS;
+      return true;
+    }
+    return false;
   }
 
-  /** 左右配置のときだけフォーカスが意味を持つ */
+  /** 左右配置のときだけフォーカスが意味を持つ。全幅表示中は背景 */
   private effectiveFocus(): Focus {
-    return this.frame.wide ? this.focus : "decision";
+    return this.frame.wide ? (this.full ? "background" : this.focus) : "decision";
   }
 
   /** 背景(上下配置では画面全体)を to へ。現在の見え方 cur から相対で動かすときは呼び出し側が計算する */
@@ -204,7 +228,7 @@ export class App {
       if (this.mode === "normal") this.wheel(key.dir, key.x);
       return [];
     }
-    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), lastG: this.lastG, now });
+    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, lastG: this.lastG, now });
     this.lastG = lastG;
     return action ? this.apply(action, m, now) : [];
   }
@@ -235,6 +259,8 @@ export class App {
         return [];
       }
       case "scroll-edge": this.setScroll(a.to === "top" ? 0 : this.frame.scrollMax); return [];
+      case "hscroll": this.hscroll = Math.max(0, Math.min(this.frame.hMax, this.hscroll + a.delta * HSCROLL_STEP)); return [];
+      case "full": this.full = !this.full; this.scroll = 0; return [];
       case "focus": this.focus = this.focus === "decision" ? "background" : "decision"; return [];
       case "input-char": if (this.input) this.input.text += a.ch; return [];
       case "input-backspace": if (this.input) this.input.text = Array.from(this.input.text).slice(0, -1).join(""); return [];

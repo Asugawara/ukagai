@@ -58,8 +58,8 @@ export async function run(argv: string[]): Promise<number> {
     paintTimer = undefined;
     const cols = out.columns || 80;
     const rows = out.rows || 24;
-    const frame = renderFrame(app.view(Date.now()), { cols, rows });
-    app.syncFrame(frame);
+    let frame = renderFrame(app.view(Date.now()), { cols, rows });
+    if (app.syncFrame(frame)) frame = renderFrame(app.view(Date.now()), { cols, rows });
     let buf = "";
     // 行末で消去すると最終桁まで書いた行の末尾 1 文字が消えるので、先に消してから書く
     for (let r = 0; r < rows; r++) buf += `\x1b[${r + 1};1H\x1b[0m\x1b[2K${frame.lines[r] ?? ""}\x1b[0m`;
