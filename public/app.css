@@ -169,3 +169,6 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .md blockquote.callout p { margin: 2px 0; }
 .md blockquote.callout strong { color: var(--c); }
 .callout-label { font-size: 12px; font-weight: 700; color: var(--c); }
+
+.build { font-size: 11px; color: var(--muted); opacity: 0.7; }
+.empty-build { position: fixed; right: 12px; bottom: 8px; }

@@ -16,6 +16,8 @@ node dist/cli.js install            # 登録(バックアップを取る)。unin
 node dist/cli.js doctor             # 登録と server の診断
 ```
 
+`npm test` の GUI のテスト(`test/gui/`)は `agent-browser` がある環境でだけ走る(無ければ skip)。
+
 開発中のセッションに hook をかけないときは `install --settings <file>` で別ファイルに書き、テスト用セッションを `claude --settings <file>` で起動する。
 
 ## ドキュメント

@@ -289,6 +289,19 @@ test("/public/* の配信とパストラバーサル拒否", async () => {
   assert.equal(t.status, 404);
 });
 
+test("GET / の app.js / app.css に mtime の版(?v=)が付き、/public/* は query を無視する", async () => {
+  const env = await setup();
+  const html = await (await fetch(env.url + "/")).text();
+  for (const name of ["app.js", "app.css"]) {
+    const v = Math.floor(statSync(join(process.cwd(), "public", name)).mtimeMs).toString(36);
+    assert.ok(html.includes(`"/public/${name}?v=${v}"`), `${name} に ?v=${v} が付く`);
+    const r = await fetch(`${env.url}/public/${name}?v=${v}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("cache-control"), "no-cache");
+  }
+  assert.ok(html.includes('"/public/vendor/marked.umd.js"'), "vendor は変えない");
+});
+
 test("token ファイルは 0600", async () => {
   const env = await setup();
   assert.equal(statSync(join(env.dataDir, "token")).mode & 0o777, 0o600);
