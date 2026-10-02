@@ -34,6 +34,20 @@ function showBanner(msg) {
   b.hidden = false;
 }
 
+// server に繋がらない間(SSE の error)。赤バナーと空状態の文言で知らせ、復帰したら 2 秒だけ「再接続しました」
+let connDown = false;
+function renderEmptyText() {
+  $("empty-title").textContent = connDown ? "接続できません" : "判断待ちはありません";
+  $("empty-sub").textContent = connDown ? `${location.origin} に再接続しています` : "エージェントが質問すると、ここに表示されます";
+}
+function setConnDown(down) {
+  if (down === connDown) return;
+  connDown = down;
+  if (down) showBanner(`接続できません(${location.origin})。再接続中…`);
+  else { $("banner").hidden = true; toast("再接続しました", { kind: "ok" }); }
+  renderEmptyText();
+}
+
 // server 再起動で cookie が失効したら GET / を取り直して cookie を更新する(同時に呼ばれても 1 回)
 let refreshing = null;
 function refreshAuth() {
@@ -375,6 +389,7 @@ function impactBox(d) {
   if (!nodes.some((n) => (n.textContent ?? "").trim())) return null;
   const body = el("div", { class: "clampable impact-body md" }, ...nodes);
   callouts(body);
+  softHyphens(body);
   return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: "影響範囲と可逆性" }), body);
 }
 
@@ -431,7 +446,12 @@ function renderRightBody(d) {
           isBlocker(d) ? el("div", { class: "blocker-band", text: "人の作業待ち" }) : null,
           titleRow(el("div", { class: "v2-title", text: titleOf(d) })), metaLine(d)));
         if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: "人にしてほしいこと" }), v2.todoBox));
-        if (v2.recBox) box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), el("div", { class: "clampable rec-body" }, v2.recBox)));
+        if (v2.recBox) {
+          // callout(CAUTION / WARNING など)は畳みの対象外。推奨の枠の中、畳んだ本文の直下に出す
+          const callouts = [...v2.recBox.querySelectorAll(".callout")].filter((c) => !c.parentElement.closest(".callout"));
+          for (const c of callouts) c.remove();
+          box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)), callouts.length ? el("div", { class: "md rec-callouts" }, ...callouts) : null));
+        }
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
           ...v2.extras.map(rawItem),
@@ -711,6 +731,7 @@ function inlineClone(node) {
       if (tag === "strong" || tag === "em" || tag === "code") {
         const e = document.createElement(tag);
         e.append(inlineClone(c));
+        if (tag === "code") hyphenText(e);
         out.append(e);
       } else if (tag === "br") out.append(" ");
       else out.append(inlineClone(c));
@@ -719,9 +740,21 @@ function inlineClone(node) {
   return out;
 }
 
+// インラインコードの `-` の直後に WORD JOINER(U+2060、幅ゼロ)を置く。`--port` のような短い語が `-` で割れない
+// (U+2011 は代替フォントで間延びするので使わない)
+// (長いパス・コマンドは overflow-wrap:anywhere で列幅に折り返す)。pre の中(コピー対象)は触らない
+function hyphenText(node) {
+  const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) if (n.textContent.includes("-")) n.textContent = n.textContent.replaceAll("-", "-\u2060");
+}
+function softHyphens(root) {
+  for (const code of root.querySelectorAll("code")) if (!code.closest("pre")) hyphenText(code);
+}
+
 // pre の畳み・diff・mermaid をまとめて適用(何度呼んでも壊れない)
 async function enhance(container) {
   callouts(container);
+  softHyphens(container);
   for (const code of container.querySelectorAll("pre > code.language-diff")) {
     code.closest("pre").replaceWith(diffBlock(code.textContent ?? ""));
   }
@@ -958,11 +991,13 @@ function connect() {
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("open", () => {
     retryMs = 2000;
-    $("banner").hidden = true;
+    if (connDown) setConnDown(false);
+    else $("banner").hidden = true;
     loadAll().catch(() => {});
   });
   es.addEventListener("error", () => {
     es.close();
+    setConnDown(true);
     const wait = retryMs;
     retryMs = Math.min(5000, retryMs * 2);
     retryTimer = setTimeout(async () => { await refreshAuth(); connect(); }, wait);

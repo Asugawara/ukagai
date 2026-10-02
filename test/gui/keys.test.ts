@@ -496,6 +496,64 @@ gui("401 後の自動復旧: server を再起動しても、新着が 10 秒以�
   assert.equal(ev(`document.getElementById("banner").hidden`), true);
 });
 
+gui("server 停止中は「接続できません」バナーと空状態、再起動で消えて「再接続しました」、新着も出る", async () => {
+  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
+  assert.equal(ev(`document.getElementById("banner").hidden`), true);
+  const old = serve!;
+  old.kill();
+  await new Promise((r) => (old.exitCode !== null ? r(null) : old.once("exit", r)));
+  await waitFor("接続できないバナー", `!document.getElementById("banner").hidden && document.getElementById("banner").textContent.includes("接続できません") && document.getElementById("banner").textContent.includes(location.origin)`, 3000);
+  assert.equal(ev(`document.getElementById("empty-title").textContent`), "接続できません");
+  await sleep(1000);
+  await startServe();
+  await waitFor("「再接続しました」のトースト", `[...document.querySelectorAll(".toast.ok")].some(t => t.textContent === "再接続しました")`, 12000);
+  assert.equal(ev(`document.getElementById("banner").hidden`), true);
+  const b = await seedQuestion({ title: "停止後の判断" });
+  await waitFor("新着", `document.querySelector("#decision .v2-title")?.textContent === ${JSON.stringify(b.title)}`, 10000);
+  assert.equal(ev(`document.getElementById("empty").hidden`), true);
+});
+
+// ---- Q3 の修正(FG) ----
+
+gui("畳んだ推奨でも CAUTION の callout は枠の中で全文見える", async () => {
+  const sentence = "この選択は設定の保存先と読み込みの順序に長く影響するため、他の機能との相互作用を含めて慎重に見てください。";
+  const rec = `B を推します。${sentence.repeat(8)}\n\n> [!CAUTION]\n> 取り消せません。実行すると元には戻せないので注意。`;
+  const question = "callout の質問です？";
+  await seedQuestion({ markdown: v2md(question, "callout の判断", ROWS, "", rec), options: [{ label: "A" }, { label: "B (Recommended)" }, { label: "C" }] });
+  ab("set", "viewport", "1440", "900");
+  await reopen();
+  await waitFor("畳み(全文チップ)", `document.querySelector("#decision .rec-main.has-more")`);
+  const r = ev<{ h: number; inBody: boolean; top: number; bottom: number; recTop: number; recBottom: number; bodyBottom: number }>(`JSON.stringify((() => {
+    const c = document.querySelector("#decision .rec .callout"), rec = document.querySelector("#decision .rec").getBoundingClientRect(), b = document.querySelector("#decision .rec-body").getBoundingClientRect(), r = c.getBoundingClientRect();
+    return { h: r.height, inBody: !!c.closest(".rec-body"), top: r.top, bottom: r.bottom, recTop: rec.top, recBottom: rec.bottom, bodyBottom: b.bottom };
+  })())`);
+  assert.ok(r.h > 0 && !r.inBody, JSON.stringify(r));
+  assert.ok(r.top >= r.bodyBottom - 1 && r.top >= r.recTop && r.bottom <= r.recBottom + 1, `callout が推奨の枠の中、畳みの下に見える: ${JSON.stringify(r)}`);
+  assert.equal(ev<boolean>(`document.querySelector("#decision .rec .callout").textContent.includes("元には戻せない")`), true);
+  assert.equal(ev<boolean>(`!document.getElementById("decision").classList.contains("expanded")`), true); // 畳んだまま
+});
+
+gui("長いインラインコードは列幅で折り返し、--port は割れない", async () => {
+  const path = "src/serve/handlers/some-very-long-directory-name/another-quite-long-segment-name/file-name-long.ts-x";
+  const long = `src/${"a-long-dir-name/".repeat(7)}file.ts`;
+  assert.ok(long.length >= 120);
+  const rec = `起動は \`--port\` を使います。対象のパスは \`${long}\` です。${path.length > 0 ? "" : ""}`;
+  await seedQuestion({ markdown: v2md("コードの質問です？", "コードの判断", ROWS, "", rec), options: [{ label: "A" }, { label: "B (Recommended)" }, { label: "C" }] });
+  ab("set", "viewport", "1440", "900");
+  await reopen();
+  const r = ev<{ over: number; lines: number; port: string; cw: number; sw: number }>(`JSON.stringify((() => {
+    const body = document.querySelector("#decision .rec-body"), br = body.getBoundingClientRect();
+    const codes = [...body.querySelectorAll("code")];
+    const over = Math.max(...codes.flatMap(c => [...c.getClientRects()].map(x => x.right - br.right)));
+    const port = codes.find(c => c.textContent.includes("port"));
+    return { over, lines: port.getClientRects().length, port: port.textContent, cw: body.clientWidth, sw: body.scrollWidth };
+  })())`);
+  assert.ok(r.over <= 1, `コードが列幅を超える: ${JSON.stringify(r)}`);
+  assert.ok(r.sw <= r.cw, `scrollWidth <= clientWidth: ${JSON.stringify(r)}`);
+  assert.equal(r.lines, 1, JSON.stringify(r)); // --port は 1 行
+  assert.equal(r.port.replaceAll("\u2060", ""), "--port");
+});
+
 gui("表示中でない判断の cancel で赤いトースト(最大 3 枚、送信ボタンの上)", async () => {
   await seedQuestion({ title: "表示中の判断" });
   const others = [await seedQuestion({ title: "裏の判断 1" }), await seedQuestion({ title: "裏の判断 2" }), await seedQuestion({ title: "裏の判断 3" }), await seedQuestion({ title: "裏の判断 4" })];
@@ -615,9 +673,11 @@ gui("fallback になった(回答済み扱いでない)裏の判断は「届き�
   assert.ok(text.includes("届きませんでした"), text);
 });
 
-gui("インラインコードは折り返さない(nowrap)、コードブロックは従来どおり", async () => {
+gui("インラインコードは列幅で折り返す(nowrap でない)、`-` の後ろに U+2060、コードブロックは従来どおり", async () => {
   await seedQuestion({ markdown: v2md("コードの質問です？", "コードの判断", ROWS, "`some-very-long-inline-code-identifier`\n\n```\nblock\n```\n\n") });
   await reopen();
-  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background :not(pre) > code")).whiteSpace`), "nowrap");
-  assert.notEqual(ev<string>(`getComputedStyle(document.querySelector("#background pre code")).whiteSpace`), "nowrap");
+  const cs = ev<{ ws: string; wrap: string }>(`JSON.stringify((() => { const s = getComputedStyle(document.querySelector("#background :not(pre) > code")); return { ws: s.whiteSpace, wrap: s.overflowWrap }; })())`);
+  assert.deepEqual(cs, { ws: "normal", wrap: "anywhere" });
+  assert.equal(ev<string>(`document.querySelector("#background :not(pre) > code").textContent`), "some-\u2060very-\u2060long-\u2060inline-\u2060code-\u2060identifier");
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background pre code")).whiteSpace`), "pre");
 });
