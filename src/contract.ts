@@ -159,6 +159,7 @@ export const Explanation = z.object({
   has: z.object({ mermaid: z.boolean(), table: z.boolean(), diff: z.boolean() }),
   match: z.enum(["question", "recency"]),
   attached_via: z.enum(["first_call", "after_deny", "none"]),
+  // not_required は予約(どの経路も設定しない。GUI / TUI が表示文だけ持つ)
   none_reason: z.enum(["plan_mode", "loop_guard", "not_required"]).optional(),
 });
 export type Explanation = z.infer<typeof Explanation>;
@@ -260,6 +261,8 @@ export const Metrics = z.object({
     answer_lost: z.number().int().nonnegative(),
     cancelled: z.number().int().nonnegative(),
     escaped_question: z.number().int().nonnegative(),
+    // Stop で blocker 語彙を検知した回数。分母(total)には含めない
+    blocker_detected: z.number().int().nonnegative(),
     total: z.number().int().nonnegative(),
     rate: z.number().nullable(),
   }),

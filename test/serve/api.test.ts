@@ -503,6 +503,20 @@ test("F3: events.jsonl に tool_input などの生入力を保存しない", asy
   assert.ok(text.includes("PostToolUse"));
 });
 
+test("Q2-06: blocker_detected を events.jsonl に保存し、metrics.a.blocker_detected で数える(total には入らない)", async () => {
+  const env = await setup();
+  const base = { session_id: "s", transcript_path: "/x", cwd: "/c", hook_event_name: "Stop" };
+  await api(env, "/api/events", { body: { ...base, received_at: new Date().toISOString(), blocker_detected: true } });
+  await api(env, "/api/events", { body: { ...base, received_at: new Date().toISOString() } });
+  const lines = readFileSync(join(env.dataDir, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0].blocker_detected, true);
+  assert.equal(lines[1].blocker_detected, undefined);
+  const m = (await (await api(env, "/api/metrics")).json()) as any;
+  assert.equal(m.a.blocker_detected, 1);
+  assert.equal(m.a.total, 0);
+});
+
 test("F5: UserPromptSubmit が pending の判断に来たら cancelled", async () => {
   const env = await setup();
   const created = (await (await api(env, "/api/decisions", { body: decisionBody(env, "tu-f5") })).json()) as { id: string };

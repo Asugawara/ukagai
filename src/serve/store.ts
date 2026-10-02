@@ -55,6 +55,7 @@ const EVENT_KEYS = [
   "agent_type",
   "received_at",
   "escaped_question",
+  "blocker_detected",
   "observe",
   "notification_type",
 ] as const;
@@ -85,6 +86,7 @@ export class Store {
 
   // events から再構築する集計
   private escapedQuestions = 0;
+  private blockersDetected = 0;
   private panelOpens = 0;
   private observeStarts = new Map<string, number>();
   private baseline: number[] = [];
@@ -382,6 +384,7 @@ export class Store {
       return;
     }
     if (ev.escaped_question) this.escapedQuestions++;
+    if (ev.blocker_detected) this.blockersDetected++;
     const at = Date.parse(ev.received_at);
     if (ev.observe && Number.isFinite(at)) {
       const toolUseId = (ev as Record<string, unknown>).tool_use_id;
@@ -479,7 +482,7 @@ export class Store {
     const total = count.answered + count.fallback + count.hook_disconnected + count.answer_lost + count.cancelled + this.escapedQuestions;
     const dTotal = d.first_call + d.after_deny + d.none;
     return {
-      a: { ...count, escaped_question: this.escapedQuestions, total, rate: total === 0 ? null : count.answered / total },
+      a: { ...count, escaped_question: this.escapedQuestions, blocker_detected: this.blockersDetected, total, rate: total === 0 ? null : count.answered / total },
       b: { human: stat(human), agent: stat(agent), baseline: stat(this.baseline) },
       c: { session_panel_opens: this.panelOpens },
       d: { ...d, total: dTotal, attach_rate: dTotal === 0 ? null : (d.first_call + d.after_deny) / dTotal },

@@ -209,6 +209,16 @@ test("推奨に条件(なら / 場合 / とき / if )が無いと recommend_cond
   for (const ok of ["C の場合は B。", "速さが要るときは B。", "Use B if C.", "C なら B。"]) {
     assert.equal(validateExplanation(rec(ok)).valid, true, ok);
   }
+  // Q2-03: 誤通過は落ち、言い回しの幅は通る
+  for (const ng of ["命名規則に合わせなければならないためです。", "ときどき読み返すので。", "diff を見るので。", "守らなければならず、B は避ける。"]) {
+    assert.deepEqual(validateExplanation(rec(ng)).missing, ["recommend_cond"], ng);
+  }
+  for (const ok of ["短さを優先するのであれば log.jsonl が正しくなります。", "保存期間が長い場合は SQLite。", "Choose log.jsonl if brevity matters.", "移行する際は B。", "When C, use B.", "Unless C, use A."]) {
+    assert.equal(validateExplanation(rec(ok)).valid, true, ok);
+  }
+  // コードブロックと callout の中の語は数えない
+  assert.deepEqual(validateExplanation(rec("A を推す。\n> [!NOTE]\n> C なら B。")).missing, ["recommend_cond"]);
+  assert.deepEqual(validateExplanation(rec("A を推す。\n```\nif x\n```")).missing, ["recommend_cond"]);
   // 長すぎて条件も無いときは両方、順序は recommend_long の直後
   assert.deepEqual(validateExplanation(rec("あ".repeat(401))).missing, ["recommend_long", "recommend_cond"]);
   assert.ok(!validateExplanation(BLOCKER, "answer_question", BLOCKER_LABELS).missing.includes("recommend_cond"));

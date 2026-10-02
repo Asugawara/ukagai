@@ -9,7 +9,7 @@
 | API | 呼び手 | 役割 |
 |---|---|---|
 | `POST /api/decisions` | hook | 判断を登録。同じ `tool_use_id` なら既存を返す |
-| `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | long-poll。回答済みなら 200 + response、未回答で timeout なら 204。各 poll の終了時に `lease_until` を更新 |
+| `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | long-poll。回答済み(`answer_submitted` / `fallback`)なら 200 + response、未回答で timeout なら 204、閉じた判断(`answered` など)なら 410 を即返す。各 poll の終了時に `lease_until` を更新 |
 | `POST /api/decisions/:id/ack` | hook | response を受け取った確認。`answered` と `delivered_at` が付く |
 | `POST /api/decisions/:id/cancel` | hook | hook が SIGTERM / SIGINT / SIGHUP で降りる時の通知。`pending` → `cancelled`、`answer_submitted` → `answer_lost` |
 | `POST /api/decisions/:id/answer` | GUI | 回答の送信 |
@@ -54,7 +54,7 @@
 }
 ```
 
-`kind` は `answer_question`(AskUserQuestion)か `approve_plan`(ExitPlanMode)。`request` は hook の `tool_input` をそのまま入れる。`explanation` は任意(形は計画 3 節の `Decision.explanation`)。`explanation.type`(`decision` / `blocker`、省略 = decision)は説明ファイルの front matter の `type` で、server は保存して返すだけ。
+`kind` は `answer_question`(AskUserQuestion)か `approve_plan`(ExitPlanMode)。`request` は hook の `tool_input` をそのまま入れる。`explanation` は任意(形は計画 3 節の `Decision.explanation`)。`explanation.type`(`decision` / `blocker`、省略 = decision)は説明ファイルの front matter の `type` で、server は保存して返すだけ。 `explanation.none_reason` は `plan_mode` / `loop_guard`(hook が設定する)と `not_required`(予約。どの経路も設定しない。GUI / TUI が表示文を持つので contract に残す)。
 
 応答: **新規は 201、同じ `tool_use_id` が既にあれば 200**(本文はどちらも `Decision` 全体)。`status` は `pending`。
 
@@ -129,6 +129,7 @@ Bearer 必須。`Content-Type: application/json` が要るので `{}` を送る�
 
 - `observe.phase`: `--observe` の PreToolUse が `start`、PostToolUse が `end`。
 - `escaped_question: true`: Stop の `last_assistant_message` が粗い検出に掛かったとき。
+- `blocker_detected: true`: Stop の `last_assistant_message` が blocker 語彙に掛かったとき(`events.jsonl` に保存し、`GET /api/metrics` の `a.blocker_detected` で数える。`a.total` には含めない)。
 
 応答 204。
 
@@ -181,7 +182,7 @@ GUI が「セッション一覧パネルを開いた」ことを (c) の補助�
 
 ```json
 {
-  "a": { "answered": 9, "fallback": 1, "hook_disconnected": 0, "answer_lost": 0, "cancelled": 0, "escaped_question": 0, "total": 10, "rate": 0.9 },
+  "a": { "answered": 9, "fallback": 1, "hook_disconnected": 0, "answer_lost": 0, "cancelled": 0, "escaped_question": 0, "blocker_detected": 0, "total": 10, "rate": 0.9 },
   "b": {
     "human": { "count": 9, "median_ms": 21000, "mean_ms": 25000 },
     "agent": { "count": 3, "median_ms": 18000, "mean_ms": 19000 },
@@ -254,8 +255,10 @@ stateDiagram-v2
 | 400 | JSON の形が schema に合わない(`{"error":..., "issues":[...]}`)、`Host` 不正、許可外のパス、kind に合わない answer |
 | 415 | POST の `Content-Type` が `application/json` でない |
 | 401 | 認可が足りない(上の表)、またはトークン / cookie の不一致 |
+| 403 | cookie だけで `POST /api/events` を送り、`hook_event_name` が `ukagai.session_panel_open` でない |
 | 404 | 存在しない `:id` |
 | 409 | 状態遷移違反(例: `answered` に `answer`、`pending` に `ack`) |
+| 410 | `wait` の対象が閉じた判断(`answered` / `hook_disconnected` / `answer_lost` / `cancelled` / `denied_explain`)。本文は `{error, status}` |
 
 ## hook の出力(stdout)
 
