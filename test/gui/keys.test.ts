@@ -78,7 +78,7 @@ async function api(path: string, body?: unknown) {
 }
 
 type Opt = { label: string; description?: string };
-type Seed = { title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string };
+type Seed = { title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string; noneReason?: string };
 
 /** 判断を投入する。既定は v2 の説明付きの単一選択(A / B(Recommended) / C) */
 async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }> {
@@ -94,7 +94,9 @@ async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }
     session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
     request: { questions: [{ question, header: "確認", options, multiSelect: s.multiSelect ?? false }] },
   };
-  if (explain) {
+  if (s.noneReason) {
+    body.explanation = { path: "", markdown: "", has: { mermaid: false, table: false, diff: false }, match: "question", attached_via: "none", none_reason: s.noneReason };
+  } else if (explain) {
     body.explanation = {
       path: "", title, question, reversibility: "reversible", scope: "file",
       markdown: s.markdown ?? SEED_MD.replace("__QUESTION__", question).replace("__TITLE__", title),
@@ -131,13 +133,13 @@ async function seedBlocker(): Promise<{ id: string; title: string }> {
   return { id: d.id, title };
 }
 
-async function seedPlan(): Promise<{ id: string }> {
+async function seedPlan(plan = "# 計画\n\n手順 1"): Promise<{ id: string }> {
   const n = ++seq;
   const d = await api("/api/decisions", {
     tool_use_id: `toolu_gui_${process.pid}_${n}`,
     kind: "approve_plan",
     session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
-    request: { plan: "# 計画\n\n手順 1", planFilePath: "/tmp/plan.md" },
+    request: { plan, planFilePath: "/tmp/plan.md" },
   });
   assert.ok(d.id, `decision を作れない: ${JSON.stringify(d)}`);
   return { id: d.id };
@@ -172,14 +174,8 @@ const fire = (code: string) => ev(
   `document.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", code: "${code}", keyCode: 229, bubbles: true, cancelable: true })), "ok"`,
 );
 
-before(async () => {
-  if (!HAS_BROWSER) return;
-  // HOME を一時ディレクトリにして、~/.ukagai と実セッションに触れない(transcript_path の許可範囲もここが基準)
-  home = mkdtempSync(join(tmpdir(), "ukagai-gui-"));
-  dataDir = join(home, "data");
-  port = await freePort();
-  base = `http://127.0.0.1:${port}`;
-  // dist/ が古いと server の挙動がずれるので、常に src を tsx で動かす
+/** serve を起動して healthz が通るまで待つ(port / dataDir は固定。再起動にも使う) */
+async function startServe() {
   serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home } });
   const end = Date.now() + 20000;
   for (;;) {
@@ -188,6 +184,17 @@ before(async () => {
     await sleep(100);
   }
   token = readFileSync(join(dataDir, "token"), "utf8").trim();
+}
+
+before(async () => {
+  if (!HAS_BROWSER) return;
+  // HOME を一時ディレクトリにして、~/.ukagai と実セッションに触れない(transcript_path の許可範囲もここが基準)
+  home = mkdtempSync(join(tmpdir(), "ukagai-gui-"));
+  dataDir = join(home, "data");
+  port = await freePort();
+  base = `http://127.0.0.1:${port}`;
+  // dist/ が古いと server の挙動がずれるので、常に src を tsx で動かす
+  await startServe();
   ab("open", base + "/", "--viewport", "1440x900");
   opened = true;
 });
@@ -464,4 +471,111 @@ gui("hook の上限内の説明(pass-design.md)ではクランプが発動せず
   assert.equal(ev<number>(`document.querySelectorAll("#decision .more-chip").length`), 0);
   assert.equal(ev<boolean>(`document.getElementById("decision").scrollHeight <= document.getElementById("decision").clientHeight`), true);
   assert.equal(ev<boolean>(`document.getElementById("decision").clientHeight <= 900`), true);
+});
+
+// ---- Q1 の修正(FA) ----
+
+/** v2 説明。rows は [ラベル(表の先頭列), 起きること, リスク] */
+function v2md(question: string, title: string, rows: string[][], extra = "", rec = "B を推します。"): string {
+  const table = rows.map((r) => `| ${r.join(" | ")} |`).join("\n");
+  return `---\nukagai: 1\nquestion: ${question}\ntitle: ${title}\nrecommended: B\nreversibility: reversible\nscope: file\n---\n\n## なぜ今この判断が要るか\n\n確認用です。\n\n${extra}## 選択肢\n\n| 選択肢 | 選ぶと起きること | リスクと戻し方 |\n|---|---|---|\n${table}\n\n## 推奨\n\n${rec}\n`;
+}
+const ROWS = [["A", "A になる", "なし"], ["B", "B になる", "なし"], ["C", "C になる", "なし"]];
+
+gui("401 後の自動復旧: server を再起動しても、新着が 10 秒以内に出る", async () => {
+  const a = await seedQuestion({ title: "再起動前の判断" });
+  await reopen();
+  assert.equal(ev(`document.querySelector("#decision .v2-title").textContent`), a.title);
+  const old = serve!;
+  old.kill();
+  await new Promise((r) => (old.exitCode !== null ? r(null) : old.once("exit", r)));
+  await sleep(1500);
+  await startServe(); // 同じ port / data-dir。cookie は失効する
+  const b = await seedQuestion({ title: "再起動後の判断" });
+  await waitFor("再起動後の判断が一覧に出る", `document.getElementById("pending-list").textContent.includes(${JSON.stringify(b.title)}) || document.querySelector("#decision .v2-title")?.textContent === ${JSON.stringify(b.title)}`, 10000);
+  assert.equal(ev(`document.getElementById("banner").hidden`), true);
+});
+
+gui("表示中でない判断の cancel で赤いトースト(最大 3 枚、送信ボタンの上)", async () => {
+  await seedQuestion({ title: "表示中の判断" });
+  const others = [await seedQuestion({ title: "裏の判断 1" }), await seedQuestion({ title: "裏の判断 2" }), await seedQuestion({ title: "裏の判断 3" }), await seedQuestion({ title: "裏の判断 4" })];
+  await reopen();
+  for (const o of others) await api(`/api/decisions/${o.id}/cancel`, {});
+  await waitFor("トースト", `document.querySelectorAll(".toast.lost").length === 3`);
+  const text = ev<string>(`document.querySelector(".toast.lost").textContent`);
+  assert.ok(text.includes("届きませんでした"), text);
+  const r = ev<{ t: number; b: number }>(`JSON.stringify((() => { const t = document.querySelector(".toasts").getBoundingClientRect(), s = document.getElementById("submit").getBoundingClientRect(); return { t: t.bottom, b: s.top }; })())`);
+  assert.ok(r.t <= r.b, `トーストが送信ボタンに重ならない: ${JSON.stringify(r)}`);
+});
+
+gui("計画: 見出しは平文、「影響範囲と可逆性」が右列にある(無ければ出ない)", async () => {
+  await seedPlan("# `src/foo.ts` を **直す** 計画\n\n## 作業\n\n1. a\n\n## 影響範囲と可逆性\n\nfile 内だけ。git で戻せる。\n");
+  await reopen("document.querySelector('#decision .btn')");
+  assert.equal(ev<string>(`document.querySelector("#decision .v2-title").textContent`), "src/foo.ts を 直す 計画");
+  assert.equal(ev<boolean>(`document.querySelector("#decision .impact").textContent.includes("git で戻せる")`), true);
+  assert.equal(ev<string>(`document.querySelector("#decision .impact-cap").textContent`), "影響範囲と可逆性");
+  await cancelAll();
+  await seedPlan("# 計画\n\n## 作業\n\n1. a\n");
+  await reopen("document.querySelector('#decision .btn')");
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .impact")`), false);
+});
+
+gui("広い図: f で全幅(判断列を隠す)、Enter は無効、Esc で戻る", async () => {
+  const wide = "## 図\n\n```mermaid\nflowchart LR\n" + Array.from({ length: 14 }, (_, i) => `  N${i}[ノード ${i} の長いラベルです] --> N${i + 1}[ノード ${i + 1} の長いラベルです]`).join("\n") + "\n```\n\n";
+  const question = "広い図の質問です？";
+  const { id } = await seedQuestion({ markdown: v2md(question, "広い図の判断", ROWS, wide), options: [{ label: "A" }, { label: "B (Recommended)" }, { label: "C" }] });
+  ab("set", "viewport", "1440", "900");
+  await reopen();
+  await waitFor("全幅で見るチップ", `document.querySelector("#background .wide-chip")`, 10000);
+  const full = () => ev<boolean>(`document.body.classList.contains("fullwide")`);
+  press("f");
+  assert.equal(full(), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.getElementById("decision")).display === "none"`), true);
+  press("Enter");
+  await sleep(400);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  press("Escape");
+  assert.equal(full(), false);
+  press("f", "Tab");
+  assert.equal(full(), false);
+  ab("click", ".wide-chip"); // クリックでも入る
+  assert.equal(full(), true);
+  press("f");
+  assert.equal(full(), false);
+});
+
+gui("説明なし: (Recommended) は外して推奨バッジ、理由は平文", async () => {
+  await seedQuestion({ explain: false, noneReason: "loop_guard", options: [{ label: "A (Recommended)" }, { label: "B" }] });
+  await reopen();
+  assert.equal(ev<string>(`document.querySelector("#decision .opt .lab").textContent`), "A推奨");
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .opt .rec-badge")`), true);
+  const note = ev<string>(`document.querySelector("#background .bg-note").textContent`);
+  assert.ok(note.includes("書き直しの指示に従わなかったため") && !note.includes("loop_guard"), note);
+  assert.deepEqual(view(), { cursor: 0, checked: 0 });
+  press("Enter");
+  const list = (await api("/api/decisions?status=answer_submitted")) as any[];
+  assert.equal(Object.values(list.at(-1).response.answers)[0], "A (Recommended)");
+});
+
+gui("説明内の外部 img は除去、data: は残る", async () => {
+  const imgs = `<img src="https://example.invalid/a.png">\n\n<img src="//example.invalid/b.png">\n\n<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">\n\n`;
+  await seedQuestion({ markdown: v2md("画像の質問です？", "画像の判断", ROWS, imgs) });
+  await reopen();
+  assert.equal(ev<number>(`document.querySelectorAll("#background img").length`), 1);
+  assert.equal(ev<boolean>(`document.querySelector("#background img").src.startsWith("data:")`), true);
+});
+
+gui("ラベルに <b> があっても v2 のカードが出る(対応が取れない option だけ生で補う)", async () => {
+  const label = '<b>A</b> "quoted"';
+  await seedQuestion({
+    markdown: v2md("HTML ラベルの質問です？", "HTML ラベルの判断", [[label, "A になる", "なし"], ["B", "B になる", "なし"]]),
+    options: [{ label, description: "生の説明 A" }, { label: "B (Recommended)", description: "生の説明 B" }, { label: "Z", description: "生の説明 Z" }],
+  });
+  await reopen();
+  const labs = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt .lab")].map(e => e.firstChild.textContent))`);
+  assert.deepEqual(labs.slice(0, 3), ['A "quoted"', "B", "Z"]);
+  assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent.includes("A になる")`), true); // 表から
+  assert.equal(ev<boolean>(`document.body.innerText.includes("生の説明 Z")`), true); // 取れない option は生
+  assert.equal(ev<boolean>(`document.body.innerText.includes("生の説明 A")`), false);
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .rec-cap")`), true);
 });
