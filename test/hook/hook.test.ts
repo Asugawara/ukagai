@@ -444,3 +444,55 @@ test("server 不在でも無関係な tool は stdout 空 exit 0", async () => {
   assert.equal(r.code, 0);
   assert.equal(r.stdout, "");
 });
+
+const multiInput = (sp: string, extra: Record<string, unknown> = {}) => {
+  const base = t1(sp, extra) as { tool_input: { questions: unknown[] } };
+  const q2 = { question: "C と D のどちらにしますか？", header: "選択2", options: [{ label: "C", description: "c" }, { label: "D", description: "d" }], multiSelect: false };
+  return { ...base, tool_input: { questions: [...base.tool_input.questions, q2] } };
+};
+
+test("多問 → 説明ファイルがあっても deny(1 回に 1 問)+ denied_explain 登録", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(multiInput(sp)));
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "deny");
+    assert.match(out.permissionDecisionReason, /1 回に 1 問にしてください\(今回は 2 問\)/);
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.status, "denied_explain");
+    assert.equal(create?.body.explanation, undefined);
+    assert.ok(!f.calls.some((c) => c.path.includes("/wait")));
+  });
+  assert.ok(existsSync(join(sp, "ukagai", "e.md")), "説明ファイルは消費しない");
+});
+
+test("多問 deny が 2 分以内にある → deny せず none / loop_guard で登録(質問文は照合しない)", async () => {
+  const sp = tmpDir();
+  const rec = deniedRecord(new Date(Date.now() - 30_000).toISOString(), {
+    request: { questions: [{ question: "別の質問" }, { question: "もう一つ" }] },
+  });
+  const h: Handler = (req, res) =>
+    req.method === "GET" && req.path.startsWith("/api/decisions?")
+      ? json(res, 200, [rec])
+      : req.path.includes("/wait")
+        ? json(res, 200, { response: { via: "gui", answers: { [Q]: "A" }, decided_at: NOW() } })
+        : false;
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(multiInput(sp)));
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.explanation.attached_via, "none");
+    assert.equal(create?.body.explanation.none_reason, "loop_guard");
+  });
+});
+
+test("plan mode の多問 → 要求なしで none / plan_mode", async () => {
+  const sp = tmpDir();
+  await withServer(answerHandler({ [Q]: "A" }), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(multiInput(sp, { permission_mode: "plan" })));
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.explanation.none_reason, "plan_mode");
+  });
+});

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   denyReason,
+  multiDenyReason,
   findExplanation,
   markUsed,
   normalizeLabel,
@@ -150,4 +151,11 @@ test("denyReason: 保存先・question 原文・足りない項目を含み 600 
   const long = denyReason("A", { path: "/p/ukagai/explain.md", question: "Q", missing: many });
   assert.ok(long.length <= 600);
   assert.match(long, /…ほか \d+ 件/);
+});
+
+test("multiDenyReason: 問数を含み 600 文字以内、URL なし", () => {
+  const r = multiDenyReason(3);
+  assert.match(r, /今回は 3 問/);
+  assert.ok(r.length <= 600);
+  assert.doesNotMatch(r, /https?:|localhost|127\.0\.0\.1|\/api\//);
 });

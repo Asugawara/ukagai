@@ -102,6 +102,7 @@
 | `options` | 「選択肢」の節が無い | 「選択肢」の節 |
 | `table` | `options` があるのに 3.3 の表が無い(`options` が無いときは評価しない) | 選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行) |
 | `recommend` | 「推奨」の節が無い、または空 | 「推奨」の節 |
+| `multi` | (検査ではなく 5 節の手順 0 で使う)`questions` が 2 つ以上 | 質問は 1 回に 1 問 |
 | `diagram` | 図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
 
 - front matter が無いときは `front_matter` だけを追加し、`question` `title` `reversibility` `scope` `recommended` は評価しない(図の必須判定は安全側で「必須」)。
@@ -112,6 +113,7 @@
 
 `permission_mode === "plan"` のときは説明を要求しない(6 節)。それ以外:
 
+0. **多問なら deny**: `questions.length > 1` なら、探索より前に `permissionDecision: "deny"` を返し `denied_explain` として登録する(`explanation` は付けない)。理由文は次(7 節にも再掲、600 文字以内、URL なし): `AskUserQuestion は 1 回に 1 問にしてください(今回は N 問)。GUI は 1 問ずつ、説明ファイルと一緒に表示します。最初の質問から順に、1 問ごとに説明ファイルを書いて AskUserQuestion を 1 問だけで出し直してください。文章で聞き直してはいけません。` ループ保険: 同じ `session_id + agent_id` で `questions.length > 1` の `denied_explain` が **2 分以内**にあれば deny せず手順 1 に進む(説明が無ければ `attached_via: none` / `none_reason: loop_guard`)。質問文は照合しない(分けた後の 1 問目は別の質問文になるため)。
 1. **探索**: 置き場(1 節)の `.md`(`.used.md` を除く)から、front matter の `question` が `questions[0].question` と**完全一致**するものを探す(複数あれば更新時刻が最新のもの。`match: question`)。無ければ、**10 分以内**(E4 で確定)に書かれた(更新時刻)未使用ファイルがちょうど 1 つならそれを使う(`match: recency`)。0 個または 2 個以上なら「見つからない」(`file`)。
 2. **検査と登録**: 見つかったファイルを 4 節の検査にかける。通れば Decision に登録する。`attached_via` は、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が直近 **2 分以内**(E4 で確定)にあれば `after_deny`、無ければ `first_call`。使ったファイルは `<名前>.used.md` に rename する。
 3. **deny**: 見つからない / 検査が落ちたら、`permissionDecision: "deny"` + 7 節の理由文を返し、`denied_explain` として登録する(GUI には出さない)。
@@ -148,6 +150,10 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 {path} に書いていただけますか(同じディレクトリなら名前は自由です)。front matter の question: は「{question}」と完全に同じにしてください。
 書き方は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。
 ```
+
+### 多問の deny 理由文(手順 0)
+
+`AskUserQuestion は 1 回に 1 問にしてください(今回は N 問)。GUI は 1 問ずつ、説明ファイルと一緒に表示します。最初の質問から順に、1 問ごとに説明ファイルを書いて AskUserQuestion を 1 問だけで出し直してください。文章で聞き直してはいけません。` 版 A / B の区別は無い。
 
 ## 8. SessionStart / SubagentStart の additionalContext
 
@@ -195,6 +201,8 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 
 ## 既知の制約
 
+- 多問 deny は `missing` を記録しない(Decision に `missing` の欄が無いため)。`denied_explain` かつ `request.questions` が 2 件以上であることで見分ける。
+- plan mode の多問は deny せず、従来どおり生の質問文・選択肢で GUI に出る。
 - `question` が複数行の質問文は front matter の 1 行スカラーで完全一致できず、recency に頼る。
 - recency は別の質問向けのファイルも拾いうる(10 分以内にちょうど 1 つあれば `match: recency` で添付される)。
 - 見出し照合は完全一致を優先するが、完全一致が無いと部分一致になる。「図」は部分一致なので、先に出る「図解」などの見出しに当たり、本来の「図」の節を隠しうる。

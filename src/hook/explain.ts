@@ -18,7 +18,8 @@ export type MissingCode =
   | "table"
   | "recommend"
   | "diagram"
-  | "impact";
+  | "impact"
+  | "multi";
 
 export interface Has {
   mermaid: boolean;
@@ -48,6 +49,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   recommend: "「推奨」の節",
   diagram: "「図」の節と Mermaid の図",
   impact: "「影響範囲と可逆性」の節",
+  multi: "質問は 1 回に 1 問",
 };
 
 const REVERSIBILITY = ["reversible", "costly", "irreversible"];
@@ -396,6 +398,14 @@ export function denyReason(template: DenyTemplate, p: DenyParams): string {
     if (full.length <= MAX_REASON) return full;
   }
   return composeReason(template, p, `…ほか ${p.missing.length} 件`, false);
+}
+
+/** questions が 2 つ以上のときの deny 理由文(spec 5 節の手順 0)。URL なし、600 文字以内 */
+export function multiDenyReason(count: number): string {
+  return (
+    `AskUserQuestion は 1 回に 1 問にしてください(今回は ${count} 問)。GUI は 1 問ずつ、説明ファイルと一緒に表示します。` +
+    "最初の質問から順に、1 問ごとに説明ファイルを書いて AskUserQuestion を 1 問だけで出し直してください。文章で聞き直してはいけません。"
+  );
 }
 
 // ---- 置き場 ----
