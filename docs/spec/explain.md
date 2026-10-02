@@ -1,0 +1,178 @@
+# 説明ファイルの仕様
+
+エージェントが人に判断を求める前に書く「説明」の形式と、hook(`src/hook/explain.ts`)が行う検査の規則。実装計画は `docs/strategy/03-mvp-implementation-plan.md` の 3 節「説明の経路」。この文書の規則が実装と fixture(`test/explain-fixtures/`)の正になる。
+
+**未確定の印**: `【E4 で確定】` `【E5 で確定】` は、実機検証(E4 / E5)の結果で最後に直す値・文面。それまでは書かれた値を仮置きとして実装する。
+
+## 1. 置き場
+
+| 優先 | 場所 |
+|---|---|
+| 1 | `<scratchpad_dir>/ukagai/<自由な名前>.md`(`scratchpad_dir` は hook の stdin の値) |
+| 2 | `scratchpad_dir` が無いとき: `~/.ukagai/explain/<session_id>/<自由な名前>.md` |
+
+- リポジトリの中には置かない。
+- 拡張子は `.md`。名前は自由。`.used.md` で終わるものは使用済みで、探索の対象外。
+- hook は使ったファイルを `<名前>.used.md` に rename する。server は本文を Decision に複写する(scratchpad は一時領域)。
+- 改行は読み込み時に LF へ正規化する。
+
+## 2. front matter
+
+ファイルの先頭行が `---` で、次の `---` までを front matter とする。書式は YAML の部分集合: 1 行 1 項目の `key: value`。値は 1 行のスカラーで、前後を `"` で囲んでもよい(囲んだ場合は外側の `"` だけを外す。エスケープは解釈しない)。値に `: ` や `#` を含むときは `"` で囲む。未知のキーは無視する。
+
+| 欄 | 必須 | 値 | 意味 |
+|---|---|---|---|
+| `ukagai` | 必須 | `1` | 形式のバージョン。`1` 以外は不正 |
+| `question` | 必須 | 文字列 | `AskUserQuestion` の `questions[0].question` を**一字一句そのまま**。照合は完全一致(空白・全角半角の正規化はしない)。質問が複数のときも `questions[0]` だけを使う |
+| `title` | 任意 | 文字列 | GUI の見出し。無ければ `question` を使う |
+| `reversibility` | 必須 | `reversible` / `costly` / `irreversible` | 決めた後に戻せるか。`reversible` = 簡単に戻せる、`costly` = 戻せるが手間かコストがかかる、`irreversible` = 戻せない |
+| `scope` | 必須 | `file` / `repo` / `machine` / `external` | 影響の範囲。`file` = 数ファイル、`repo` = リポジトリ全体、`machine` = この機械(リポジトリ外のファイル・設定・プロセス)、`external` = 他人・他システム(push、公開、課金、メッセージ送信) |
+
+「`scope` が `repo` 以上」= `repo` / `machine` / `external`(順序は `file` < `repo` < `machine` < `external`)。
+
+## 3. 本文
+
+### 3.1 見出しの照合
+
+- 見出しは ATX 形式(`#` 1〜6 個 + 空白 + 文字列)。コードフェンス(```` ``` ````、`~~~`)の内側の行は見出しとして扱わない。
+- 節は、その見出しから、同じか浅いレベルの次の見出しの直前まで(深い見出しは節に含む)。
+- 照合は**正規化した部分一致**: 見出しの文字列と必須の見出し名の両方に同じ正規化をかけ、見出しが必須名を含めば一致。
+- 正規化 = Unicode NFKC(全角半角を統一)→ 空白(全種)を削除 → 「と」と「・」を削除 → 小文字化。
+- 一致する見出しが複数あれば、最初のものを使う。
+
+| コード | 必須の見出し名 | 正規化後 |
+|---|---|---|
+| `why` | なぜ今この判断が要るか | なぜ今この判断が要るか |
+| `compare` | 選択肢の比較 | 選択肢の比較 |
+| `diagram` | 図 | 図 |
+| (計画) | 影響範囲と可逆性 | 影響範囲可逆性 |
+
+「関係する差分」は照合の対象にしない(3.2 節)。
+
+### 3.2 必須条件
+
+| 節 | 条件 |
+|---|---|
+| なぜ今この判断が要るか | 常に必須。節に空でない行が 1 行以上 |
+| 選択肢の比較 | 常に必須。節の中に 3.3 の表 |
+| 図 | **`scope` が `repo` 以上、または `reversibility` が `reversible` 以外のとき必須**。節の中に ` ```mermaid ` のコードブロックが 1 つ以上。`scope` か `reversibility` が欠落・不正なときは必須として扱う(安全側)。それ以外は任意 |
+| 関係する差分 | コード変更が絡むときに書く。hook は判定できないので**検査しない**(任意) |
+
+### 3.3 表の最低条件
+
+「選択肢の比較」の節の中に、GFM の表(ヘッダ行 + 区切り行 `|---|` + データ行)が次を満たすこと。
+
+1. ヘッダの列のうち、正規化後に `利点`、`欠点`、`コスト` をそれぞれ含む列がある(3 列とも必須。他の列は自由。選択肢の名前は先頭列に書く)。
+2. データ行が 2 行以上。stdin から選択肢の数が分かるときは、さらに `questions[0].options` の数以上(= 選択肢ごとに 1 行)。
+3. 各データ行の 3 列(利点・欠点・コスト)のセルが空でない。空白のみ、または `-` `—` `ー` のみは空とみなす。
+
+節の中に表が複数あれば、どれか 1 つが満たせばよい。
+
+### 3.4 `has`(記録用の事実)
+
+検査の合否とは別に、本文全体について記録する(`explanation.has`、(d) の集計用)。
+
+| 欄 | 条件 |
+|---|---|
+| `mermaid` | ` ```mermaid ` のコードブロックが本文のどこかにある |
+| `table` | GFM の表(ヘッダ行 + 区切り行)が本文のどこかにある(列や行の条件は問わない) |
+| `diff` | ` ```diff ` のコードブロックが本文のどこかにある |
+
+## 4. 検査結果
+
+検査は次の `missing` コードを**この順で**列挙する。`missing` が空のとき `valid: true`。
+
+| コード | 条件(これを満たさないとき追加) | deny 理由文での呼び名 |
+|---|---|---|
+| `file` | 説明ファイルが見つからない(この場合は他のコードを評価しない) | 説明ファイル本体 |
+| `front_matter` | front matter が無い、閉じていない、または `ukagai` が `1` でない | front matter(`ukagai: 1`) |
+| `question` | `question` が無い、または空 | `question` |
+| `reversibility` | 無い、または値が集合外 | `reversibility` |
+| `scope` | 無い、または値が集合外 | `scope` |
+| `why` | 「なぜ今この判断が要るか」の節が無い、または空 | 「なぜ今この判断が要るか」の節 |
+| `compare` | 「選択肢の比較」の節が無い | 「選択肢の比較」の節 |
+| `table` | `compare` があるのに 3.3 の表が無い(`compare` が無いときは評価しない) | 選択肢の比較の表(選択肢ごとに 1 行、利点・欠点・コストの列) |
+| `diagram` | 図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
+
+- front matter が無いときは `front_matter` だけを追加し、`question` `reversibility` `scope` は評価しない(図の必須判定は安全側で「必須」)。
+- 検査の入力は「ファイル全文」と、任意の `optionsCount`(`questions[0].options` の数)。
+- `question` の欄そのものの形式検査と、stdin の質問文との照合(次節の手順 1)は別物。検査は欄の有無だけを見る。
+
+## 5. hook の判定手順(PreToolUse × AskUserQuestion)
+
+`permission_mode === "plan"` のときは説明を要求しない(6 節)。それ以外:
+
+1. **探索**: 置き場(1 節)の `.md`(`.used.md` を除く)から、front matter の `question` が `questions[0].question` と**完全一致**するものを探す(複数あれば更新時刻が最新のもの。`match: question`)。無ければ、**10 分以内**【E4 で確定】に書かれた(更新時刻)未使用ファイルがちょうど 1 つならそれを使う(`match: recency`)。0 個または 2 個以上なら「見つからない」(`file`)。
+2. **検査と登録**: 見つかったファイルを 4 節の検査にかける。通れば Decision に登録する。`attached_via` は、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が直近 **2 分以内**【E4 で確定】にあれば `after_deny`、無ければ `first_call`。使ったファイルは `<名前>.used.md` に rename する。
+3. **deny**: 見つからない / 検査が落ちたら、`permissionDecision: "deny"` + 7 節の理由文を返し、`denied_explain` として登録する(GUI には出さない)。
+4. **ループ保険**: 手順 3 の時点で、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が **2 分以内**【E4 で確定】に既にあれば、deny せず説明なしで GUI に出す(`attached_via: none`、`none_reason: loop_guard`、GUI に「説明なし」の印)。
+
+## 6. plan mode
+
+`permission_mode === "plan"` の AskUserQuestion は説明ファイルを要求しない。探索もしない。`attached_via: none`、`none_reason: plan_mode`。(d) の分母から除く。
+
+## 7. deny 理由文のテンプレート
+
+2 種類を用意する。**E4 の結果(再呼び出し率)でどちらかに確定する**【E4 で確定】。確定までは実装側で切り替えられるようにする。
+
+プレースホルダ:
+
+- `{path}`: 保存先の絶対パス(`<scratchpad_dir>/ukagai/explain.md`。名前は自由だが例を 1 つ示す)
+- `{question}`: `questions[0].question` の原文
+- `{missing}`: 4 節の「呼び名」を `、` で連結したもの
+
+共通の制約: **GUI の URL・ポート・API パスを書かない**(Claude 自身に `curl` で回答させないため)。展開後の全文は **600 文字以内**。超えるときは `{missing}` を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。`{question}` は原文でなければ照合できないので切り詰めない。
+
+### 版 A: 命令文
+
+```
+AskUserQuestion の前に、人が判断するための説明ファイルを書いてください。足りない項目: {missing}。
+保存先: {path}(同じディレクトリなら名前は自由)。front matter の question: には次の文字列を一字一句そのまま入れること: {question}
+書式は skill ukagai-explain に従い、書き終えたら同じ質問をもう一度 AskUserQuestion で出してください。文章で聞き直してはいけません。
+```
+
+### 版 B: 事実 + 依頼
+
+```
+この判断に付ける説明ファイル(ukagai 形式)が、まだ条件を満たしていません。足りない項目: {missing}。
+{path} に書いていただけますか(同じディレクトリなら名前は自由です)。front matter の question: は「{question}」と完全に同じにしてください。
+書き方は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。
+```
+
+## 8. SessionStart / SubagentStart の additionalContext
+
+どちらも sync で返す。3 行。`{scratchpad_dir}` は stdin の値で埋める。無いときは `~/.ukagai/explain/<session_id>` の絶対パスに置き換える。URL は書かない。文面は【E5 で確定】。
+
+```
+人に判断を求める前(AskUserQuestion の前、計画の提示の前)に、人が読む説明を Markdown で {scratchpad_dir}/ukagai/ に書くこと。書式は skill ukagai-explain に従う。
+front matter の question: には AskUserQuestion の質問文を一字一句そのまま入れる。選択肢の比較は表に、構造や流れは Mermaid の図にする。
+文章で質問せず AskUserQuestion を使い、計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
+```
+
+## 9. ExitPlanMode
+
+- 別ファイルは要求しない。`tool_input.plan`(計画本文)を検査する。
+- 検査: 3.1 の照合規則で「影響範囲と可逆性」(正規化後 `影響範囲可逆性`)に一致する見出しがあり、その節に空でない行が 1 行以上ある。見出しのレベルは問わない。無ければ `missing: ["impact"]`。
+- Mermaid は**推奨**で、要求しない。無ければ `has.mermaid: false` として (d) に数える。
+- 不備のときの deny は**同一セッション(`session_id`)で 1 回まで**。2 回目以降は deny せず登録する(`attached_via: none`、`none_reason: loop_guard`)。
+- 通ったときの `attached_via` は `first_call`(deny 済みなら `after_deny`)。`explanation.markdown` には計画本文を入れる。
+- plan mode 中でも要求する(ExitPlanMode は plan mode でしか呼ばれない)。6 節の免除は AskUserQuestion だけ。
+- deny 理由文は 7 節の版に準じ、`{missing}` を「「影響範囲と可逆性」の節」、`{path}` / `{question}` の行を省く。
+
+## 10. Mermaid の扱い
+
+hook は Mermaid の構文を検査しない(コードブロックの有無だけを見る)。GUI は描画に失敗したら、コードをそのまま表示してエラーを添える。
+
+## 11. fixture
+
+`test/explain-fixtures/` に 7 つ。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表の行数は `optionsCount` を渡さない前提(データ行 2 以上)で判定する。
+
+| ファイル | valid | missing |
+|---|---|---|
+| `pass-design.md` | true | なし |
+| `pass-naming.md` | true | なし |
+| `pass-destructive.md` | true | なし |
+| `fail-no-table.md` | false | `table` |
+| `fail-no-question.md` | false | `question` |
+| `fail-no-diagram-when-required.md` | false | `diagram` |
+| `plan-heading-variant.md` | true | なし |
