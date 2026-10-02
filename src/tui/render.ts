@@ -129,15 +129,16 @@ function cardLines(card: Card, w: number, o: { cursor: boolean; selected: boolea
 /** 推奨ボックスが列の高さの半分を超えるとき、本文を何行で切るか */
 const REC_CUT_ROWS = 8;
 
-function recBox(text: string, w: number, o: { rows: number; full: boolean }): string[] {
+function recBox(text: string, w: number, o: { rows: number; full: boolean; title?: string; always?: boolean }): string[] {
   const inner = Math.max(10, w - 4);
+  const title = o.title ?? "推奨";
   let body = renderMarkdown(text, inner);
-  if (body.length + 2 > o.rows / 2) {
+  if (body.length > REC_CUT_ROWS && (o.always || body.length + 2 > o.rows / 2)) {
     body = o.full
       ? [...body, `${DIM}… (. で折りたたむ)${RESET}`]
       : [...body.slice(0, REC_CUT_ROWS), `${DIM}… (. で全文)${RESET}`];
   }
-  const top = `${DIM}┌─${RESET} ${BOLD}推奨${RESET} ${DIM}${"─".repeat(Math.max(0, w - 9))}┐${RESET}`;
+  const top = `${DIM}┌─${RESET} ${BOLD}${title}${RESET} ${DIM}${"─".repeat(Math.max(0, w - 5 - width(title)))}┐${RESET}`;
   const bottom = `${DIM}└${"─".repeat(Math.max(0, w - 2))}┘${RESET}`;
   return [top, ...body.map((l) => `${DIM}│${RESET} ${padEnd(l, inner)} ${DIM}│${RESET}`), bottom];
 }
@@ -152,6 +153,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   }
 
   if (m.kind === "plan") {
+    if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, title: "影響範囲と可逆性", always: true }), "");
     lines.push(`${BOLD}この計画を承認しますか${RESET}`, "");
     const buttons: [string, string][] = [["y", "承認"], ["a", "承認して auto"], ["n", "却下"]];
     buttons.forEach(([k, label], i) => {
@@ -168,7 +170,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     return {
       lines,
       focus,
-      hint: v.input ? "Enter 却下を送る · Esc 取りやめ" : "j/k 移動 · Enter 決定 · y 承認 · a auto · n 却下",
+      hint: v.input ? "Enter 却下を送る · Esc 取りやめ" : "j/k 移動 · Enter 決定 · y 承認 · a auto · n 却下 · . 影響範囲の全文",
     };
   }
 

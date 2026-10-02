@@ -45,7 +45,7 @@ const HELP: Record<Subcommand, string> = {
       h/l・[ ] 保留の切替  b 一覧  y/a/n 計画の承認/auto/却下  q 終了
       PgUp/PgDn・ホイール 背景のスクロール  Tab 背景/判断の列の切替
       ←→・横ホイール・Home/End 幅超過の図の横スクロール  f 背景を全幅で表示
-      . 長い推奨の全文/折りたたみ
+      . 長い推奨・計画の影響範囲の全文/折りたたみ
 `,
   serve: `使い方: ukagai serve [options]
 

@@ -53,6 +53,8 @@ export interface ScreenModel {
   backgroundNote?: string;
   /** 「推奨」節の本文(Markdown) */
   recommendation: string | null;
+  /** 計画本文の「影響範囲と可逆性」節の本文(Markdown)。計画カードの右列に出す */
+  impact?: string | null;
   /** 人の作業待ち(explanation.type === "blocker") */
   blocker: boolean;
   /** blocker の「人にしてほしいこと」節の本文(Markdown)。右列の最上部に出す */
@@ -207,6 +209,15 @@ function rawCard(o: { label: string; description?: string | undefined }, recomme
   };
 }
 
+/** 計画本文から「影響範囲と可逆性」節の本文を抜き出す(完全一致を先に、次に部分一致)。無ければ null */
+export function impactOf(plan: string): string | null {
+  const body = toLines(plan);
+  const { inFence } = scanFences(body);
+  const sec = findSection(scanHeadings(body, inFence), body.length, "影響範囲と可逆性");
+  if (!sec) return null;
+  return body.slice(sec.start + 1, sec.end).join("\n").trim() || null;
+}
+
 export function buildModel(d: Decision): ScreenModel {
   const explained = hasExplanation(d);
   const md = explained ? (d.explanation?.markdown ?? "") : "";
@@ -236,7 +247,7 @@ export function buildModel(d: Decision): ScreenModel {
       const lines = toLines(md);
       background += "\n\n---\n\n" + lines.slice(parseFrontMatter(lines).bodyStart).join("\n");
     }
-    return { ...base, kind: "plan", background, recommendation: null };
+    return { ...base, kind: "plan", background, recommendation: null, impact: impactOf(plan) };
   }
 
   const qs = questionsOf(d);

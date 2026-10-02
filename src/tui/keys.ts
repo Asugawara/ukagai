@@ -248,6 +248,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     if (ch === "y") return done({ type: "approve" });
     if (ch === "a") return done({ type: "approve-auto" });
     if (ch === "n") return done({ type: "reject" });
+    if (ch === ".") return done({ type: "rec" });
     return done(null);
   }
 
