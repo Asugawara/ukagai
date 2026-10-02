@@ -40,9 +40,8 @@ const UNDO_WORDS =
 const hasBad = (s) => UNDO_BAD_WORDS.test(s ?? "");
 // Option colors: --opt-0..3 in app.css; the recommended option uses the accent
 const optColor = (i, recommended) => (recommended ? "var(--accent)" : `var(--opt-${i % 4})`);
-// Confirmation / grace (seconds). `reversible` + `file` is sent at once; a decision without metadata too
+// A weighty answer needs Enter twice within this time; everything else is POSTed at once
 const CONFIRM_MS = 3000;
-const GRACE_S = { reversible: 2, costly: 3, irreversible: 5 };
 const NONE_TYPES = [
   ["Missing option", "none_missing"],
   ["Wrong premise", "none_premise"],
@@ -247,58 +246,80 @@ function notifyBackground(prev, d) {
 
 // ---- Pending button / title ----
 
-// Pending button: fixed top right at 1100px and up, inline at the right end of the right column heading below that
-const narrowQuery = matchMedia("(max-width: 1099px)");
-// Keep a reference and park it in body before #decision is rebuilt so it is not destroyed
+// Pending button: at the right end of the header's first row. Park it in body before #head is rebuilt so it is not destroyed
 const pendingBtn = $("pending-btn");
 const pendingCount = $("pending-count");
 function stashPending() { if (pendingBtn.parentElement !== document.body) document.body.prepend(pendingBtn); }
 function placePending() {
-  const slot = narrowQuery.matches ? document.querySelector("#decision .title-row") : null;
+  const slot = document.querySelector("#head .hd-meta");
   if (slot) { if (pendingBtn.parentElement !== slot) slot.append(pendingBtn); } else stashPending();
 }
-narrowQuery.addEventListener("change", placePending);
-const titleRow = (title) => el("div", { class: "title-row" }, title);
 
 function renderHeader() {
   const n = pendingList().length;
   pendingCount.textContent = String(n);
   pendingBtn.hidden = n < 2; // with one decision only the shown one exists, so hide it
-  document.body.classList.toggle("has-pending-btn", n >= 2);
   const blocked = pendingList().some(isBlocker);
   document.title = n > 0 ? `(${n}) ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
 }
 
-// Right under the right column title: branch, working directory (full path), reversibility, scope, elapsed time
-// branch is the only context field that may be rendered
+// Header: repository / branch / worktree chips, reversibility, scope. branch is the only context field that may be rendered
 const tildePath = (p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 
 const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
 const repoOf = (d) => WT_RE.exec(d.session.cwd)?.[1] ?? cwdTail(d);
 const worktreeOf = (d) => WT_RE.exec(d.session.cwd)?.[2];
 
-// Repository (purple), branch (green), worktree (orange). The color is fixed per kind
-function chips(d, cls = "") {
-  const box = el("span", { class: `chips ${cls}`.trim() });
-  box.append(el("span", { class: "chip repo", text: `◈ ${repoOf(d)}`, title: t("chip_repo") }));
-  if (d.context?.branch) box.append(el("span", { class: "chip branch", text: `⎇ ${d.context.branch}`, title: t("chip_branch") }));
+// Where the decision comes from, as one line of dim text: `ukagai ⎇ main ⧉ worktree` (no boxes; the full working directory is the tooltip)
+function whereLine(d, extra = []) {
+  const parts = [repoOf(d)];
+  if (d.context?.branch) parts.push(`⎇ ${d.context.branch}`);
   const wt = worktreeOf(d);
-  if (wt) box.append(el("span", { class: "chip worktree", text: `⧉ ${wt}`, title: t("chip_worktree") }));
+  if (wt) parts.push(`⧉ ${wt}`);
+  const box = el("span", { class: "where", title: tildePath(d.session.cwd) }, parts.join(" "));
+  for (const x of extra) if (x) box.append(" · ", x);
   return box;
 }
 
-function metaLine(d) {
-  const line = el("div", { class: "meta-line" });
-  line.append(chips(d));
-  const rev = reversibilityOf(d);
-  if (rev === "irreversible") line.append(el("span", { class: "badge irreversible", text: t("irreversible") }));
-  else if (rev === "costly") line.append(el("span", { class: "badge costly", text: t("costly") }));
-  else if (rev === "reversible") line.append(el("span", { class: "badge reversible", text: t("reversible") }));
+function metaBox(d) {
+  const box = el("div", { class: "hd-meta" });
   const scope = scopeOf(d);
-  if (scope) line.append(el("span", { class: "badge", text: scope }));
-  line.append(el("span", { class: "cwd", text: tildePath(d.session.cwd), title: d.session.cwd }));
-  line.append(el("span", { class: "badge age", "data-created": d.created_at, text: elapsed(d.created_at) }));
-  return line;
+  box.append(whereLine(d, [scope ? el("span", { text: scope }) : null, el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) })]));
+  // The only box in the header is the reversibility mark, and only when it is not "reversible"
+  const rev = reversibilityOf(d);
+  if (rev === "irreversible") box.append(el("span", { class: "badge irreversible", text: t("irreversible") }));
+  else if (rev === "costly") box.append(el("span", { class: "badge costly", text: t("costly") }));
+  else if (rev === "reversible") box.append(el("span", { class: "rev", text: t("reversible") }));
+  return box;
+}
+
+// The header (full width, above both columns). Row 1: title + chips, reversibility, scope, pending pill. Row 2: the headline (the first
+// sentence of the recommendation, or the raw question / the plan prompt). Both rows are one / two lines and end in … (click or `.` shows all)
+function renderHead(d) {
+  const head = $("head");
+  stashPending();
+  head.replaceChildren();
+  head.hidden = !d;
+  head.className = "hd";
+  head.onclick = null;
+  if (!d) return;
+  const dr = draftOf(d);
+  const title = titleOf(d);
+  let line2;
+  if (d.kind === "approve_plan") line2 = el("div", { class: "headline plain clampable", text: t("plan_question") });
+  else if (d.request.questions.length === 1 && modelFor(d).v2) line2 = modelFor(d).v2.headline;
+  else if (d.request.questions.length === 1 && title !== d.request.questions[0].question) line2 = el("div", { class: "headline plain clampable", text: d.request.questions[0].question });
+  const blocker = isBlocker(d);
+  head.classList.toggle("blocker", blocker);
+  head.append(
+    el("div", { class: "hd-top" },
+      blocker ? el("span", { class: "blocker-band", text: t("blocker_band") }) : null,
+      el("div", { class: "v2-title", text: title, title }),
+      metaBox(d)),
+    el("div", { class: "hd-line2" }, line2 ?? null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
+  head.onclick = (e) => { if (e.target.closest(".headline, .v2-title")) toggleExpand(dr); };
+  head.classList.toggle("expanded", !!dr.expanded);
+  placePending();
 }
 
 // ---- Drawer ----
@@ -331,14 +352,15 @@ function renderList() {
     const meta = el("div", { class: "meta" },
       el("span", { text: kindLabel(d) }),
       el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) }));
-    if (isBlocker(d)) meta.append(el("span", { class: "badge blocker", text: t("badge_action") }));
-    if (d.kind === "answer_question" && !hasExplanation(d)) meta.append(el("span", { class: "badge none", text: t("badge_no_explanation") }));
-    if (d.id === shownId) meta.append(el("span", { class: "badge", text: t("badge_shown") }));
+    // At most one dim mark per row: ● waiting for you, (no explanation), ▸ shown
+    if (isBlocker(d)) meta.append(el("span", { class: "mark blocker", title: t("badge_action"), text: "●" }));
+    else if (d.kind === "answer_question" && !hasExplanation(d)) meta.append(el("span", { class: "mark", text: `(${t("badge_no_explanation").toLowerCase()})` }));
+    else if (d.id === shownId) meta.append(el("span", { class: "mark", title: t("badge_shown"), text: "▸" }));
     const row = el("button", {
       class: "row" + (d.id === shownId ? " current" : ""),
       type: "button",
       onclick: () => { show(d.id); setDrawer(false); },
-    }, el("div", { class: "title", text: titleOf(d) }), chips(d, "small"), meta);
+    }, el("div", { class: "title", text: titleOf(d) }), whereLine(d), meta);
     list.append(el("li", {}, row));
   }
   if (!list.children.length) list.append(el("li", { class: "muted", text: t("no_pending") }));
@@ -384,8 +406,6 @@ async function send(d, body) {
 // A raw option that has no row in the explanation table: strip the (Recommended) suffix and show a recommended badge. The answer value stays the original label
 const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label) });
 
-const kbd = (t) => el("kbd", { class: "kbd", text: t });
-const keyLine = (...parts) => el("div", { class: "keys" }, ...parts.flatMap(([ks, label]) => [...ks.map(kbd), el("span", { text: label })]));
 const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
 
 async function copyCode(pre) {
@@ -407,33 +427,36 @@ function revealCard(card) {
   else if (c.bottom > b.bottom - 2) box.scrollTop += c.bottom - b.bottom + 4;
 }
 
-// Folding of long recommendations and card bodies (6 / 3 lines in CSS). Only elements that overflow get a "Show all ." chip.
-// The expanded state lives in the per-decision draft; `.` or a chip click toggles everything
+// Folding of long text: the headline and the card bodies are 2 lines (the card under the cursor shows everything), the plan's scope section 8.
+// One text button in the header (shown only when something is folded) and `.` toggle everything; the state is per decision
+function setExpanded(dr) {
+  for (const root of [$("decision"), $("head")]) root.classList.toggle("expanded", !!dr.expanded);
+  const chip = document.querySelector("#head .more-chip");
+  if (chip) chip.textContent = dr.expanded ? t("collapse") : t("show_all");
+}
 function toggleExpand(dr) {
   dr.expanded = !dr.expanded;
-  const root = $("decision");
-  root.classList.toggle("expanded", dr.expanded);
-  for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = `${dr.expanded ? t("collapse") : t("show_all")} `;
-  revealCard(root.querySelector(".opt.cursor"));
+  setExpanded(dr);
+  updateMore(dr);
+  revealCard($("decision").querySelector(".opt.cursor"));
+}
+// Show the "Show all" button only when something is folded (or while expanded, so that it can fold again)
+function updateMore(dr) {
+  const chip = document.querySelector("#head .more-chip");
+  if (!chip) return;
+  if (dr?.expanded) { chip.hidden = false; return; }
+  chip.hidden = ![...document.querySelectorAll("#head .clampable, #decision .clampable")].some((c) => c.scrollHeight > c.clientHeight + 1);
 }
 function markClamps(root, dr) {
-  root.classList.remove("expanded");
-  for (const c of root.querySelectorAll(".clampable")) {
-    if (c.scrollHeight <= c.clientHeight + 1) continue;
-    const host = c.parentElement;
-    host.classList.add("has-more");
-    if (host.querySelector(".more-chip")) continue;
-    host.append(el("button", { class: "more-chip", type: "button", tabindex: "-1", onclick: () => toggleExpand(dr) }, el("span", { text: `${t("show_all")} ` }), kbd(".")));
-  }
-  if (dr.expanded) { root.classList.add("expanded"); for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = `${t("collapse")} `; }
+  for (const c of root.querySelectorAll(".impact .clampable")) c.parentElement.classList.toggle("has-more", c.scrollHeight > c.clientHeight + 1);
+  setExpanded(dr);
+  updateMore(dr);
 }
 
 function renderRight(d) {
   document.body.append(toastBox); // park it so replaceChildren does not remove it
   renderRightBody(d);
   placeToasts();
-  placePending();
-  clampMeta();
 }
 
 // Show the "Scope and reversibility" section (matched by name, either language) of the plan body in the right column. null when absent.
@@ -451,38 +474,13 @@ function impactBox(d) {
   return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: t("sec_impact") }), body);
 }
 
-// The meta-line wraps. Rows from the third on are hidden and the end becomes …
-function clampMeta() {
-  for (const line of document.querySelectorAll("#decision .meta-line")) {
-    line.querySelector(".meta-more")?.remove();
-    const kids = [...line.children];
-    for (const k of kids) k.hidden = false;
-    const centers = kids.map((k) => { const r = k.getBoundingClientRect(); return r.top + r.height / 2; });
-    const rows = [];
-    centers.forEach((c, i) => { if (!rows.length || c > centers[rows.at(-1)] + 8) rows.push(i); });
-    if (rows.length <= 2) continue;
-    let keep = rows[2];
-    for (let i = keep; i < kids.length; i++) kids[i].hidden = true;
-    const more = el("span", { class: "meta-more", text: "…" });
-    line.append(more);
-    const rowOf = (y) => rows.filter((r) => centers[r] <= y + 8).length;
-    while (keep > 1) {
-      const r = more.getBoundingClientRect();
-      if (rowOf(r.top + r.height / 2) <= 2) break;
-      kids[--keep].hidden = true;
-    }
-  }
-}
-window.addEventListener("resize", () => { clampMeta(); refreshWide(); });
+window.addEventListener("resize", () => {
+  const d = decisions.get(shownId);
+  if (d) updateMore(draftOf(d));
+  refreshWide();
+});
 
-// ---- Weight (Enter twice) and grace (undo) ----
-
-// How long a sent answer waits before the POST (0 = at once). `reversible` + `file`, or no metadata at all, is immediate
-function graceSecs(d) {
-  const rev = reversibilityOf(d);
-  if (!rev || (rev === "reversible" && scopeOf(d) === "file")) return 0;
-  return GRACE_S[rev] ?? 0;
-}
+// ---- Weight (Enter twice) ----
 
 function syncConfirm(dr) {
   const bar = document.querySelector("#decision .confirm-bar");
@@ -501,44 +499,11 @@ function armConfirm(d, dr, key) {
   syncConfirm(dr);
 }
 
-// Send an answer. A weighty one needs Enter twice within 3 seconds; then the grace period runs (Undo with `u` / Esc) before the POST
+// Send an answer at once. A weighty one (irreversible, or a chosen option that cannot be undone) needs Enter twice within 3 seconds first
 function attempt(d, dr, key, body, weighty) {
   if (weighty && dr.confirmKey !== key) { armConfirm(d, dr, key); return; }
   clearConfirm(dr);
-  const secs = graceSecs(d);
-  if (!secs) { send(d, body); return; }
-  const grace = { body, until: Date.now() + secs * 1000, timer: 0 };
-  dr.grace = grace;
-  grace.timer = setInterval(() => {
-    const left = grace.until - Date.now();
-    if (left <= 0) {
-      clearInterval(grace.timer);
-      if (dr.grace !== grace) return;
-      dr.grace = null;
-      send(d, body);
-      return;
-    }
-    const n = document.querySelector("#decision .grace-n");
-    if (n && shownId === d.id) n.textContent = String(Math.ceil(left / 1000));
-  }, 200);
-  if (shownId === d.id) renderRight(d);
-}
-
-function cancelGrace(d) {
-  const dr = drafts.get(d.id);
-  if (!dr?.grace) return false;
-  clearInterval(dr.grace.timer);
-  dr.grace = null;
-  if (shownId === d.id) renderRight(d);
-  return true;
-}
-
-function graceBar(d, dr) {
-  const left = Math.max(1, Math.ceil((dr.grace.until - Date.now()) / 1000));
-  const text = t("sent_in", { n: "\u0000" }).split("\u0000");
-  return el("div", { class: "grace-bar" },
-    el("span", { class: "grace-text" }, text[0], el("b", { class: "grace-n", text: String(left) }), text[1] ?? ""),
-    el("button", { class: "btn", type: "button", onclick: () => cancelGrace(d) }, el("span", { text: t("undo") }), kbd("u")));
+  send(d, body);
 }
 
 const confirmBar = (dr) => el("div", { class: "confirm-bar", hidden: !dr.confirmKey, text: t("confirm_again") });
@@ -618,7 +583,7 @@ function closeOverlay() {
 }
 function openOverlay(kind, title, body, extra = {}) {
   closeOverlay();
-  const card = el("div", { class: `overlay-card ${kind}` }, el("div", { class: "overlay-title" }, el("span", { text: title }), kbd("Esc")), body);
+  const card = el("div", { class: `overlay-card ${kind}` }, el("div", { class: "overlay-title" }, el("span", { text: title })), body);
   const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-label": title, onclick: (e) => { if (e.target === root) closeOverlay(); } }, card);
   document.body.append(root);
   overlay = { kind, el: root, ...extra };
@@ -638,7 +603,7 @@ function openCompare(v2, ui) {
   const table = el("table", { class: "cmp" });
   const head = el("tr", {}, el("th"));
   v2.cards.forEach((c, i) => head.append(el("th", { class: "cmp-h" + (c.recommended ? " is-rec" : ""), "data-i": String(i), onclick: () => { overlay.sel = i; syncCompare(); } },
-    el("span", { class: "opt-chip", style: `--oc:${c.color}`, text: c.label }))));
+    el("span", { class: "opt-label", style: `--oc:${c.color}` }, el("i", { class: "dot" }), c.label))));
   table.append(el("thead", {}, head));
   const body = el("tbody");
   for (const name of names) {
@@ -681,18 +646,14 @@ function overlayKey(ev) {
   syncCompare();
 }
 
-// ---- Right column pieces for the 1-second layer ----
+// ---- Left column lead: what to doubt (Recommendation body, You decide, Assumptions, Against, Affected) ----
 
-// Fold rows: a heading line with a one-line summary; the body shows when the screen is expanded (`.` / click, same switch as the recommendation)
-const foldRow = (dr, ...kids) => el("div", { class: "sect-row", onclick: () => toggleExpand(dr) }, ...kids);
-
-// Affected: one line of chips (they shrink), "+N" for the rest; expanded, the chips wrap
-const affectsRow = (v2, dr) => {
+// Affected: a folded row at the end of the left column ("Affected (N)"), a vertical list of `code` when opened
+const affectsRow = (v2) => {
   if (!v2?.affects.length) return null;
-  const row = el("div", { class: "affects", title: t("affected"), onclick: () => toggleExpand(dr) }, el("span", { class: "aff-cap", text: `${t("affected")}:` }));
-  for (const a of v2.affects.slice(0, 6)) row.append(el("span", { class: "chip aff", text: a, title: a }));
-  if (v2.affects.length > 6) row.append(el("span", { class: "chip aff more", text: `+${v2.affects.length - 6}`, title: v2.affects.slice(6).join(", ") }));
-  return row;
+  const list = el("ul", {});
+  for (const a of v2.affects) list.append(el("li", {}, el("code", { text: a })));
+  return el("details", { class: "affects" }, el("summary", { text: `${t("affected")} (${v2.affects.length})` }), list);
 };
 
 // You decide: always shown (1-3 bullets)
@@ -703,43 +664,32 @@ const unknownsRow = (v2) => {
   return el("div", { class: "unknowns" }, el("b", { class: "unknowns-cap", text: t("you_decide") }), list);
 };
 
-const optRow = (v2) => {
-  if (!v2?.cards.length) return null;
-  const row = el("div", { class: "optrow" });
-  for (const c of v2.cards) row.append(el("span", { class: "opt-chip" + (c.recommended ? " starred" : ""), style: `--oc:${c.color}`, text: c.label }));
-  return row;
-};
-
-// Assumptions: "Assumptions 2 ☐☐" until expanded
-function assumptionsBox(v2, dr) {
+function assumptionsBox(v2) {
   if (!v2?.assumptions.length) return null;
   const list = el("ul", {});
   for (const li of v2.assumptions) list.append(el("li", {}, ...[...li.cloneNode(true).childNodes]));
-  const n = v2.assumptions.length;
-  return el("div", { class: "assumptions sect" },
-    foldRow(dr, el("b", { class: "sect-cap", text: `${t("sec_assumptions")} ${n}` }), el("span", { class: "sect-sum boxes", text: "☐".repeat(Math.min(n, 8)) })),
-    el("div", { class: "sect-body" }, el("div", { class: "assumptions-hint", text: t("assumptions_hint") }), list));
+  return el("div", { class: "assumptions" },
+    el("b", { class: "sect-cap", text: t("sec_assumptions") }),
+    el("div", { class: "assumptions-hint", text: t("assumptions_hint") }), list);
 }
 
-// Against: the caption and the first line until expanded
-function againstBox(v2, dr) {
+function againstBox(v2) {
   if (!v2?.against) return null;
-  const first = (v2.against.textContent ?? "").replace(/\s+/g, " ").trim();
-  return el("div", { class: "against sect" },
-    foldRow(dr, el("b", { class: "against-cap", text: t("against_cap") }), el("span", { class: "sect-sum one-line", text: first })),
-    el("div", { class: "sect-body" }, v2.against));
+  return el("div", { class: "against" }, el("b", { class: "against-cap", text: t("against_cap") }), v2.against);
 }
+
+// The rest of the recommendation (the headline is in the header) with its callouts in the frame. null when the recommendation was one sentence
+const recBox = (v2) => v2?.recBox ? el("div", { class: "rec" }, el("div", { class: "rec-cap", text: v2.recCap ?? t("sec_recommendation") }), el("div", { class: "rec-body" }, v2.recBox)) : null;
 
 function renderRightBody(d) {
   const root = $("decision");
-  stashPending();
-  root.classList.remove("expanded", "split");
+  root.classList.remove("split");
   if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
   if (!d) return;
   const dr = draftOf(d);
-  const closed = d.status !== "pending" || !!dr.grace; // while the grace period runs the screen is frozen (Undo only)
+  const closed = d.status !== "pending";
   if (STATUS_KEYS[d.status]) root.append(el("div", { class: "status", text: statusText(d.status) }));
 
   if (d.kind === "answer_question") {
@@ -761,22 +711,7 @@ function renderRightBody(d) {
       if (single) box.append(top, cardsBox);
       let items;
       if (v2) {
-        top.append(el("div", { class: "head" },
-          isBlocker(d) ? el("div", { class: "blocker-band", text: t("blocker_band") }) : null,
-          titleRow(el("div", { class: "v2-title", text: titleOf(d) })),
-          v2.headline ?? null,
-          metaLine(d), affectsRow(v2, dr), unknownsRow(v2), optRow(v2)));
         if (v2.todoBox) top.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
-        if (v2.recBox) {
-          // Callouts (CAUTION / WARNING ...) are exempt from folding. Show them inside the recommendation frame, right under the folded body
-          const callouts = [...v2.recBox.querySelectorAll(".callout")].filter((c) => !c.parentElement.closest(".callout"));
-          for (const c of callouts) c.remove();
-          top.append(el("div", { class: "rec" },
-            el("div", { class: "rec-cap", text: v2.recCap ?? t("sec_recommendation") }),
-            v2.recBox.textContent.trim() || v2.recBox.querySelector("pre, table, ul, ol, img") ? el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)) : null,
-            callouts.length ? el("div", { class: "md rec-callouts" }, ...callouts) : null));
-        }
-        top.append(...[assumptionsBox(v2, dr), againstBox(v2, dr)].filter(Boolean));
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk })),
           ...v2.extras.map(rawItem),
@@ -787,12 +722,8 @@ function renderRightBody(d) {
           if (done) done.pref = true;
         }
       } else {
-        const title = titleOf(d);
-        // Show title once when it equals the question. When they differ (session.title), show the question under the title
-        top.append(el("div", { class: "head" },
-          title === q.question ? el("div", { class: "header", text: q.header }) : null,
-          titleRow(el("div", { class: "question", text: title })), metaLine(d)));
-        if (title !== q.question) top.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
+        // The header carries the title (and, for one question, the question under it). With several questions each one is headed here
+        if (!single) box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
         items = q.options.map(rawItem);
       }
       if (single) {
@@ -800,7 +731,6 @@ function renderRightBody(d) {
         // For single select, moving = selecting. Pre-select the initial position (the recommended one, else the first)
         if (!closed && !q.multiSelect && sel.size === 0 && !free.on && items.length) sel.add(items[dr.cursor].value);
       }
-      if (single) top.append(keyLine([["↑", "↓"], t("hint_move")], [["Enter"], t("hint_answer")], ...(v2?.todoBox?.querySelector("pre") ? [[["c"], t("key_copy_command")]] : []), ...(q.multiSelect ? [[["Space"], t("hint_toggle")]] : [])));
       for (const it of items) {
         const input = el("input", {
           type: q.multiSelect ? "checkbox" : "radio",
@@ -814,15 +744,15 @@ function renderRightBody(d) {
             updateSubmit();
           },
         });
-        const labText = el("span", it.color ? { class: "opt-chip", style: `--oc:${it.color}`, text: it.label } : { text: it.label });
-        const lab = el("div", { class: "lab" }, labText, it.badge ? el("span", { class: "rec-badge", text: t("recommended") }) : null);
+        const labText = el("span", it.color ? { class: "opt-label", style: `--oc:${it.color}`, text: it.label } : { text: it.label });
+        const lab = el("div", { class: "lab" }, labText, it.badge ? el("span", { class: "rec-badge", text: `★ ${t("recommended")}` }) : null);
         const descs = it.lines.map((l) => {
           const dd = el("div", { class: (l.muted ? "desc muted" : "desc") + (l.extra ? " extra" : "") + " clampable" },
             l.extra ? el("b", { class: "xcol", text: `${l.extra}: ` }) : null, l.cell ? inlineClone(l.cell) : l.text);
           if (v2) decorate(dd, { terms: v2.terms }, { risk: !!l.muted });
           return dd;
         });
-        const card = el("label", { class: "opt" + (it.badge ? " rec" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null }, input,
+        const card = el("label", { class: "opt" + (it.badge ? " recommended" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null }, input,
           el("span", { class: "grow" }, lab, ...descs));
         if (single) { const idx = cards.length; cards.push({ input, card, risk: it.risk ?? "" }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
         cardsBox.append(card);
@@ -830,7 +760,7 @@ function renderRightBody(d) {
       if (single) {
         const none = dr.none;
         cardsBox.append(el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
-          el("span", { text: t("none_of_these") }), kbd("n")));
+          el("span", { text: t("none_of_these") })));
         if (none && !closed) {
           const panel = el("div", { class: "none-panel" });
           NONE_TYPES.forEach(([type, key], k) => panel.append(el("div", {
@@ -863,7 +793,7 @@ function renderRightBody(d) {
         oninput: (ev) => { free.text = ev.target.value; updateSubmit(); },
       });
       const freeCard = el("label", { class: "opt free" }, freeInput,
-        el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("free_text") }), single ? kbd("Enter") : null), freeText));
+        el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("free_text") })), freeText));
       if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
       cardsBox.append(freeCard);
       qsBox.append(box);
@@ -893,9 +823,9 @@ function renderRightBody(d) {
     const submit = el("button", {
       class: "btn primary", type: "button", id: "submit", disabled: closed || !complete(),
       onclick: () => { const { answers, weighty } = collect(); attempt(d, dr, "submit", { answers }, weighty); },
-    }, el("span", { text: t("answer") }), kbd("Enter"));
+    }, el("span", { text: t("answer") }));
     function updateSubmit() { submit.disabled = closed || !complete(); }
-    const actions = el("div", { class: "actions" }, confirmBar(dr), dr.grace ? graceBar(d, dr) : submit);
+    const actions = el("div", { class: "actions" }, confirmBar(dr), submit);
     if (single) {
       const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", d.explanation && hasExplanation(d) ? "y" : "", "n"].filter(Boolean);
       const extraHints = [
@@ -922,6 +852,7 @@ function renderRightBody(d) {
         dr.cursor = i;
         cards.forEach((c, k) => c.card.classList.toggle("cursor", k === i));
         revealCard(cards[i].card);
+        updateMore(dr);
         if (select && !multi && !closed) cards[i].input.click();
       },
       get cursor() { return dr.cursor ?? 0; },
@@ -930,7 +861,7 @@ function renderRightBody(d) {
         if (!dr.none) return;
         const [type] = NONE_TYPES[dr.none.cursor];
         const note = dr.none.note.trim();
-        attempt(d, dr, "none", { answers: { [qs[0].question]: `${NONE_PREFIX} — ${type}${note ? `: ${note}` : ""}` } }, false); // a type answer chooses nothing irreversible: no Enter twice (the grace period stays)
+        attempt(d, dr, "none", { answers: { [qs[0].question]: `${NONE_PREFIX} — ${type}${note ? `: ${note}` : ""}` } }, false); // a type answer chooses nothing irreversible: no Enter twice
       },
     };
     if (single && !closed) ui.setCursor(dr.cursor, false);
@@ -940,16 +871,14 @@ function renderRightBody(d) {
   }
 
   // approve_plan
-  const qsBox = el("div", { class: "qs" },
-    el("div", { class: "head" }, titleRow(el("div", { class: "v2-title", text: titleOf(d) })), metaLine(d)),
-    el("div", { class: "plan-q", text: t("plan_question") }));
+  const qsBox = el("div", { class: "qs" });
   const impact = impactBox(d);
   if (impact) qsBox.append(impact);
   root.append(qsBox);
   const weighty = reversibilityOf(d) === "irreversible";
-  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => attempt(d, dr, "approve", { approve: true, set_mode_auto: false }, weighty) }, el("span", { text: t("approve") }), kbd("y"));
-  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => attempt(d, dr, "auto", { approve: true, set_mode_auto: true }, weighty) }, el("span", { text: t("approve_auto") }), kbd("a"));
-  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }), kbd("n"));
+  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => attempt(d, dr, "approve", { approve: true, set_mode_auto: false }, weighty) }, el("span", { text: t("approve") }));
+  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => attempt(d, dr, "auto", { approve: true, set_mode_auto: true }, weighty) }, el("span", { text: t("approve_auto") }));
+  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }));
   const actions = el("div", { class: "actions" }, confirmBar(dr));
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
@@ -963,9 +892,8 @@ function renderRightBody(d) {
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  if (dr.grace) actions.append(graceBar(d, dr));
-  else actions.append(approve, auto, reject);
-  actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · ←→ ${t("hint_next")}`, " ", buildTag()));
+  actions.append(approve, auto, reject);
+  actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · ←→ ${t("hint_next")}`, " ", buildTag()));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
@@ -1093,7 +1021,7 @@ function refreshWide() {
     const wide = full || (natural > 0 && natural > box.clientWidth * WIDE_RATIO && box.clientWidth > 0);
     box.classList.toggle("wide", wide);
     const chip = box.querySelector(".wide-chip");
-    if (wide && !chip) box.prepend(el("button", { class: "wide-chip", type: "button", tabindex: "-1", onclick: () => setFullwide(!document.body.classList.contains("fullwide")) }, el("span", { text: `${t("full_width")} ` }), kbd("f")));
+    if (wide && !chip) box.prepend(el("button", { class: "wide-chip", type: "button", tabindex: "-1", onclick: () => setFullwide(!document.body.classList.contains("fullwide")) }, t("full_width")));
     else if (!wide && chip) chip.remove();
     const svg = box.querySelector("svg");
     if (svg) {
@@ -1101,7 +1029,7 @@ function refreshWide() {
       else { svg.style.removeProperty("width"); svg.style.removeProperty("max-width"); svg.style.removeProperty("max-height"); }
     }
     const c2 = box.querySelector(".wide-chip");
-    if (c2) c2.firstChild.textContent = `${full ? t("back") : t("full_width")} `;
+    if (c2) c2.textContent = full ? t("back") : t("full_width");
   }
 }
 
@@ -1200,7 +1128,7 @@ function softHyphens(root) {
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const escAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const SKIP_RICH = "pre, .term, .optref, .fn, .fn-n, button, kbd, .risk-bad, .risk-undo, .num, .cbadge";
+const SKIP_RICH = "pre, .term, .optref, .fn, .fn-n, button, .risk-bad, .risk-undo, .num, .cbadge";
 
 // Wrap every match of the global regex `re` in text nodes under root; make(m) returns the node to put in, or null to leave the text
 function wrapText(root, re, make, skip = SKIP_RICH) {
@@ -1355,7 +1283,7 @@ function splitHeadline(box) {
   }
   if (!placed) range.setEnd(p, p.childNodes.length);
   if (!text.slice(0, upTo).trim()) return null;
-  const head = el("div", { class: "headline" });
+  const head = el("div", { class: "headline clampable" });
   head.append(range.extractContents());
   // what is left of the paragraph starts at the next sentence
   const first = document.createTreeWalker(p, NodeFilter.SHOW_TEXT).nextNode();
@@ -1603,7 +1531,12 @@ function renderLeft(d) {
     return Promise.all(jobs).catch(() => {});
   }
   if (hasExplanation(d)) {
-    root.append(modelFor(d).left);
+    const m = modelFor(d);
+    const lead = m.v2 ? [recBox(m.v2), unknownsRow(m.v2), assumptionsBox(m.v2), againstBox(m.v2)].filter(Boolean) : [];
+    if (lead.length) root.append(el("div", { class: "lead" }, ...lead));
+    root.append(m.left);
+    const aff = m.v2 ? affectsRow(m.v2) : null;
+    if (aff) root.append(aff);
     return;
   }
   const code = ex?.none_reason ?? "";
@@ -1622,6 +1555,7 @@ function renderAll() {
   renderHeader();
   renderList();
   const left = renderLeft(d);
+  renderHead(d);
   renderRight(d);
   refreshWide();
   left?.then?.(refreshWide);
@@ -1640,8 +1574,6 @@ function advance() {
 function upsert(d) {
   const prev = decisions.get(d.id);
   decisions.set(d.id, d);
-  const grace = drafts.get(d.id)?.grace;
-  if (grace && d.status !== "pending") { clearInterval(grace.timer); drafts.get(d.id).grace = null; }
   if (d.id !== shownId) notifyBackground(prev, d);
   if (d.id === shownId) {
     if (d.status !== "pending") {
@@ -1724,7 +1656,7 @@ function cycle(step) {
 // With an IME enabled, keydown has key "Process" and keyCode 229, so the character is lost.
 // Outside text fields, decide the bound key from the physical key (code)
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyU: "u", Slash: "/", Period: ".",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", Slash: "/", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -1780,13 +1712,6 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if (!typing && key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
-  // During the grace period only Undo (u / Esc) works
-  const shown = decisions.get(shownId);
-  if (shown && drafts.get(shown.id)?.grace) {
-    if (key === "u" || key === "Escape") { ev.preventDefault(); cancelGrace(shown); }
-    else if (key === "Enter" || key === " " || key.startsWith("Arrow")) ev.preventDefault();
-    return;
-  }
   if (!ui || ui.closed) return;
   const isBtn = t instanceof HTMLButtonElement;
 
@@ -1905,14 +1830,19 @@ $("empty").append(el("div", { class: "build empty-build", text: `build ${BUILD}`
 
 // Apply the display language: static text in index.html, then everything rendered from decisions.
 // The language is read from <html data-lang>; changing it later (tests do) re-renders in place.
+function renderDrawerKeys() {
+  $("drawer-keys").textContent = `↑↓ ${t("key_move")} · Enter ${t("key_show")} · Esc ← ${t("key_close")}`;
+}
 function applyLang() {
   applyStatic();
+  renderDrawerKeys();
   renderEmptyText();
   if (connDown) showBanner(t("cannot_connect", { origin: location.origin }));
   models.clear(); // cached models hold localized DOM (copy button, callout labels, fold summaries)
   renderAll();
 }
 applyStatic();
+renderDrawerKeys();
 renderEmptyText();
 new MutationObserver(applyLang).observe(document.documentElement, { attributes: true, attributeFilter: ["data-lang"] });
 
