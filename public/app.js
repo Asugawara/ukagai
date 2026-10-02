@@ -1,10 +1,11 @@
 // ukagai GUI。ユーザー由来の文字列は textContent で入れる。innerHTML は marked / mermaid の出力だけ。
 const MULTI_SELECT_SEPARATOR = ", "; // src/contract.ts と同じ値
+const FOLD_LINES = 9;
 
 const decisions = new Map();
-const sessions = new Map();
 const drafts = new Map(); // id -> { sel: Map<qIndex, Set<label>>, free: Map<qIndex, {on, text}>, rejecting, reason }
-let selectedId = null;
+let shownId = null;
+let ui = null; // 表示中の判断の操作(キーボード用)
 
 const $ = (id) => document.getElementById(id);
 
@@ -60,9 +61,32 @@ function sanitize(html) {
 
 // ---- 表示補助 ----
 
-function sessionTitle(d) {
-  const s = d.session;
-  return s.title || d.context?.ai_title || s.cwd.split("/").filter(Boolean).pop() || s.cwd;
+const hasExplanation = (d) => !!d.explanation && d.explanation.attached_via !== "none";
+
+function cwdTail(d) {
+  return d.session.cwd.split("/").filter(Boolean).pop() || d.session.cwd;
+}
+
+function titleOf(d) {
+  let t = d.explanation?.title;
+  if (!t && d.kind === "answer_question" && hasExplanation(d)) t = parseFrontMatter(d.explanation.markdown).fm.title;
+  return t || d.session.title || cwdTail(d);
+}
+
+function reversibilityOf(d) {
+  const ex = d.explanation;
+  if (!ex) return undefined;
+  if (ex.reversibility) return ex.reversibility;
+  if (d.kind === "answer_question" && hasExplanation(d)) return parseFrontMatter(ex.markdown).fm.reversibility;
+  return undefined;
+}
+
+function scopeOf(d) {
+  const ex = d.explanation;
+  if (!ex) return undefined;
+  if (ex.scope) return ex.scope;
+  if (d.kind === "answer_question" && hasExplanation(d)) return parseFrontMatter(ex.markdown).fm.scope;
+  return undefined;
 }
 
 function elapsed(iso) {
@@ -81,44 +105,87 @@ function diffBlock(text) {
   return pre;
 }
 
-// ---- 保留一覧 ----
+const pendingList = () =>
+  [...decisions.values()].filter((d) => d.status === "pending").sort((a, b) => a.created_at.localeCompare(b.created_at));
 
-function visibleDecisions() {
-  return [...decisions.values()]
-    .filter((d) => d.status === "pending" || d.id === selectedId)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+const kindLabel = (d) => (d.kind === "approve_plan" ? "📋 計画" : "❓ 質問");
+
+// ---- トースト ----
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), 2000);
 }
+
+// ---- header ----
+
+function renderHeader() {
+  const d = decisions.get(shownId);
+  const n = pendingList().length;
+  $("pending-count").textContent = String(n);
+  $("pending-btn").classList.toggle("hot", n >= 2);
+  document.title = n > 0 ? `(${n}) ukagai` : "ukagai";
+  const badges = $("badges");
+  badges.replaceChildren();
+  if (!d) {
+    $("kind-icon").textContent = "";
+    $("title").textContent = "";
+    return;
+  }
+  $("kind-icon").textContent = d.kind === "approve_plan" ? "📋" : "❓";
+  $("title").textContent = titleOf(d);
+  $("title").title = titleOf(d);
+  const rev = reversibilityOf(d);
+  if (rev === "irreversible") badges.append(el("span", { class: "badge irreversible", text: "元に戻せない" }));
+  else if (rev === "costly") badges.append(el("span", { class: "badge costly", text: "戻すのにコストがかかる" }));
+  else if (rev === "reversible") badges.append(el("span", { class: "badge reversible", text: "戻せる" }));
+  const scope = scopeOf(d);
+  if (scope) badges.append(el("span", { class: "badge", text: scope }));
+  badges.append(el("span", { class: "badge", text: cwdTail(d), title: d.session.cwd }));
+  badges.append(el("span", { class: "badge age", "data-created": d.created_at, text: elapsed(d.created_at) }));
+}
+
+// ---- ドロワー ----
+
+function setDrawer(open) {
+  $("drawer").classList.toggle("open", open);
+  $("drawer").setAttribute("aria-hidden", String(!open));
+  $("backdrop").hidden = !open;
+  $("pending-btn").setAttribute("aria-expanded", String(open));
+  if (open) refreshMetrics();
+  else if (document.activeElement === $("pending-btn")) $("pending-btn").blur(); // Enter が保留ボタンに吸われないように
+}
+
+const drawerOpen = () => $("drawer").classList.contains("open");
 
 function renderList() {
   const list = $("pending-list");
   list.replaceChildren();
-  const items = visibleDecisions();
-  $("pending-count").textContent = `(${items.filter((d) => d.status === "pending").length})`;
-  for (const d of items) {
+  for (const d of pendingList()) {
     const meta = el("div", { class: "meta" },
-      el("span", { text: d.kind === "approve_plan" ? "📋 計画" : "❓ 質問" }),
+      el("span", { text: kindLabel(d) }),
       el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) }));
-    if (d.session.agent_type) meta.append(el("span", { class: "badge", text: d.session.agent_type }));
-    if (d.explanation?.attached_via === "none" || !d.explanation) meta.append(el("span", { class: "badge none", text: "説明なし" }));
+    if (d.kind === "answer_question" && !hasExplanation(d)) meta.append(el("span", { class: "badge none", text: "説明なし" }));
+    if (d.id === shownId) meta.append(el("span", { class: "badge", text: "表示中" }));
     const row = el("button", {
-      class: "row" + (d.id === selectedId ? " selected" : ""),
-      onclick: () => select(d.id),
-    }, el("div", { class: "title", text: sessionTitle(d) }), meta);
+      class: "row" + (d.id === shownId ? " current" : ""),
+      type: "button",
+      onclick: () => { show(d.id); setDrawer(false); },
+    }, el("div", { class: "title", text: titleOf(d) }), meta);
     list.append(el("li", {}, row));
   }
+  if (!list.children.length) list.append(el("li", { class: "muted", text: "保留はありません" }));
 }
 
-function select(id) {
-  selectedId = id;
-  renderList();
-  renderDetail();
-}
-
-// ---- カード ----
+// ---- 右列: 判断 ----
 
 function draftOf(d) {
   let dr = drafts.get(d.id);
-  if (!dr) drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "" }));
+  if (!dr) drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", cursor: null }));
   return dr;
 }
 
@@ -131,51 +198,90 @@ const STATUS_TEXT = {
   cancelled: "キャンセルされました",
 };
 
-async function send(d, body, btn) {
-  document.querySelectorAll("#card button").forEach((b) => (b.disabled = true));
+async function send(d, body) {
+  document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
   try {
     const updated = await post(`/api/decisions/${d.id}/answer`, body);
     decisions.set(updated.id, updated);
+    if (shownId === d.id) {
+      toast(STATUS_TEXT[updated.status] ?? "送信しました");
+      advance();
+    } else {
+      renderHeader();
+      renderList();
+    }
   } catch (e) {
     if (e.message !== "unauthorized") showBanner(`送信に失敗しました: ${e.message}`);
+    if (shownId === d.id) renderRight(decisions.get(d.id));
   }
-  renderList();
-  renderDetail();
 }
 
-function renderCard(d) {
-  const card = el("div", { class: "panel" });
+function terminalButton(d, closed) {
+  return el("button", { class: "link", type: "button", disabled: closed, text: "ターミナルで答える", onclick: () => send(d, { fallback: true }) });
+}
+
+const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
+
+function renderRight(d) {
+  const root = $("decision");
+  root.replaceChildren();
+  ui = null;
+  if (!d) return;
   const dr = draftOf(d);
   const closed = d.status !== "pending";
-  if (STATUS_TEXT[d.status]) card.append(el("div", { class: "status", text: STATUS_TEXT[d.status] }));
+  if (STATUS_TEXT[d.status]) root.append(el("div", { class: "status", text: STATUS_TEXT[d.status] }));
 
   if (d.kind === "answer_question") {
     const qs = d.request.questions;
+    const single = qs.length === 1;
+    const v2 = single ? modelFor(d).v2 : null;
+    const cards = []; // 質問が 1 つのときの { input, card }(矢印キー用)
+    let freeTextEl = null;
+    const qsBox = el("div", { class: "qs" });
     qs.forEach((q, qi) => {
       const sel = dr.sel.get(qi) ?? dr.sel.set(qi, new Set()).get(qi);
       const free = dr.free.get(qi) ?? dr.free.set(qi, { on: false, text: "" }).get(qi);
-      const box = el("div", { class: "q" },
-        el("div", { class: "header", text: q.header }),
-        el("div", { class: "question", text: q.question }));
-      for (const o of q.options) {
+      const box = el("div", { class: "q" });
+      let items;
+      if (v2) {
+        box.append(el("div", { class: "v2-title", text: v2.title }));
+        if (v2.recBox) box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), v2.recBox));
+        items = [
+          ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
+          ...v2.extras.map((o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: SUFFIX_RE.test(o.label) })),
+        ];
+      } else {
+        box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
+        items = q.options.map((o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: SUFFIX_RE.test(o.label) }));
+      }
+      if (single) {
+        if (dr.cursor == null) dr.cursor = Math.max(0, items.findIndex((i) => i.pref));
+        // 単一選択は移動 = 選択。初期位置(推奨、無ければ先頭)を選んでおく
+        if (!closed && !q.multiSelect && sel.size === 0 && !free.on && items.length) sel.add(items[dr.cursor].value);
+      }
+      for (const it of items) {
         const input = el("input", {
           type: q.multiSelect ? "checkbox" : "radio",
           name: `q${qi}`,
+          tabindex: "-1",
           disabled: closed,
-          checked: sel.has(o.label),
+          checked: sel.has(it.value),
           onchange: (ev) => {
-            if (q.multiSelect) ev.target.checked ? sel.add(o.label) : sel.delete(o.label);
-            else { sel.clear(); sel.add(o.label); free.on = false; }
+            if (q.multiSelect) ev.target.checked ? sel.add(it.value) : sel.delete(it.value);
+            else { sel.clear(); sel.add(it.value); free.on = false; }
             updateSubmit();
           },
         });
-        box.append(el("label", { class: "opt" }, input,
-          el("span", {}, el("div", { text: o.label }), o.description ? el("div", { class: "desc", text: o.description }) : null)));
+        const lab = el("div", { class: "lab" }, el("span", { text: it.label }), it.badge ? el("span", { class: "rec-badge", text: "推奨" }) : null);
+        const card = el("label", { class: "opt" + (it.badge ? " rec" : "") }, input,
+          el("span", { class: "grow" }, lab, ...it.lines.map((l) => el("div", { class: l.muted ? "desc muted" : "desc", text: l.text }))));
+        if (single) { const idx = cards.length; cards.push({ input, card }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
+        box.append(card);
       }
       const freeInput = el("input", {
         type: q.multiSelect ? "checkbox" : "radio",
         name: `q${qi}`,
-        class: "free-toggle",
+        tabindex: "-1",
         disabled: closed,
         checked: free.on,
         onchange: (ev) => {
@@ -189,22 +295,28 @@ function renderCard(d) {
         onfocus: () => { if (!free.on) freeInput.click(); },
         oninput: (ev) => { free.text = ev.target.value; updateSubmit(); },
       });
-      box.append(el("label", { class: "opt" }, freeInput, el("span", {}, el("div", { text: "自由記述" }))), freeText);
-      card.append(box);
+      const freeCard = el("label", { class: "opt free" }, freeInput,
+        el("span", { class: "grow" }, el("div", { class: "lab", text: "自由記述" }), freeText));
+      if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
+      box.append(freeCard);
+      qsBox.append(box);
     });
-    const freeOf = (qi) => dr.free.get(qi);
+    root.append(qsBox);
     const complete = () => qs.every((_, qi) => {
-      const f = freeOf(qi);
+      const f = dr.free.get(qi);
       if (f.on) return f.text.trim() !== "";
       return (dr.sel.get(qi)?.size ?? 0) > 0;
     });
     const submit = el("button", {
-      class: "btn primary", id: "submit", disabled: closed || !complete(),
+      class: "btn primary", type: "button", id: "submit", disabled: closed || !complete(),
+      title: "キー: Enter",
       onclick: () => {
         const answers = {};
         qs.forEach((q, qi) => {
-          const picked = q.options.map((o) => o.label).filter((l) => dr.sel.get(qi).has(l));
-          const f = freeOf(qi);
+          const sel = dr.sel.get(qi);
+          // 回答は元の option.label(表の見た目ではなく)で返す
+          const picked = q.options.map((o) => o.label).filter((l) => sel.has(l));
+          const f = dr.free.get(qi);
           if (f.on && !q.multiSelect) picked.length = 0;
           if (f.on) picked.push(f.text.trim());
           answers[q.question] = picked.join(MULTI_SELECT_SEPARATOR);
@@ -214,32 +326,66 @@ function renderCard(d) {
       text: "回答する",
     });
     function updateSubmit() { submit.disabled = closed || !complete(); }
-    card.append(el("div", { class: "actions" }, submit, terminalButton(d, closed)));
-  } else {
-    card.append(el("div", { class: "md", id: "plan-body" }));
-    const actions = el("div", { class: "actions" },
-      el("button", { class: "btn primary", disabled: closed, text: "承認", onclick: () => send(d, { approve: true, set_mode_auto: false }) }),
-      el("button", { class: "btn", disabled: closed, text: "承認して auto", onclick: () => send(d, { approve: true, set_mode_auto: true }) }),
-      el("button", { class: "btn danger", disabled: closed, text: "却下", onclick: () => { dr.rejecting = true; renderDetail(); } }),
-      terminalButton(d, closed));
-    card.append(actions);
-    if (dr.rejecting && !closed) {
-      const input = el("input", {
-        type: "text", placeholder: "却下の理由(必須)", value: dr.reason,
-        oninput: (ev) => { dr.reason = ev.target.value; confirm.disabled = !dr.reason.trim(); },
-      });
-      const confirm = el("button", {
-        class: "btn danger", disabled: !dr.reason.trim(), text: "却下を送る",
-        onclick: () => send(d, { approve: false, reason: dr.reason.trim() }),
-      });
-      card.append(input, el("div", { class: "actions" }, confirm));
-    }
+    const actions = el("div", { class: "actions" }, submit, terminalButton(d, closed));
+    if (single) actions.append(el("div", { class: "hint", text: "↑↓ 選ぶ · Enter 決定 · Space 複数選択の切替" }));
+    root.append(actions);
+    const multi = !!qs[0].multiSelect && single;
+    ui = {
+      kind: "question", cards, multi, submit, closed, freeText: freeTextEl,
+      setCursor(i, select) {
+        if (!cards.length) return;
+        i = clamp(i, cards.length);
+        dr.cursor = i;
+        cards.forEach((c, k) => c.card.classList.toggle("cursor", k === i));
+        cards[i].card.scrollIntoView({ block: "nearest" });
+        if (select && !multi && !closed) cards[i].input.click();
+      },
+      get cursor() { return dr.cursor ?? 0; },
+    };
+    if (single && !closed) ui.setCursor(dr.cursor, false);
+    return;
   }
-  return card;
+
+  // approve_plan
+  const qsBox = el("div", { class: "qs" }, el("div", { class: "plan-q", text: "この計画を承認しますか" }));
+  root.append(qsBox);
+  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, title: "キー: y", text: "承認", onclick: () => send(d, { approve: true, set_mode_auto: false }) });
+  const auto = el("button", { class: "btn", type: "button", disabled: closed, title: "キー: a", text: "承認して auto", onclick: () => send(d, { approve: true, set_mode_auto: true }) });
+  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, title: "キー: n", text: "却下", onclick: () => startReject(d) });
+  const actions = el("div", { class: "actions" });
+  if (dr.rejecting && !closed) {
+    const confirm = el("button", {
+      class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: "却下を送る",
+      onclick: () => send(d, { approve: false, reason: dr.reason.trim() }),
+    });
+    const input = el("input", {
+      type: "text", id: "reason", placeholder: "却下の理由(必須)", value: dr.reason,
+      oninput: (ev) => { dr.reason = ev.target.value; confirm.disabled = !dr.reason.trim(); },
+      onkeydown: (ev) => { if (ev.key === "Enter" && dr.reason.trim()) confirm.click(); },
+    });
+    actions.append(el("div", { class: "reject-box" }, input), confirm);
+  }
+  actions.append(approve, auto, reject, terminalButton(d, closed), el("div", { class: "hint", text: "←→ ↑↓ 選ぶ · Enter 決定 · y 承認 · a auto · n 却下" }));
+  root.append(actions);
+  const buttons = [approve, auto, reject];
+  ui = {
+    kind: "plan", buttons, closed, approve, auto,
+    setCursor(i) {
+      i = clamp(i, buttons.length);
+      dr.cursor = i;
+      buttons.forEach((b, k) => b.classList.toggle("cursor", k === i));
+    },
+    get cursor() { return dr.cursor ?? 0; },
+  };
+  if (!closed) ui.setCursor(dr.cursor ?? 0);
 }
 
-function terminalButton(d, closed) {
-  return el("button", { class: "btn", disabled: closed, text: "ターミナルで答える", onclick: () => send(d, { fallback: true }) });
+function startReject(d) {
+  const dr = draftOf(d);
+  dr.rejecting = true;
+  dr.cursor = 2;
+  renderRight(d);
+  $("reason")?.focus();
 }
 
 // ---- Markdown / Mermaid / diff ----
@@ -290,91 +436,209 @@ async function renderMermaid(codeEl) {
   }
 }
 
-function renderMarkdown(container, md) {
-  const html = sanitize(window.marked.parse(md, { async: false }));
-  container.innerHTML = html;
+// 9 行を超える pre は <details> に畳む
+function foldLongPre(container) {
+  for (const pre of container.querySelectorAll("pre")) {
+    if (pre.parentElement?.tagName === "DETAILS" && pre.parentElement.classList.contains("fold")) continue;
+    const lines = (pre.textContent ?? "").replace(/\n$/, "").split("\n").length;
+    if (lines <= FOLD_LINES) continue;
+    const det = el("details", { class: "fold" }, el("summary", { text: `コードを表示(${lines} 行)` }));
+    pre.replaceWith(det);
+    det.append(pre);
+  }
+}
+
+// pre の畳み・diff・mermaid をまとめて適用(何度呼んでも壊れない)
+async function enhance(container) {
   for (const code of container.querySelectorAll("pre > code.language-diff")) {
     code.closest("pre").replaceWith(diffBlock(code.textContent ?? ""));
   }
-  return Promise.all([...container.querySelectorAll("pre > code.language-mermaid")].map(renderMermaid));
+  await Promise.all([...container.querySelectorAll("pre > code.language-mermaid")].map(renderMermaid));
+  foldLongPre(container);
 }
 
-function renderExplanation(d) {
-  const root = $("explanation");
+async function renderMarkdown(container, md) {
+  container.innerHTML = sanitize(window.marked.parse(md, { async: false }));
+  await enhance(container);
+}
+
+// ---- 説明ファイル v2 から判断画面を組む ----
+
+const SUFFIX_RE = /\s*[(（]\s*(recommended|推奨)\s*[)）]\s*$/i;
+const stripSuffix = (s) => s.replace(SUFFIX_RE, "");
+const normLabel = (s) => stripSuffix(s.normalize("NFKC")).replace(/\s/g, "").toLowerCase();
+const normHeading = (s) => s.normalize("NFKC").replace(/\s/g, "").replace(/[と・]/g, "").toLowerCase();
+
+// h1〜h3 で節に切る。節は同じか浅い次の見出しの直前まで
+function sectionsOf(container) {
+  const kids = [...container.children];
+  const level = (n) => { const m = /^H([1-3])$/.exec(n.tagName); return m ? Number(m[1]) : 0; };
+  const secs = [];
+  kids.forEach((k, i) => {
+    const lv = level(k);
+    if (!lv) return;
+    let j = i + 1;
+    while (j < kids.length && !(level(kids[j]) && level(kids[j]) <= lv)) j++;
+    secs.push({ head: k, nodes: kids.slice(i, j), norm: normHeading(k.textContent ?? "") });
+  });
+  return secs;
+}
+
+// 完全一致を優先し、無ければ部分一致
+function findSection(secs, name) {
+  const n = normHeading(name);
+  return secs.find((s) => s.norm === n) ?? secs.find((s) => s.norm.includes(n));
+}
+
+const models = new Map(); // id -> { left, v2 }
+const modelFor = (d) => {
+  let m = models.get(d.id);
+  if (!m) models.set(d.id, (m = buildModel(d)));
+  return m;
+};
+
+function buildModel(d) {
+  const m = { left: null, v2: null };
+  if (d.kind !== "answer_question" || !hasExplanation(d)) return m;
+  const { fm, body } = parseFrontMatter(d.explanation.markdown);
+  const left = el("div", { class: "md" });
+  left.innerHTML = sanitize(window.marked.parse(body, { async: false }));
+  m.left = left;
+  const qs = d.request.questions;
+  if (qs.length === 1) {
+    const secs = sectionsOf(left);
+    const optSec = findSection(secs, "選択肢");
+    let recSec = findSection(secs, "推奨");
+    if (recSec === optSec) recSec = undefined;
+    const table = optSec?.nodes.find((n) => n.tagName === "TABLE") ?? optSec?.nodes.map((n) => n.querySelector?.("table")).find(Boolean);
+    const v2 = table ? parseOptionsTable(table, qs[0].options, fm) : null;
+    if (v2) {
+      v2.title = fm.title || d.explanation.title || qs[0].question;
+      for (const n of optSec.nodes) n.remove();
+      if (recSec) {
+        const recBox = el("div", { class: "md" });
+        for (const n of recSec.nodes.slice(1)) recBox.append(n);
+        recSec.head.remove();
+        if (recBox.children.length) { v2.recBox = recBox; enhance(recBox).catch(() => {}); }
+      }
+      m.v2 = v2;
+    }
+  }
+  enhance(left).catch(() => {});
+  return m;
+}
+
+// 表(先頭列 = ラベル)を options に対応付ける。対応が取れる行が無ければ null
+function parseOptionsTable(table, options, fm) {
+  const trs = [...table.querySelectorAll("tr")];
+  if (trs.length < 2) return null;
+  const cells = (tr) => [...tr.children].map((c) => (c.textContent ?? "").trim());
+  const header = cells(trs[0]);
+  const hn = header.map(normHeading);
+  const hi = hn.findIndex((h) => h.includes(normHeading("起きること")));
+  const ri = hn.findIndex((h) => h.includes(normHeading("リスク")));
+  const cards = [];
+  for (const row of trs.slice(1).map(cells)) {
+    const o = options.find((o) => normLabel(o.label) === normLabel(row[0] ?? ""));
+    if (!o || cards.some((c) => c.option === o)) continue;
+    let lines;
+    if (hi >= 0 && ri >= 0) lines = [{ text: row[hi] ?? "" }, { text: row[ri] ?? "", muted: true }];
+    else lines = row.slice(1).map((t, j) => ({ text: t ? `${header[j + 1] ?? ""}: ${t}` : "" })); // 旧形式
+    lines = lines.filter((l) => l.text && !/^[-—ー]+$/.test(l.text));
+    cards.push({ option: o, label: stripSuffix(row[0]), lines, suffix: SUFFIX_RE.test(row[0]), recommended: false });
+  }
+  if (!cards.length) return null;
+  const want = fm.recommended ? normLabel(fm.recommended) : null;
+  const byFm = want ? cards.filter((c) => normLabel(c.option.label) === want) : [];
+  for (const c of byFm.length ? byFm : cards.filter((c) => c.suffix)) c.recommended = true;
+  const extras = options.filter((o) => !cards.some((c) => c.option === o));
+  return { cards, extras };
+}
+
+// ---- 左列: 背景 ----
+
+function renderLeft(d) {
+  const root = $("background");
   root.replaceChildren();
+  root.scrollTop = 0;
+  if (!d) return;
   const ex = d.explanation;
-  if (!ex || ex.attached_via === "none") {
-    const reason = ex?.none_reason ?? "";
-    root.append(el("div", { class: "panel muted", text: `エージェントは説明を書きませんでした${reason ? `(理由: ${reason})` : ""}` }));
+
+  if (d.kind === "approve_plan") {
+    const plan = el("div", { class: "md" });
+    root.append(plan);
+    const jobs = [renderMarkdown(plan, d.request.plan ?? "")];
+    // hook は explanation.markdown に計画本文を入れるので、本文と違うときだけ続ける
+    if (hasExplanation(d) && ex.markdown.trim() !== (d.request.plan ?? "").trim()) {
+      const md = el("div", { class: "md" });
+      root.append(el("hr"), md);
+      jobs.push(renderMarkdown(md, parseFrontMatter(ex.markdown).body));
+    }
+    return Promise.all(jobs).catch(() => {});
+  }
+  if (hasExplanation(d)) {
+    root.append(modelFor(d).left);
     return;
   }
-  const { fm, body } = parseFrontMatter(ex.markdown);
-  const panel = el("div", { class: "panel" });
-  const rev = fm.reversibility ?? ex.reversibility;
-  if (rev === "irreversible" || rev === "costly") {
-    panel.append(el("div", { class: `band ${rev}`, text: rev === "irreversible" ? "元に戻せない" : "戻すのにコストがかかる" }));
-  }
-  const table = el("table", { class: "fm" });
-  for (const [label, val] of [["title", fm.title ?? ex.title], ["reversibility", rev], ["scope", fm.scope ?? ex.scope]]) {
-    if (val) table.append(el("tr", {}, el("th", { text: label }), el("td", { text: val })));
-  }
-  panel.append(table);
-  const md = el("div", { class: "md" });
-  panel.append(md);
-  root.append(panel);
-  renderMarkdown(md, body);
+  const reason = ex?.none_reason ?? "";
+  root.append(el("div", { class: "bg-note", text: `エージェントは説明を書きませんでした${reason ? `(理由: ${reason})` : ""}` }));
 }
 
-// ---- 補助文脈 ----
+// ---- 表示の切り替え ----
 
-function renderContext(d) {
-  const body = $("context-body");
-  body.replaceChildren();
-  const c = d.context ?? {};
-  if (c.last_assistant_text) body.append(el("h2", { text: "直前のエージェント発言" }), el("pre", { text: c.last_assistant_text }));
-  if (c.recent_tools?.length) {
-    const ul = el("ul");
-    for (const t of c.recent_tools) ul.append(el("li", { text: `${t.name}: ${t.summary}` }));
-    body.append(el("h2", { text: "直近のツール" }), ul);
-  }
-  if (c.branch || c.git_diff_stat) {
-    body.append(el("h2", { text: `git${c.branch ? `(${c.branch})` : ""}` }));
-    if (c.git_diff_stat) body.append(el("pre", { text: c.git_diff_stat }));
-  }
-  if (c.git_diff) body.append(el("h2", { text: "git diff" }), diffBlock(c.git_diff));
-  if (!body.children.length) body.append(el("p", { class: "muted", text: "文脈はありません。" }));
+function renderAll() {
+  const d = decisions.get(shownId);
+  $("main").hidden = !d;
+  $("empty").hidden = !!d;
+  renderHeader();
+  renderList();
+  renderLeft(d);
+  renderRight(d);
 }
 
-function renderDetail() {
-  const d = decisions.get(selectedId);
-  if (!d) {
-    $("card").replaceChildren(el("p", { class: "muted", text: "判断を選んでください。" }));
-    $("explanation").replaceChildren();
-    $("context-body").replaceChildren();
+function show(id) {
+  shownId = id;
+  renderAll();
+}
+
+function advance() {
+  shownId = pendingList()[0]?.id ?? null;
+  renderAll();
+}
+
+function upsert(d) {
+  const prev = decisions.get(d.id);
+  decisions.set(d.id, d);
+  if (d.id === shownId) {
+    if (d.status !== "pending") {
+      toast(STATUS_TEXT[d.status] ?? "更新されました");
+      advance();
+    } else if (!prev || prev.status !== d.status) {
+      renderAll();
+    }
     return;
   }
-  const card = renderCard(d);
-  $("card").replaceChildren(card);
-  if (d.kind === "approve_plan") renderMarkdown(card.querySelector("#plan-body"), d.request.plan);
-  // 説明は判断ごとに 1 回描けばよい。状態更新のたびに描き直さない
-  if ($("explanation").dataset.id !== d.id) {
-    $("explanation").dataset.id = d.id;
-    renderExplanation(d);
-    renderContext(d);
+  if (shownId == null && d.status === "pending") {
+    show(d.id);
+    return;
   }
+  renderHeader();
+  renderList();
 }
 
-// ---- セッション / メトリクス ----
-
-function renderSessions() {
-  const ul = $("sessions-list");
-  ul.replaceChildren();
-  const items = [...sessions.values()].sort((a, b) => b.last_event_at.localeCompare(a.last_event_at));
-  if (!items.length) ul.append(el("li", { class: "muted", text: "セッションなし" }));
-  for (const s of items) {
-    const name = s.title || s.cwd.split("/").filter(Boolean).pop() || s.cwd;
-    ul.append(el("li", {}, el("span", { class: `state ${s.state}` }), el("span", { text: `${name} (${s.state})` })));
+async function loadAll() {
+  const ds = await api("/api/decisions?status=pending");
+  const seen = new Set();
+  for (const d of ds) { decisions.set(d.id, d); seen.add(d.id); }
+  // SSE の取りこぼしで、手元では pending のまま変わっていたものを取り直す
+  for (const d of [...decisions.values()]) {
+    if (d.status === "pending" && !seen.has(d.id)) {
+      try { decisions.set(d.id, await api(`/api/decisions/${d.id}`)); } catch {}
+    }
   }
+  const cur = decisions.get(shownId);
+  if (!cur || cur.status !== "pending") advance();
+  else { renderHeader(); renderList(); }
 }
 
 async function refreshMetrics() {
@@ -387,46 +651,65 @@ async function refreshMetrics() {
   } catch {}
 }
 
-// ---- 起動 ----
-
-function upsert(d) {
-  decisions.set(d.id, d);
-  if (d.id === selectedId) renderDetail();
-  if (selectedId == null && d.status === "pending") selectedId = d.id;
-  renderList();
-  if (d.id === selectedId) renderDetail();
-}
-
-async function loadAll() {
-  const [ds, ss] = await Promise.all([api("/api/decisions?status=pending"), api("/api/sessions")]);
-  for (const d of ds) decisions.set(d.id, d);
-  for (const s of ss) sessions.set(s.session_id, s);
-  if (selectedId == null && ds.length) selectedId = ds[0].id;
-  renderList();
-  renderDetail();
-  renderSessions();
-}
-
 function connect() {
   const es = new EventSource("/api/stream");
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
-  es.addEventListener("session.updated", (e) => {
-    const s = JSON.parse(e.data);
-    sessions.set(s.session_id, s);
-    renderSessions();
-  });
   es.addEventListener("open", () => loadAll().catch(() => {}));
 }
 
-$("sessions-panel").addEventListener("toggle", (e) => {
-  if (!e.target.open) return;
-  post("/api/events", {
-    session_id: "gui", transcript_path: "gui", cwd: "gui",
-    hook_event_name: "ukagai.session_panel_open",
-    received_at: new Date().toISOString(),
-  }).catch(() => {});
+// ---- キーボード ----
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && drawerOpen()) { setDrawer(false); return; }
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || drawerOpen() || !ui || ui.closed) return;
+  const t = ev.target;
+  const typing = t instanceof HTMLInputElement && t.type === "text";
+
+  if (ui.kind === "question") {
+    const n = ui.cards.length;
+    if (typing) {
+      if (ev.key === "Enter") { ev.preventDefault(); if (!ui.submit.disabled) ui.submit.click(); }
+      else if (n && (ev.key === "ArrowUp" || ev.key === "ArrowDown")) {
+        ev.preventDefault();
+        t.blur();
+        ui.setCursor(ui.cursor + (ev.key === "ArrowDown" ? 1 : -1), true);
+      }
+      return;
+    }
+    if (t instanceof HTMLButtonElement) return; // ボタンの既定動作に任せる
+    if (t instanceof HTMLInputElement) t.blur(); // ネイティブの選択操作と二重にならないように
+    const onFree = n > 0 && ui.cursor === n - 1;
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      if (!n) return;
+      ev.preventDefault();
+      ui.setCursor(ui.cursor + (ev.key === "ArrowDown" ? 1 : -1), true);
+    } else if (ev.key === " ") {
+      if (!ui.multi) return;
+      ev.preventDefault();
+      ui.cards[ui.cursor].input.click();
+    } else if (ev.key === "ArrowRight") {
+      if (onFree) { ev.preventDefault(); ui.freeText.focus(); }
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (onFree && ui.freeText.value.trim() === "") ui.freeText.focus();
+      else if (!ui.submit.disabled) ui.submit.click();
+    }
+    return;
+  }
+
+  // 計画
+  if (typing || t instanceof HTMLButtonElement) return;
+  if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
+  else if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
+  else if (ev.key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }
+  else if (ev.key === "y") { ev.preventDefault(); ui.approve.click(); }
+  else if (ev.key === "a") { ev.preventDefault(); ui.auto.click(); }
+  else if (ev.key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });
+
+$("pending-btn").addEventListener("click", () => setDrawer(!drawerOpen()));
+$("backdrop").addEventListener("click", () => setDrawer(false));
 
 setInterval(() => {
   for (const e of document.querySelectorAll(".age")) e.textContent = elapsed(e.dataset.created);
