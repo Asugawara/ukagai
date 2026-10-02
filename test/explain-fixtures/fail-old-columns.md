@@ -4,7 +4,7 @@ question: 判断を保存するファイルの名前は decisions.jsonl と log.
 title: 判断ログのファイル名を decisions.jsonl と log.jsonl のどちらにするか
 reversibility: reversible
 scope: file
-recommended: decisions.jsonl (Recommended)
+recommended: decisions.jsonl
 ---
 
 ## なぜ今この判断が要るか
@@ -13,10 +13,10 @@ recommended: decisions.jsonl (Recommended)
 
 ## 選択肢
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
-|---|---|---|
-| decisions.jsonl (Recommended) | 中身(判断)が名前から分かり、`events.jsonl` と並べて読める。 | 少し長いだけ。定数 1 か所の変更で戻せる。 |
-| log.jsonl | 名前が短くなる。 | events との区別がつきにくい。定数 1 か所の変更で戻せる。 |
+| 選択肢 | 利点 | 欠点 | コスト |
+|---|---|---|---|
+| decisions.jsonl | 中身が名前から分かる | 少し長い | 0 |
+| log.jsonl | 短い | events と区別がつきにくい | 0 |
 
 ## 推奨
 

@@ -1,6 +1,12 @@
 {
   "valid": false,
-  "missing": ["question"],
-  "has": { "mermaid": true, "table": true, "diff": false },
+  "missing": [
+    "question"
+  ],
+  "has": {
+    "mermaid": true,
+    "table": true,
+    "diff": false
+  },
   "question": null
 }

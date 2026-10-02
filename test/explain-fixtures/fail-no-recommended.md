@@ -4,7 +4,6 @@ question: 判断を保存するファイルの名前は decisions.jsonl と log.
 title: 判断ログのファイル名を decisions.jsonl と log.jsonl のどちらにするか
 reversibility: reversible
 scope: file
-recommended: decisions.jsonl (Recommended)
 ---
 
 ## なぜ今この判断が要るか

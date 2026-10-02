@@ -9,11 +9,14 @@ export type MissingCode =
   | "file"
   | "front_matter"
   | "question"
+  | "title"
   | "reversibility"
   | "scope"
+  | "recommended"
   | "why"
-  | "compare"
+  | "options"
   | "table"
+  | "recommend"
   | "diagram"
   | "impact";
 
@@ -35,11 +38,14 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   file: "説明ファイル本体",
   front_matter: "front matter(`ukagai: 1`)",
   question: "`question`",
+  title: "`title`(決めてほしいこと 1 文)",
   reversibility: "`reversibility`",
   scope: "`scope`",
+  recommended: "`recommended`(推す選択肢のラベル)",
   why: "「なぜ今この判断が要るか」の節",
-  compare: "「選択肢の比較」の節",
-  table: "選択肢の比較の表(選択肢ごとに 1 行、利点・欠点・コストの列)",
+  options: "「選択肢」の節",
+  table: "選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行)",
+  recommend: "「推奨」の節",
   diagram: "「図」の節と Mermaid の図",
   impact: "「影響範囲と可逆性」の節",
 };
@@ -56,6 +62,20 @@ function toLines(markdown: string): string[] {
 /** NFKC → 空白削除 → 「と」「・」削除 → 小文字化 */
 export function normalizeHeading(s: string): string {
   return s.normalize("NFKC").replace(/\s/gu, "").replace(/[と・]/gu, "").toLowerCase();
+}
+
+/**
+ * 選択肢ラベルの照合用正規化(hook と GUI で同じ規則)。
+ * NFKC → 末尾の `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）` を除去
+ * → 空白(全種)を削除 → 小文字化。照合は正規化後の完全一致。
+ * (NFKC で全角括弧は半角になるので、除去は NFKC の後に半角括弧だけ見ればよい)
+ */
+export function normalizeLabel(s: string): string {
+  return s
+    .normalize("NFKC")
+    .replace(/\s*\((?:recommended|推奨)\)\s*$/iu, "")
+    .replace(/\s/gu, "")
+    .toLowerCase();
 }
 
 export interface FrontMatter {
@@ -139,7 +159,9 @@ function findSection(
   name: string,
 ): Section | null {
   const want = normalizeHeading(name);
-  const idx = headings.findIndex((h) => normalizeHeading(h.title).includes(want));
+  // 完全一致を優先し、無ければ部分一致(「選択肢」が「推奨する選択肢」に当たらないように)
+  let idx = headings.findIndex((h) => normalizeHeading(h.title) === want);
+  if (idx < 0) idx = headings.findIndex((h) => normalizeHeading(h.title).includes(want));
   if (idx < 0) return null;
   const h = headings[idx]!;
   const next = headings.slice(idx + 1).find((x) => x.level <= h.level);
@@ -184,12 +206,17 @@ function isEmptyCell(c: string | undefined): boolean {
 }
 
 /** spec 3.3 */
-function tableOk(t: Table, optionsCount: number | undefined): boolean {
+function tableOk(t: Table, labels: string[] | undefined): boolean {
   const norm = t.header.map(normalizeHeading);
-  const cols = ["利点", "欠点", "コスト"].map((k) => norm.findIndex((h) => h.includes(k)));
+  const cols = ["起きること", "リスク"].map((k) => norm.findIndex((h) => h.includes(normalizeHeading(k))));
   if (cols.some((c) => c < 0)) return false;
-  if (t.rows.length < Math.max(2, optionsCount ?? 0)) return false;
-  return t.rows.every((r) => cols.every((c) => !isEmptyCell(r[c])));
+  if (t.rows.length < Math.max(2, labels?.length ?? 0)) return false;
+  if (!t.rows.every((r) => cols.every((c) => !isEmptyCell(r[c])))) return false;
+  if (labels) {
+    const first = new Set(t.rows.map((r) => normalizeLabel(r[0] ?? "")));
+    if (!labels.every((l) => first.has(normalizeLabel(l)))) return false;
+  }
+  return true;
 }
 
 function hasContent(lines: string[], s: Section): boolean {
@@ -214,7 +241,7 @@ function hasOf(lines: string[], inFence: boolean[], blocks: FenceBlock[]): Has {
 export function validateExplanation(
   markdown: string,
   kind: "answer_question" | "approve_plan" = "answer_question",
-  optionsCount?: number,
+  labels?: string[],
 ): Validation {
   if (kind === "approve_plan") return validatePlan(markdown);
   const all = toLines(markdown);
@@ -228,19 +255,25 @@ export function validateExplanation(
   if (!fm.present || f["ukagai"] !== "1") missing.push("front_matter");
   if (fm.present) {
     if (!f["question"]) missing.push("question");
+    if (!f["title"]) missing.push("title");
     if (!f["reversibility"] || !REVERSIBILITY.includes(f["reversibility"])) missing.push("reversibility");
     if (!f["scope"] || !SCOPE.includes(f["scope"])) missing.push("scope");
+    const rec = f["recommended"];
+    if (!rec || (labels && !labels.some((l) => normalizeLabel(l) === normalizeLabel(rec)))) missing.push("recommended");
   }
 
   const why = findSection(headings, lines.length, "なぜ今この判断が要るか");
   if (!why || !hasContent(lines, why)) missing.push("why");
 
-  const compare = findSection(headings, lines.length, "選択肢の比較");
-  if (!compare) missing.push("compare");
+  const options = findSection(headings, lines.length, "選択肢");
+  if (!options) missing.push("options");
   else {
-    const tables = findTables(lines, inFence, compare.start + 1, compare.end);
-    if (!tables.some((t) => tableOk(t, optionsCount))) missing.push("table");
+    const tables = findTables(lines, inFence, options.start + 1, options.end);
+    if (!tables.some((t) => tableOk(t, labels))) missing.push("table");
   }
+
+  const recommend = findSection(headings, lines.length, "推奨");
+  if (!recommend || !hasContent(lines, recommend)) missing.push("recommend");
 
   const scope = f["scope"] ?? "";
   const rev = f["reversibility"] ?? "";
