@@ -16,25 +16,27 @@ html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
   font: 14px/1.6 system-ui, -apple-system, "Hiragino Sans", sans-serif;
-  display: grid; grid-template-rows: 44px minmax(0, 1fr);
+  height: 100dvh; display: grid; grid-template-rows: minmax(0, 1fr);
 }
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
 
-/* header */
-#top { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
-.logo { font-size: 12px; color: var(--muted); flex: none; }
-.kind-icon { flex: none; }
-#title { font-size: 16px; font-weight: 700; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
-.badges { display: flex; gap: 6px; align-items: center; flex: 1 1 0; min-width: 0; overflow: hidden; margin-left: 6px; }
-.badge { font-size: 12px; line-height: 20px; border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; white-space: nowrap; flex: none; color: var(--muted); }
+/* 保留ボタン(2 件以上のときだけ出る) */
+.pending-btn { position: fixed; top: 10px; right: 10px; z-index: 20; font: inherit; font-size: 12px; line-height: 1.4; padding: 2px 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: inherit; cursor: pointer; opacity: .6; }
+.pending-btn:hover, .pending-btn:focus-visible { opacity: 1; }
+.badge { font-size: 12px; line-height: 20px; border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; white-space: nowrap; color: var(--muted); }
 .badge.irreversible { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
 .badge.costly { background: var(--yellow-bg); border-color: var(--yellow); color: var(--fg); font-weight: 600; }
 .badge.reversible { color: var(--fg); }
 .badge.none { color: var(--yellow); border-color: var(--yellow); }
-.pending-btn { flex: none; font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: inherit; cursor: pointer; }
-.pending-btn.hot { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-.banner { position: fixed; left: 0; right: 0; top: 44px; z-index: 30; background: var(--red); color: #fff; padding: 8px 16px; }
+.head { margin-bottom: 10px; }
+.has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 72px; }
+.meta-line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 13px; max-height: 3.4em; overflow: hidden; }
+.chip.branch { font-weight: 700; border: 1px solid var(--accent); background: var(--accent-bg); border-radius: 4px; padding: 0 6px; line-height: 20px; overflow-wrap: anywhere; }
+.cwd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.meta-line .badge { color: var(--fg); }
+.meta-line .badge.irreversible { color: #fff; }
+.banner { position: fixed; left: 0; right: 0; top: 0; z-index: 30; background: var(--red); color: #fff; padding: 8px 16px; }
 
 /* main */
 main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); min-height: 0; }
@@ -47,13 +49,11 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 }
 @media (max-width: 899px) {
   html, body { height: auto; }
-  body { overflow: auto; display: block; }
-  #top { position: sticky; top: 0; z-index: 10; height: 44px; }
+  body { overflow: auto; display: block; height: auto; }
   main { display: flex; flex-direction: column; }
   #decision { order: -1; max-width: none; }
   #background, #decision { overflow: visible; }
   #background { border-right: 0; }
-  .banner { top: 0; }
 }
 .bg-note { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
 
@@ -63,7 +63,7 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 .q { margin-bottom: 18px; }
 .q .header { font-size: 12px; color: var(--muted); }
 .q .question { font-size: 17px; font-weight: 700; line-height: 1.5; margin-bottom: 8px; overflow-wrap: anywhere; }
-.plan-q { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+.plan-q { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 .opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; }
 .opt:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); }
 .opt:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -77,7 +77,7 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 .opt.free { background: transparent; border-style: dashed; color: var(--muted); }
 .opt.free .lab { font-weight: 500; }
 .rec-badge { margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 4px; padding: 0 6px; vertical-align: 1px; }
-.v2-title { font-size: 18px; font-weight: 700; line-height: 1.5; margin-bottom: 10px; overflow-wrap: anywhere; }
+.v2-title { font-size: 18px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
 .rec { border: 1px solid var(--accent); background: var(--accent-bg); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 .rec-cap { font-size: 11px; font-weight: 700; color: var(--accent); }
 .hint { font-size: 11px; color: var(--muted); text-align: center; opacity: .8; }
@@ -120,7 +120,7 @@ details { margin: 8px 0; }
 details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 
 /* 空状態 */
-.empty { grid-row: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
 .empty-title { font-size: 18px; }
 .empty-sub { font-size: 13px; color: var(--muted); }
 
@@ -134,7 +134,6 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .row.current { border-color: var(--accent); background: var(--accent-bg); }
 .row .title { font-weight: 600; overflow-wrap: anywhere; }
 .row .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.metrics { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--line); padding-top: 8px; }
 
 /* トースト */
 .toast { position: fixed; right: 16px; bottom: 16px; z-index: 60; background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: 0 2px 10px #0004; }
