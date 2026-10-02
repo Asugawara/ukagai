@@ -59,6 +59,7 @@ export type MissingCode =
   | "recommend_cond"
   | "against_weak"
   | "cell_long"
+  | "coined_term"
   | "undo"
   | "why_long"
   | "diagram"
@@ -99,6 +100,8 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   recommend_cond: 'a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.)',
   against_weak: "the Counterargument repeats the Recommendation; make it attack the pick",
   cell_long: "a cell in the options table is too long (at most 160 characters per cell)",
+  coined_term:
+    "internal identifiers the reader cannot know (plan codes, phase / gate / worker names). Say what each is in plain words, or define it under Terms",
   undo: "each risk cell must say how to undo (or that it cannot be undone)",
   why_long: 'the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked")',
   diagram: 'a "Diagram" section with a Mermaid diagram',
@@ -466,6 +469,92 @@ export function parseFootnotes(markdown: string): Footnotes {
   return { defs, refs };
 }
 
+// ---- coined terms (spec section 3.8) ----
+
+/** Common abbreviations, units and product-ish codes that are not plan identifiers (uppercase, compared whole) */
+export const COINED_ALLOW = new Set(
+  (
+    "CI CD CLI API GUI TUI SSE URL URI HTTP HTTPS JSON YAML TOML HTML CSS JS TS PR OSS DB UI UX OK NG ID CPU GPU RAM GB MB KB TB MS TTY ANSI SQL SSH TLS SSL DNS IP TCP UDP GCP AWS GCS S3 IAM VM OS PID ENV NPM PNPM CDN SVG PNG JPG PDF CSV UTF IDE LSP MCP LLM AI QA ADR README TODO FAQ EOF CRUD REST RPC GRPC JWT SDK ETA TBD WIP NFKC SGR ESC CJK IME UTC ISO RFC HEAD " +
+    "SHA RSA AES HMAC GPT IPV MD5 MP3 MP4 EC2 K8S P50 P90 P95 P99"
+  ).split(" "),
+);
+
+/** A short code: 1-4 letters, optional `-`, 1-4 letters / digits, with a digit or `-` in it (`W-T2`, `FT4`, `P-GH`, `TM28`) */
+export const COINED_TOKEN = /\b[A-Z]{1,4}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
+
+const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Tier", "Day", "Week", "Round", "Batch", "Lane"];
+const anyCase = (w: string): string => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
+/** A process word plus a number / letter: `Phase 2`, `Gate B`, `Step 3a` (the keyword in any case; the id is digits or capitals so that "step by step" is not hit) */
+export const COINED_PHASE_EN = new RegExp(
+  `\\b(?:${PHASE_WORDS.map(anyCase).join("|")})\\s?(\\d{1,3}[A-Za-z]?|[A-Z][A-Z0-9]{0,2})(?![A-Za-z0-9]|-[A-Z0-9])`,
+  "g",
+);
+/** Japanese: `フェーズ 2`, `第 3 段階` (matched on `第 3`) */
+export const COINED_PHASE_JA = /(?:フェーズ|ステップ|段階|工程|ゲート|トラック|ラウンド|第)\s?([0-9A-Z]{1,3})(?![A-Za-z0-9]|-[A-Z0-9])/g;
+
+/** A pointer that defines nothing */
+const TERM_POINTER = /plan\s*の行|the plan item|see plan|計画の項目/gi;
+const TERM_MIN_CHARS = 12;
+
+function coinedAllowed(token: string): boolean {
+  if (COINED_ALLOW.has(token)) return true;
+  const prefix = /^[A-Z]+/.exec(token)?.[0] ?? "";
+  return prefix.length >= 3 && COINED_ALLOW.has(prefix);
+}
+
+/** Identifier-like tokens in a piece of text, in order of appearance (NFKC; URLs ignored) */
+export function extractCoined(text: string): string[] {
+  const s = text.normalize("NFKC").replace(/https?:\/\/\S+/g, " ");
+  const found: { at: number; token: string }[] = [];
+  for (const m of s.matchAll(COINED_TOKEN)) {
+    const t = m[0];
+    if (/^[A-Z]\d$/.test(t) || coinedAllowed(t)) continue;
+    if (/v\d[\w.]*-$/i.test(s.slice(Math.max(0, m.index - 24), m.index))) continue; // part of a version such as v0.2.0-DT1
+    found.push({ at: m.index, token: t });
+  }
+  for (const re of [COINED_PHASE_EN, COINED_PHASE_JA]) {
+    for (const m of s.matchAll(re)) {
+      if (COINED_ALLOW.has(m[1]!.toUpperCase())) continue;
+      found.push({ at: m.index, token: m[0] });
+    }
+  }
+  const out: string[] = [];
+  for (const f of found.sort((a, b) => a.at - b.at)) if (!out.includes(f.token)) out.push(f.token);
+  return out;
+}
+
+/** A Terms definition that says something: at least 12 characters once pointers such as "plan の行" are removed */
+function termDefines(definition: string): boolean {
+  const rest = definition.normalize("NFKC").replace(TERM_POINTER, "").replace(/^[\s\p{P}\p{S}]+/u, "").trim();
+  return cpLength(rest) >= TERM_MIN_CHARS;
+}
+
+/**
+ * Internal identifiers in the explanation (title + body outside code fences; inline code counts) that Terms does not define.
+ * Tokens in `question`, in option labels (`labels` and the first column of the Options tables) and in `recommended` are exempt.
+ */
+export function findCoinedTerms(markdown: string, labels: string[] = []): string[] {
+  const all = toLines(markdown);
+  const fm = parseFrontMatter(all);
+  const lines = all.slice(fm.bodyStart);
+  const { inFence } = scanFences(lines);
+  const exempt = new Set<string>();
+  const exemptText = [fm.fields["question"] ?? "", fm.fields["recommended"] ?? "", ...labels];
+  const options = findSection(scanHeadings(lines, inFence), lines.length, SECTION.options);
+  if (options) for (const t of findTables(lines, inFence, options.start + 1, options.end)) for (const r of t.rows) exemptText.push(r[0] ?? "");
+  for (const x of exemptText) for (const t of extractCoined(x)) exempt.add(t);
+  for (const d of parseTerms(markdown)) if (termDefines(d.definition)) for (const t of extractCoined(d.term)) exempt.add(t);
+  const text = [fm.fields["title"] ?? "", ...lines.filter((_, i) => !inFence[i])].join("\n");
+  return extractCoined(text).filter((t) => !exempt.has(t));
+}
+
+/** `MISSING_LABELS.coined_term` with the tokens listed (at most 8) */
+export function coinedTermLabel(tokens: string[]): string {
+  const shown = tokens.slice(0, 8).join(", ");
+  const more = tokens.length > 8 ? ` and ${tokens.length - 8} more` : "";
+  return MISSING_LABELS.coined_term.replace("(plan codes", `(${shown}${more}; plan codes`);
+}
+
 // ---- validation ----
 
 /** spec section 4. Plans (ExitPlanMode) are delegated to validatePlan */
@@ -500,16 +589,16 @@ export function validateExplanation(
   else if (cpLength(sectionText(lines, inFence, why)) > LIMITS.whyChars) missing.push("why_long");
 
   const options = findSection(headings, lines.length, SECTION.options);
+  let okTables: Table[] = [];
   if (!options) missing.push("options");
   else {
     const tables = findTables(lines, inFence, options.start + 1, options.end);
-    const okTables = tables.filter((t) => tableOk(t, labels));
+    okTables = tables.filter((t) => tableOk(t, labels));
     if (okTables.length === 0) missing.push("table");
-    else {
-      if (okTables.some((t) => tableCellsLong(t))) missing.push("cell_long");
-      if (okTables.some((t) => !tableUndoOk(t, blocker))) missing.push("undo");
-    }
+    else if (okTables.some((t) => tableCellsLong(t))) missing.push("cell_long");
   }
+  if (findCoinedTerms(markdown, labels).length > 0) missing.push("coined_term");
+  if (okTables.length > 0 && okTables.some((t) => !tableUndoOk(t, blocker))) missing.push("undo");
 
   if (blocker) {
     const todo = findSection(headings, lines.length, SECTION.blockerTodo);

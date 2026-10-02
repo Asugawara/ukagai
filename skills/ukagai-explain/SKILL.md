@@ -16,6 +16,7 @@ Write the explanation a human needs to decide as Markdown, then ask the same que
 - If you cannot state in one sentence **why only a human can decide** (taste, external circumstances, responsibility for an irreversible change, premises the agent cannot know), do not ask. Proceed with the recommendation and report it afterwards.
 - **One AskUserQuestion call = one question.** If there are several, ask them **from the start** one at a time, writing one explanation file per question and calling them in order (a call with two or more questions is denied by the hook and the rewrite costs time).
 - **A `reversible` + `file` decision is not asked: proceed and report it.**
+- **Never use internal identifiers in the explanation: plan item codes (W-T2, P-GH), phase / gate / step numbers, worker or session names, ticket-like codes. The reader did not write your plan and cannot know them. Say what the thing is in plain words ("the GitHub repository", "the restore test on the Cloud Run deployment"). If you must name one, define it under Terms with what it is and why it matters here, not where it came from.** The hook denies undefined ones (`coined_term`, below).
 
 ### Decide scope and reversibility before asking
 
@@ -98,7 +99,8 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - Put details, evidence and logs in the "What I checked" section as bullets. Do not write what the decision does not need.
 - **Risk cells say how to undo.** Each cell of "Risks and how to undo" must contain a whole word such as undo / revert / roll back / restore / reinstall / recreate / re-run / `git checkout` / delete the … / remove the …, or say it cannot be undone (cannot be restored / irreversible / permanent / unrecoverable; Japanese 戻せ / 戻す / 元に戻 / 消せ / やり直 / 再実行 / 再作成 / 復元 / 戻せない / 元に戻らない). Without it the hook denies (`undo`). The GUI / TUI paint the cannot-be-undone phrases red and the how-to-undo words green.
 - **Evidence by footnote.** Cite what you checked from the body with `[^1]` and define it in "What I checked" (`[^1]: \`grep -rn jsonl src\` finds nothing`). The GUI shows the evidence on hover. A definition without a reference is fine; a reference without a definition is denied (`footnote`).
-- **Order of the codes** the hook reports: … `cell_long`, `undo`, … `diagram`, `checked`, `footnote`.
+- **No coined identifiers.** The hook scans the title and body (not code fences; inline code counts) for short codes such as `W-T2`, `FT4`, `TM28`, `P-GH`, and for `Phase 2` / `Gate B` / `フェーズ 2` / `第 3 段階`. Abbreviations like CI / API / JSON, versions (`v0.2.0`), `#12`, HTTP statuses and one-letter + one-digit cell names (`A1`) are fine, and so are tokens in the question or in option labels. Any other token must be defined under Terms in at least 12 characters of plain words ("the plan item" / "plan の行" alone does not count), or you get `coined_term`; rewrite in plain words instead.
+- **Order of the codes** the hook reports: … `cell_long`, `coined_term`, `undo`, … `diagram`, `checked`, `footnote`.
 
 - Make the labels match the AskUserQuestion `options[].label` (a trailing `(Recommended)` is optional).
 - Draw only structure, flow and dependencies. Pick one type:
@@ -330,3 +332,24 @@ What is wrong:
 - There is no reason a human must decide.
 - The question was paraphrased, so it cannot be matched.
 - The diagram is decoration that does not help the decision.
+
+## Bad example: coined identifiers
+
+````markdown
+title: P-GH: create the repository private first?
+
+W-T2 is done except FT4. The next gate G-T2 needs the TM28 restore drill, and both need P-GH.
+
+## Terms
+- **P-GH** — plan の行
+````
+
+The reader never saw your plan. W-T2 / FT4 / G-T2 / TM28 are undefined and P-GH's definition says nothing (`coined_term`).
+
+Good rewrite (same content in plain words):
+
+````markdown
+title: Create the GitHub repository as private first, or public from the start?
+
+The agent-side CI and release setup is done except the release workflow file. The release checkpoint needs a passing smoke test in the 3 CI modes and a restore test of the Cloud Run deployment from backup; both need the GitHub repository to exist.
+````
