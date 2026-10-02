@@ -251,19 +251,23 @@ GUI の描画: Markdown(見出し・表・コードブロック)、Mermaid(`merm
 | 説明の質が低い(図が飾り、表が埋まっていない) | 図の必須条件を `scope` / `reversibility` で絞った。(d) の手採点を 1 日 3 件。skill の良い例・悪い例を実例で差し替える |
 | Claude 自身が API を叩いて自己回答する | トークン認可 + 理由文に URL を書かない。限界は 7 節 |
 
-## 9. 未確認の一覧(「動く」と書いていないこと)
+## 9. 検証の結果(2026-10-02 時点。詳細は `docs/verification/02-hook-limits.md` と `03-e2e.md`)
 
 | 事項 | 状態 |
 |---|---|
-| 注入(allow + updatedInput)が通る | 確認済み。ただし Claude Code 2.1.287 × Sonnet 5.5 × auto mode のみ。opus / default / acceptEdits は E4 で一部確認 |
-| deny → 説明を書く → 同じ質問を再度出す | 未確認(E4) |
-| 出力なし exit 0 で通常 UI に落ちる | 公式ドキュメントに記述あり。実機は E7 |
-| budget 切れで自分で降りて fallback を記録できる | 推測(境界規則は 3 節) |
-| `<scratchpad_dir>/ukagai/` に auto 以外のモードで書ける | 未確認(E4) |
-| ExitPlanMode の deny 後に再提出する | 未確認(E3) |
-| PermissionRequest の `setMode auto` でモードが戻る | 公式ドキュメントに記述あり。実機は E3 |
-| 2 分 / 10 分の閾値 | 根拠なし。E4 で往復時間を測ってから確定 |
-| timeout 3600 が丸められない | 未確認(E1) |
-| SessionStart / SubagentStart の `additionalContext` で事前指示が効く | 未確認(E5 / E6) |
-| multiSelect の区切り、自由記述、キー不一致・欠落 | 未確認(E2) |
-| サブエージェント内の hook 発火と `agent_id`、`session_id` の同一性、transcript のパス | 公式ドキュメントに記述あり。実機は E6 |
+| 注入(allow + updatedInput)が通る | 確認済み(01: Sonnet × auto。02 E4: Opus、default / acceptEdits / plan でも通る) |
+| deny → 説明を書く → 同じ質問を再度出す | 確認済み(02 E4: 9 回中 8 回が 2 往復で成立。plan mode × Opus の 1 回は書かずに断念。03 V1-2b: 15 秒で `after_deny`) |
+| SessionStart の事前指示だけで 1 回目から説明が付く | 確認済み(02 E5: 6/6。ただし列挙値が自由文になるので additionalContext に値を書く。03 V1-2: SessionStart ありでは deny が起きず `first_call`) |
+| 出力なし exit 0 で通常 UI に落ちる | 確認済み(02 E7: 接続拒否で 30〜90 ms。03 V1-4: 0.09 秒) |
+| budget 切れで自分で降りて fallback を記録できる | 単体テストのみ。実機は未確認 |
+| `<scratchpad_dir>/ukagai/` に auto 以外のモードで書ける | 確認済み(02 E4: default / acceptEdits / plan(Sonnet)で許可プロンプト無し) |
+| ExitPlanMode の deny 後に再提出する | 確認済み(02 E3: 6.3 秒で図と節を足して再提出) |
+| PermissionRequest の `setMode auto` でモードが戻る | 確認済み(02 E3、03 V1-3: 続く Write が許可プロンプト無しで通り状態行が auto。ただしセッション既定が auto の環境なので、既定 default での再確認が要る) |
+| 2 分 / 10 分の閾値 | 往復は 6〜15 秒で、2 分で十分。10 分超の古いファイルの扱いは未検証 |
+| timeout 3600 が丸められない | 確認済み(02 E1: 3600 / 86400 とも 660 秒超で生存、`hook_cancelled` なし。`statusMessage` はスピナー行に出る) |
+| Esc / ctrl+c 中の挙動 | 確認済み(02 E1-3: hook に SIGTERM、ツール拒否扱いでターン終了。hook は SIGTERM で server に cancel を通知する: F3) |
+| multiSelect の区切り、自由記述、キー不一致・欠落 | 確認済み(02 E2: `"A, C"` と自由文はそのまま Claude に渡る。不一致・欠落は無回答扱いでエラーにならない。一部回答は答えた分だけ渡る) |
+| サブエージェント内の AskUserQuestion | **発生しない**(02 E6: サブエージェントにはツールが提供されず hook は発火しない。SubagentStart の additionalContext は届く) |
+| Notification hook が待機中に鳴る | 鳴らない(02 E1-4。設計どおり「ターミナル側で止まっている」検出にだけ使う) |
+| `/hooks` の表示 | `--settings` 経由の hook は一覧に出ない(02 E1-2h) |
+| server ↔ hook の結合 | 確認済み(03 V1: 説明付き、deny 往復、loop_guard、計画承認 + setMode、フェイルオープン、ターミナルで答える。実 server × 実 hook の結合テスト 3 本) |
