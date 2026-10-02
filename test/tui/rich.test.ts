@@ -101,7 +101,6 @@ const appOf = (md = RICH()): App => {
   app.upsert(rich(md), now);
   return app;
 };
-const release = (app: App) => app.tick((now += 10_000));
 
 // ---- parsing (explain.ts additions) ----
 
@@ -251,8 +250,7 @@ test("a light option sends with a single Enter; an irreversible decision makes e
   assert.equal(press(light, enter).length, 1);
   const irr = appOf(RICH("irreversible", "repo"));
   assert.deepEqual(press(irr, enter), []);
-  assert.equal(press(irr, enter).length, 0, "irreversible waits out its 5 s undo window after the second Enter");
-  assert.equal(release(irr).length, 1);
+  assert.equal(press(irr, enter).length, 1, "the second Enter sends at once");
 });
 
 const PLAN = (rev?: string) =>
@@ -267,65 +265,26 @@ test("plan: irreversible approval (y, a, Enter on a button) needs a second press
   app.upsert(PLAN("irreversible"), now);
   assert.deepEqual(press(app, ch("y")), []);
   assert.ok(app.view(now).notice);
-  assert.deepEqual(press(app, enter), [], "Enter confirms y (the cursor moved to Approve) and starts the 5 s window");
-  assert.ok(app.graceActive());
-  assert.equal(release(app).length, 1);
+  assert.equal(press(app, enter).length, 1, "Enter confirms y (the cursor moved to Approve) and sends at once");
   const auto = new App();
   auto.upsert(PLAN("irreversible"), now);
   assert.deepEqual(press(auto, ch("a")), []);
-  press(auto, ch("a"));
-  assert.deepEqual(auto.tick((now += 10_000)).map((e) => (e as { body: unknown }).body), [{ approve: true, set_mode_auto: true }]);
+  assert.deepEqual(press(auto, ch("a")).map((e) => (e as { body: unknown }).body), [{ approve: true, set_mode_auto: true }]);
 });
 
-// ---- grace ----
+// ---- sent at once ----
 
-test("grace: costly waits 3s, nothing is sent before, then the answer goes out; the footer counts down", () => {
-  const app = appOf(RICH("costly", "repo"));
-  const t0 = now + 10;
-  assert.deepEqual(app.handle(enter, t0), []);
-  assert.equal(app.view(t0).notice, "Sent in 3… Undo (u)");
-  assert.equal(app.view(t0 + 1500).notice, "Sent in 2… Undo (u)");
-  assert.deepEqual(app.tick(t0 + 2999), []);
-  const eff = app.tick(t0 + 3000);
-  assert.equal(eff.length, 1);
-  assert.equal(app.view(t0 + 3000).notice, null);
-});
-
-test("grace: reversible 2s, irreversible 5s", () => {
-  const rev = appOf(RICH("reversible", "repo"));
-  const t0 = now + 10;
-  rev.handle(enter, t0);
-  assert.deepEqual(rev.tick(t0 + 1999), []);
-  assert.equal(rev.tick(t0 + 2000).length, 1);
-  const irr = appOf(RICH("irreversible", "repo"));
-  irr.handle(enter, t0);
-  irr.handle(enter, t0 + 10);
-  assert.deepEqual(irr.tick(t0 + 5009), []);
-  assert.equal(irr.tick(t0 + 5010).length, 1);
-});
-
-test("grace: u or Esc cancels, nothing is ever sent, and the screen is back", () => {
-  for (const k of [ch("u"), esc]) {
-    const app = appOf(RICH("costly", "repo"));
-    press(app, enter);
-    assert.ok(app.graceActive());
-    assert.deepEqual(press(app, k), []);
-    assert.equal(app.graceActive(), false);
-    assert.ok(app.view(now).toast?.includes("Canceled"));
-    assert.deepEqual(release(app), []);
-    assert.equal(app.shownId, "d1");
-    assert.equal(press(app, enter).length, 0, "can be answered again (new window)");
-    assert.equal(release(app).length, 1);
+test("costly / irreversible / reversible-outside-file answers are sent at once, with no undo window", () => {
+  for (const [rev, scope] of [["costly", "repo"], ["reversible", "repo"], ["reversible", "file"]]) {
+    const eff = press(appOf(RICH(rev, scope)), enter);
+    assert.equal(eff.length, 1, `${rev}/${scope}`);
   }
 });
 
-test("grace: other keys do nothing during the window; reversible + file is sent at once", () => {
+test("a sent answer is not sent twice", () => {
   const app = appOf(RICH("costly", "repo"));
-  press(app, enter);
-  press(app, ch("j"), ch("n"), enter);
-  assert.equal(app.mode, "normal");
-  assert.equal(release(app).length, 1);
-  assert.equal(press(appOf(RICH("reversible", "file")), enter).length, 1);
+  assert.equal(press(app, enter).length, 1);
+  assert.deepEqual(press(app, enter), []);
 });
 
 // ---- None of these ----
@@ -378,12 +337,11 @@ test("None of these: n on a plan is still reject", () => {
 // ---- i18n ----
 
 test("the new messages exist in en and ja with the same placeholders", () => {
-  for (const k of ["reversible", "you_decide", "assumptions_title", "against_title", "none_of_these", "confirm_again", "sending_in", "send_canceled", "hint_none", "hint_evidence"] as const) {
+  for (const k of ["reversible", "you_decide", "assumptions_title", "against_title", "none_of_these", "confirm_again", "hint_none", "hint_evidence"] as const) {
     assert.ok(MESSAGES.en[k] && MESSAGES.ja[k], k);
   }
   assert.equal(MESSAGES.en.confirm_again, "Press Enter again to confirm (3s)");
   assert.equal(MESSAGES.ja.confirm_again, "もう一度 Enter で確定(3 秒)");
-  assert.ok(MESSAGES.en.sending_in.includes("{n}") && MESSAGES.ja.sending_in.includes("{n}"));
 });
 
 // ---- Q5 fixes ----
@@ -400,4 +358,12 @@ test("render: Affected items lose their inline-code backticks", () => {
   const { text } = draw(appOf(RICH().replace("- src/server/stream.ts", "- `src/server/stream.ts`")));
   assert.ok(text.includes("src/server/stream.ts"));
   assert.ok(!text.includes("`src/server/stream.ts`"));
+});
+
+test("render: the right-column hint is one row at the narrowest right column (en / ja)", () => {
+  for (const lang of ["en", "ja"] as const) {
+    const { text } = draw(appOf(), lang);
+    const hint = text.split("\n").find((l) => l.includes("j/k") && l.includes("Enter"));
+    assert.ok(hint, lang);
+  }
 });

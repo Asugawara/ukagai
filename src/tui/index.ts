@@ -161,11 +161,10 @@ export async function run(argv: string[]): Promise<number> {
     process.on("SIGHUP", () => quit(0));
 
     // Refresh elapsed times and toasts, and refetch in case SSE is unavailable
-    // Also releases an answer whose undo window has passed (a 250 ms tick; repaint every second, or every tick during an undo window)
+    // A 250 ms tick; repaint every second
     let beat = 0;
     const tick = setInterval(() => {
-      runEffects(app.tick(Date.now()));
-      if (++beat % 4 === 0 || app.graceActive()) schedule();
+      if (++beat % 4 === 0) schedule();
     }, 250);
     const poll = setInterval(() => void refetch(), REFETCH_MS);
 

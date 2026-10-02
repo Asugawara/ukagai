@@ -24,8 +24,6 @@ interface Draft {
 export const TOAST_MS = 2000;
 /** How long the first Enter of a two-step confirmation stays valid */
 export const CONFIRM_MS = 3000;
-/** Time to undo after sending, by reversibility (reversible + file is sent at once) */
-export const GRACE_MS = { reversible: 2000, costly: 3000, irreversible: 5000 } as const;
 /** Rows per wheel notch */
 export const WHEEL_LINES = 3;
 /** Columns per ← → horizontal scroll */
@@ -74,8 +72,6 @@ export class App {
   /** First Enter of a two-step confirmation; `prior` is the one in force when the current key arrived */
   private confirm: { id: string; kind: string; until: number } | null = null;
   private prior: { id: string; kind: string; until: number } | null = null;
-  /** An answer waiting out its undo window (nothing has been POSTed yet) */
-  private grace: { id: string; body: Record<string, unknown>; until: number } | null = null;
   private footIdx = -1;
   private listIndex = 0;
   private lastG = 0;
@@ -112,7 +108,6 @@ export class App {
 
   upsert(d: Decision, now: number): void {
     this.decisions.set(d.id, d);
-    if (d.status !== "pending" && this.grace?.id === d.id) this.grace = null;
     if (d.status !== "pending" && this.sent.has(d.id)) {
       const key = STATUS_KEY[d.status];
       if (key) this.showToast(t(this.lang, key), now);
@@ -143,7 +138,6 @@ export class App {
     this.hinted.delete(id);
     this.sending.delete(id);
     this.sent.delete(id);
-    if (this.grace?.id === id) this.grace = null;
     if (id === this.shownId) this.advance(now);
   }
 
@@ -238,24 +232,10 @@ export class App {
     };
   }
 
-  /** The prompt shown in the footer: the undo countdown, or "Press Enter again" */
+  /** The prompt shown in the footer: "Press Enter again" */
   private notice(now: number): string | null {
-    if (this.grace) return t(this.lang, "sending_in", { n: Math.max(1, Math.ceil((this.grace.until - now) / 1000)) });
     if (this.confirm && this.confirm.until >= now) return t(this.lang, "confirm_again");
     return null;
-  }
-
-  /** Whether an answer is waiting out its undo window (the caller repaints for the countdown) */
-  graceActive(): boolean {
-    return this.grace !== null;
-  }
-
-  /** Release an answer whose undo window has passed (call regularly) */
-  tick(now: number): Effect[] {
-    const g = this.grace;
-    if (!g || now < g.until) return [];
-    this.grace = null;
-    return this.emit(g.id, g.body);
   }
 
   /** Take the drawn screen dimensions and clamp the scroll positions. Returns true when a hint just started (redraw) */
@@ -303,15 +283,6 @@ export class App {
     if (key.name !== "hwheel" && key.name !== "wheel") {
       this.prior = this.confirm;
       this.confirm = null;
-      if (this.grace) {
-        // During the undo window only u / Esc (undo) and Ctrl-C do anything
-        if (key.name === "ctrl-c") return [{ type: "quit" }];
-        if (key.name === "esc" || (key.name === "char" && key.ch === "u")) {
-          this.grace = null;
-          this.showToast(t(this.lang, "send_canceled"), now);
-        }
-        return [];
-      }
     }
     if (key.name === "hwheel") {
       if (this.mode === "normal") this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
@@ -380,7 +351,7 @@ export class App {
         if (!n) return [];
         this.none = null;
         this.mode = "normal";
-        return this.send(m, { answers: { [questionText(this.decisions.get(m.id)!)]: noneAnswer(n.index, n.text) } }, now);
+        return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: noneAnswer(n.index, n.text) } });
       }
       case "move": this.moveCursor(m, dr, dr.cursor + a.delta); return [];
       case "top": this.moveCursor(m, dr, 0); return [];
@@ -420,7 +391,7 @@ export class App {
   /** Approve a plan (Enter twice when the decision is irreversible) */
   private approve(m: ScreenModel, auto: boolean, now: number): Effect[] {
     if (!this.guard(m, auto ? "approve-auto" : "approve", m.reversibility === "irreversible", now)) return [];
-    return this.send(m, { approve: true, set_mode_auto: auto }, now);
+    return this.emit(m.id, { approve: true, set_mode_auto: auto });
   }
 
   /** The first press of a heavy action only arms it; the same action on the very next key (within 3s) goes through */
@@ -509,7 +480,7 @@ export class App {
       if (!reason) return [];
       this.input = null;
       this.mode = "normal";
-      return this.send(m, { approve: false, reason }, now);
+      return this.emit(m.id, { approve: false, reason });
     }
     dr.free.text = inp.text;
     if (!inp.text.trim()) dr.free.on = false;
@@ -544,22 +515,7 @@ export class App {
     if (dr.free.on && dr.free.text.trim()) picked.push(dr.free.text.trim());
     const heavy = m.reversibility === "irreversible" || q.cards.some((c) => c.heavy && dr.sel.has(c.value) && !(dr.free.on && !q.multi));
     if (!this.guard(m, "answer", heavy, now)) return [];
-    return this.send(m, { answers: { [questionText(this.decisions.get(m.id)!)]: picked.join(MULTI_SELECT_SEPARATOR) } }, now);
-  }
-
-  /** How long an answer waits for an undo: none for reversible + file, else by reversibility. Unknown reversibility sends at once */
-  private graceMs(m: ScreenModel): number {
-    if (!m.reversibility) return 0;
-    if (m.reversibility === "reversible" && m.scope === "file") return 0;
-    return GRACE_MS[m.reversibility] ?? 0;
-  }
-
-  private send(m: ScreenModel, body: Record<string, unknown>, now: number): Effect[] {
-    if (this.sending.has(m.id) || this.grace) return [];
-    const ms = this.graceMs(m);
-    if (ms === 0) return this.emit(m.id, body);
-    this.grace = { id: m.id, body, until: now + ms };
-    return [];
+    return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: picked.join(MULTI_SELECT_SEPARATOR) } });
   }
 
   private emit(id: string, body: Record<string, unknown>): Effect[] {
