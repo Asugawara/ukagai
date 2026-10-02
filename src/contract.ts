@@ -41,7 +41,7 @@ export const AskUserQuestionItem = z.looseObject({
   question: z.string(),
   header: z.string(),
   options: z.array(AskUserQuestionOption),
-  multiSelect: z.boolean(),
+  multiSelect: z.boolean().optional(),
 });
 
 /** AskUserQuestion の tool_input */
@@ -193,6 +193,8 @@ export const CreateDecisionRequest = z.object({
   session: DecisionSession,
   request: DecisionRequestBody,
   explanation: Explanation.optional(),
+  /** 説明なしの deny を記録するときだけ `denied_explain`(GUI には出ない) */
+  status: z.literal("denied_explain").optional(),
 });
 export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequest>;
 
