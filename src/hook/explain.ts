@@ -9,6 +9,7 @@ export type MissingCode =
   | "file"
   | "front_matter"
   | "question"
+  | "type"
   | "title"
   | "reversibility"
   | "scope"
@@ -16,6 +17,7 @@ export type MissingCode =
   | "why"
   | "options"
   | "table"
+  | "todo"
   | "recommend"
   | "diagram"
   | "impact"
@@ -39,6 +41,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   file: "説明ファイル本体",
   front_matter: "front matter(`ukagai: 1`)",
   question: "`question`",
+  type: "`type`(decision / blocker)",
   title: "`title`(決めてほしいこと 1 文)",
   reversibility: "`reversibility`",
   scope: "`scope`",
@@ -46,6 +49,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   why: "「なぜ今この判断が要るか」の節",
   options: "「選択肢」の節",
   table: "選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行)",
+  todo: "「人にしてほしいこと」の節(コマンドのコードブロック付き)",
   recommend: "「推奨」の節",
   diagram: "「図」の節と Mermaid の図",
   impact: "「影響範囲と可逆性」の節",
@@ -54,6 +58,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
 
 const REVERSIBILITY = ["reversible", "costly", "irreversible"];
 const SCOPE = ["file", "repo", "machine", "external"];
+const TYPES = ["decision", "blocker"];
 
 // ---- 小道具 ----
 
@@ -257,6 +262,7 @@ export function validateExplanation(
   if (!fm.present || f["ukagai"] !== "1") missing.push("front_matter");
   if (fm.present) {
     if (!f["question"]) missing.push("question");
+    if (f["type"] !== undefined && !TYPES.includes(f["type"])) missing.push("type");
     if (!f["title"]) missing.push("title");
     if (!f["reversibility"] || !REVERSIBILITY.includes(f["reversibility"])) missing.push("reversibility");
     if (!f["scope"] || !SCOPE.includes(f["scope"])) missing.push("scope");
@@ -264,7 +270,8 @@ export function validateExplanation(
     if (!rec || (labels && !labels.some((l) => normalizeLabel(l) === normalizeLabel(rec)))) missing.push("recommended");
   }
 
-  const why = findSection(headings, lines.length, "なぜ今この判断が要るか");
+  const blocker = f["type"] === "blocker";
+  const why = findSection(headings, lines.length, blocker ? "なぜ止まったか" : "なぜ今この判断が要るか");
   if (!why || !hasContent(lines, why)) missing.push("why");
 
   const options = findSection(headings, lines.length, "選択肢");
@@ -274,15 +281,23 @@ export function validateExplanation(
     if (!tables.some((t) => tableOk(t, labels))) missing.push("table");
   }
 
-  const recommend = findSection(headings, lines.length, "推奨");
-  if (!recommend || !hasContent(lines, recommend)) missing.push("recommend");
+  if (blocker) {
+    const todo = findSection(headings, lines.length, "人にしてほしいこと");
+    if (!todo || !hasContent(lines, todo) || !blocks.some((b) => b.start > todo.start && b.start < todo.end)) {
+      missing.push("todo");
+    }
+  } else {
+    const recommend = findSection(headings, lines.length, "推奨");
+    if (!recommend || !hasContent(lines, recommend)) missing.push("recommend");
+  }
 
   const scope = f["scope"] ?? "";
   const rev = f["reversibility"] ?? "";
   const scopeKnown = SCOPE.includes(scope);
   const revKnown = REVERSIBILITY.includes(rev);
   const diagramRequired =
-    !scopeKnown || !revKnown || scope !== "file" || rev !== "reversible";
+    !blocker &&
+    (!scopeKnown || !revKnown || scope !== "file" || rev !== "reversible");
   if (diagramRequired) {
     const diagram = findSection(headings, lines.length, "図");
     if (!diagram || !sectionHasMermaid(blocks, diagram)) missing.push("diagram");

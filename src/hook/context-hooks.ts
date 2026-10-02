@@ -1,6 +1,7 @@
 import { autostart, defaultDeps, type AutostartDeps } from "./autostart.js";
 import { EventInput, HookInputBase } from "../contract.js";
 import type { Client } from "./client.js";
+import { BLOCKER_REASON, isBlockerMessage } from "./blocker.js";
 import { explainDir } from "./explain.js";
 import type { HookOptions } from "./options.js";
 
@@ -11,19 +12,22 @@ const OBSERVED = new Set(["UserPromptSubmit", "Stop", "SubagentStop", "PostToolU
 const ASYNC_EVENT_TIMEOUT_MS = 1500;
 /** SessionEnd は sync(budget 1.5 秒)なので短く */
 const SESSION_END_TIMEOUT_MS = 500;
+/** Stop は sync(全体 2 秒)なので event の POST は 1 秒で打ち切る */
+export const STOP_EVENT_TIMEOUT_MS = 1000;
 /** 末尾(空白と Markdown の記号を除く)が ？ / ? なら、文章で質問したとみなす */
 export function isEscapedQuestion(text: string | undefined): boolean {
   if (!text) return false;
   return /[？?][\s*_」』)）]*$/.test(text);
 }
 
-/** spec 8 節の 4 行。dir は説明ファイルの置き場そのもの */
+/** spec 8 節の 5 行。dir は説明ファイルの置き場そのもの */
 export function contextText(dir: string): string {
   return [
     "人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。",
     `聞くときは、人が読む説明を Markdown で ${dir}/ に書くこと。書式は skill ukagai-explain に従う。`,
     "front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。構造や流れは Mermaid の図にする。",
     "文章で質問せず AskUserQuestion を 1 回に 1 問だけ使い、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。",
+    "認証・権限など人の作業で止まるときは、文章で終えず blocker 形式の説明を書いて AskUserQuestion(対応した / 飛ばして続ける / 中断)で聞く。人が対応したら同じ作業を再試行する。",
   ].join("\n");
 }
 
@@ -70,8 +74,24 @@ export async function observedEvent(raw: Record<string, unknown>, client: Client
   if (name === "Stop") {
     const msg = raw["last_assistant_message"];
     if (isEscapedQuestion(typeof msg === "string" ? msg : undefined)) extra["escaped_question"] = true;
+    if (isBlockerMessage(typeof msg === "string" ? msg : undefined)) extra["blocker_detected"] = true;
   }
-  await post(raw, extra, client, name === "SessionEnd" ? SESSION_END_TIMEOUT_MS : ASYNC_EVENT_TIMEOUT_MS);
+  await post(
+    raw,
+    extra,
+    client,
+    name === "Stop" ? STOP_EVENT_TIMEOUT_MS : name === "SessionEnd" ? SESSION_END_TIMEOUT_MS : ASYNC_EVENT_TIMEOUT_MS,
+  );
+}
+
+/** Stop(sync)の保険: 文章で人の作業待ちと言って止まったら、blocker 形式で聞くよう続行させる(spec 12 節) */
+export function stopDecision(raw: Record<string, unknown>): Out | null {
+  if (raw["hook_event_name"] !== "Stop") return null;
+  if (raw["stop_hook_active"] === true) return null;
+  if (raw["permission_mode"] === "plan") return null;
+  const msg = raw["last_assistant_message"];
+  if (typeof msg !== "string" || !isBlockerMessage(msg)) return null;
+  return { decision: "block", reason: BLOCKER_REASON };
 }
 
 /** --observe: PreToolUse は start、PostToolUse は end */

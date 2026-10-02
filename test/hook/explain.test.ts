@@ -17,8 +17,8 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("fixture が 10 ある", () => {
-  assert.equal(mdFiles.length, 10);
+test("fixture が 13 ある", () => {
+  assert.equal(mdFiles.length, 13);
 });
 
 for (const f of mdFiles) {
@@ -158,4 +158,47 @@ test("multiDenyReason: 問数を含み 600 文字以内、URL なし", () => {
   assert.match(r, /今回は 3 問/);
   assert.ok(r.length <= 600);
   assert.doesNotMatch(r, /https?:|localhost|127\.0\.0\.1|\/api\//);
+});
+
+const BLOCKER = `---
+ukagai: 1
+question: "Q?"
+type: blocker
+title: 認証してほしい
+reversibility: reversible
+scope: machine
+recommended: 対応した。続けて
+---
+## なぜ止まったか
+認証エラー。
+## 人にしてほしいこと
+1. 実行する
+
+\`\`\`sh
+gcloud auth login
+\`\`\`
+## 選択肢
+| 案 | 選ぶと起きること | リスクと戻し方 |
+|---|---|---|
+| 対応した。続けて (Recommended) | a | b |
+| この手順は飛ばして続けて | a | b |
+| ここで中断 | a | b |
+`;
+
+const BLOCKER_LABELS = ["対応した。続けて (Recommended)", "この手順は飛ばして続けて", "ここで中断"];
+
+test("blocker は recommend / diagram を要求せず、3 ラベルを照合できる", () => {
+  const v = validateExplanation(BLOCKER, "answer_question", BLOCKER_LABELS);
+  assert.deepEqual(v.missing, []);
+  assert.equal(v.valid, true);
+});
+
+test("blocker のラベルが揃わないと table 不備、todo のコードブロックが無いと todo 不備", () => {
+  assert.deepEqual(validateExplanation(BLOCKER, "answer_question", [...BLOCKER_LABELS, "別"]).missing, ["table"]);
+  assert.deepEqual(validateExplanation(BLOCKER.replace(/```sh[\s\S]*?```/, "gcloud auth login")).missing, ["todo"]);
+});
+
+test("type が decision なら todo は要らず、従来どおり recommend が要る", () => {
+  assert.equal(validateExplanation(GOOD.replace("ukagai: 1", "ukagai: 1\ntype: decision")).valid, true);
+  assert.deepEqual(validateExplanation(BLOCKER.replace("type: blocker", "type: decision")).missing, ["why", "recommend", "diagram"]);
 });

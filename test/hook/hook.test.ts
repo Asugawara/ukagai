@@ -366,7 +366,7 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
     assert.equal(out.hookEventName, ev);
     assert.ok(out.additionalContext.includes(`${sp}/ukagai/`));
     assert.doesNotMatch(out.additionalContext, /https?:|\/api\//);
-    assert.equal(out.additionalContext.split("\n").length, 4);
+    assert.equal(out.additionalContext.split("\n").length, 5);
     assert.ok(out.additionalContext.includes("reversibility は reversible / costly / irreversible、scope は file / repo / machine / external"));
   });
 }
@@ -400,6 +400,37 @@ test("Stop: 「どちらにしますか？」→ escaped_question: true の even
     const evs = f.calls.filter((c) => c.path === "/api/events");
     assert.equal(evs[1]?.body.escaped_question, undefined);
   });
+});
+
+test("Stop: ブロッカー語彙 + stop_hook_active: false → decision: block、event は blocker_detected: true", async () => {
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(stop("gcloud の認証がないため進められません。")));
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, "block");
+    assert.ok(out.reason.includes("ukagai-explain"));
+    assert.ok(out.reason.length <= 600);
+    const ev = f.calls.find((c) => c.path === "/api/events");
+    assert.equal(ev?.body.blocker_detected, true);
+  });
+});
+
+test("Stop: stop_hook_active: true / 語彙不一致 / plan mode / --observe は出力なし", async () => {
+  await withServer(() => false, async (f, d) => {
+    const msg = "gcloud の認証がないため進められません。";
+    const run = async (input: Record<string, unknown>, ...more: string[]) =>
+      (await runHook(args(f, d, ...more), JSON.stringify(input))).stdout;
+    assert.equal(await run({ ...stop(msg), stop_hook_active: true }), "");
+    assert.equal(await run(stop("実装が終わりました。")), "");
+    assert.equal(await run({ ...stop(msg), permission_mode: "plan" }), "");
+    assert.equal(await run(stop(msg), "--observe"), "");
+    assert.equal(await run({ ...stop(msg), last_assistant_message: undefined }), "");
+  });
+});
+
+test("Stop: server 不在でも block を返す(event の失敗は握りつぶす)", async () => {
+  const r = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", dataDirWithToken()], JSON.stringify(stop("権限がありません")));
+  assert.equal(JSON.parse(r.stdout).decision, "block");
+  assert.ok(r.ms < 2500);
 });
 
 test("isEscapedQuestion: 末尾が ？/? のときだけ true(記号は無視、キーワードは見ない)", () => {

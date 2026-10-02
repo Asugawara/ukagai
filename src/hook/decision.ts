@@ -147,6 +147,7 @@ export async function handleDecision(
         const fm = parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields;
         explanation = {
           path: found.path,
+          type: fm["type"] === "blocker" || fm["type"] === "decision" ? fm["type"] : undefined,
           title: fm["title"] || q0.question,
           question: fm["question"],
           reversibility: fm["reversibility"] as Explanation["reversibility"],

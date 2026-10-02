@@ -1,0 +1,12 @@
+{
+  "valid": false,
+  "missing": [
+    "type"
+  ],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": true
+  },
+  "question": "判断を保存するファイルの名前は decisions.jsonl と log.jsonl のどちらにしますか？"
+}
