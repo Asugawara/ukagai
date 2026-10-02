@@ -503,7 +503,7 @@ gui("表示中でない判断の cancel で赤いトースト(最大 3 枚、送
   for (const o of others) await api(`/api/decisions/${o.id}/cancel`, {});
   await waitFor("トースト", `document.querySelectorAll(".toast.lost").length === 3`);
   const text = ev<string>(`document.querySelector(".toast.lost").textContent`);
-  assert.ok(text.includes("届きませんでした"), text);
+  assert.ok(text.includes("取り消されました") && !text.includes("届きませんでした"), text); // 未回答の cancel
   const r = ev<{ t: number; b: number }>(`JSON.stringify((() => { const t = document.querySelector(".toasts").getBoundingClientRect(), s = document.getElementById("submit").getBoundingClientRect(); return { t: t.bottom, b: s.top }; })())`);
   assert.ok(r.t <= r.b, `トーストが送信ボタンに重ならない: ${JSON.stringify(r)}`);
 });
@@ -557,8 +557,8 @@ gui("説明なし: (Recommended) は外して推奨バッジ、理由は平文",
   assert.equal(Object.values(list.at(-1).response.answers)[0], "A (Recommended)");
 });
 
-gui("説明内の外部 img は除去、data: は残る", async () => {
-  const imgs = `<img src="https://example.invalid/a.png">\n\n<img src="//example.invalid/b.png">\n\n<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">\n\n`;
+gui("説明内の外部・相対 img は除去、data: は残る", async () => {
+  const imgs = `<img src="https://example.invalid/a.png">\n\n<img src="//example.invalid/b.png">\n\n<img src="x">\n\n<img src="/x">\n\n<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">\n\n`;
   await seedQuestion({ markdown: v2md("画像の質問です？", "画像の判断", ROWS, imgs) });
   await reopen();
   assert.equal(ev<number>(`document.querySelectorAll("#background img").length`), 1);
@@ -578,4 +578,46 @@ gui("ラベルに <b> があっても v2 のカードが出る(対応が取れ�
   assert.equal(ev<boolean>(`document.body.innerText.includes("生の説明 Z")`), true); // 取れない option は生
   assert.equal(ev<boolean>(`document.body.innerText.includes("生の説明 A")`), false);
   assert.equal(ev<boolean>(`!!document.querySelector("#decision .rec-cap")`), true);
+});
+
+gui("1000x700 で保留 2 件: → / 回答 / cancel で画面が白くならず、例外が出ない", async () => {
+  ab("set", "viewport", "1000", "700");
+  try {
+    const a = await seedQuestion({ title: "切替の 1 件目" });
+    const b = await seedQuestion({ title: "切替の 2 件目" });
+    await reopen();
+    ev(`window.__errs = [], window.addEventListener("error", (e) => window.__errs.push(String(e.message))), window.addEventListener("unhandledrejection", (e) => window.__errs.push(String(e.reason))), "ok"`);
+    const title = () => ev<string>(`document.querySelector("#decision .v2-title")?.textContent ?? ""`);
+    assert.equal(title(), a.title);
+    assert.equal(ev<boolean>(`!!document.querySelector("#decision .title-row #pending-btn")`), true); // 保留ピルは見出し行にある
+    press("ArrowRight");
+    assert.equal(title(), b.title); // 空でなく次の判断が出る
+    assert.equal(ev<boolean>(`!!document.getElementById("pending-btn")`), true);
+    press("ArrowLeft");
+    assert.equal(title(), a.title);
+    press("Enter"); // a に回答 → 残り(b)が出る
+    await waitFor("残りの判断", `document.querySelector("#decision .v2-title")?.textContent === ${JSON.stringify(b.title)}`);
+    await api(`/api/decisions/${b.id}/cancel`, {});
+    await waitFor("空状態", `!document.getElementById("empty").hidden && document.getElementById("main").hidden`);
+    assert.deepEqual(ev<string[]>(`JSON.stringify(window.__errs)`), []);
+  } finally {
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+gui("fallback になった(回答済み扱いでない)裏の判断は「届きませんでした」", async () => {
+  await seedQuestion({ title: "表示中の判断" });
+  const o = await seedQuestion({ title: "裏の判断 F" });
+  await reopen();
+  await api(`/api/decisions/${o.id}/answer`, { fallback: true });
+  await waitFor("トースト", `document.querySelector(".toast.lost")`);
+  const text = ev<string>(`document.querySelector(".toast.lost").textContent`);
+  assert.ok(text.includes("届きませんでした"), text);
+});
+
+gui("インラインコードは折り返さない(nowrap)、コードブロックは従来どおり", async () => {
+  await seedQuestion({ markdown: v2md("コードの質問です？", "コードの判断", ROWS, "`some-very-long-inline-code-identifier`\n\n```\nblock\n```\n\n") });
+  await reopen();
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background :not(pre) > code")).whiteSpace`), "nowrap");
+  assert.notEqual(ev<string>(`getComputedStyle(document.querySelector("#background pre code")).whiteSpace`), "nowrap");
 });
