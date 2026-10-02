@@ -12,6 +12,18 @@
           }
         ]
       }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/user/.herdr/worktrees/ukagai/verify-e1-e5/verification/hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
