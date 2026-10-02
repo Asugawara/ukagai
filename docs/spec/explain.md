@@ -172,14 +172,14 @@ GUI の右列で選択肢カードが画面外に押し出されないよう、�
 - `{question}`: `questions[0].question` の原文
 - `{missing}`: 4 節の「呼び名」(`recommended` `title` なども含む。呼び名が長いため 600 文字の切り詰めが効きやすい)を `、` で連結したもの(`todo` = 「人にしてほしいこと」の節(コマンドのコードブロック付き)、`type` = `type`(decision / blocker))
 
-共通の制約: **GUI の URL・ポート・API パスを書かない**(Claude 自身に `curl` で回答させないため)。展開後の全文は **600 文字以内**。超えるときは `{missing}` を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。`{question}` は原文でなければ照合できないので切り詰めない。
+共通の制約: **GUI の URL・ポート・API パスを書かない**(Claude 自身に `curl` で回答させないため)。展開後の全文は **600 文字以内**(ただし下の「最小テンプレート」を埋め込むときは **1200 文字以内**)。超えるときは `{missing}` を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。`{question}` は原文でなければ照合できないので切り詰めない。
 
 ### 版 A: 命令文
 
 ```
 AskUserQuestion の前に、人が判断するための説明ファイルを書いてください。足りない項目: {missing}。
 保存先: {path}(同じディレクトリなら名前は自由)。front matter の question: には次の文字列を一字一句そのまま入れること: {question}
-書式は skill ukagai-explain に従い、書き終えたら同じ質問をもう一度 AskUserQuestion で出してください。文章で聞き直してはいけません。
+書式の全体は skill ukagai-explain。書き終えたら同じ質問をもう一度 AskUserQuestion で出してください。文章で聞き直してはいけません。
 ```
 
 ### 版 B: 事実 + 依頼
@@ -187,9 +187,33 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 ```
 この判断に付ける説明ファイル(ukagai 形式)が、まだ条件を満たしていません。足りない項目: {missing}。
 {path} に書いていただけますか(同じディレクトリなら名前は自由です)。front matter の question: は「{question}」と完全に同じにしてください。
-書き方は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。
+書式の全体は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。
 ```
 
+どちらの版も、冒頭に「まず skill ukagai-explain を読んでください(読んでいなければ)。」の 1 句を付ける(版 B は「…読んでいただけますか(読んでいなければ)。」)。
+
+### 最小テンプレート(Q4-04)
+
+`missing` に `file` / `front_matter` / `question` / `title` / `recommended` のどれかがあるとき(= 最初の deny で書式が分からないとき)、`保存先:` の行の直後に、次をコードブロック 1 つで貼る。`question:` には実際の質問文を埋める(この場合「一字一句そのまま入れること」の文は省く)。`table` など他のコードだけが欠けるときは貼らない(短いまま)。
+
+```
+---
+ukagai: 1
+question: {question}
+title: <人に決めてほしいこと 1 文>
+recommended: <推す選択肢のラベル>
+reversibility: reversible | costly | irreversible
+scope: file | repo | machine | external
+---
+## なぜ今この判断が要るか
+## 選択肢
+| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+## 推奨
+(最後の 1 文に「〜なら B」)
+## 図  (reversible 以外、または machine / external のとき。Mermaid)
+```
+
+見つかったファイルが `type: blocker` のときは、欠けが 1 つでもあれば blocker 用を貼る: front matter に `type: blocker` と `recommended: 対応した。続けて`、`reversibility: reversible`、`scope: machine`、節は「なぜ止まったか」「人にしてほしいこと」「選択肢」(表の見出しと固定 3 ラベルの行。推奨・図は無い)。
 ### 多問の deny 理由文(手順 0)
 
 `AskUserQuestion は 1 回に 1 問にしてください(今回は N 問)。GUI は 1 問ずつ、説明ファイルと一緒に表示します。最初の質問から順に、1 問ごとに説明ファイルを書いて AskUserQuestion を 1 問だけで出し直してください。文章で聞き直してはいけません。` 版 A / B の区別は無い。

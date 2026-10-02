@@ -437,12 +437,65 @@ export async function markUsed(path: string): Promise<string> {
 // ---- deny 理由文(spec 7 節 / 9 節) ----
 
 const MAX_REASON = 600;
+/** 最小テンプレートを埋め込む deny 文の上限(テンプレート自体が 300 文字ほどあるため) */
+const MAX_REASON_TEMPLATE = 1200;
 
 export interface DenyParams {
   /** AskUserQuestion のときだけ。plan では省く */
   path?: string;
   question?: string;
   missing: string[];
+  /** missing のコード列。テンプレートを出すかの判定に使う(省くと出さない) */
+  codes?: MissingCode[];
+  /** 見つかったファイルが `type: blocker` のとき true */
+  blocker?: boolean;
+}
+
+/** 書式の根幹(front matter の必須キー)が欠けるときだけ最小テンプレートを出す。blocker は欠けがあれば常に出す */
+const TEMPLATE_CODES: MissingCode[] = ["file", "front_matter", "question", "title", "recommended"];
+
+function needsTemplate(p: DenyParams): boolean {
+  if (p.path === undefined || p.question === undefined || !p.codes) return false;
+  return p.blocker === true ? p.codes.length > 0 : p.codes.some((c) => TEMPLATE_CODES.includes(c));
+}
+
+function templateBlock(p: DenyParams): string {
+  const body = p.blocker
+    ? [
+        "---",
+        "ukagai: 1",
+        `question: ${p.question}`,
+        "type: blocker",
+        "title: <何が必要か 1 文>",
+        "recommended: 対応した。続けて",
+        "reversibility: reversible",
+        "scope: machine",
+        "---",
+        "## なぜ止まったか  (失敗したコマンドとエラーの抜粋)",
+        "## 人にしてほしいこと  (番号付きの手順と、そのまま打てるコマンドのコードブロック)",
+        "## 選択肢",
+        "| 選択肢 | 選ぶと起きること | リスクと戻し方 |",
+        "| 対応した。続けて | | |",
+        "| この手順は飛ばして続けて | | |",
+        "| ここで中断 | | |",
+      ]
+    : [
+        "---",
+        "ukagai: 1",
+        `question: ${p.question}`,
+        "title: <人に決めてほしいこと 1 文>",
+        "recommended: <推す選択肢のラベル>",
+        "reversibility: reversible | costly | irreversible",
+        "scope: file | repo | machine | external",
+        "---",
+        "## なぜ今この判断が要るか",
+        "## 選択肢",
+        "| 選択肢 | 選ぶと起きること | リスクと戻し方 |",
+        "## 推奨",
+        "(最後の 1 文に「〜なら B」)",
+        "## 図  (reversible 以外、または machine / external のとき。Mermaid)",
+      ];
+  return "```\n" + body.join("\n") + "\n```";
 }
 
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
@@ -454,27 +507,33 @@ function composeReason(template: DenyTemplate, p: DenyParams, missingText: strin
       : `この計画には、まだ条件を満たしていない点があります。足りない項目: ${missingText}。` +
           (withTail ? "\n書き方は skill ukagai-explain にあります。直したうえで、もう一度 ExitPlanMode で出していただけますか。" : "");
   }
+  const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
   if (template === "A") {
     return (
-      `AskUserQuestion の前に、人が判断するための説明ファイルを書いてください。足りない項目: ${missingText}。\n` +
-      `保存先: ${p.path}(同じディレクトリなら名前は自由)。front matter の question: には次の文字列を一字一句そのまま入れること: ${p.question}` +
-      (withTail ? "\n書式は skill ukagai-explain に従い、書き終えたら同じ質問をもう一度 AskUserQuestion で出してください。文章で聞き直してはいけません。" : "")
+      `まず skill ukagai-explain を読んでください(読んでいなければ)。AskUserQuestion の前に、人が判断するための説明ファイルを書いてください。足りない項目: ${missingText}。\n` +
+      (tpl
+        ? `保存先: ${p.path}(同じディレクトリなら名前は自由)。次の形で書くこと。question: は質問文を一字一句そのまま入れてある。${tpl}`
+        : `保存先: ${p.path}(同じディレクトリなら名前は自由)。front matter の question: には次の文字列を一字一句そのまま入れること: ${p.question}`) +
+      (withTail ? "\n書式の全体は skill ukagai-explain。書き終えたら同じ質問をもう一度 AskUserQuestion で出してください。文章で聞き直してはいけません。" : "")
     );
   }
   return (
-    `この判断に付ける説明ファイル(ukagai 形式)が、まだ条件を満たしていません。足りない項目: ${missingText}。\n` +
-    `${p.path} に書いていただけますか(同じディレクトリなら名前は自由です)。front matter の question: は「${p.question}」と完全に同じにしてください。` +
-    (withTail ? "\n書き方は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。" : "")
+    `まず skill ukagai-explain を読んでいただけますか(読んでいなければ)。この判断に付ける説明ファイル(ukagai 形式)が、まだ条件を満たしていません。足りない項目: ${missingText}。\n` +
+    (tpl
+      ? `${p.path} に次の形で書いていただけますか(同じディレクトリなら名前は自由です)。question: は質問文と完全に同じにしてあります。${tpl}`
+      : `${p.path} に書いていただけますか(同じディレクトリなら名前は自由です)。front matter の question: は「${p.question}」と完全に同じにしてください。`) +
+    (withTail ? "\n書式の全体は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。" : "")
   );
 }
 
-/** 600 文字以内。超えるときは missing を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。question は切らない */
+/** 通常 600 文字以内(テンプレートを出すときは 1200 文字以内)。超えるときは missing を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。question は切らない */
 export function denyReason(template: DenyTemplate, p: DenyParams): string {
+  const max = needsTemplate(p) ? MAX_REASON_TEMPLATE : MAX_REASON;
   for (let keep = p.missing.length; keep >= 0; keep--) {
     const rest = p.missing.length - keep;
     const text = p.missing.slice(0, keep).join("、") + (rest > 0 ? `${keep > 0 ? "、" : ""}…ほか ${rest} 件` : "");
     const full = composeReason(template, p, text, true);
-    if (full.length <= MAX_REASON) return full;
+    if (full.length <= max) return full;
   }
   return composeReason(template, p, `…ほか ${p.missing.length} 件`, false);
 }

@@ -166,6 +166,8 @@ export async function handleDecision(
           path: join(dir, "explain.md"),
           question: q0.question,
           missing: codes.map((c) => MISSING_LABELS[c]),
+          codes,
+          blocker: found ? parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields["type"] === "blocker" : false,
         });
         const reg = await client.createDecision({ ...base, status: "denied_explain", missing: codes });
         if (!reg) return null;
