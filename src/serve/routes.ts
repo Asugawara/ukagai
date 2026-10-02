@@ -122,6 +122,7 @@ export function createApp(deps: AppDeps): Hono {
       if (cookies.size > MAX_COOKIES) cookies.delete(cookies.values().next().value as string);
       setCookie(c, COOKIE_NAME, value, { httpOnly: true, sameSite: "Strict", path: "/" });
     }
+    c.header("Cache-Control", "no-store");
     return c.html(html);
   });
 
@@ -138,7 +139,11 @@ export function createApp(deps: AppDeps): Hono {
     try {
       const body = await readFile(file);
       return new Response(new Uint8Array(body), {
-        headers: { "Content-Type": MIME[extname(file).toLowerCase()] ?? "application/octet-stream" },
+        headers: {
+          "Content-Type": MIME[extname(file).toLowerCase()] ?? "application/octet-stream",
+          // ブラウザの経験則キャッシュで古い app.js / app.css が残らないように毎回取り直させる
+          "Cache-Control": "no-cache",
+        },
       });
     } catch {
       return c.json({ error: "not found" }, 404);
