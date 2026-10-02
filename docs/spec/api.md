@@ -58,7 +58,7 @@
 
 応答: **新規は 201、同じ `tool_use_id` が既にあれば 200**(本文はどちらも `Decision` 全体)。`status` は `pending`。
 
-- 説明なしの deny を記録するときは同じ API を使い、要求に `"status": "denied_explain"` を付ける(`CreateDecisionRequest.status`)。`Decision.status` は `denied_explain` になる。GUI 一覧(`GET /api/decisions` の既定)には出ず、SSE も飛ばさず、セッション状態も変えず、文脈収集もしない。`GET /api/decisions?status=denied_explain` なら取れる。
+- 説明なしの deny を記録するときは同じ API を使い、要求に `"status": "denied_explain"` を付ける(`CreateDecisionRequest.status`)。`Decision.status` は `denied_explain` になる。GUI 一覧(`GET /api/decisions` の既定)には出ず、SSE も飛ばさず、セッション状態も変えず、文脈収集もしない。`GET /api/decisions?status=denied_explain` なら取れる。deny の理由は要求の `missing`(MissingCode の配列、`denied_explain` のときだけ)をそのまま `Decision.missing` に保存して返す(server は解釈しない)。
 - `first_denied_at` は server が付ける。要求の `explanation.attached_via` が `after_deny` のとき、同じ `session_id + agent_id + questions[0].question` の直近 120 秒以内の `denied_explain` の `created_at` を入れる。`attached_via` 自体は hook が決めた値をそのまま保存する。
 - 登録時に server が文脈(git、transcript)を集める。transcript が読めないと 500 ms 後に 1 回再読するため、**この POST は最大 1.5 秒かかる**(server 側の絶対上限)。hook は POST の timeout を 1.5 秒より長く取ること(接続できるかの判定は別に短くてよい)。
 - `transcript_path`、`explanation.path` が許可外なら 400。`cwd` が無くても 201 で `context` が空になるだけ。
@@ -238,7 +238,7 @@ stateDiagram-v2
 | Bearer のみ | `POST /api/decisions`、`GET /api/decisions/:id/wait`、`POST /api/decisions/:id/ack`、`GET /api/sessions/:id/pending-mode-switch`、`POST .../consume` |
 | cookie か Bearer | `POST /api/decisions/:id/answer`、`POST /api/events`(cookie だけのときは `hook_event_name` が `ukagai.session_panel_open` の event のみ。他は 403)、`GET /api/decisions`、`GET /api/decisions/:id`、`GET /api/sessions`、`GET /api/metrics`、`GET /api/stream` |
 | 認可なし | `GET /healthz`、`GET /`、`GET /public/*` |
-- **Host**: `127.0.0.1:4818` と `localhost:4818` 以外は 400(DNS rebinding 対策)。
+- **Host**: `127.0.0.1:<port>` と `localhost:<port>`(port は serve のもの)以外は 400(DNS rebinding 対策)。
 - **Content-Type**: **すべての POST**(本文の無い ack / consume を含む)は `application/json` 必須(違えば 415)。本文が無い場合は `{}` を送る。検査の順は Host(400)→ 認可(401)→ Content-Type(415)→ 本文(400)。
 - **パス**: `transcript_path` は `~/.claude/projects/` 配下、`explanation.path` は `<scratchpad_dir>/ukagai/` か `~/.ukagai/explain/` 配下、`cwd` は実在ディレクトリに限る(`isAllowedTranscriptPath` / `isAllowedExplanationPath`。`..` と symlink を解決してから判定)。
 - **cookie の限界**: cookie は `GET /` で無認可に発行される。同一機の他プロセスは `curl -c` で取得できる。これは MVP の限界(計画 7 節)。cookie の保持は 1000 件までで、超えると古い順に捨てる。

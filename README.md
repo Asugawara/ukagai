@@ -22,7 +22,7 @@ node dist/cli.js tui --server http://127.0.0.1:4832 --data-dir /tmp/ukagai-x   #
 
 `npm test` の GUI のテスト(`test/gui/`)は `agent-browser` がある環境でだけ走る(無ければ skip)。
 
-開発中のセッションに hook をかけないときは `install --settings <file>` で別ファイルに書き、テスト用セッションを `claude --settings <file>` で起動する。
+開発中のセッションに hook をかけないときは `install --settings <file>` で別ファイルに書き、テスト用セッションを `claude --settings <file>` で起動する。`--settings` では skill は触らない。skill も試すなら `--skill` を付ける。
 
 ## ドキュメント
 

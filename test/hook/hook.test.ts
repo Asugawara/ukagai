@@ -26,7 +26,7 @@ recommended: A
 | A | a | b |
 | B | a | b |
 ## 推奨
-A を推す。
+A を推す。C なら B。
 `;
 
 function t1(scratchpad: string, extra: Record<string, unknown> = {}) {
@@ -174,6 +174,7 @@ test("説明ファイル無し → deny(保存先の絶対パスと question 原
     assert.ok(out.permissionDecisionReason.includes(Q));
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.status, "denied_explain");
+    assert.deepEqual(create?.body.missing, ["file"]);
     assert.ok(!f.calls.some((c) => c.path.includes("/wait")));
   });
 });
@@ -492,6 +493,7 @@ test("多問 → 説明ファイルがあっても deny(1 回に 1 問)+ denied_
     assert.match(out.permissionDecisionReason, /1 回に 1 問にしてください\(今回は 2 問\)/);
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.status, "denied_explain");
+    assert.deepEqual(create?.body.missing, ["multi"]);
     assert.equal(create?.body.explanation, undefined);
     assert.ok(!f.calls.some((c) => c.path.includes("/wait")));
   });

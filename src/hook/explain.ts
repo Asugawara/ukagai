@@ -20,6 +20,7 @@ export type MissingCode =
   | "todo"
   | "recommend"
   | "recommend_long"
+  | "recommend_cond"
   | "cell_long"
   | "why_long"
   | "diagram"
@@ -55,6 +56,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   todo: "「人にしてほしいこと」の節(コマンドのコードブロック付き)",
   recommend: "「推奨」の節",
   recommend_long: "「推奨」の節が長い(3 文・400 文字以内)",
+  recommend_cond: "「推奨」に別の選択肢が正しくなる条件(「〜なら B」)",
   cell_long: "選択肢の表のセルが長い(各セル 2 文・160 文字以内)",
   why_long: "「なぜ今この判断が要るか」の節が長い(600 文字以内。詳細は「確かめたこと」へ)",
   diagram: "「図」の節と Mermaid の図",
@@ -263,6 +265,9 @@ function tableCellsLong(t: Table): boolean {
   return t.rows.some((r) => cols.some((c) => cpLength(r[c] ?? "") > LIMITS.cellChars));
 }
 
+/** 「推奨」に別の選択肢が正しくなる条件があるか(語の有無だけ見る) */
+const RECOMMEND_COND = /なら|場合|とき|if /i;
+
 function hasContent(lines: string[], s: Section): boolean {
   return lines.slice(s.start + 1, s.end).some((l) => l.trim() !== "");
 }
@@ -334,6 +339,7 @@ export function validateExplanation(
       if (cpLength(text) > LIMITS.recommendChars || countSentences(text) > LIMITS.recommendSentences) {
         missing.push("recommend_long");
       }
+      if (!RECOMMEND_COND.test(text)) missing.push("recommend_cond");
     }
   }
 
@@ -341,9 +347,10 @@ export function validateExplanation(
   const rev = f["reversibility"] ?? "";
   const scopeKnown = SCOPE.includes(scope);
   const revKnown = REVERSIBILITY.includes(rev);
+  // 必須: reversible 以外、または scope が machine / external(repo + reversible は任意)
   const diagramRequired =
     !blocker &&
-    (!scopeKnown || !revKnown || scope !== "file" || rev !== "reversible");
+    (!scopeKnown || !revKnown || rev !== "reversible" || scope === "machine" || scope === "external");
   if (diagramRequired) {
     const diagram = findSection(headings, lines.length, "図");
     if (!diagram || !sectionHasMermaid(blocks, diagram)) missing.push("diagram");

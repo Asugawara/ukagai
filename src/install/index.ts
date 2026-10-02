@@ -22,13 +22,13 @@ export async function run(argv: string[]): Promise<number> {
     if (t.dryRun) {
       const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
       process.stdout.write(diff === "" ? "settings: 変更なし\n" : diff);
-      if (!t.noSkill) process.stdout.write(`skill: ${SKILL_SOURCE} -> ${skillDest}\n`);
+      if (t.handleSkill) process.stdout.write(`skill: ${SKILL_SOURCE} -> ${skillDest}\n`);
       process.stdout.write("(--dry-run: 何も書いていません)\n");
       return 0;
     }
 
     const bak = await writeSettings(t.settingsFile, after);
-    if (!t.noSkill) {
+    if (t.handleSkill) {
       await mkdir(t.skillDir, { recursive: true });
       await copyFile(SKILL_SOURCE, skillDest);
     }
@@ -38,7 +38,7 @@ export async function run(argv: string[]): Promise<number> {
     out.push(`timeout:  ${t.timeout}s(PreToolUse の --budget ${t.timeout - 10})${t.observe ? " [observe]" : ""}`);
     out.push(`events:   ${HOOK_EVENTS.join(", ")}`);
     out.push(t.noAutostart ? "autostart: off(--no-autostart)" : "autostart: on");
-    out.push(t.noSkill ? "skill:    (--no-skill)" : `skill:    ${skillDest}`);
+    out.push(t.handleSkill ? `skill:    ${skillDest}` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (--settings 指定のため対象外。置くなら --skill)");
     process.stdout.write(out.join("\n") + "\n");
     return 0;
   } catch (err) {

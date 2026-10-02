@@ -9,6 +9,8 @@ export interface Target {
   observe: boolean;
   dryRun: boolean;
   noSkill: boolean;
+  /** skill を配置・削除・診断する対象か(`--settings` 指定時は `--skill` が無ければ false) */
+  handleSkill: boolean;
   noAutostart: boolean;
   server: string;
   dataDir: string;
@@ -21,6 +23,7 @@ const DEFAULT_SERVER = "http://127.0.0.1:4818";
 export function parseTarget(argv: string[]): Target {
   let settings: string | undefined;
   let project = false;
+  let skill = false;
   const t = {
     timeout: 3600,
     observe: false,
@@ -43,6 +46,7 @@ export function parseTarget(argv: string[]): Target {
     else if (a === "--dry-run") t.dryRun = true;
     else if (a === "--observe") t.observe = true;
     else if (a === "--no-skill") t.noSkill = true;
+    else if (a === "--skill") skill = true;
     else if (a === "--no-autostart") t.noAutostart = true;
     else if (a === "--timeout") {
       const n = Number(val());
@@ -59,6 +63,7 @@ export function parseTarget(argv: string[]): Target {
   return {
     ...t,
     hookArgs,
+    handleSkill: !t.noSkill && (settings === undefined || skill),
     settingsFile: settings ?? join(base, "settings.json"),
     skillDir: join(base, "skills", "ukagai-explain"),
   };

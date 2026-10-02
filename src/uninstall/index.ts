@@ -22,7 +22,7 @@ export async function run(argv: string[]): Promise<number> {
     const after = removeHooks(before);
     const changed = serialize(before) !== serialize(after);
     const skillFile = join(t.skillDir, "SKILL.md");
-    const skillExists = !t.noSkill && (await exists(skillFile));
+    const skillExists = t.handleSkill && (await exists(skillFile));
 
     if (t.dryRun) {
       const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);

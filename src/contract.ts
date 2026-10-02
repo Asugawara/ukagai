@@ -183,6 +183,8 @@ export const Decision = z.object({
   context: DecisionContext,
   explanation: Explanation.optional(),
   first_denied_at: z.string().optional(),
+  /** denied_explain のときだけ。deny した理由の MissingCode(spec explain.md 4 節) */
+  missing: z.array(z.string()).optional(),
   status: DecisionStatus,
   lease_until: z.string().optional(),
   created_at: z.string(),
@@ -201,6 +203,8 @@ export const CreateDecisionRequest = z.object({
   explanation: Explanation.optional(),
   /** 説明なしの deny を記録するときだけ `denied_explain`(GUI には出ない) */
   status: z.literal("denied_explain").optional(),
+  /** denied_explain のときだけ。deny した理由の MissingCode */
+  missing: z.array(z.string()).optional(),
 });
 export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequest>;
 
