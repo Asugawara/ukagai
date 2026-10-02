@@ -1,263 +1,269 @@
 ---
 name: ukagai-explain
-description: "人に判断を求める前に説明ファイルを書く。AskUserQuestion や ExitPlanMode を呼ぶ直前、設計の分岐・取り消しにくい操作・命名など人が決める場面で、推奨と選択肢の表を Markdown に書くときに使う。"
+description: "Write an explanation file before asking a human to decide. Use it right before calling AskUserQuestion or ExitPlanMode, when a human decides: a design fork, a hard-to-undo operation, naming. The file holds a recommendation and a table of options, written as Markdown."
 ---
 
 # ukagai-explain
 
-人が判断するための説明を Markdown で書き、そのあとで同じ質問を AskUserQuestion で出す。ukagai の GUI はこのファイルで判断画面を組む。人は矢印キーと Enter だけで決める。正式な仕様は `docs/spec/explain.md`。
+Write the explanation a human needs to decide as Markdown, then ask the same question with AskUserQuestion. The ukagai GUI builds the decision screen from this file. The human decides with arrow keys and Enter only. The formal specification is `docs/spec/explain.md`.
 
-## 聞く前に考えること(最重要)
+**Language.** Write the explanation in the language given by the SessionStart context (the user's configured language). Section headings and the blocker's fixed labels are accepted in English or Japanese; prefer English headings.
 
-- コードを読み、コマンドで確かめてから、選択肢を 2〜4 に絞る。
-- **必ず 1 つを推奨する。** その選択肢のラベル末尾に ` (Recommended)` を付けて先頭に置く。
-- **人でなければ決められない理由**(好み、外部の事情、戻せない変更の責任、エージェントが知り得ない前提)を 1 文で言えないなら、聞かない。推奨どおり進めて、あとで報告する。
-- **1 回の AskUserQuestion は 1 問。** 複数あるなら**最初から** 1 問ずつ、説明ファイルも 1 問ごとに書いて順に出す(2 問以上で出すと hook が deny し、書き直しで時間がかかる)。
-- **`reversible` + `file` の判断は聞かずに進めて報告する。**
+## Think before asking (most important)
 
-### 聞く前に scope と reversibility を決める
+- Read the code and verify with commands, then narrow the options to 2–4.
+- **Always recommend exactly one.** Put it first and append ` (Recommended)` to its label.
+- If you cannot state in one sentence **why only a human can decide** (taste, external circumstances, responsibility for an irreversible change, premises the agent cannot know), do not ask. Proceed with the recommendation and report it afterwards.
+- **One AskUserQuestion call = one question.** If there are several, ask them **from the start** one at a time, writing one explanation file per question and calling them in order (a call with two or more questions is denied by the hook and the rewrite costs time).
+- **A `reversible` + `file` decision is not asked: proceed and report it.**
 
-| 値 | 意味 |
+### Decide scope and reversibility before asking
+
+| Value | Meaning |
 |---|---|
-| `reversibility: reversible` | 簡単に戻せる |
-| `reversibility: costly` | 戻せるが手間かコストがかかる |
-| `reversibility: irreversible` | 戻せない |
-| `scope: file` | 数ファイル |
-| `scope: repo` | リポジトリ全体 |
-| `scope: machine` | この機械(リポジトリ外のファイル・設定・プロセス) |
-| `scope: external` | 他人・他システム(push、公開、課金、メッセージ送信) |
+| `reversibility: reversible` | Easy to undo |
+| `reversibility: costly` | Can be undone, but at some effort or cost |
+| `reversibility: irreversible` | Cannot be undone |
+| `scope: file` | A few files |
+| `scope: repo` | The whole repository |
+| `scope: machine` | This machine (files, settings and processes outside the repository) |
+| `scope: external` | Other people or systems (push, publish, billing, sending messages) |
 
-### 複数の質問があるとき
+### When there are several questions
 
 ```
-1 問目: 説明ファイルを書く → AskUserQuestion(1 問だけ)→ 回答を受け取る
-2 問目: 説明ファイルを書く → AskUserQuestion(1 問だけ)→ 回答を受け取る
+Question 1: write the explanation file → AskUserQuestion (one question only) → receive the answer
+Question 2: write the explanation file → AskUserQuestion (one question only) → receive the answer
 ```
 
-前の回答で次の質問が変わることもある。まとめて 1 回で出さない。
+An earlier answer can change the next question. Never batch them into one call.
 
-複数の質問を順に聞くときは、先に出した質問の回答を読み、あとの説明の前提と矛盾しないか見直す。回答と矛盾する記述を書かない。
+When asking several questions in order, read the answers to the earlier ones and check that the later explanations do not contradict them. Never write a statement that contradicts an answer.
 
-## いつ書くか
+## When to write
 
-- AskUserQuestion を呼ぶ**直前**。設計の分岐、取り消しにくい操作、命名など。
-- ExitPlanMode は別ファイル不要。計画本文に「影響範囲と可逆性」の節を入れる。計画には頼まれていない手順(削除・掃除・無関係な変更)を入れない。要るなら理由を書いて別の選択肢にする。
-- plan mode 中の AskUserQuestion には要らない。
+- **Right before** calling AskUserQuestion: a design fork, a hard-to-undo operation, naming.
+- ExitPlanMode needs no separate file. Put a "Scope and reversibility" section in the plan body. Do not put steps nobody asked for (deletion, cleanup, unrelated changes) in the plan. If they are needed, give the reason and make them a separate option.
+- AskUserQuestion in plan mode needs none.
 
-## どこに書くか
+## Where to write
 
-`<scratchpad_dir>/ukagai/<自由な名前>.md`。scratchpad のパスは system prompt と SessionStart の指示にある。無ければ `~/.ukagai/explain/<session_id>/`。リポジトリには置かない。
+`<scratchpad_dir>/ukagai/<any name>.md`. The scratchpad path is in the system prompt and the SessionStart instructions. If there is none, use `~/.ukagai/explain/<session_id>/`. Never put it in the repository.
 
-## front matter
+## Front matter
 
 ```
 ---
 ukagai: 1
-question: AskUserQuestion の質問文を一字一句そのまま
-title: 人に決めてほしいこと 1 文
-recommended: 推す選択肢のラベル
+question: the AskUserQuestion question, verbatim
+title: the decision for the human, in one sentence
+recommended: label of the option you recommend
 reversibility: reversible | costly | irreversible
 scope: file | repo | machine | external
 ---
 ```
 
-- `question` は照合用。GUI には出ない。`questions[0].question` と完全に同じにする。
-- `title` は GUI の判断見出し。「〜を A と B のどちらにするか」のように、決めてほしいことを 1 文で。
-- `recommended` は推す選択肢のラベル。AskUserQuestion の `options[].label` のどれかと一致させる(末尾の `(Recommended)` の有無は問わない)。
+- `question` is for matching and is not shown in the GUI. Make it exactly the same as `questions[0].question`.
+- `title` is the decision heading in the GUI. One sentence for what the human decides, such as "Choose A or B for …".
+- `recommended` is the label of the option you recommend. It must match one of the `options[].label` of AskUserQuestion (a trailing `(Recommended)` is optional).
 
-## 本文の節
+## Body sections
 
-| 節 | 必須 | 書くこと |
+| Section | Required | What to write |
 |---|---|---|
-| なぜ今この判断が要るか | 常に | 状況と、**人が決めるべき理由**(あなたが知り得ないこと)。2〜3 文 |
-| 選択肢 | 常に | 表。先頭列 = 選択肢のラベル。列は「選ぶと起きること」「リスクと戻し方」。選択肢ごとに 1 行 |
-| 推奨 | 常に | **3 文に収める。** 1 文目 = 推す選択肢と理由、2 文目 = 補足(省略可)、最後の 1 文 = 別の選択肢が正しくなる条件(「〜なら B」「〜の場合は B」「〜のときは B」「〜であれば B」のいずれかで書く)。5 文を超えると deny(`recommend_long`) |
-| 図 | reversibility が reversible 以外、または scope が machine / external(`repo` + `reversible` は任意) | Mermaid |
-| 確かめたこと | 任意 | file:line、コマンドの結果。推測は「推測」と書く |
-| 関係する差分 | 任意 | 判断に関係する hunk だけ。` ```diff ` で 20 行以内 |
+| Why this decision is needed now | Always | The situation, and **why a human must decide** (what you cannot know). 2–3 sentences |
+| Options | Always | A table. First column = option label. Columns: "What happens if chosen" and "Risks and how to undo". One row per option |
+| Recommendation | Always | **Keep it to 3 sentences.** Sentence 1 = the option you recommend and why, sentence 2 = supplement (optional), last sentence = the condition under which another option is right (write it as "if …, B", "when …, B", "unless …, A", etc.). More than 5 sentences is denied (`recommend_long`) |
+| Diagram | When reversibility is anything but reversible, or scope is machine / external (`repo` + `reversible` is optional) | Mermaid |
+| What I checked | Optional | file:line, command results. Mark guesses as guesses |
+| Related diff | Optional | Only the hunks that bear on the decision. At most 20 lines in a ` ```diff ` block |
 
-- 「選択肢」の各セルは 1〜2 文。読む人は矢印キーと Enter だけで決めるので、**カード 1 枚で判断できる文**にする。
-### 長さの上限
+- Each cell of the options table is 1–2 sentences. The reader decides with arrow keys and Enter only, so write **sentences that let one card carry the decision**.
+- Japanese headings and column names are accepted as aliases: 「なぜ今この判断が要るか」「選択肢」「推奨」「図」「確かめたこと」「関係する差分」「影響範囲と可逆性」, and columns 「選ぶと起きること」「リスクと戻し方」. Prefer the English names.
 
-hook が検査する(超えると deny)。GUI の右列は選択肢カードを画面内に収めるので、長い説明は折りたたまれて読まれにくくなる。
+### Length limits
 
-- 推奨: 5 文・400 文字以内(`recommend_long`)。目安は 3 文。
-- 表のセル(選ぶと起きること・リスクと戻し方): 各セル 160 文字以内(`cell_long`。文数は検査しない。目安は 2 文)。
-- なぜ今この判断が要るか(blocker は「なぜ止まったか」): 目安は 2〜3 文。上限は 600 文字(`why_long`)。
-- 推奨には、別の選択肢が正しくなる条件(「〜なら B」)を入れる。推奨の本文に「なら」「場合」「とき」「であれば」「際は」「際に」、または英語の if / when / unless のいずれかが要る。無いと deny する(`recommend_cond`)。「ならない」「なければならない」「ときどき」は数えない。
-- 詳細・根拠・ログは「確かめたこと」の節に箇条書きで書く。判断に要らないことは書かない。
+The hook checks them (over the limit is denied). The right column of the GUI keeps the option cards on screen, so long explanations get folded away and are rarely read.
 
-- ラベルは AskUserQuestion の `options[].label` と揃える(末尾の `(Recommended)` の有無は問わない)。
-- 図にするのは構造・流れ・依存関係だけ。型は 1 つ選ぶ:
-  - `flowchart`: 部品のつながり、処理の流れ、分岐。
-  - `sequenceDiagram`: 複数の主体のやりとりの順序。
-  - `stateDiagram-v2`: 状態と遷移(pending → answered など)。
-- 図は実在する構造・流れだけを描く。想定や案を描くときは、図の直前に「(案)」と断る。
-- 図は選択肢の違いが見えるように描く。**必須条件を満たしても、選択肢の違いが図に出ないなら図は書かず、代わりに表の行を詳しくする。**
-- Mermaid は TUI でも読めるように書く(助言。hook は検査しない): 矢印の前後に空白を置く(`A --> B`。`A-->B` は不可)、ノードは 10 個以内、1 行は 100 桁以内。
-- 差分は全体を載せない(GUI が `git diff` を別に添える)。
+- Recommendation: at most 5 sentences and 400 characters (`recommend_long`). Aim for 3 sentences.
+- Table cells (what happens if chosen, risks and how to undo): at most 160 characters per cell (`cell_long`; sentences are not counted; aim for 2 sentences).
+- Why this decision is needed now (for a blocker, "Why I stopped"): aim for 2–3 sentences. The limit is 600 characters (`why_long`).
+- Recommendation needs the condition under which another option is right ("if …, B"). The text of the section must contain one of: if / when / unless / otherwise / in case, or the Japanese なら / 場合 / とき / であれば / 際は / 際に. Without it the hook denies (`recommend_cond`). "ならない", "なければならない" and "ときどき" do not count.
+- Put details, evidence and logs in the "What I checked" section as bullets. Do not write what the decision does not need.
 
-## 強調
+- Make the labels match the AskUserQuestion `options[].label` (a trailing `(Recommended)` is optional).
+- Draw only structure, flow and dependencies. Pick one type:
+  - `flowchart`: how parts connect, the flow of processing, branches.
+  - `sequenceDiagram`: the order of exchanges among several actors.
+  - `stateDiagram-v2`: states and transitions (pending → answered, etc.).
+- Draw only structures and flows that exist. When you draw an assumption or a proposal, say "(proposal)" right before the diagram.
+- Draw the diagram so that the difference between the options shows. **Even when a diagram is required, if the difference between the options does not show in it, do not write one; make the table rows more detailed instead.**
+- Write Mermaid so that it is readable in the TUI too (advice; the hook does not check): put spaces around arrows (`A --> B`, not `A-->B`), at most 10 nodes, at most 100 columns per line.
+- Do not include the whole diff (the GUI attaches `git diff` separately).
 
-- `**太字**` にするのは 2 種類だけ: **推す選択肢の名前**と、**取り消せない事実**。**1 文に 1 つまで、説明全体で 8 箇所まで。全部を太字にしない。** GUI は accent 色で描く(「リスクと戻し方」の中は赤)。
-- 戻せない結果・他人や外部システムに及ぶ影響は、callout に 1〜2 行で書く。戻すのにコストがかかるなら `> [!WARNING]`、戻せないなら `> [!CAUTION]`。callout は「推奨」節の中に置いてよい(GUI が畳みの外に出す)。置き場所は変えなくてよい。
-- 確かめた事実のうち判断を左右するものは `> [!NOTE]` でもよい。
+## Emphasis
+
+- Use `**bold**` for only two things: **the name of the option you recommend** and **a fact that cannot be undone**. **At most one per sentence and 8 in the whole explanation. Never bold everything.** The GUI draws it in the accent color (red inside "Risks and how to undo").
+- Write irreversible results and effects on other people or external systems in a callout of 1–2 lines. Use `> [!WARNING]` when undoing costs something and `> [!CAUTION]` when it cannot be undone. A callout may sit inside the Recommendation section (the GUI moves it out of the fold). There is no need to change where it sits.
+- A checked fact that sways the decision may use `> [!NOTE]`.
 
 ```markdown
-| JSONL | 追記だけで保存し、**起動時に 1 回読んで復元**する。 | 検索は全件読み。**SQLite へ移すには移行コードが要る**。 |
+| JSONL | Stores by appending only, and **restores by reading once at startup**. | Search reads everything. **Moving to SQLite needs migration code**. |
 
 > [!WARNING]
-> 保存形式を変えると、既存のログを読めなくなる人が出る。
+> Changing the storage format leaves some people unable to read existing logs.
 ```
 
-## 人の作業で止まったとき(blocker)
+## When stopped by human work (blocker)
 
-認証・ログイン・権限付与・2 要素認証・鍵の配置・物理的な操作など、**人にしかできない作業**で進めなくなったときに使う。**文章で「認証してください」と言って turn を終えるのは禁止。** 終えると ukagai の GUI には何も出ず、人が気づいて「進めて」と打つまで止まる。
+Use this when you cannot proceed because of **work only a human can do**: authentication, login, granting permissions, two-factor authentication, placing a key, a physical operation. **Ending the turn with prose such as "please authenticate" is forbidden.** Ending that way shows nothing in the ukagai GUI, and work stays stopped until the human notices and types "continue".
 
-説明ファイルを `type: blocker` で書き、AskUserQuestion を **1 問、選択肢は次の固定の 3 つ**で出す:
+Write the explanation file with `type: blocker` and call AskUserQuestion with **one question and exactly these 3 fixed options**:
 
-1. `対応した。続けて (Recommended)`
-2. `この手順は飛ばして続けて`
-3. `ここで中断`
+1. `Done. Continue (Recommended)`
+2. `Skip this step and continue`
+3. `Stop here`
 
-人が「対応した」を選んだら、**同じ作業を再試行する**。
+(The Japanese labels `対応した。続けて` / `この手順は飛ばして続けて` / `ここで中断` are accepted as aliases. Prefer English.)
 
-front matter: `ukagai: 1`、`question`(一字一句)、`type: blocker`、`title`(何が必要か 1 文)、`recommended: 対応した。続けて`、`reversibility` / `scope`(たいてい `reversible` / `machine`)。
+When the human picks "Done", **retry the same work**.
 
-本文の必須節(**推奨と図は要らない**):
+Front matter: `ukagai: 1`, `question` (verbatim), `type: blocker`, `title` (what is needed, in one sentence), `recommended: Done. Continue`, `reversibility` / `scope` (usually `reversible` / `machine`).
 
-| 節 | 書くこと |
+Required body sections (**no Recommendation and no Diagram**):
+
+| Section | What to write |
 |---|---|
-| なぜ止まったか | 失敗したコマンドとエラーの抜粋(コードブロックで 10 行以内) |
-| 人にしてほしいこと | 番号付きの手順と、人がそのまま打てるコマンドのコードブロック(1 つ以上。無いと hook が deny する) |
-| 選択肢 | 表。先頭列 = 上の 3 ラベル、列は「選ぶと起きること」「リスクと戻し方」 |
+| Why I stopped | The failed command and an excerpt of the error (a code block of at most 10 lines) |
+| What you need to do | Numbered steps, and a code block with commands the human can type as they are (at least one; without it the hook denies) |
+| Options | A table. First column = the 3 labels above. Columns: "What happens if chosen" and "Risks and how to undo" |
 
-良い例(gcloud の認証切れ):
+Good example (expired gcloud authentication):
 
 ````markdown
 ---
 ukagai: 1
-question: gcloud の認証が切れています。対応できましたか？
+question: Your gcloud authentication has expired. Could you take care of it?
 type: blocker
-title: gcloud の認証が切れているので `gcloud auth login` をしてほしい
-recommended: 対応した。続けて
+title: gcloud authentication has expired; please run `gcloud auth login`
+recommended: Done. Continue
 reversibility: reversible
 scope: machine
 ---
 
-## なぜ止まったか
+## Why I stopped
 
-`gcloud run deploy` が認証エラーで失敗しました。ブラウザでのログインが要り、私にはできません。
+`gcloud run deploy` failed with an authentication error. A browser login is required, which I cannot do.
 
 ```
 ERROR: (gcloud.run.deploy) You do not currently have an active account selected.
 Please run: $ gcloud auth login
 ```
 
-## 人にしてほしいこと
+## What you need to do
 
-1. ターミナルで次を実行し、ブラウザでログインする。
-2. アプリケーションのデフォルト認証も更新する。
+1. Run the following in a terminal and log in in the browser.
+2. Also refresh the application default credentials.
 
 ```sh
 gcloud auth login
 gcloud auth application-default login
 ```
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| 対応した。続けて | 同じデプロイを再試行して続ける。 | 認証が通っていなければ、また同じ表示で止まる。 |
-| この手順は飛ばして続けて | デプロイを飛ばして残りの作業を進める。 | デプロイされないまま進む。あとで手動でデプロイすれば戻せる。 |
-| ここで中断 | 作業をここで止める。 | 途中までの変更は残る。再開すれば続けられる。 |
+| Done. Continue | Retry the same deploy and carry on. | If authentication did not succeed, it stops again with the same message. |
+| Skip this step and continue | Skip the deploy and do the rest of the work. | The work proceeds without the deploy. Undo by deploying manually later. |
+| Stop here | Stop the work here. | Changes made so far stay. Resume to continue. |
 ````
 
-## やってはいけないこと
+## Do not
 
-- **推奨を決めずに聞く。**
-- **生の質問文に頼る。** GUI は `question` を表示しない。判断に必要なことは `title`、「推奨」、「選択肢」の表に書く。
-- 飾りの図(「開始 → 検討 → 決定」のような、判断に効かない図)。
-- 選択肢を 1 つしか書かない表、空のセルがある表、利点・欠点・コストの列の表。
-- `question` を言い換える。
-- 説明の中に GUI の URL や API を書く。
+- **Ask without settling on a recommendation.**
+- **Rely on the raw question text.** The GUI does not show `question`. Put what the decision needs in `title`, "Recommendation" and the options table.
+- Decorative diagrams ("start → consider → decide" and the like, which do not help the decision).
+- A table with only one option, a table with empty cells, or a table with pros / cons / cost columns.
+- Paraphrase `question`.
+- Write the GUI URL or API in the explanation.
 
-## 良い例(設計分岐、2 択)
+## Good example (design fork, two options)
 
 ````markdown
 ---
 ukagai: 1
-question: decisions の永続化は JSONL と SQLite のどちらにしますか？
-title: 判断ログの保存形式を JSONL と SQLite のどちらにするか
+question: Should decisions be persisted as JSONL or SQLite?
+title: Choose JSONL or SQLite as the storage format of the decision log
 recommended: JSONL
 reversibility: costly
 scope: repo
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-保存形式を決めないと W3 の store を書き始められません。JSONL は追記だけで済み、SQLite は検索に強い反面、`node:sqlite` が実験的でスキーマ移行も要ります。ログを今後どう使うか(検索や集計を早く欲しいか)は私には分からず、人が決めることです。
+W3's store cannot be written until the storage format is decided. JSONL needs only appends; SQLite is strong at search, but `node:sqlite` is experimental and schema migrations are needed. How the log will be used (whether search and aggregation are wanted early) is something I cannot know, so a human decides.
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| JSONL | 追記だけで保存し、**起動時に 1 回読んで復元する**。実装は約 0.5 日。 | 検索・集計は全件読みになる。必要になったら SQLite へ移す(**移行コードが要る**)。 |
-| SQLite | 検索・集計を SQL で書ける。実装は約 1.5 日。 | `node:sqlite` が実験的で、スキーマ移行が要る。JSONL へ戻すには書き出しが要る。 |
+| JSONL | Stores by appending only, and **restores by reading once at startup**. About 0.5 days to implement. | Search and aggregation read everything. Move to SQLite when needed (**migration code is needed**). |
+| SQLite | Search and aggregation are written in SQL. About 1.5 days to implement. | `node:sqlite` is experimental and needs schema migrations. Going back to JSONL needs an export. |
 
-## 推奨
+## Recommendation
 
-**JSONL** を推します。2 週間分のログに検索は要らず、依存なしで復元も 1 回の読み込みで済みます。集計や検索を最初から使うと決まっているなら SQLite が正しくなります。
+I recommend **JSONL**. Two weeks of logs need no search, and with no dependency restoring is one read. SQLite becomes the right choice if you already know you will use aggregation or search from the start.
 
 > [!WARNING]
-> 保存形式を変えると、既存のログを読み直す移行が要る。
+> Changing the storage format requires a migration that re-reads existing logs.
 
-## 図
+## Diagram
 
 ```mermaid
 flowchart LR
-  S[serve] -->|追記| J[decisions.jsonl]
-  J -->|起動時に pending を復元| S
-  J -.必要になったら移行.-> Q[(SQLite)]
+  S[serve] -->|append| J[decisions.jsonl]
+  J -->|restore pending at startup| S
+  J -.migrate when needed.-> Q[(SQLite)]
 ```
 
-## 確かめたこと
+## What I checked
 
-- `src/server/` に永続化の実装はまだ無い(`grep -rn jsonl src` が 0 件)。
+- `src/server/` has no persistence implementation yet (`grep -rn jsonl src` finds nothing).
 ````
 
-## 悪い例(同じ題材)
+## Bad example (same subject)
 
 ````markdown
 ---
 ukagai: 1
-question: 永続化の方式はどうしましょう？
+question: What should we do about persistence?
 reversibility: costly
 scope: repo
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-保存方法を決めたいです。
+I want to decide how to save.
 
-## 選択肢
+## Options
 
-| 選択肢 | 利点 | 欠点 | コスト |
+| Option | Pros | Cons | Cost |
 |---|---|---|---|
 | JSONL | | | |
 
-## 図
+## Diagram
 
 ```mermaid
 flowchart LR
-  A[開始] --> B[検討] --> C[決定]
+  A[Start] --> B[Consider] --> C[Decide]
 ```
 ````
 
-悪い点:
+What is wrong:
 
-- 推奨が無い(`recommended` も「推奨」の節も欠けている)。`title` も無い。
-- 表が 1 行しかなく、列が利点・欠点・コストで、セルも空。
-- 人が決めるべき理由が無い。
-- question が言い換えられていて照合できない。
-- 図が判断に効かない飾り。
+- There is no recommendation (both `recommended` and the Recommendation section are missing). `title` is missing too.
+- The table has one row, its columns are pros / cons / cost, and the cells are empty.
+- There is no reason a human must decide.
+- The question was paraphrased, so it cannot be matched.
+- The diagram is decoration that does not help the decision.

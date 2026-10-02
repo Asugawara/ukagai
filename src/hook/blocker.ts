@@ -1,13 +1,14 @@
 /**
- * Stop hook の保険(docs/spec/explain.md 12 節): 文章で「人の作業待ち」と言って止まったかを語彙で見る。
- * 「対象語」と「詰まり語」の両方が同じ文(「。」「.」改行区切り)に入っているときだけ一致にする
+ * Stop hook safeguard (docs/spec/explain.md section 12): detect by vocabulary whether the agent stopped in prose saying it is waiting for human work.
+ * Matches only when a target word and a stuck word are in the same sentence (split on 。 . and newlines).
+ * The vocabulary is intentionally bilingual (English and Japanese).
  */
 export const BLOCKER_TARGET =
   /認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵|login|sign[ -]?in|api[ _-]?key|APIキー|API キー|\bauth\b/i;
 export const BLOCKER_STUCK =
   /ない|無い|なく|なければ|無く|無ければ|ありません|切れ|失敗|必要|してください|お願い|できません|進められません|進めません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked/i;
 
-/** 「問題ありません」「問題なく」のような否定の否定は詰まりではないので、照合前に文から除く */
+/** Double negatives such as 「問題ありません」/ 「問題なく」 are not blockers, so they are removed from the sentence before matching */
 export const BLOCKER_SAFE = /問題(は|も)?(ありません|なく|ない|無く|無い|なし|無し)|支障(は|も)?(ありません|なく|ない|無く|無い)|エラー(は|も)?(ありません|なく|ない|無く|無い|なし|無し)|わけではありません|わけではない|必要(は|も)?(ありません|ない|無い|なく)|問題(は|も)?なかった|要りません|不要/g;
 
 export function isBlockerMessage(text: string | undefined): boolean {
@@ -18,6 +19,6 @@ export function isBlockerMessage(text: string | undefined): boolean {
     .some((s) => BLOCKER_TARGET.test(s) && BLOCKER_STUCK.test(s));
 }
 
-/** Stop で続行させるときの理由文(600 文字以内、URL なし) */
+/** Reason given when Stop is made to continue (at most 600 characters, no URL) */
 export const BLOCKER_REASON =
-  "人の作業(認証・権限など)が要るなら、文章で終えずに ukagai の blocker 形式で聞いてください: skill ukagai-explain の「人の作業で止まったとき」に従って説明ファイル(type: blocker、「なぜ止まったか」「人にしてほしいこと」「選択肢」)を書き、AskUserQuestion を選択肢「対応した。続けて (Recommended)」「この手順は飛ばして続けて」「ここで中断」で出してください。人の作業が要らないなら、そのまま終えて構いません。";
+  'If human work (authentication, permissions, etc.) is needed, do not just end with prose; ask in ukagai\'s blocker format: following "When stopped by human work" in skill ukagai-explain, write an explanation file (type: blocker, with "Why I stopped", "What you need to do" and "Options") and call AskUserQuestion with the options "Done. Continue (Recommended)", "Skip this step and continue" and "Stop here". If no human work is needed, you may simply end.';

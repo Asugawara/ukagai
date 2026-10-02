@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isEscapedQuestion } from "../../src/hook/context-hooks.js";
+import { contextText, isEscapedQuestion } from "../../src/hook/context-hooks.js";
 import { dataDirWithToken, fakeServer, json, runHook, tmpDir, writeFile, type Fake, type Handler } from "./helpers.js";
 
 const fx = (n: string) => JSON.parse(readFileSync(fileURLToPath(new URL(`../fixtures/${n}`, import.meta.url)), "utf8"));
@@ -13,20 +13,20 @@ const NOW = () => new Date().toISOString();
 const explanationFor = (q: string) => `---
 ukagai: 1
 question: ${q}
-title: A と B のどちらにするか
+title: Choose A or B
 reversibility: reversible
 scope: file
 recommended: A
 ---
-## なぜ今この判断が要るか
-決める必要がある。
-## 選択肢
-| 案 | 選ぶと起きること | リスクと戻し方 |
+## Why this decision is needed now
+It has to be decided.
+## Options
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
 | A | a | b |
 | B | a | b |
-## 推奨
-A を推す。C なら B。
+## Recommendation
+I recommend A. If C, choose B.
 `;
 
 function t1(scratchpad: string, extra: Record<string, unknown> = {}) {
@@ -51,7 +51,7 @@ async function withServer<T>(handler: Handler, fn: (f: Fake, dataDir: string) =>
 
 const args = (f: Fake, dataDir: string, ...rest: string[]) => ["--server", f.url, "--data-dir", dataDir, ...rest];
 
-test("T1: GUI の回答が t1-stdout.json と一致し、ack が呼ばれる。説明ファイルは .used.md になる", async () => {
+test("T1: the GUI answer matches t1-stdout.json and ack is called; the explanation file becomes .used.md", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   await withServer(answerHandler({ [Q]: "B" }), async (f, d) => {
@@ -67,14 +67,14 @@ test("T1: GUI の回答が t1-stdout.json と一致し、ack が呼ばれる。�
     assert.ok(ack);
     assert.deepEqual(ack.body, {});
     assert.ok(f.calls.filter((c) => c.method === "POST").every((c) => c.ctype === "application/json"));
-    // ack が出力より先(wait → ack の順)
+    // ack comes before the output (wait → ack)
     const order = f.calls.map((c) => c.path);
     assert.ok(order.findIndex((p) => p.includes("/wait")) < order.indexOf("/api/decisions/dec-1/ack"));
   });
   assert.deepEqual(readdirSync(join(sp, "ukagai")), ["e.used.md"]);
 });
 
-test("multiSelect が stdin に無くてもフェイルオープンで落ちず出力する", async () => {
+test("fails open and still outputs when multiSelect is absent from stdin", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   const input = t1(sp);
@@ -85,7 +85,7 @@ test("multiSelect が stdin に無くてもフェイルオープンで落ちず�
   });
 });
 
-test("server 不在(閉じたポート)は stdout 空、exit 0、1.5 秒以内", async () => {
+test("server absent (closed port): empty stdout, exit 0, within 1.5 seconds", async () => {
   const f = await fakeServer();
   const port = f.port;
   await f.close();
@@ -94,11 +94,11 @@ test("server 不在(閉じたポート)は stdout 空、exit 0、1.5 秒以内",
   const r = await runHook(["--server", `http://127.0.0.1:${port}`, "--data-dir", dataDirWithToken()], JSON.stringify(t1(sp)));
   assert.equal(r.code, 0);
   assert.equal(r.stdout, "");
-  // node + tsx の起動時間を除いた実処理が短いこと(起動込みで 1.5 秒)
+  // the real work, excluding node + tsx startup, is short (1.5 seconds including startup)
   assert.ok(r.ms < 1500, `ms=${r.ms}`);
 });
 
-test("token が無ければ接続不可扱いで stdout 空", async () => {
+test("without a token it is treated as unreachable and stdout is empty", async () => {
   await withServer(() => false, async (f) => {
     const sp = tmpDir();
     writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
@@ -109,7 +109,7 @@ test("token が無ければ接続不可扱いで stdout 空", async () => {
   });
 });
 
-test("--budget 30(poll timeout 既定)なら poll せず fallback を送って stdout 空", async () => {
+test("--budget 30 (default poll timeout) sends the fallback without polling and stdout is empty", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   await withServer(() => false, async (f, d) => {
@@ -122,7 +122,7 @@ test("--budget 30(poll timeout 既定)なら poll せず fallback を送って s
   });
 });
 
-test("常に 204 の server: 残りが poll + 5 秒を切った時点で fallback", async () => {
+test("server that always returns 204: falls back once less than poll + 5 seconds remain", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   const h: Handler = (req, res) => {
@@ -140,7 +140,7 @@ test("常に 204 の server: 残りが poll + 5 秒を切った時点で fallbac
   });
 });
 
-test("wait が 404 なら stdout 空 exit 0", async () => {
+test("wait returning 404: empty stdout, exit 0", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   await withServer((req, res) => (req.path.includes("/wait") ? (res.writeHead(404).end(), true) : false), async (f, d) => {
@@ -151,7 +151,7 @@ test("wait が 404 なら stdout 空 exit 0", async () => {
   });
 });
 
-test("via: terminal(GUI で「ターミナルで答える」)は stdout 空で ack もしない", async () => {
+test("via: terminal (answered in the terminal from the GUI): empty stdout and no ack", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   const h: Handler = (req, res) =>
@@ -163,7 +163,7 @@ test("via: terminal(GUI で「ターミナルで答える」)は stdout 空で a
   });
 });
 
-test("説明ファイル無し → deny(保存先の絶対パスと question 原文)+ denied_explain を登録", async () => {
+test("no explanation file → deny (absolute save path and verbatim question) and denied_explain is registered", async () => {
   const sp = tmpDir();
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
@@ -179,22 +179,22 @@ test("説明ファイル無し → deny(保存先の絶対パスと question 原
   });
 });
 
-test("形式不備 → deny の理由に足りない項目名が入る", async () => {
+test("malformed explanation → the deny reason names the missing items", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q).replace(/\| B .*\n/, ""));
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
     const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
-    assert.match(reason, /選択肢の表/);
+    assert.match(reason, /options table/);
   });
-  assert.ok(existsSync(join(sp, "ukagai", "e.md")), "不備のファイルは rename しない");
+  assert.ok(existsSync(join(sp, "ukagai", "e.md")), "a defective file is not renamed");
 });
 
-test("--deny-template B で版 B の文面になる", async () => {
+test("--deny-template B gives the variant B wording", async () => {
   const sp = tmpDir();
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d, "--deny-template", "B"), JSON.stringify(t1(sp)));
-    assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /書いていただけますか/);
+    assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /Could you write/);
   });
 });
 
@@ -208,7 +208,7 @@ const deniedRecord = (createdAt: string, extra: Record<string, unknown> = {}) =>
   ...extra,
 });
 
-test("2 分以内に denied_explain あり + ファイル無し → deny せず none / loop_guard で登録", async () => {
+test("denied_explain within 2 minutes + no file → no deny; registered as none / loop_guard", async () => {
   const sp = tmpDir();
   const h: Handler = (req, res) =>
     req.method === "GET" && req.path.startsWith("/api/decisions?")
@@ -226,7 +226,7 @@ test("2 分以内に denied_explain あり + ファイル無し → deny せず 
   });
 });
 
-test("2 分以内の denied_explain があり説明が付いた → after_deny + first_denied_at", async () => {
+test("denied_explain within 2 minutes and an explanation attached → after_deny + first_denied_at", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   const at = new Date(Date.now() - 30_000).toISOString();
@@ -238,11 +238,11 @@ test("2 分以内の denied_explain があり説明が付いた → after_deny +
     await runHook(args(f, d), JSON.stringify(t1(sp)));
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.explanation.attached_via, "after_deny");
-    assert.equal(create?.body.first_denied_at, undefined, "first_denied_at は server が付ける");
+    assert.equal(create?.body.first_denied_at, undefined, "first_denied_at is set by the server");
   });
 });
 
-test("2 分より古い denied_explain はループ保険の対象外(再び deny)", async () => {
+test("a denied_explain older than 2 minutes is outside the loop guard (deny again)", async () => {
   const sp = tmpDir();
   const h: Handler = (req, res) =>
     req.method === "GET" && req.path.startsWith("/api/decisions?")
@@ -254,7 +254,7 @@ test("2 分より古い denied_explain はループ保険の対象外(再び den
   });
 });
 
-test("permission_mode: plan → 説明ファイル無しでも deny せず none / plan_mode", async () => {
+test("permission_mode: plan → no deny even without a file; none / plan_mode", async () => {
   const sp = tmpDir();
   await withServer(answerHandler({ [Q]: "A" }), async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(t1(sp, { permission_mode: "plan" })));
@@ -266,11 +266,11 @@ test("permission_mode: plan → 説明ファイル無しでも deny せず none 
 });
 
 const planWith = (extra: string) => ({ ...fx("t5-stdin.json"), tool_input: { ...fx("t5-stdin.json").tool_input, plan: extra } });
-const GOOD_PLAN = "# 計画\n\n## 影響範囲と可逆性\n1 ファイルだけ。revert で戻せる。\n";
+const GOOD_PLAN = "# Plan\n\n## Scope and reversibility\nOne file only. A revert undoes it.\n";
 
-test("T5: ExitPlanMode の approve → t5-stdout.json と一致(plan は不備でも 1 回目は deny されるので、節付きの計画で)", async () => {
+test("T5: ExitPlanMode approve matches t5-stdout.json (a defective plan is denied the first time, so use a plan with the section)", async () => {
   const input = fx("t5-stdin.json");
-  const withImpact = { ...input, tool_input: { ...input.tool_input, plan: input.tool_input.plan + "\n## 影響範囲と可逆性\nなし。\n" } };
+  const withImpact = { ...input, tool_input: { ...input.tool_input, plan: input.tool_input.plan + "\n## Scope and reversibility\nNone.\n" } };
   const h: Handler = (req, res) =>
     req.path.includes("/wait") ? json(res, 200, { response: { via: "gui", approve: true, decided_at: NOW() } }) : false;
   await withServer(h, async (f, d) => {
@@ -285,13 +285,13 @@ test("T5: ExitPlanMode の approve → t5-stdout.json と一致(plan は不備�
   });
 });
 
-test("T5 の実 fixture(影響範囲の節なし): 1 回目は deny、2 回目(denied_explain あり)は loop_guard で登録し t5-stdout.json と一致", async () => {
+test("T5 real fixture (no scope section): denied the first time; the second (with denied_explain) is registered as loop_guard and matches t5-stdout.json", async () => {
   const input = fx("t5-stdin.json");
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(input));
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.match(out.permissionDecisionReason, /影響範囲と可逆性/);
+    assert.match(out.permissionDecisionReason, /Scope and reversibility/);
     assert.equal(f.calls.find((c) => c.method === "POST")?.body.status, "denied_explain");
   });
   const h: Handler = (req, res) =>
@@ -308,7 +308,7 @@ test("T5 の実 fixture(影響範囲の節なし): 1 回目は deny、2 回目(d
   });
 });
 
-test("ExitPlanMode の却下 → deny + reason。set_mode_auto の承認は allow(hook は何もしない)", async () => {
+test("ExitPlanMode rejection → deny + reason; approval with set_mode_auto is allow (the hook does nothing)", async () => {
   const h = (response: object): Handler => (req, res) =>
     req.path.includes("/wait") ? json(res, 200, { response: { via: "gui", decided_at: NOW(), ...response } }) : false;
   await withServer(h({ approve: false, reason: "x" }), async (f, d) => {
@@ -333,7 +333,7 @@ const perm = (extra = {}) => ({
   ...extra,
 });
 
-test("PermissionRequest: pending-mode-switch 有 → setMode auto を出して consume", async () => {
+test("PermissionRequest: pending-mode-switch present → emits setMode auto and consumes it", async () => {
   const h: Handler = (req, res) =>
     req.method === "GET" && req.path === "/api/sessions/s1/pending-mode-switch" ? json(res, 200, { pending: true }) : false;
   await withServer(h, async (f, d) => {
@@ -348,7 +348,7 @@ test("PermissionRequest: pending-mode-switch 有 → setMode auto を出して c
   });
 });
 
-test("PermissionRequest: 無 → 空。Write / Edit 以外も空", async () => {
+test("PermissionRequest: absent → empty; tools other than Write / Edit are empty too", async () => {
   await withServer(() => false, async (f, d) => {
     assert.equal((await runHook(args(f, d), JSON.stringify(perm()))).stdout, "");
     assert.equal((await runHook(args(f, d), JSON.stringify(perm({ tool_name: "Bash" })))).stdout, "");
@@ -357,7 +357,7 @@ test("PermissionRequest: 無 → 空。Write / Edit 以外も空", async () => {
 });
 
 for (const ev of ["SessionStart", "SubagentStart"]) {
-  test(`${ev} → additionalContext に scratchpad パスが入る(server 不要)`, async () => {
+  test(`${ev} → additionalContext contains the scratchpad path (no server needed)`, async () => {
     const sp = "/private/tmp/x/scratchpad";
     const r = await runHook(
       ["--data-dir", tmpDir(), "--no-autostart"],
@@ -368,11 +368,39 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
     assert.ok(out.additionalContext.includes(`${sp}/ukagai/`));
     assert.doesNotMatch(out.additionalContext, /https?:|\/api\//);
     assert.equal(out.additionalContext.split("\n").length, 5);
-    assert.ok(out.additionalContext.includes("reversibility は reversible / costly / irreversible、scope は file / repo / machine / external"));
+    assert.ok(out.additionalContext.includes("reversibility is reversible / costly / irreversible, scope is file / repo / machine / external"));
+    assert.doesNotMatch(out.additionalContext, /[ぁ-んァ-ン一-龥]/);
+    assert.ok(out.additionalContext.includes("Write the explanation file in English."));
   });
 }
 
-test("SessionStart に scratchpad_dir が無ければ data-dir/explain/<session_id>", async () => {
+test("SessionStart with lang: ja in config.json adds the Japanese instruction (still 5 lines, English text)", async () => {
+  const dd = tmpDir();
+  writeFile(join(dd, "config.json"), JSON.stringify({ lang: "ja" }));
+  const r = await runHook(
+    ["--data-dir", dd, "--no-autostart"],
+    JSON.stringify({ session_id: "s1", transcript_path: "/t", cwd: "/c", hook_event_name: "SessionStart" }),
+  );
+  const ctx: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+  assert.ok(ctx.includes("Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese."));
+  assert.ok(!ctx.includes("Write the explanation file in English."));
+  assert.equal(ctx.split("\n").length, 5);
+  assert.doesNotMatch(ctx, /[ぁ-んァ-ン一-龥]/);
+});
+
+test("contextText: en and ja differ only by the language sentence", () => {
+  const en = contextText("/d", "en");
+  const ja = contextText("/d", "ja");
+  assert.equal(en.split("\n").length, 5);
+  assert.equal(ja.split("\n").length, 5);
+  assert.equal(contextText("/d"), en);
+  assert.equal(
+    ja.replace("Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese.", "Write the explanation file in English."),
+    en,
+  );
+});
+
+test("SessionStart without scratchpad_dir uses data-dir/explain/<session_id>", async () => {
   const dd = tmpDir();
   const r = await runHook(
     ["--data-dir", dd, "--no-autostart"],
@@ -389,7 +417,7 @@ const stop = (msg: string) => ({
   last_assistant_message: msg,
 });
 
-test("Stop: 「どちらにしますか？」→ escaped_question: true の event。普通の文は付かない", async () => {
+test("Stop: a question like \"Which one?\" → event with escaped_question: true; a plain sentence does not get it", async () => {
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(stop("A と B のどちらにしますか？")));
     assert.equal(r.stdout, "");
@@ -397,13 +425,13 @@ test("Stop: 「どちらにしますか？」→ escaped_question: true の even
     assert.equal(ev?.body.escaped_question, true);
     assert.equal(ev?.body.hook_event_name, "Stop");
     assert.ok(typeof ev?.body.received_at === "string");
-    await runHook(args(f, d), JSON.stringify(stop("完了しました。")));
+    await runHook(args(f, d), JSON.stringify(stop("Done.")));
     const evs = f.calls.filter((c) => c.path === "/api/events");
     assert.equal(evs[1]?.body.escaped_question, undefined);
   });
 });
 
-test("Stop: ブロッカー語彙 + stop_hook_active: false → decision: block、event は blocker_detected: true", async () => {
+test("Stop: blocker vocabulary + stop_hook_active: false → decision: block, event has blocker_detected: true", async () => {
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(stop("gcloud の認証がないため進められません。")));
     const out = JSON.parse(r.stdout);
@@ -415,15 +443,15 @@ test("Stop: ブロッカー語彙 + stop_hook_active: false → decision: block�
   });
 });
 
-test("Stop: stop_hook_active: true / 語彙不一致 / plan mode / --observe は出力なし", async () => {
+test("Stop: stop_hook_active: true / no vocabulary match / plan mode / --observe produce no output", async () => {
   await withServer(() => false, async (f, d) => {
     const msg = "gcloud の認証がないため進められません。";
     const run = async (input: Record<string, unknown>, ...more: string[]) =>
       (await runHook(args(f, d, ...more), JSON.stringify(input))).stdout;
     assert.equal(await run({ ...stop(msg), stop_hook_active: true }), "");
-    // Q3-05: block しなかった Stop には blocker_detected を付けない
+    // Q3-05: a Stop that did not block does not get blocker_detected
     assert.equal(f.calls.filter((c) => c.path === "/api/events").at(-1)?.body.blocker_detected, undefined);
-    assert.equal(await run(stop("実装が終わりました。")), "");
+    assert.equal(await run(stop("The implementation is finished.")), "");
     assert.equal(await run({ ...stop(msg), permission_mode: "plan" }), "");
     assert.equal(await run(stop(msg), "--observe"), "");
     assert.equal(f.calls.filter((c) => c.path === "/api/events").at(-1)?.body.blocker_detected, undefined);
@@ -431,23 +459,24 @@ test("Stop: stop_hook_active: true / 語彙不一致 / plan mode / --observe は
   });
 });
 
-test("Stop: server 不在でも block を返す(event の失敗は握りつぶす)", async () => {
-  const r = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", dataDirWithToken()], JSON.stringify(stop("権限がなく進められません")));
+test("Stop: still returns block when the server is absent (event failures are swallowed)", async () => {
+  const r = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", dataDirWithToken()], JSON.stringify(stop("Permission denied, so I cannot proceed.")));
   assert.equal(JSON.parse(r.stdout).decision, "block");
   assert.ok(r.ms < 2500);
 });
 
-test("isEscapedQuestion: 末尾が ？/? のときだけ true(記号は無視、キーワードは見ない)", () => {
+test("isEscapedQuestion: true only when the end is ？/? (marks are ignored, keywords are not checked)", () => {
   assert.equal(isEscapedQuestion("A と B のどちらにしますか？"), true);
   assert.equal(isEscapedQuestion("次はどうしますか？**"), true);
   assert.equal(isEscapedQuestion("「どうしますか？」"), true);
   assert.equal(isEscapedQuestion("Which one?"), true);
   assert.equal(isEscapedQuestion("『A と B のどちらにしますか？』への回答は『A』でした。"), false);
   assert.equal(isEscapedQuestion("教えてください。"), false);
+  assert.equal(isEscapedQuestion("Please tell me."), false);
   assert.equal(isEscapedQuestion(undefined), false);
 });
 
-test("SessionEnd / UserPromptSubmit は event を送る", async () => {
+test("SessionEnd / UserPromptSubmit send an event", async () => {
   await withServer(() => false, async (f, d) => {
     for (const name of ["SessionEnd", "UserPromptSubmit"]) {
       await runHook(args(f, d), JSON.stringify({ ...stop("x"), hook_event_name: name }));
@@ -456,7 +485,7 @@ test("SessionEnd / UserPromptSubmit は event を送る", async () => {
   });
 });
 
-test("--observe: PreToolUse は start、PostToolUse は end を送り、stdout は空(deny も判断登録もしない)", async () => {
+test("--observe: PreToolUse sends start and PostToolUse sends end; stdout is empty (no deny, no decision registered)", async () => {
   const sp = tmpDir();
   await withServer(() => false, async (f, d) => {
     const pre = await runHook(args(f, d, "--observe"), JSON.stringify(t1(sp)));
@@ -468,13 +497,13 @@ test("--observe: PreToolUse は start、PostToolUse は end を送り、stdout �
   });
 });
 
-test("壊れた JSON を stdin → 空 exit 0", async () => {
+test("broken JSON on stdin → empty, exit 0", async () => {
   const r = await runHook([], "{not json");
   assert.equal(r.code, 0);
   assert.equal(r.stdout, "");
 });
 
-test("server 不在でも無関係な tool は stdout 空 exit 0", async () => {
+test("unrelated tools: empty stdout, exit 0 even without a server", async () => {
   const r = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", tmpDir()], '{"tool_name":"Bash","hook_event_name":"PreToolUse"}');
   assert.equal(r.code, 0);
   assert.equal(r.stdout, "");
@@ -482,31 +511,31 @@ test("server 不在でも無関係な tool は stdout 空 exit 0", async () => {
 
 const multiInput = (sp: string, extra: Record<string, unknown> = {}) => {
   const base = t1(sp, extra) as { tool_input: { questions: unknown[] } };
-  const q2 = { question: "C と D のどちらにしますか？", header: "選択2", options: [{ label: "C", description: "c" }, { label: "D", description: "d" }], multiSelect: false };
+  const q2 = { question: "C と D のどちらにしますか？", header: "Choice 2", options: [{ label: "C", description: "c" }, { label: "D", description: "d" }], multiSelect: false };
   return { ...base, tool_input: { questions: [...base.tool_input.questions, q2] } };
 };
 
-test("多問 → 説明ファイルがあっても deny(1 回に 1 問)+ denied_explain 登録", async () => {
+test("multiple questions → deny even with an explanation file (one question per call) and denied_explain is registered", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(multiInput(sp)));
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.match(out.permissionDecisionReason, /1 回に 1 問にしてください\(今回は 2 問\)/);
+    assert.match(out.permissionDecisionReason, /Ask one question per AskUserQuestion call \(this call had 2\)/);
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.status, "denied_explain");
     assert.deepEqual(create?.body.missing, ["multi"]);
     assert.equal(create?.body.explanation, undefined);
     assert.ok(!f.calls.some((c) => c.path.includes("/wait")));
   });
-  assert.ok(existsSync(join(sp, "ukagai", "e.md")), "説明ファイルは消費しない");
+  assert.ok(existsSync(join(sp, "ukagai", "e.md")), "the explanation file is not consumed");
 });
 
-test("多問 deny が 2 分以内にある → deny せず none / loop_guard で登録(質問文は照合しない)", async () => {
+test("a multi-question deny within 2 minutes → no deny; registered as none / loop_guard (question text is not compared)", async () => {
   const sp = tmpDir();
   const rec = deniedRecord(new Date(Date.now() - 30_000).toISOString(), {
-    request: { questions: [{ question: "別の質問" }, { question: "もう一つ" }] },
+    request: { questions: [{ question: "another question" }, { question: "one more" }] },
   });
   const h: Handler = (req, res) =>
     req.method === "GET" && req.path.startsWith("/api/decisions?")
@@ -523,7 +552,7 @@ test("多問 deny が 2 分以内にある → deny せず none / loop_guard で
   });
 });
 
-test("plan mode の多問 → 要求なしで none / plan_mode", async () => {
+test("multiple questions in plan mode → none / plan_mode without any requirement", async () => {
   const sp = tmpDir();
   await withServer(answerHandler({ [Q]: "A" }), async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(multiInput(sp, { permission_mode: "plan" })));

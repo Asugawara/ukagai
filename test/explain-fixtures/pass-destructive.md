@@ -1,38 +1,38 @@
 ---
 ukagai: 1
 question: ~/.ukagai/decisions.jsonl を削除して履歴を初期化してよいですか？
-title: 壊れた判断ログを退避してから削除するか、そのまま削除するか
+title: Delete the broken decision log after backing it up, or delete it as is
 reversibility: irreversible
 scope: machine
-recommended: 退避してから削除
+recommended: Back up, then delete
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-起動時の復元が、壊れた行を含む `decisions.jsonl` で失敗しています。ファイルを消せば起動できますが、これまでの判断の履歴(指標 (a')(b) の元データ)も消え、戻せません。リポジトリの外のファイルを変更する操作で、履歴を捨ててよいかは人にしか決められません。
+Restoring at startup fails because `decisions.jsonl` contains a broken line. Deleting the file lets it start, but the history of past decisions (the source data for metrics (a') and (b)) is also lost and cannot be restored. This changes a file outside the repository, and only a human can decide whether to discard the history.
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| 退避してから削除 | 履歴が `.bak` に残り、起動時は空から再開する。 | ディスクを少し使う。壊れた行だけ直して `.bak` から戻せる。 |
-| そのまま削除 | 履歴が消え、起動時は空から再開する。 | 履歴は戻せない。 |
+| Back up, then delete | The history stays in `.bak`, and startup resumes from empty. | Uses a little disk. Fix only the broken line and restore from `.bak`. |
+| Delete as is | The history is gone, and startup resumes from empty. | The history cannot be restored. |
 
-## 推奨
+## Recommendation
 
-退避してから削除を推します。手順が 1 つ増えるだけで、後から壊れた行だけ直して履歴を取り戻せます。履歴がもう要らないと分かっているなら、そのまま削除で足ります。
+I recommend backing up, then deleting. It adds only one step, and you can later fix just the broken line to recover the history. Deleting as is is enough if you already know the history is no longer needed.
 
-## 図
+## Diagram
 
 ```mermaid
 flowchart TD
-  F[decisions.jsonl] -->|退避して削除| B[decisions.jsonl.bak]
-  F -->|そのまま削除| X[履歴が消える]
-  B --> R[起動時に空から再開]
+  F[decisions.jsonl] -->|back up, then delete| B[decisions.jsonl.bak]
+  F -->|delete as is| X[history is gone]
+  B --> R[startup resumes from empty]
   X --> R
 ```
 
-## 関係する差分
+## Related diff
 
 ```diff
 --- a/scripts/reset-log.sh

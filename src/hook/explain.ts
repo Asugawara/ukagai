@@ -3,7 +3,31 @@ import { join } from "node:path";
 import { RECENCY_WINDOW_MS } from "../contract.js";
 import type { DenyTemplate } from "./options.js";
 
-// docs/spec/explain.md の規則の実装。
+// Implements the rules in docs/spec/explain.md.
+
+/** Section headings: English first, Japanese alias second. */
+export const SECTION = {
+  why: ["Why this decision is needed now", "なぜ今この判断が要るか"],
+  options: ["Options", "選択肢"],
+  recommendation: ["Recommendation", "推奨"],
+  diagram: ["Diagram", "図"],
+  checked: ["What I checked", "確かめたこと"],
+  diff: ["Related diff", "関係する差分"],
+  blockerWhy: ["Why I stopped", "なぜ止まったか"],
+  blockerTodo: ["What you need to do", "人にしてほしいこと"],
+  impact: ["Scope and reversibility", "影響範囲と可逆性"],
+} as const;
+
+/** Fixed option labels for blockers (suffix "(Recommended)" allowed on the first). */
+export const BLOCKER_LABELS = {
+  done: ["Done. Continue", "対応した。続けて"],
+  skip: ["Skip this step and continue", "この手順は飛ばして続けて"],
+  stop: ["Stop here", "ここで中断"],
+} as const;
+
+/** Table column detection (header cell text). The first column is always the option label. */
+export const COLUMN_HAPPENS = /happens|outcome|起きること/i;
+export const COLUMN_RISK = /risk|リスク/i;
 
 export type MissingCode =
   | "file"
@@ -40,50 +64,50 @@ export interface Validation {
   question: string | null;
 }
 
-/** deny 理由文での呼び名(spec 4 節) */
+/** Names used in the deny reason (spec section 4) */
 export const MISSING_LABELS: Record<MissingCode, string> = {
-  file: "説明ファイル本体",
-  front_matter: "front matter(`ukagai: 1`)",
+  file: "the explanation file itself",
+  front_matter: "front matter (`ukagai: 1`)",
   question: "`question`",
-  type: "`type`(decision / blocker)",
-  title: "`title`(決めてほしいこと 1 文)",
+  type: "`type` (decision / blocker)",
+  title: "`title` (the decision for the human, in one sentence)",
   reversibility: "`reversibility`",
   scope: "`scope`",
-  recommended: "`recommended`(推す選択肢のラベル)",
-  why: "「なぜ今この判断が要るか」の節",
-  options: "「選択肢」の節",
-  table: "選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行)",
-  todo: "「人にしてほしいこと」の節(コマンドのコードブロック付き)",
-  recommend: "「推奨」の節",
-  recommend_long: "「推奨」の節が長い(5 文・400 文字以内)",
-  recommend_cond: "「推奨」に別の選択肢が正しくなる条件(「〜なら B」「〜の場合は B」「〜のときは B」「〜であれば B」のいずれかで書く)",
-  cell_long: "選択肢の表のセルが長い(各セル 160 文字以内)",
-  why_long: "「なぜ今この判断が要るか」の節が長い(600 文字以内。詳細は「確かめたこと」へ)",
-  diagram: "「図」の節と Mermaid の図",
-  impact: "「影響範囲と可逆性」の節",
-  multi: "質問は 1 回に 1 問",
+  recommended: "`recommended` (label of the option you recommend)",
+  why: 'the "Why this decision is needed now" section',
+  options: 'the "Options" section',
+  table: "the options table (first column is the label; columns for what happens if chosen and for risks and how to undo; one row per option)",
+  todo: 'the "What you need to do" section (with a code block of commands)',
+  recommend: 'the "Recommendation" section',
+  recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters)',
+  recommend_cond: 'a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.)',
+  cell_long: "a cell in the options table is too long (at most 160 characters per cell)",
+  why_long: 'the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked")',
+  diagram: 'a "Diagram" section with a Mermaid diagram',
+  impact: 'the "Scope and reversibility" section',
+  multi: "one question per call",
 };
 
 const REVERSIBILITY = ["reversible", "costly", "irreversible"];
 const SCOPE = ["file", "repo", "machine", "external"];
 const TYPES = ["decision", "blocker"];
 
-// ---- 小道具 ----
+// ---- helpers ----
 
 export function toLines(markdown: string): string[] {
   return markdown.replace(/\r\n?/g, "\n").split("\n");
 }
 
-/** NFKC → 空白削除 → 「と」「・」削除 → 小文字化 */
+/** NFKC → drop whitespace → drop 「と」「・」 (Japanese aliases) → lowercase */
 export function normalizeHeading(s: string): string {
   return s.normalize("NFKC").replace(/\s/gu, "").replace(/[と・]/gu, "").toLowerCase();
 }
 
 /**
- * 選択肢ラベルの照合用正規化(hook と GUI で同じ規則)。
- * NFKC → 末尾の `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）` を除去
- * → 空白(全種)を削除 → 小文字化。照合は正規化後の完全一致。
- * (NFKC で全角括弧は半角になるので、除去は NFKC の後に半角括弧だけ見ればよい)
+ * Normalize an option label for matching (same rule in hook and GUI).
+ * NFKC → strip a trailing `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）`
+ * → remove all whitespace → lowercase. Matching is exact on the normalized form.
+ * (NFKC turns full-width parentheses into half-width ones, so only half-width needs checking afterwards.)
  */
 export function normalizeLabel(s: string): string {
   return s
@@ -96,7 +120,7 @@ export function normalizeLabel(s: string): string {
 export interface FrontMatter {
   present: boolean;
   fields: Record<string, string>;
-  /** 本文の先頭行(front matter が無ければ 0) */
+  /** First line of the body (0 without front matter) */
   bodyStart: number;
 }
 
@@ -168,15 +192,20 @@ export function scanHeadings(lines: string[], inFence: boolean[]): { level: numb
   return out;
 }
 
+/**
+ * Find a section by any of its names (English first, Japanese alias second).
+ * Exact match on any name wins; otherwise the first partial match. English is case-insensitive.
+ */
 export function findSection(
   headings: { level: number; title: string; line: number }[],
   total: number,
-  name: string,
+  names: readonly string[],
 ): Section | null {
-  const want = normalizeHeading(name);
-  // 完全一致を優先し、無ければ部分一致(「選択肢」が「推奨する選択肢」に当たらないように)
-  let idx = headings.findIndex((h) => normalizeHeading(h.title) === want);
-  if (idx < 0) idx = headings.findIndex((h) => normalizeHeading(h.title).includes(want));
+  const wants = names.map(normalizeHeading);
+  const norm = headings.map((h) => normalizeHeading(h.title));
+  // Prefer an exact match so that "Options" does not hit "Recommended options"
+  let idx = norm.findIndex((t) => wants.includes(t));
+  if (idx < 0) idx = norm.findIndex((t) => wants.some((w) => t.includes(w)));
   if (idx < 0) return null;
   const h = headings[idx]!;
   const next = headings.slice(idx + 1).find((x) => x.level <= h.level);
@@ -220,10 +249,15 @@ function isEmptyCell(c: string | undefined): boolean {
   return c === undefined || /^[-—ー]*$/u.test(c.trim());
 }
 
+/** Indexes of the "what happens" and "risk" columns (-1 when missing) */
+function columnsOf(t: Table): [number, number] {
+  const cells = t.header.map((h) => h.normalize("NFKC"));
+  return [cells.findIndex((h) => COLUMN_HAPPENS.test(h)), cells.findIndex((h) => COLUMN_RISK.test(h))];
+}
+
 /** spec 3.3 */
 function tableOk(t: Table, labels: string[] | undefined): boolean {
-  const norm = t.header.map(normalizeHeading);
-  const cols = ["起きること", "リスク"].map((k) => norm.findIndex((h) => h.includes(normalizeHeading(k))));
+  const cols = columnsOf(t);
   if (cols.some((c) => c < 0)) return false;
   if (t.rows.length < Math.max(2, labels?.length ?? 0)) return false;
   if (!t.rows.every((r) => cols.every((c) => !isEmptyCell(r[c])))) return false;
@@ -234,14 +268,14 @@ function tableOk(t: Table, labels: string[] | undefined): boolean {
   return true;
 }
 
-/** 長さの上限(spec 3.2)。文字数は NFKC 後の code point 数 */
+/** Length limits (spec 3.2). Characters are code points after NFKC */
 export const LIMITS = { recommendChars: 400, recommendSentences: 5, cellChars: 160, whyChars: 600 };
 
 function cpLength(s: string): number {
   return [...s.normalize("NFKC")].length;
 }
 
-/** 節の本文(見出し・コードブロック・空行を除く) */
+/** Body text of a section (without the heading, code blocks and blank lines) */
 function sectionText(lines: string[], inFence: boolean[], s: Section): string {
   return lines
     .slice(s.start + 1, s.end)
@@ -250,7 +284,7 @@ function sectionText(lines: string[], inFence: boolean[], s: Section): string {
     .join("\n");
 }
 
-/** 文の数。`。` `!` `?` と、直後が空白か末尾の `.` で区切る(`file.ts` や `0.5` は区切らない) */
+/** Sentence count. Splits on `。` `!` `?` and on a `.` followed by whitespace or the end (not `file.ts` or `0.5`) */
 function countSentences(text: string): number {
   return text
     .normalize("NFKC")
@@ -258,20 +292,21 @@ function countSentences(text: string): number {
     .filter((x) => x.trim() !== "").length;
 }
 
-/** 「起きること」「リスク」列のセルのいずれかが上限を超える */
+/** Any cell in the "what happens" or "risk" column exceeds the limit */
 function tableCellsLong(t: Table): boolean {
-  const norm = t.header.map(normalizeHeading);
-  const cols = ["起きること", "リスク"].map((k) => norm.findIndex((h) => h.includes(normalizeHeading(k))));
+  const cols = columnsOf(t);
   return t.rows.some((r) => cols.some((c) => cpLength(r[c] ?? "") > LIMITS.cellChars));
 }
 
 /**
- * 「推奨」に別の選択肢が正しくなる条件があるか(語の有無だけ見る)。
- * `ならない` / `ならず`(なければならない 等)と `ときどき` は除く。「でなければ」「なければ」は当たり(`なければなら…` だけ除く)。`if` / `when` / `unless` は単語として
+ * Whether "Recommendation" contains a condition under which another option is right (checks for words only).
+ * Excludes `ならない` / `ならず` (as in なければならない) and `ときどき`; `なければ` counts unless followed by `なら…`.
+ * `if` / `when` / `unless` / `otherwise` / `in case` are matched as whole words.
  */
-export const RECOMMEND_COND = /なら(?!ない|ず)|なければ(?!なら)|場合|とき(?!どき)|であれば|際[はに]|\bif\b|\bwhen\b|\bunless\b/i;
+export const RECOMMEND_COND =
+  /なら(?!ない|ず)|なければ(?!なら)|場合|とき(?!どき)|であれば|際[はに]|\bif\b|\bwhen\b|\bunless\b|\botherwise\b|\bin case\b/i;
 
-/** 条件の判定に使う本文: コードブロック・callout(`>` 始まりの行)を除く */
+/** Text used for the condition check: without code blocks and callouts (lines starting with `>`) */
 function condText(text: string): string {
   return text
     .split("\n")
@@ -295,9 +330,9 @@ function hasOf(lines: string[], inFence: boolean[], blocks: FenceBlock[]): Has {
   };
 }
 
-// ---- 検査 ----
+// ---- validation ----
 
-/** spec 4 節。plan(ExitPlanMode)は validatePlan に委ねる */
+/** spec section 4. Plans (ExitPlanMode) are delegated to validatePlan */
 export function validateExplanation(
   markdown: string,
   kind: "answer_question" | "approve_plan" = "answer_question",
@@ -324,11 +359,11 @@ export function validateExplanation(
   }
 
   const blocker = f["type"] === "blocker";
-  const why = findSection(headings, lines.length, blocker ? "なぜ止まったか" : "なぜ今この判断が要るか");
+  const why = findSection(headings, lines.length, blocker ? SECTION.blockerWhy : SECTION.why);
   if (!why || !hasContent(lines, why)) missing.push("why");
   else if (cpLength(sectionText(lines, inFence, why)) > LIMITS.whyChars) missing.push("why_long");
 
-  const options = findSection(headings, lines.length, "選択肢");
+  const options = findSection(headings, lines.length, SECTION.options);
   if (!options) missing.push("options");
   else {
     const tables = findTables(lines, inFence, options.start + 1, options.end);
@@ -338,12 +373,12 @@ export function validateExplanation(
   }
 
   if (blocker) {
-    const todo = findSection(headings, lines.length, "人にしてほしいこと");
+    const todo = findSection(headings, lines.length, SECTION.blockerTodo);
     if (!todo || !hasContent(lines, todo) || !blocks.some((b) => b.start > todo.start && b.start < todo.end)) {
       missing.push("todo");
     }
   } else {
-    const recommend = findSection(headings, lines.length, "推奨");
+    const recommend = findSection(headings, lines.length, SECTION.recommendation);
     if (!recommend || !hasContent(lines, recommend)) missing.push("recommend");
     else {
       const text = sectionText(lines, inFence, recommend);
@@ -358,12 +393,12 @@ export function validateExplanation(
   const rev = f["reversibility"] ?? "";
   const scopeKnown = SCOPE.includes(scope);
   const revKnown = REVERSIBILITY.includes(rev);
-  // 必須: reversible 以外、または scope が machine / external(repo + reversible は任意)
+  // Required unless reversible with a scope of file / repo (repo + reversible is optional)
   const diagramRequired =
     !blocker &&
     (!scopeKnown || !revKnown || rev !== "reversible" || scope === "machine" || scope === "external");
   if (diagramRequired) {
-    const diagram = findSection(headings, lines.length, "図");
+    const diagram = findSection(headings, lines.length, SECTION.diagram);
     if (!diagram || !sectionHasMermaid(blocks, diagram)) missing.push("diagram");
   }
 
@@ -375,17 +410,17 @@ export function validateExplanation(
   };
 }
 
-/** spec 9 節: 「影響範囲と可逆性」の節が空でなく存在する */
+/** spec section 9: a non-empty "Scope and reversibility" section exists */
 export function validatePlan(plan: string): Validation {
   const lines = toLines(plan);
   const { inFence, blocks } = scanFences(lines);
   const headings = scanHeadings(lines, inFence);
-  const sec = findSection(headings, lines.length, "影響範囲と可逆性");
+  const sec = findSection(headings, lines.length, SECTION.impact);
   const missing: MissingCode[] = !sec || !hasContent(lines, sec) ? ["impact"] : [];
   return { valid: missing.length === 0, missing, has: hasOf(lines, inFence, blocks), question: null };
 }
 
-// ---- 探索 ----
+// ---- lookup ----
 
 export interface FoundExplanation {
   path: string;
@@ -393,7 +428,7 @@ export interface FoundExplanation {
   match: "question" | "recency";
 }
 
-/** spec 5 節の手順 1。`question:` 完全一致(最新の更新時刻)→ 10 分以内の未使用 1 件 → null */
+/** spec section 5, step 1. Exact `question:` match (latest mtime) → the single unused file within 10 minutes → null */
 export async function findExplanation(
   dir: string,
   question: string,
@@ -417,7 +452,7 @@ export async function findExplanation(
         question: parseFrontMatter(toLines(markdown)).fields["question"],
       });
     } catch {
-      // 読めないものは無視
+      // ignore unreadable files
     }
   }
   const exact = files.filter((f) => f.question === question).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
@@ -427,37 +462,39 @@ export async function findExplanation(
   return null;
 }
 
-/** `<名前>.md` を `<名前>.used.md` に rename。新しいパスを返す */
+/** Rename `<name>.md` to `<name>.used.md` and return the new path */
 export async function markUsed(path: string): Promise<string> {
   const used = path.replace(/\.md$/, "") + ".used.md";
   await rename(path, used);
   return used;
 }
 
-// ---- deny 理由文(spec 7 節 / 9 節) ----
+// ---- deny reason (spec sections 7 and 9) ----
 
 const MAX_REASON = 600;
-/** 最小テンプレートを埋め込む deny 文の上限(テンプレート自体が 300 文字ほどあるため) */
+/** Upper bound for a deny reason that embeds the minimal template (the template itself is about 400 characters) */
 const MAX_REASON_TEMPLATE = 1200;
 
 export interface DenyParams {
-  /** AskUserQuestion のときだけ。plan では省く */
+  /** AskUserQuestion only; omitted for plans */
   path?: string;
   question?: string;
   missing: string[];
-  /** missing のコード列。テンプレートを出すかの判定に使う(省くと出さない) */
+  /** Codes behind `missing`; decides whether to show the template (omitted: no template) */
   codes?: MissingCode[];
-  /** 見つかったファイルが `type: blocker` のとき true */
+  /** True when the file found has `type: blocker` */
   blocker?: boolean;
 }
 
-/** 書式の根幹(front matter の必須キー)が欠けるときだけ最小テンプレートを出す。blocker は欠けがあれば常に出す */
+/** The template is shown only when a front matter key (the core of the format) is missing. For blockers, whenever anything is missing */
 const TEMPLATE_CODES: MissingCode[] = ["file", "front_matter", "question", "title", "recommended"];
 
 function needsTemplate(p: DenyParams): boolean {
   if (p.path === undefined || p.question === undefined || !p.codes) return false;
   return p.blocker === true ? p.codes.length > 0 : p.codes.some((c) => TEMPLATE_CODES.includes(c));
 }
+
+const OPTIONS_HEADER = "| Option | What happens if chosen | Risks and how to undo |";
 
 function templateBlock(p: DenyParams): string {
   const body = p.blocker
@@ -466,34 +503,34 @@ function templateBlock(p: DenyParams): string {
         "ukagai: 1",
         `question: ${p.question}`,
         "type: blocker",
-        "title: <何が必要か 1 文>",
-        "recommended: 対応した。続けて",
+        "title: <what is needed, in one sentence>",
+        `recommended: ${BLOCKER_LABELS.done[0]}`,
         "reversibility: reversible",
         "scope: machine",
         "---",
-        "## なぜ止まったか  (失敗したコマンドとエラーの抜粋)",
-        "## 人にしてほしいこと  (番号付きの手順と、そのまま打てるコマンドのコードブロック)",
-        "## 選択肢",
-        "| 選択肢 | 選ぶと起きること | リスクと戻し方 |",
-        "| 対応した。続けて | | |",
-        "| この手順は飛ばして続けて | | |",
-        "| ここで中断 | | |",
+        `## ${SECTION.blockerWhy[0]}  (the failed command and an excerpt of the error)`,
+        `## ${SECTION.blockerTodo[0]}  (numbered steps, and a code block with commands to run as they are)`,
+        `## ${SECTION.options[0]}`,
+        OPTIONS_HEADER,
+        `| ${BLOCKER_LABELS.done[0]} | | |`,
+        `| ${BLOCKER_LABELS.skip[0]} | | |`,
+        `| ${BLOCKER_LABELS.stop[0]} | | |`,
       ]
     : [
         "---",
         "ukagai: 1",
         `question: ${p.question}`,
-        "title: <人に決めてほしいこと 1 文>",
-        "recommended: <推す選択肢のラベル>",
+        "title: <the decision for the human, in one sentence>",
+        "recommended: <label of the option you recommend>",
         "reversibility: reversible | costly | irreversible",
         "scope: file | repo | machine | external",
         "---",
-        "## なぜ今この判断が要るか",
-        "## 選択肢",
-        "| 選択肢 | 選ぶと起きること | リスクと戻し方 |",
-        "## 推奨",
-        "(推す選択肢と理由。最後の 1 文は、別の選択肢が正しくなる条件)",
-        "## 図  (reversible 以外、または machine / external のとき。Mermaid)",
+        `## ${SECTION.why[0]}`,
+        `## ${SECTION.options[0]}`,
+        OPTIONS_HEADER,
+        `## ${SECTION.recommendation[0]}`,
+        "(the option you recommend and why; the last sentence names the condition that makes another option right)",
+        `## ${SECTION.diagram[0]}  (Mermaid; for anything not reversible, or scope machine / external)`,
       ];
   return "```\n" + body.join("\n") + "\n```";
 }
@@ -502,53 +539,53 @@ function composeReason(template: DenyTemplate, p: DenyParams, missingText: strin
   const isPlan = p.path === undefined || p.question === undefined;
   if (isPlan) {
     return template === "A"
-      ? `計画(ExitPlanMode)に不備があります。足りない項目: ${missingText}。` +
-          (withTail ? "\n書式は skill ukagai-explain に従って計画本文を直し、同じ計画をもう一度 ExitPlanMode で出してください。" : "")
-      : `この計画には、まだ条件を満たしていない点があります。足りない項目: ${missingText}。` +
-          (withTail ? "\n書き方は skill ukagai-explain にあります。直したうえで、もう一度 ExitPlanMode で出していただけますか。" : "");
+      ? `The plan (ExitPlanMode) is incomplete. Missing: ${missingText}.` +
+          (withTail ? "\nFix the plan text following skill ukagai-explain, then call ExitPlanMode again with the same plan." : "")
+      : `This plan does not meet the requirements yet. Missing: ${missingText}.` +
+          (withTail ? "\nThe format is described in skill ukagai-explain. Could you fix it and call ExitPlanMode again?" : "");
   }
   const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
   if (template === "A") {
     return (
-      `まず skill ukagai-explain を読んでください(読んでいなければ)。AskUserQuestion の前に、人が判断するための説明ファイルを書いてください。足りない項目: ${missingText}。\n` +
+      `First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
       (tpl
-        ? `保存先: ${p.path}(同じディレクトリなら名前は自由)。次の形で書くこと。question: は質問文を一字一句そのまま入れてある。${tpl}`
-        : `保存先: ${p.path}(同じディレクトリなら名前は自由)。front matter の question: には次の文字列を一字一句そのまま入れること: ${p.question}`) +
-      (withTail ? "\n書式の全体は skill ukagai-explain。書き終えたら同じ質問をもう一度 AskUserQuestion で出してください。文章で聞き直してはいけません。" : "")
+        ? `Save to: ${p.path} (any name in the same directory). Write it in this shape; question: already holds the question text verbatim.${tpl}`
+        : `Save to: ${p.path} (any name in the same directory). Put exactly this string in the front matter question: ${p.question}`) +
+      (withTail ? "\nThe full format is in skill ukagai-explain. When done, call AskUserQuestion again with the same question. Do not ask in prose." : "")
     );
   }
   return (
-    `まず skill ukagai-explain を読んでいただけますか(読んでいなければ)。この判断に付ける説明ファイル(ukagai 形式)が、まだ条件を満たしていません。足りない項目: ${missingText}。\n` +
+    `Could you first read skill ukagai-explain (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
     (tpl
-      ? `${p.path} に次の形で書いていただけますか(同じディレクトリなら名前は自由です)。question: は質問文と完全に同じにしてあります。${tpl}`
-      : `${p.path} に書いていただけますか(同じディレクトリなら名前は自由です)。front matter の question: は「${p.question}」と完全に同じにしてください。`) +
-    (withTail ? "\n書式の全体は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。" : "")
+      ? `Could you write ${p.path} in this shape (any name in the same directory is fine)? question: is identical to the question text.${tpl}`
+      : `Could you write ${p.path} (any name in the same directory is fine)? The front matter question: must be identical to "${p.question}".`) +
+    (withTail ? "\nThe full format is in skill ukagai-explain. When done, please call AskUserQuestion again with the same question." : "")
   );
 }
 
-/** 通常 600 文字以内(テンプレートを出すときは 1200 文字以内)。超えるときは missing を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。question は切らない */
+/** At most 600 characters (1200 with the template). Beyond that, missing is cut to "... and N more", then the last sentence is dropped. question is never cut */
 export function denyReason(template: DenyTemplate, p: DenyParams): string {
   const max = needsTemplate(p) ? MAX_REASON_TEMPLATE : MAX_REASON;
   for (let keep = p.missing.length; keep >= 0; keep--) {
     const rest = p.missing.length - keep;
-    const text = p.missing.slice(0, keep).join("、") + (rest > 0 ? `${keep > 0 ? "、" : ""}…ほか ${rest} 件` : "");
+    const text = p.missing.slice(0, keep).join("; ") + (rest > 0 ? `${keep > 0 ? "; " : ""}... and ${rest} more` : "");
     const full = composeReason(template, p, text, true);
     if (full.length <= max) return full;
   }
-  return composeReason(template, p, `…ほか ${p.missing.length} 件`, false);
+  return composeReason(template, p, `... and ${p.missing.length} more`, false);
 }
 
-/** questions が 2 つ以上のときの deny 理由文(spec 5 節の手順 0)。URL なし、600 文字以内 */
+/** Deny reason for two or more questions (spec section 5, step 0). No URL, at most 600 characters */
 export function multiDenyReason(count: number): string {
   return (
-    `AskUserQuestion は 1 回に 1 問にしてください(今回は ${count} 問)。GUI は 1 問ずつ、説明ファイルと一緒に表示します。` +
-    "最初の質問から順に、1 問ごとに説明ファイルを書いて AskUserQuestion を 1 問だけで出し直してください。文章で聞き直してはいけません。"
+    `Ask one question per AskUserQuestion call (this call had ${count}). The GUI shows one question at a time, with its explanation file. ` +
+    "Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose."
   );
 }
 
-// ---- 置き場 ----
+// ---- location ----
 
-/** `<scratchpad_dir>/ukagai/`、無ければ `<dataDir>/explain/<session_id>/` */
+/** `<scratchpad_dir>/ukagai/`, otherwise `<dataDir>/explain/<session_id>/` */
 export function explainDir(scratchpadDir: string | undefined, dataDir: string, sessionId: string): string {
   return scratchpadDir ? join(scratchpadDir, "ukagai") : join(dataDir, "explain", sessionId);
 }

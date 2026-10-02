@@ -1,23 +1,23 @@
 ---
 ukagai: 1
 question: 判断を保存するファイルの名前は decisions.jsonl と log.jsonl のどちらにしますか？
-title: 判断ログのファイル名を decisions.jsonl と log.jsonl のどちらにするか
+title: Choose decisions.jsonl or log.jsonl as the decision log file name
 reversibility: reversible
 scope: file
 recommended: decisions.jsonl
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-`~/.ukagai/` に作るファイルの名前を、store の実装前に決めます。名前は `src/server/store.ts` の定数 1 か所にしか出てこないので、あとで替えるのも簡単です。好みの問題で、人が決める余地があります。
+Decide the name of the file created in `~/.ukagai/` before the store is implemented. The name appears in only one place, a constant in `src/server/store.ts`, so changing it later is easy. It is a matter of taste, so there is room for a human to decide.
 
-## 選択肢
+## Options
 
-| 選択肢 | 利点 | 欠点 | コスト |
+| Option | Pros | Cons | Cost |
 |---|---|---|---|
-| decisions.jsonl | 中身が名前から分かる | 少し長い | 0 |
-| log.jsonl | 短い | events と区別がつきにくい | 0 |
+| decisions.jsonl | The name shows the content | Slightly long | 0 |
+| log.jsonl | Short | Hard to tell apart from events | 0 |
 
-## 推奨
+## Recommendation
 
-`decisions.jsonl` を推します。名前から中身が分かり、`events.jsonl` と区別できるためです。短さを優先するなら `log.jsonl` が正しくなります。
+I recommend `decisions.jsonl`. The name shows the content and stays distinct from `events.jsonl`. `log.jsonl` becomes the right choice if you prefer brevity.

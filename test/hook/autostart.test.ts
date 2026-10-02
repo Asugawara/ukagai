@@ -39,7 +39,7 @@ function setup(opts: { up: boolean | "after-spawn"; extra?: string[]; server?: s
 
 const marker = (dd: string) => join(dd, "gui-opened");
 
-test("到達できる + gui-opened が今日: spawn なし", async () => {
+test("reachable + gui-opened is today: no spawn", async () => {
   const s = setup({ up: true });
   writeFileSync(marker(s.dd), TODAY + "\n");
   const out = await sessionContext(RAW, s.hookOpts, s.deps);
@@ -47,7 +47,7 @@ test("到達できる + gui-opened が今日: spawn なし", async () => {
   assert.equal(s.spawns.length, 0);
 });
 
-test("到達できる + gui-opened が昨日: open が呼ばれ今日に更新", async () => {
+test("reachable + gui-opened is yesterday: open is called and the marker moves to today", async () => {
   const s = setup({ up: true });
   writeFileSync(marker(s.dd), "2026-10-01\n");
   await sessionContext(RAW, s.hookOpts, s.deps);
@@ -55,7 +55,7 @@ test("到達できる + gui-opened が昨日: open が呼ばれ今日に更新",
   assert.equal(readFileSync(marker(s.dd), "utf8").trim(), TODAY);
 });
 
-test("到達できない: serve を期待の引数で起動し、healthz が通れば open", async () => {
+test("unreachable: starts serve with the expected arguments, and opens once healthz passes", async () => {
   const s = setup({ up: "after-spawn" });
   const out = await sessionContext(RAW, s.hookOpts, s.deps);
   assert.ok(out);
@@ -67,7 +67,7 @@ test("到達できない: serve を期待の引数で起動し、healthz が通�
   assert.ok(existsSync(join(s.dd, "serve.log")));
 });
 
-test("起動しても healthz が通らない: open なし、additionalContext は返る", async () => {
+test("healthz never passes after start: no open, additionalContext is still returned", async () => {
   const s = setup({ up: false });
   const out = await sessionContext(RAW, s.hookOpts, s.deps);
   assert.ok((out as any).hookSpecificOutput.additionalContext);
@@ -75,14 +75,14 @@ test("起動しても healthz が通らない: open なし、additionalContext �
   assert.ok(!existsSync(marker(s.dd)));
 });
 
-test("server が別ホストなら自動起動しない", async () => {
+test("does not auto-start when the server is on another host", async () => {
   const s = setup({ up: false, server: "http://example.com:4818" });
   const out = await sessionContext(RAW, s.hookOpts, s.deps);
   assert.ok(out);
   assert.equal(s.spawns.length, 0);
 });
 
-test("--no-autostart: fetch も spawn もしない", async () => {
+test("--no-autostart: neither fetch nor spawn", async () => {
   const s = setup({ up: false, extra: ["--no-autostart"] });
   const out = await sessionContext(RAW, s.hookOpts, s.deps);
   assert.ok(out);
@@ -90,7 +90,7 @@ test("--no-autostart: fetch も spawn もしない", async () => {
   assert.equal(s.spawns.length, 0);
 });
 
-test("SubagentStart: 何もしない", async () => {
+test("SubagentStart: does nothing", async () => {
   const s = setup({ up: false });
   const out = await sessionContext({ ...RAW, hook_event_name: "SubagentStart" }, s.hookOpts, s.deps);
   assert.ok(out);
