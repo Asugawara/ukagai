@@ -67,6 +67,8 @@ Claude Code の hook から呼ばれる。失敗しても何も出力せず exit
   --observe             観測のみ
   --server <url>        server の URL
   --data-dir <dir>      token の置き場
+  --deny-template <A|B> deny 理由文の文体(既定 A)
+  --poll-timeout-ms <ms>  1 回の long-poll の長さ(test 用)
   -h, --help            この使い方を表示する
 `,
   install: `使い方: ukagai install [options]

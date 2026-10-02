@@ -33,7 +33,7 @@ node dist/cli.js tui --server http://127.0.0.1:4832 --data-dir /tmp/ukagai-x   #
 | `docs/strategy/03-mvp-implementation-plan.md` | 現行の MVP 実装計画(hook + GUI 方式、分割と担当、日程、リスク) |
 | `docs/spec/api.md` | server の API、状態遷移、認可 |
 | `docs/spec/explain.md` | エージェントが書く説明ファイル(v2: title / recommended / 推奨 / 選択肢の表)の仕様と hook の判定規則 |
-| `skills/ukagai-explain/SKILL.md` | 説明の書き方を Claude に教える skill(install が配置する) |
+| `skills/ukagai-explain/SKILL.md` | 説明の書き方を Claude に教える skill(`install`(`--settings` なし、または `--skill`)が配置する) |
 | `docs/verification/01-askuserquestion-injection.md` | PreToolUse hook で AskUserQuestion / ExitPlanMode に回答を注入できることの実機検証 |
 | `docs/verification/02-hook-limits.md` | hook の timeout 上限、answers の変種、deny で説明を書かせる往復などの実機検証 |
 | `docs/verification/03-e2e.md` | serve + hook + GUI + install を Claude Code 本体で通した E2E 検証 |
