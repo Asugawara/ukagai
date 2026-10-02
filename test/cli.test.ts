@@ -31,3 +31,12 @@ test("hook スタブは JSON を stdin で受けて stdout 空・exit 0", () => 
   assert.equal(r.status, 0);
   assert.equal(r.stdout, "");
 });
+
+test("tui --help は exit 0、TTY でなければ exit 1", () => {
+  const h = runCli(["tui", "--help"]);
+  assert.equal(h.status, 0);
+  assert.match(h.stdout, /--data-dir/);
+  const r = runCli(["tui"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /TTY/);
+});

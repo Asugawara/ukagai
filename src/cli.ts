@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const SUBCOMMANDS = ["serve", "hook", "install", "uninstall", "doctor"] as const;
+const SUBCOMMANDS = ["serve", "hook", "install", "uninstall", "doctor", "tui"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const USAGE = `ukagai - 判断を 1 か所に集める hooks + GUI
@@ -13,6 +13,7 @@ const USAGE = `ukagai - 判断を 1 か所に集める hooks + GUI
   install    Claude Code の settings に hook と skill を登録する
   uninstall  install が登録したものだけを外す
   doctor     登録と接続の状態を診断する
+  tui        ターミナルで判断に答える(GUI と同じ画面、vim 風キー)
 
 オプション:
   -h, --help  この使い方を表示する
@@ -28,6 +29,18 @@ const SETTINGS_OPTIONS = `  --settings <file>  対象の settings ファイル(�
 `;
 
 const HELP: Record<Subcommand, string> = {
+  tui: `使い方: ukagai tui [options]
+
+ターミナルで判断を表示し、キーボードだけで答える。server が起動している必要がある。
+
+オプション:
+  --server <url>     server の URL(既定: http://127.0.0.1:4818)
+  --data-dir <dir>   token の置き場(既定: ~/.ukagai)
+  -h, --help         この使い方を表示する
+
+キー: j/k 移動  gg/G 先頭/末尾  Space 複数選択  Enter 送信  i 自由記述
+      h/l 保留の切替  b 一覧  y/a/n 計画の承認/auto/却下  q 終了
+`,
   serve: `使い方: ukagai serve [options]
 
 GUI と API の server を起動する。
