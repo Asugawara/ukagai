@@ -1,4 +1,4 @@
-/** 行単位の unified diff(依存なし。LCS) */
+/** Line-based unified diff (no dependencies; LCS) */
 export function unifiedDiff(a: string, b: string, labelA: string, labelB: string, ctx = 3): string {
   const x = a === "" ? [] : a.replace(/\n$/, "").split("\n");
   const y = b === "" ? [] : b.replace(/\n$/, "").split("\n");

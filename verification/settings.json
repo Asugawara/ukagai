@@ -8,7 +8,7 @@
             "type": "command",
             "command": "node /Users/user/dev/ukagai/verification/hook.mjs",
             "timeout": 3600,
-            "statusMessage": "ukagai: GUI で回答待ち"
+            "statusMessage": "ukagai: waiting for an answer in the GUI"
           }
         ]
       }

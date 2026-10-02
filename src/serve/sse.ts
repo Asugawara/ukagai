@@ -4,7 +4,7 @@ export type SseEventName = "decision.created" | "decision.updated" | "session.up
 
 type Client = { controller: ReadableStreamDefaultController<Uint8Array> };
 
-/** SSE の接続管理と broadcast */
+/** SSE connection management and broadcast */
 export class SseHub {
   private clients = new Set<Client>();
   private encoder = new TextEncoder();
@@ -14,7 +14,7 @@ export class SseHub {
     return this.clients.size;
   }
 
-  /** 新しい接続用の Response を返す */
+  /** Return a Response for a new connection */
   connect(signal?: AbortSignal): Response {
     let client: Client | undefined;
     const remove = () => {
@@ -68,7 +68,7 @@ export class SseHub {
       try {
         c.controller.close();
       } catch {
-        // 既に閉じている
+        // Already closed
       }
     }
     this.clients.clear();

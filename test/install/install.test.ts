@@ -29,7 +29,7 @@ const EVENTS = ["PreToolUse", "PermissionRequest", "SessionStart", "SubagentStar
 const SKILL = (e: Env): string => join(e.home, ".claude", "skills", "ukagai-explain", "SKILL.md");
 const OTHER = { hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/usr/bin/other", args: ["x"] }] }] }, model: "opus" };
 
-test("空の settings に install: 全 event、exec form、statusMessage、--budget 3590、skill", async () => {
+test("install into empty settings: all events, exec form, statusMessage, --budget 3590, skill", async () => {
   const e = await setup();
   const r = await ukagai(e, ["install", "--settings", e.settings]);
   assert.equal(r.code, 0, r.err);
@@ -43,29 +43,29 @@ test("空の settings に install: 全 event、exec form、statusMessage、--bud
   assert.match(h.args[0], /dist[\\/]cli\.js$/);
   assert.equal(h.args[1], "hook");
   assert.equal(h.args[h.args.indexOf("--budget") + 1], "3590");
-  assert.equal(h.statusMessage, "ukagai: GUI で回答待ち");
+  assert.equal(h.statusMessage, "ukagai: waiting for an answer in the GUI");
   assert.equal(h.timeout, 3600);
   assert.equal(s.hooks.SessionEnd[0].hooks[0].timeout, 2);
   assert.equal(s.hooks.Stop[0].hooks[0].async, undefined);
   assert.equal(s.hooks.Stop[0].hooks[0].timeout, 5);
   assert.equal(s.hooks.SubagentStop[0].hooks[0].async, true);
   assert.equal(s.hooks.SessionStart[0].hooks[0].async, undefined);
-  assert.ok(!(await exists(join(e.home, ".claude"))), "--settings では skill に触らない");
+  assert.ok(!(await exists(join(e.home, ".claude"))), "--settings does not touch the skill");
 });
 
-test("--settings + --skill のときだけ skill を置き、uninstall も --skill のときだけ消す", async () => {
+test("skill is placed only with --settings + --skill, and uninstall removes it only with --skill", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
   assert.ok(await exists(SKILL(e)));
   const r1 = await ukagai(e, ["uninstall", "--settings", e.settings]);
   assert.doesNotMatch(r1.out, /skill:/);
-  assert.ok(await exists(SKILL(e)), "--settings だけの uninstall は skill を消さない");
+  assert.ok(await exists(SKILL(e)), "uninstall with --settings only does not remove the skill");
   const r2 = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
   assert.match(r2.out, /skill:/);
   assert.ok(!(await exists(SKILL(e))));
 });
 
-test("--data-dir / --server 指定で全 hook の args に入り、未指定では入らない", async () => {
+test("--data-dir / --server go into every hook's args when given, and not when omitted", async () => {
   const e = await setup();
   const dd = join(e.dir, "data");
   await ukagai(e, ["install", "--settings", e.settings, "--data-dir", dd, "--server", "http://127.0.0.1:9999/"]);
@@ -86,18 +86,18 @@ test("--data-dir / --server 指定で全 hook の args に入り、未指定で�
   }
 });
 
-test("5 サブコマンドの --help は exit 0 で使い方を出す", async () => {
+test("--help of the 5 subcommands exits 0 and prints usage", async () => {
   const e = await setup();
   for (const c of ["serve", "hook", "install", "uninstall", "doctor"]) {
     for (const f of ["--help", "-h"]) {
       const r = await ukagai(e, [c, f]);
       assert.equal(r.code, 0, `${c} ${f}: ${r.err}`);
-      assert.match(r.out, new RegExp(`使い方: ukagai ${c}`));
+      assert.match(r.out, new RegExp(`Usage: ukagai ${c}`));
     }
   }
 });
 
-test("2 回目の install は .bak を残す", async () => {
+test("a second install leaves a .bak", async () => {
   const e = await setup();
   await writeFile(e.settings, JSON.stringify(OTHER));
   await ukagai(e, ["install", "--settings", e.settings]);
@@ -106,7 +106,7 @@ test("2 回目の install は .bak を残す", async () => {
   assert.deepEqual(await readJson(join(e.dir, baks[0]!)), OTHER);
 });
 
-test("既存の hooks を保持し、2 回 install しても重複しない", async () => {
+test("keeps existing hooks and does not duplicate on a second install", async () => {
   const e = await setup();
   await writeFile(e.settings, JSON.stringify(OTHER));
   await ukagai(e, ["install", "--settings", e.settings]);
@@ -121,7 +121,7 @@ test("既存の hooks を保持し、2 回 install しても重複しない", as
   assert.deepEqual(s2, s1);
 });
 
-test("uninstall で元と等価に戻り、skill が消える", async () => {
+test("uninstall restores the equivalent original and removes the skill", async () => {
   const e = await setup();
   await writeFile(e.settings, JSON.stringify(OTHER));
   await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
@@ -132,14 +132,14 @@ test("uninstall で元と等価に戻り、skill が消える", async () => {
   assert.ok(!(await exists(join(e.home, ".claude", "skills", "ukagai-explain"))));
 });
 
-test("uninstall: 空になった event キーと hooks が残らない", async () => {
+test("uninstall: no empty event keys or hooks remain", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings]);
   await ukagai(e, ["uninstall", "--settings", e.settings]);
   assert.deepEqual(await readJson(e.settings), {});
 });
 
-test("--dry-run は書かない", async () => {
+test("--dry-run does not write", async () => {
   const e = await setup();
   await writeFile(e.settings, JSON.stringify(OTHER));
   const before = await stat(e.settings);
@@ -152,7 +152,7 @@ test("--dry-run は書かない", async () => {
   assert.ok(!(await exists(SKILL(e))));
 });
 
-test("--observe: PreToolUse に --observe、PostToolUse の matcher に AskUserQuestion", async () => {
+test("--observe: --observe on PreToolUse, AskUserQuestion in the PostToolUse matcher", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings, "--observe"]);
   const s = await readJson(e.settings);
@@ -160,7 +160,7 @@ test("--observe: PreToolUse に --observe、PostToolUse の matcher に AskUserQ
   assert.match(s.hooks.PostToolUse[0].matcher, /AskUserQuestion/);
 });
 
-test("--no-autostart: SessionStart の hook だけに --no-autostart、既定では付かない", async () => {
+test("--no-autostart: only on the SessionStart hook, not by default", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings]);
   assert.ok(!(await readJson(e.settings)).hooks.SessionStart[0].hooks[0].args.includes("--no-autostart"));
@@ -170,7 +170,7 @@ test("--no-autostart: SessionStart の hook だけに --no-autostart、既定で
   assert.ok(!s.hooks.Stop[0].hooks[0].args.includes("--no-autostart"));
 });
 
-test("--project は .claude/settings.json と .claude/skills に書く", async () => {
+test("--project writes to .claude/settings.json and .claude/skills", async () => {
   const e = await setup();
   const proj = join(e.dir, "proj");
   await mkdir(proj);
@@ -183,7 +183,7 @@ test("--project は .claude/settings.json と .claude/skills に書く", async (
   assert.ok(!(await exists(SKILL(e))));
 });
 
-test("壊れた JSON は書き換えず exit 1", async () => {
+test("broken JSON is not rewritten and exits 1", async () => {
   const e = await setup();
   await writeFile(e.settings, "{ not json");
   const r = await ukagai(e, ["install", "--settings", e.settings]);
@@ -191,7 +191,7 @@ test("壊れた JSON は書き換えず exit 1", async () => {
   assert.equal(await readFile(e.settings, "utf8"), "{ not json");
 });
 
-test("doctor: install 済み + server 不在 → hook ○、server ×、exit 1", async () => {
+test("doctor: installed + no server -> hook ○, server ×, exit 1", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings]);
   const r = await ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")]);
@@ -199,10 +199,10 @@ test("doctor: install 済み + server 不在 → hook ○、server ×、exit 1",
   assert.match(r.out, /○ +hook PreToolUse/);
   assert.match(r.out, /× +server/);
   assert.match(r.out, /× +token/);
-  assert.match(r.out, /○ +skill ukagai-explain +対象外/);
+  assert.match(r.out, /○ +skill ukagai-explain +not handled/);
 });
 
-test("doctor --skill: skill の有無を判定する", async () => {
+test("doctor --skill: detects whether the skill exists", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
   const args = ["doctor", "--settings", e.settings, "--skill", "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")];

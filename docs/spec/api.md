@@ -1,31 +1,32 @@
-# API 仕様
+# API spec
 
-`docs/strategy/03-mvp-implementation-plan.md` 3 節の契約を人向けに書いたもの。型の正は `src/contract.ts`(zod)。食い違ったら計画と `contract.ts` を正とし、この文書を直す。
+A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-implementation-plan.md`. The source of truth for types is `src/contract.ts` (zod). If this document disagrees, treat the plan and `contract.ts` as correct and fix this document.
 
-`ukagai serve` は `127.0.0.1:4818` で待ち受ける。JSON 例の値は `test/fixtures/` の実物(検証 01 の T1)と同じ。
+`ukagai serve` listens on `127.0.0.1:4818`. The values in the JSON examples are the same as the real files in `test/fixtures/` (T1 of verification 01).
 
-## エンドポイント
+## Endpoints
 
-| API | 呼び手 | 役割 |
+| API | Caller | Role |
 |---|---|---|
-| `POST /api/decisions` | hook | 判断を登録。同じ `tool_use_id` なら既存を返す |
-| `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | long-poll。回答済み(`answer_submitted` / `fallback`)なら 200 + response、未回答で timeout なら 204、閉じた判断(`answered` など。待機中にそうなった場合も)なら 410 を即返す。各 poll の終了時に `lease_until` を更新 |
-| `POST /api/decisions/:id/ack` | hook | response を受け取った確認。`answered` と `delivered_at` が付く |
-| `POST /api/decisions/:id/cancel` | hook | hook が SIGTERM / SIGINT / SIGHUP で降りる時の通知。`pending` → `cancelled`、`answer_submitted` → `answer_lost` |
-| `POST /api/decisions/:id/answer` | GUI | 回答の送信 |
-| `GET /api/decisions?status=pending` | GUI | 一覧 |
-| `GET /api/decisions/:id` | GUI | 詳細 |
-| `POST /api/events` | hook(観測) | 観測 hook の生 JSON。`--observe` の時刻、Stop の `escaped_question`、PermissionRequest の消費 |
-| `GET /api/sessions` | GUI | セッションごとの状態 |
-| `GET /api/sessions/:id/pending-mode-switch` | hook | 「承認して auto」の未消費記録を読む |
-| `POST /api/sessions/:id/pending-mode-switch/consume` | hook | 上の記録を消す |
-| `GET /api/metrics` | GUI | (a')(b)(d) の集計 |
-| `GET /api/stream` | GUI | SSE。`decision.created` / `decision.updated` / `session.updated` |
-| `GET /healthz` | hook | 接続確認 |
+| `POST /api/decisions` | hook | Register a decision. Returns the existing one for the same `tool_use_id` |
+| `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | Long-poll. If answered (`answer_submitted` / `fallback`), 200 + response; if unanswered and the timeout passes, 204; if the decision is closed (`answered` etc., including when it becomes so while waiting), 410 immediately. Updates `lease_until` at the end of each poll |
+| `POST /api/decisions/:id/ack` | hook | Confirmation that the response was received. Sets `answered` and `delivered_at` |
+| `POST /api/decisions/:id/cancel` | hook | Notification when the hook exits on SIGTERM / SIGINT / SIGHUP. `pending` → `cancelled`, `answer_submitted` → `answer_lost` |
+| `POST /api/decisions/:id/answer` | GUI | Submit an answer |
+| `GET /api/decisions?status=pending` | GUI | List |
+| `GET /api/decisions/:id` | GUI | Detail |
+| `POST /api/events` | hook (observation) | Raw JSON of an observation hook. The `--observe` timestamps, `escaped_question` from Stop, consumption of PermissionRequest |
+| `GET /api/sessions` | GUI | State per session |
+| `GET /api/sessions/:id/pending-mode-switch` | hook | Read the unconsumed "approve and switch to auto" record |
+| `POST /api/sessions/:id/pending-mode-switch/consume` | hook | Delete the record above |
+| `GET /api/metrics` | GUI | Aggregates for (a')(b)(d) |
+| `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja" }`, the display language from `<data-dir>/config.json`, read once when the server starts (missing/malformed → `"en"`) |
+| `GET /api/stream` | GUI | SSE. `decision.created` / `decision.updated` / `session.updated` |
+| `GET /healthz` | hook | Connectivity check |
 
 ### POST /api/decisions
 
-要求(`CreateDecisionRequest`。`context` は server が集めるので hook は送らない):
+Request (`CreateDecisionRequest`. The server collects `context`, so the hook does not send it):
 
 ```json
 {
@@ -41,11 +42,11 @@
   "request": {
     "questions": [
       {
-        "question": "A と B のどちらにしますか？",
-        "header": "選択",
+        "question": "Which do you choose, A or B?",
+        "header": "Choice",
         "options": [
-          { "label": "A", "description": "選択肢 A" },
-          { "label": "B", "description": "選択肢 B" }
+          { "label": "A", "description": "Option A" },
+          { "label": "B", "description": "Option B" }
         ],
         "multiSelect": false
       }
@@ -54,66 +55,66 @@
 }
 ```
 
-`kind` は `answer_question`(AskUserQuestion)か `approve_plan`(ExitPlanMode)。`request` は hook の `tool_input` をそのまま入れる。`explanation` は任意(形は計画 3 節の `Decision.explanation`)。`explanation.type`(`decision` / `blocker`、省略 = decision)は説明ファイルの front matter の `type` で、server は保存して返すだけ。 `explanation.none_reason` は `plan_mode` / `loop_guard`(hook が設定する)と `not_required`(予約。どの経路も設定しない。GUI / TUI が表示文を持つので contract に残す)。
+`kind` is `answer_question` (AskUserQuestion) or `approve_plan` (ExitPlanMode). `request` holds the hook's `tool_input` as is. `explanation` is optional (its shape is `Decision.explanation` in section 3 of the plan). `explanation.type` (`decision` / `blocker`, omitted = decision) is the `type` in the explanation file's front matter; the server only stores and returns it. `explanation.none_reason` is `plan_mode` / `loop_guard` (set by the hook) or `not_required` (reserved. No path sets it. It stays in the contract because the GUI / TUI hold the display text).
 
-応答: **新規は 201、同じ `tool_use_id` が既にあれば 200**(本文はどちらも `Decision` 全体)。`status` は `pending`。
+Response: **201 for a new decision, 200 if the same `tool_use_id` already exists** (the body is the whole `Decision` in both cases). `status` is `pending`.
 
-- 説明なしの deny を記録するときは同じ API を使い、要求に `"status": "denied_explain"` を付ける(`CreateDecisionRequest.status`)。`Decision.status` は `denied_explain` になる。GUI 一覧(`GET /api/decisions` の既定)には出ず、SSE も飛ばさず、セッション状態も変えず、文脈収集もしない。`GET /api/decisions?status=denied_explain` なら取れる。deny の理由は要求の `missing`(MissingCode の配列、`denied_explain` のときだけ)をそのまま `Decision.missing` に保存して返す(server は解釈しない)。
-- `first_denied_at` は server が付ける。要求の `explanation.attached_via` が `after_deny` のとき、同じ `session_id + agent_id + questions[0].question` の直近 120 秒以内の `denied_explain` の `created_at` を入れる。`attached_via` 自体は hook が決めた値をそのまま保存する。
-- 登録時に server が文脈(git、transcript)を集める。transcript が読めないと 500 ms 後に 1 回再読するため、**この POST は最大 1.5 秒かかる**(server 側の絶対上限)。hook は POST の timeout を 1.5 秒より長く取ること(接続できるかの判定は別に短くてよい)。
-- `transcript_path`、`explanation.path` が許可外なら 400。`cwd` が無くても 201 で `context` が空になるだけ。
+- To record a deny without an explanation, use the same API and add `"status": "denied_explain"` to the request (`CreateDecisionRequest.status`). `Decision.status` becomes `denied_explain`. It does not appear in the GUI list (the default of `GET /api/decisions`), sends no SSE, does not change session state, and does not collect context. `GET /api/decisions?status=denied_explain` retrieves it. The reason for the deny is the request's `missing` (an array of MissingCode, only for `denied_explain`), which is stored as is in `Decision.missing` and returned (the server does not interpret it).
+- `first_denied_at` is set by the server. When the request's `explanation.attached_via` is `after_deny`, it is set to the `created_at` of the most recent `denied_explain` with the same `session_id + agent_id + questions[0].question` within the last 120 seconds. `attached_via` itself is stored as the hook decided it.
+- At registration the server collects context (git, transcript). If the transcript cannot be read, it re-reads once after 500 ms, so **this POST takes up to 1.5 seconds** (an absolute upper bound on the server side). The hook must set the POST timeout longer than 1.5 seconds (the check of whether it can connect may be shorter).
+- 400 if `transcript_path` or `explanation.path` is not allowed. A missing `cwd` still gives 201, and `context` is just empty.
 
 ### GET /api/decisions/:id/wait
 
-- 回答済み: 200
+- Answered: 200
 
 ```json
 {
   "response": {
     "via": "gui",
-    "answers": { "A と B のどちらにしますか？": "B" },
+    "answers": { "Which do you choose, A or B?": "B" },
     "decided_at": "2026-10-02T03:09:12.400Z"
   }
 }
 ```
 
-`approve_plan` の応答は `answers` の代わりに `approve` / `reason` / `set_mode_auto` が入る。`via` が `terminal` のときは `{fallback:true}` が送られた場合で、hook は何も出力せず終了する。
+The response for `approve_plan` carries `approve` / `reason` / `set_mode_auto` instead of `answers`. When `via` is `terminal`, `{fallback:true}` was sent, and the hook exits without printing anything.
 
-- 未回答で `timeout_ms`(既定 25000)が過ぎた: 204(本文なし)。`answered` / `hook_disconnected` などの終端状態は、待たずに即 410(`{error, status}`)。
-- `timeout_ms` は 0〜600000 に丸める。数値でなければ既定値。
-- lease の更新: poll の**開始時と終了時**の両方で `lease_until = now + timeout_ms + LEASE_GRACE_MS` にする(開始時にも更新しないと、初回の長い poll 中に初期 lease が切れる)。登録直後の初期 lease は `now + LEASE_GRACE_MS`。`pending` / `answer_submitted` のときだけ更新する。lease だけの更新は `decisions.jsonl` に書かない。
+- Unanswered and `timeout_ms` (default 25000) has passed: 204 (no body). Terminal states such as `answered` / `hook_disconnected` return 410 (`{error, status}`) immediately without waiting.
+- `timeout_ms` is clamped to 0–600000. If it is not a number, the default is used.
+- Lease update: at both the **start and end** of a poll, set `lease_until = now + timeout_ms + LEASE_GRACE_MS` (without updating at the start too, the initial lease expires during the first long poll). The initial lease right after registration is `now + LEASE_GRACE_MS`. It is updated only for `pending` / `answer_submitted`. A lease-only update is not written to `decisions.jsonl`.
 
-hook は 200 を受けて stdout に書く前に ack を打つ(ack が通ってから出力する)。
+The hook sends the ack after receiving 200 and before writing to stdout (it prints only after the ack succeeds).
 
 ### POST /api/decisions/:id/ack
 
-要求の本文は不要だが、`Content-Type: application/json` は必須なので `{}` を送る。応答 200 で `Decision`(`status: "answered"`、`response.delivered_at` 付き)。
+No request body is needed, but `Content-Type: application/json` is required, so send `{}`. Response 200 with the `Decision` (`status: "answered"`, with `response.delivered_at`).
 
 ### POST /api/decisions/:id/cancel
 
-Bearer 必須。`Content-Type: application/json` が要るので `{}` を送る。`pending` なら `cancelled`、`answer_submitted` なら `answer_lost` にして 200 + `Decision`(SSE `decision.updated`)。終端の状態なら 409。Esc / ctrl+c で Claude Code が hook に送る SIGTERM(E1-3)を受け、hook が 300 ms の timeout で 1 回だけ打つ。lease 切れまで GUI に残るのを避ける。登録前・出力後のシグナルでは打たない。
+Bearer required. `Content-Type: application/json` is required, so send `{}`. If `pending`, it becomes `cancelled`; if `answer_submitted`, it becomes `answer_lost`; response 200 + `Decision` (SSE `decision.updated`). 409 for a terminal state. The hook receives the SIGTERM that Claude Code sends on Esc / ctrl+c (E1-3) and sends this once, with a 300 ms timeout. This avoids the decision lingering in the GUI until the lease expires. It is not sent for signals before registration or after output.
 
 ### POST /api/decisions/:id/answer
 
-要求は次の 4 形のどれか(`AnswerRequest`。キーの混在は 400):
+The request is one of the following 4 shapes (`AnswerRequest`. Mixed keys give 400):
 
 ```json
-{ "answers": { "A と B のどちらにしますか？": "B" } }
+{ "answers": { "Which do you choose, A or B?": "B" } }
 { "approve": true, "set_mode_auto": true }
-{ "approve": false, "reason": "影響範囲を狭めてから出し直して" }
+{ "approve": false, "reason": "Narrow the scope first, then resubmit" }
 { "fallback": true }
 ```
 
-- `answers` の値は文字列のみ。`multiSelect` はラベルを `MULTI_SELECT_SEPARATOR`(仮に `", "`)で結合した 1 文字列。
-- `approve: false` は `reason` が空でない文字列で必須。
-- `set_mode_auto` は `approve: true` のときだけ。
-- `{fallback:true}` は `pending` → `fallback` に遷移する(GUI からは送らない。ボタンは廃止)。それ以外は `pending` → `answer_submitted`。
+- The values of `answers` are strings only. For `multiSelect`, it is one string of the labels joined with `MULTI_SELECT_SEPARATOR` (tentatively `", "`).
+- `approve: false` requires `reason` as a non-empty string.
+- `set_mode_auto` is allowed only with `approve: true`.
+- `{fallback:true}` transitions `pending` → `fallback` (the GUI does not send it; the button was removed). Anything else transitions `pending` → `answer_submitted`.
 
-応答 200: 更新後の `Decision`。
+Response 200: the updated `Decision`.
 
 ### POST /api/events
 
-観測 hook の stdin をそのまま送り、`received_at` を足す(`EventInput`)。知らないキーは保持する。
+Sends the observation hook's stdin as is and adds `received_at` (`EventInput`). Unknown keys are preserved.
 
 ```json
 {
@@ -127,13 +128,13 @@ Bearer 必須。`Content-Type: application/json` が要るので `{}` を送る�
 }
 ```
 
-- `observe.phase`: `--observe` の PreToolUse が `start`、PostToolUse が `end`。
-- `escaped_question: true`: Stop の `last_assistant_message` が粗い検出に掛かったとき。
-- `blocker_detected: true`: Stop の `last_assistant_message` が blocker 語彙に掛かったとき(`events.jsonl` に保存し、`GET /api/metrics` の `a.blocker_detected` で数える。`a.total` には含めない)。
+- `observe.phase`: `start` for PreToolUse and `end` for PostToolUse under `--observe`.
+- `escaped_question: true`: when Stop's `last_assistant_message` matches the rough detection.
+- `blocker_detected: true`: when Stop's `last_assistant_message` matches the blocker vocabulary (stored in `events.jsonl` and counted in `a.blocker_detected` of `GET /api/metrics`. Not included in `a.total`).
 
-応答 204。
+Response 204.
 
-GUI が「セッション一覧パネルを開いた」ことを (c) の補助指標として送るときも同じ API を使う(cookie で送れる)。
+The same API is used when the GUI sends "opened the session list panel" as a supplementary metric for (c) (it can be sent with a cookie).
 
 ```json
 {
@@ -145,7 +146,7 @@ GUI が「セッション一覧パネルを開いた」ことを (c) の補助�
 }
 ```
 
-- `hook_event_name` が `ukagai.session_panel_open` の event は、セッション状態もセッション一覧も変えず、`metrics.c.session_panel_opens` を 1 増やすだけ。`session_id` / `transcript_path` / `cwd` は schema を通るための値で何でもよい。
+- An event whose `hook_event_name` is `ukagai.session_panel_open` changes neither session state nor the session list; it only increments `metrics.c.session_panel_opens` by 1. `session_id` / `transcript_path` / `cwd` are values just to pass the schema and can be anything.
 
 ### GET /api/sessions
 
@@ -157,24 +158,24 @@ GUI が「セッション一覧パネルを開いた」ことを (c) の補助�
     "session_id": "00000000-0000-4000-8000-000000000001",
     "state": "waiting_decision",
     "last_event_at": "2026-10-02T03:09:12.000Z",
-    "title": "A/B の選択",
+    "title": "A/B choice",
     "cwd": "/Users/user/dev/ukagai"
   }
 ]
 ```
 
-`state` は `working` / `waiting_decision` / `idle` / `ended`。
+`state` is `working` / `waiting_decision` / `idle` / `ended`.
 
 ### GET /api/sessions/:id/pending-mode-switch / POST .../consume
 
-本文は `contract.ts` の `PendingModeSwitch` / `ConsumeModeSwitchResponse`。記録は `approve: true, set_mode_auto: true` の answer で作られ、120 秒(`MODE_SWITCH_TTL_MS`)で失効する。
+The bodies are `PendingModeSwitch` / `ConsumeModeSwitchResponse` in `contract.ts`. The record is created by an answer with `approve: true, set_mode_auto: true` and expires after 120 seconds (`MODE_SWITCH_TTL_MS`).
 
 ```json
 { "pending": false }
 { "pending": true, "set_at": "2026-10-02T03:09:12.000Z", "expires_at": "2026-10-02T03:11:12.000Z" }
 ```
 
-`POST .../consume` は未消費かつ未失効の記録があれば消して `{ "consumed": true }`、なければ `{ "consumed": false }`(consume は `Content-Type: application/json` 必須なので `{}` を送る)。
+`POST .../consume` deletes the record if there is an unconsumed, unexpired one and returns `{ "consumed": true }`; otherwise `{ "consumed": false }` (consume requires `Content-Type: application/json`, so send `{}`).
 
 ### GET /api/metrics
 
@@ -193,30 +194,42 @@ GUI が「セッション一覧パネルを開いた」ことを (c) の補助�
 }
 ```
 
-- (a') `rate = answered / total`。`total = answered + fallback + hook_disconnected + answer_lost + cancelled + escaped_question`。分母が 0 なら `null`。
-- (b) `human` = `created_at → decided_at`、`agent` = `first_denied_at → created_at`、`baseline` = `--observe` で取った値。
-- (d) `plan_mode` の判断は `total` から除く。
+- (a') `rate = answered / total`. `total = answered + fallback + hook_disconnected + answer_lost + cancelled + escaped_question`. `null` if the denominator is 0.
+- (b) `human` = `created_at → decided_at`, `agent` = `first_denied_at → created_at`, `baseline` = values taken with `--observe`.
+- (d) Decisions with `plan_mode` are excluded from `total`.
+
+### GET /api/config
+
+Returns the GUI display language, from `<data-dir>/config.json`. It is read once when the server starts; a missing or malformed file gives `"en"`. Allowed with cookie or Bearer.
+
+```json
+{ "lang": "ja" }
+```
 
 ### GET /api/stream
 
-SSE。イベント名は `decision.created` / `decision.updated`(データは `Decision`)、`session.updated`(データは `SessionSummary`)。
+SSE. The event names are `decision.created` / `decision.updated` (data is `Decision`) and `session.updated` (data is `SessionSummary`).
 
-サブエージェント内では AskUserQuestion が提供されないため判断は発生しない(Claude Code 2.1.287 で確認)。
+AskUserQuestion is not available inside subagents, so no decision arises there (confirmed with Claude Code 2.1.287).
 
-## 状態遷移
+### GET /
+
+Serves `public/index.html`. The server injects the `?v=` version into the asset URLs, and also injects `<html lang="…" data-lang="…">` into index.html, with `lang` taken from the same config as `GET /api/config`.
+
+## State transitions
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending: POST /api/decisions
-    [*] --> denied_explain: 説明なしの deny を登録
-    pending --> answer_submitted: GUI が回答
-    pending --> fallback: GUI が「ターミナルで答える」
-    pending --> cancelled: hook が cancel(シグナル)
-    pending --> hook_disconnected: lease 切れ
-    pending --> cancelled: lease 切れ後に UserPromptSubmit / Stop
-    answer_submitted --> answered: hook が ack
-    answer_submitted --> answer_lost: lease 切れ(ack 無し)または hook が cancel(シグナル)
-    hook_disconnected --> cancelled: 同セッションの UserPromptSubmit / Stop
+    [*] --> denied_explain: register a deny without explanation
+    pending --> answer_submitted: GUI answers
+    pending --> fallback: GUI "answer in the terminal"
+    pending --> cancelled: hook cancels (signal)
+    pending --> hook_disconnected: lease expired
+    pending --> cancelled: UserPromptSubmit / Stop after lease expiry
+    answer_submitted --> answered: hook acks
+    answer_submitted --> answer_lost: lease expired (no ack) or hook cancels (signal)
+    hook_disconnected --> cancelled: UserPromptSubmit / Stop in the same session
     answered --> [*]
     fallback --> [*]
     answer_lost --> [*]
@@ -224,70 +237,70 @@ stateDiagram-v2
     denied_explain --> [*]
 ```
 
-許可される遷移は上の通り(`cancel` は既存の遷移を使う)(`canTransition`)。`denied_explain` は終端で、再呼び出し時に `session_id + agent_id + questions[0].question` で引いて `attached_via: after_deny` と `first_denied_at` を付けるのに使う。
+The allowed transitions are as above (`cancel` uses the existing transitions) (`canTransition`). `denied_explain` is terminal; on a repeat call it is looked up by `session_id + agent_id + questions[0].question` and used to attach `attached_via: after_deny` and `first_denied_at`.
 
-`lease_until` は最後の poll 終了 + `POLL_TIMEOUT_MS`(25 秒)+ `LEASE_GRACE_MS`(10 秒)。
+`lease_until` is the end of the last poll + `POLL_TIMEOUT_MS` (25 seconds) + `LEASE_GRACE_MS` (10 seconds).
 
-## 認可と入力検証
+## Authorization and input validation
 
-- **Bearer**: `serve` が起動時に作るトークンを `~/.ukagai/token`(0600)に書く。hook は読んで `Authorization: Bearer <token>` で送る。
-- **cookie**: GUI は `GET /` で `SameSite=Strict; HttpOnly` cookie `ukagai_session` を受け取る。値はトークンとは別のランダム値で、server がメモリで保持する(再起動で無効になるので、GUI は `GET /` を取り直す)。
-- **エンドポイントごとの認可**(実装どおり):
+- **Bearer**: `serve` creates a token at startup and writes it to `~/.ukagai/token` (0600). The hook reads it and sends it as `Authorization: Bearer <token>`.
+- **cookie**: the GUI receives a `SameSite=Strict; HttpOnly` cookie `ukagai_session` from `GET /`. The value is a random value separate from the token, and the server keeps it in memory (it becomes invalid on restart, so the GUI re-fetches `GET /`).
+- **Authorization per endpoint** (as implemented):
 
-| 認可 | エンドポイント |
+| Authorization | Endpoints |
 |---|---|
-| Bearer のみ | `POST /api/decisions`、`GET /api/decisions/:id/wait`、`POST /api/decisions/:id/ack`、`GET /api/sessions/:id/pending-mode-switch`、`POST .../consume` |
-| cookie か Bearer | `POST /api/decisions/:id/answer`、`POST /api/events`(cookie だけのときは `hook_event_name` が `ukagai.session_panel_open` の event のみ。他は 403)、`GET /api/decisions`、`GET /api/decisions/:id`、`GET /api/sessions`、`GET /api/metrics`、`GET /api/stream` |
-| 認可なし | `GET /healthz`、`GET /`、`GET /public/*` |
-- **Host**: `127.0.0.1:<port>` と `localhost:<port>`(port は serve のもの)以外は 400(DNS rebinding 対策)。
-- **Content-Type**: **すべての POST**(本文の無い ack / consume を含む)は `application/json` 必須(違えば 415)。本文が無い場合は `{}` を送る。検査の順は Host(400)→ 認可(401)→ Content-Type(415)→ 本文(400)。
-- **パス**: `transcript_path` は `~/.claude/projects/` 配下、`explanation.path` は `<scratchpad_dir>/ukagai/` か `~/.ukagai/explain/` 配下、`cwd` は実在ディレクトリに限る(`isAllowedTranscriptPath` / `isAllowedExplanationPath`。`..` と symlink を解決してから判定)。
-- **cookie の限界**: cookie は `GET /` で無認可に発行される。同一機の他プロセスは `curl -c` で取得できる。これは MVP の限界(計画 7 節)。cookie の保持は 1000 件までで、超えると古い順に捨てる。
-- **wait の終端**: `GET /api/decisions/:id/wait` は、判断が `answered` / `hook_disconnected` / `answer_lost` / `cancelled` / `denied_explain` のとき(待機中にそうなった場合も含む)即座に 410 `{error, status}` を返す。hook は非 200 を error として無出力で終える。
-- 限界: 同一ユーザーの他プロセスが `~/.ukagai/token` を読めば API を叩ける(計画 7 節)。
+| Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `GET /api/sessions/:id/pending-mode-switch`, `POST .../consume` |
+| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
+| none | `GET /healthz`, `GET /`, `GET /public/*` |
+- **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
+- **Content-Type**: **every POST** (including ack / consume, which have no body) requires `application/json` (otherwise 415). If there is no body, send `{}`. The order of checks is Host (400) → authorization (401) → Content-Type (415) → body (400).
+- **Paths**: `transcript_path` must be under `~/.claude/projects/`, `explanation.path` under `<scratchpad_dir>/ukagai/` or `~/.ukagai/explain/`, and `cwd` an existing directory (`isAllowedTranscriptPath` / `isAllowedExplanationPath`. Judged after resolving `..` and symlinks).
+- **Cookie limit**: a cookie is issued without authorization at `GET /`. Other processes on the same machine can obtain one with `curl -c`. This is an MVP limitation (section 7 of the plan). At most 1000 cookies are kept; beyond that the oldest are dropped.
+- **Terminal states of wait**: `GET /api/decisions/:id/wait` returns 410 `{error, status}` immediately when the decision is `answered` / `hook_disconnected` / `answer_lost` / `cancelled` / `denied_explain` (including when it becomes so while waiting). The hook treats a non-200 as an error and exits without output.
+- Limitation: another process of the same user that can read `~/.ukagai/token` can call the API (section 7 of the plan).
 
-## エラー応答
+## Error responses
 
-本文は `{"error":"<短い説明>"}`。
+The body is `{"error":"<short description>"}`.
 
-| status | 条件 |
+| status | Condition |
 |---|---|
-| 400 | JSON の形が schema に合わない(`{"error":..., "issues":[...]}`)、`Host` 不正、許可外のパス、kind に合わない answer |
-| 415 | POST の `Content-Type` が `application/json` でない |
-| 401 | 認可が足りない(上の表)、またはトークン / cookie の不一致 |
-| 403 | cookie だけで `POST /api/events` を送り、`hook_event_name` が `ukagai.session_panel_open` でない |
-| 404 | 存在しない `:id` |
-| 409 | 状態遷移違反(例: `answered` に `answer`、`pending` に `ack`) |
-| 410 | `wait` の対象が閉じた判断(`answered` / `hook_disconnected` / `answer_lost` / `cancelled` / `denied_explain`)。本文は `{error, status}` |
+| 400 | JSON shape does not match the schema (`{"error":..., "issues":[...]}`), invalid `Host`, a disallowed path, an answer that does not fit the kind |
+| 415 | The POST `Content-Type` is not `application/json` |
+| 401 | Insufficient authorization (table above), or a token / cookie mismatch |
+| 403 | `POST /api/events` sent with a cookie alone and `hook_event_name` is not `ukagai.session_panel_open` |
+| 404 | A nonexistent `:id` |
+| 409 | State transition violation (e.g. `answer` on `answered`, `ack` on `pending`) |
+| 410 | The target of `wait` is a closed decision (`answered` / `hook_disconnected` / `answer_lost` / `cancelled` / `denied_explain`). The body is `{error, status}` |
 
-## hook の出力(stdout)
+## Hook output (stdout)
 
-| 判断 | stdout |
+| Decision | stdout |
 |---|---|
-| 回答(allow) | `test/fixtures/t1-stdout.json`。`updatedInput` は `tool_input` に `answers` を足したもの |
-| 計画承認(allow) | `test/fixtures/t5-stdout.json`。`updatedInput` は `tool_input` そのまま |
-| deny | `test/fixtures/t4-stdout.json`。`permissionDecisionReason` に理由 |
-| 承認して auto(PermissionRequest) | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":[{"type":"setMode","mode":"auto","destination":"session"}]}}}` |
+| Answer (allow) | `test/fixtures/t1-stdout.json`. `updatedInput` is `tool_input` plus `answers` |
+| Plan approval (allow) | `test/fixtures/t5-stdout.json`. `updatedInput` is `tool_input` as is |
+| deny | `test/fixtures/t4-stdout.json`. The reason is in `permissionDecisionReason` |
+| Approve and switch to auto (PermissionRequest) | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":[{"type":"setMode","mode":"auto","destination":"session"}]}}}` |
 | SessionStart / SubagentStart | `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}` |
-| ターミナルで答える / 接続不可 / budget 切れ | 出力なし、exit 0 |
+| Answer in the terminal / cannot connect / budget exhausted | No output, exit 0 |
 
-## 計画に無い点(この文書と contract.ts で足したもの)
+## Points not in the plan (added by this document and contract.ts)
 
-- `DecisionContext.ai_title`(transcript の `ai-title`。`session.title` が無ければそこへも写す)、`CreateDecisionRequest.status`、`PendingModeSwitch` / `ConsumeModeSwitchResponse`、定数 `MODE_SWITCH_TTL_MS` / `CANCEL_WINDOW_MS`。
+- `DecisionContext.ai_title` (the transcript's `ai-title`. Also copied to `session.title` if that is missing), `CreateDecisionRequest.status`, `PendingModeSwitch` / `ConsumeModeSwitchResponse`, the constants `MODE_SWITCH_TTL_MS` / `CANCEL_WINDOW_MS`.
 
-- `WaitResponse` は `{ "response": DecisionResponse }`(計画は「200 + response」)。
-- `POST /api/decisions/:id/ack` の応答は `Decision`、エラー本文は `{"error":...}`、`POST /api/events` の応答は 204。
-- `Metrics` の形(`a` / `b` / `c` / `d`)は計画 2 節の指標名からの起案。
+- `WaitResponse` is `{ "response": DecisionResponse }` (the plan says "200 + response").
+- The response of `POST /api/decisions/:id/ack` is `Decision`, the error body is `{"error":...}`, and the response of `POST /api/events` is 204.
+- The shape of `Metrics` (`a` / `b` / `c` / `d`) is drafted from the metric names in section 2 of the plan.
 
-## W4(hook)が足した取り決め
+## Conventions added by W4 (hook)
 
-W3 の実装と合わせた hook 側の取り決め。
+Hook-side conventions aligned with the W3 implementation.
 
-- `CreateDecisionRequest` に任意の `status: "denied_explain"`(`contract.ts`。W3 も同じ追記をしているのでマージ時に重複を解く)。hook は説明なしの deny を記録するとき `status: "denied_explain"` を付けて `POST /api/decisions` する(`explanation` は付けない)。`first_denied_at` は server が付けるので hook は送らない。`attached_via` は hook が決めて送る。
-- 全 POST は `Content-Type: application/json`。本文の無い ack / consume も本文 `{}` を送る。
-- `POST /api/decisions` は新規 201、既存 200。hook は両方を成功として扱う。timeout は 3 秒(文脈収集が最大 1.5 秒)、wait は `timeout_ms + 5` 秒、その他 1 秒。
-- ループ保険: `GET /api/decisions?status=denied_explain` の全件を hook が `session_id`、`agent_id`、`questions[0].question`(ExitPlanMode は `kind: approve_plan`)、直近 2 分で絞る。失敗(接続不可 / 200 以外)したら deny せず無出力。
-- wait が 200 を返すのは `answer_submitted` / `fallback` のみ。fallback は `response.via: "terminal"` で、hook は何も出力せず ack もしない。
-- 説明なし(`attached_via: none`)と ExitPlanMode の `explanation` は `path: ""`(plan は `markdown` に計画本文、none は `markdown: ""`)、`match: "question"` 固定。server は空の `path` を弾かない。
-- `GET /api/sessions/:id/pending-mode-switch` は 200 + `{"pending": boolean}`、`POST .../consume` は 2xx。
-- hook の引数: `--poll-timeout-ms`(test 用)、`--deny-template A|B`(既定 A)。
+- `CreateDecisionRequest` gets an optional `status: "denied_explain"` (`contract.ts`. W3 made the same addition, so resolve the duplicate at merge). When the hook records a deny without an explanation, it sends `POST /api/decisions` with `status: "denied_explain"` (without `explanation`). `first_denied_at` is set by the server, so the hook does not send it. `attached_via` is decided and sent by the hook.
+- Every POST uses `Content-Type: application/json`. ack / consume, which have no body, also send the body `{}`.
+- `POST /api/decisions` is 201 for new and 200 for existing. The hook treats both as success. The timeout is 3 seconds (context collection takes up to 1.5 seconds), wait is `timeout_ms + 5` seconds, and others 1 second.
+- Loop guard: the hook takes all of `GET /api/decisions?status=denied_explain` and filters by `session_id`, `agent_id`, `questions[0].question` (`kind: approve_plan` for ExitPlanMode), and the last 2 minutes. On failure (cannot connect / non-200) it does not deny and prints nothing.
+- wait returns 200 only for `answer_submitted` / `fallback`. A fallback has `response.via: "terminal"`, and the hook prints nothing and does not ack.
+- The `explanation` for no explanation (`attached_via: none`) and for ExitPlanMode has `path: ""` (for plan, `markdown` holds the plan body; for none, `markdown: ""`) and a fixed `match: "question"`. The server does not reject an empty `path`.
+- `GET /api/sessions/:id/pending-mode-switch` is 200 + `{"pending": boolean}`, and `POST .../consume` is 2xx.
+- Hook arguments: `--poll-timeout-ms` (for tests), `--deny-template A|B` (default A).

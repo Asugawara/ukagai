@@ -24,7 +24,7 @@ function isDirectory(p: string): boolean {
   }
 }
 
-/** 失敗・timeout は undefined。出力は GIT_MAX_BYTES で打ち切る */
+/** A failure or timeout yields undefined. Output is truncated at GIT_MAX_BYTES */
 function runGit(cwd: string, args: string[]): Promise<string | undefined> {
   return new Promise((resolve) => {
     let settled = false;
@@ -37,7 +37,7 @@ function runGit(cwd: string, args: string[]): Promise<string | undefined> {
     };
     let child;
     try {
-      // リポジトリ設定由来のコマンド実行(fsmonitor / 外部 diff / textconv)を避ける
+      // Avoid running commands that come from repository config (fsmonitor / external diff / textconv)
       child = spawn("git", ["-c", "core.fsmonitor=false", "-C", cwd, "--no-pager", ...args], {
         stdio: ["ignore", "pipe", "ignore"],
         env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
@@ -94,7 +94,7 @@ function readTail(path: string): string | undefined {
     }
     let text = buf.subarray(0, read).toString("utf8");
     if (size > len) {
-      // 先頭は行の途中で切れている
+      // The head is cut mid-line
       const nl = text.indexOf("\n");
       text = nl === -1 ? "" : text.slice(nl + 1);
     }
@@ -174,7 +174,7 @@ function readTranscriptOnce(session: DecisionSession, home: string): Context {
 async function collectTranscript(session: DecisionSession, home: string): Promise<Context> {
   const first = readTranscriptOnce(session, home);
   if (Object.keys(first).length > 0) return first;
-  // transcript の書き込みは遅れることがあるので 1 回だけ再読する
+  // Transcript writes can lag, so re-read exactly once
   await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
   return readTranscriptOnce(session, home);
 }

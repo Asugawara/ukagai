@@ -21,11 +21,11 @@ import {
 const fx = (name: string): any =>
   JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
 
-test("fixture: t1 / t5 の stdin が PreToolUseInput と各 tool_input を通る", () => {
+test("fixture: t1 / t5 stdin pass PreToolUseInput and each tool_input", () => {
   const t1 = fx("t1-stdin.json");
   assert.ok(PreToolUseInput.safeParse(t1).success);
   assert.ok(AskUserQuestionInput.safeParse(t1.tool_input).success);
-  // 知らないキー(prompt_id / effort)が落とされずに残る
+  // unknown keys (prompt_id / effort) are kept, not dropped
   assert.equal(PreToolUseInput.parse(t1).prompt_id, t1.prompt_id);
 
   const t5 = fx("t5-stdin.json");
@@ -33,7 +33,7 @@ test("fixture: t1 / t5 の stdin が PreToolUseInput と各 tool_input を通る
   assert.ok(ExitPlanModeInput.safeParse(t5.tool_input).success);
 });
 
-test("fixture: stdout が allow / deny の schema を通り、取り違えは弾かれる", () => {
+test("fixture: stdout passes the allow / deny schema and mix-ups are rejected", () => {
   assert.ok(PreToolUseAllow.safeParse(fx("t1-stdout.json")).success);
   assert.ok(PreToolUseAllow.safeParse(fx("t5-stdout.json")).success);
   assert.ok(PreToolUseDeny.safeParse(fx("t4-stdout.json")).success);
@@ -41,7 +41,7 @@ test("fixture: stdout が allow / deny の schema を通り、取り違えは弾
   assert.ok(!PreToolUseAllow.safeParse(fx("t4-stdout.json")).success);
 });
 
-test("PermissionRequest / SessionStart の出力形", () => {
+test("PermissionRequest / SessionStart output shapes", () => {
   assert.ok(
     PermissionRequestAllowSetMode.safeParse({
       hookSpecificOutput: {
@@ -63,7 +63,7 @@ test("PermissionRequest / SessionStart の出力形", () => {
   );
 });
 
-test("CreateDecisionRequest / EventInput が fixture から組み立てられる", () => {
+test("CreateDecisionRequest / EventInput can be built from fixtures", () => {
   const t1 = fx("t1-stdin.json");
   const req = {
     tool_use_id: t1.tool_use_id,
@@ -84,11 +84,11 @@ test("CreateDecisionRequest / EventInput が fixture から組み立てられる
   );
 });
 
-test("AnswerRequest: 4 形を通し、不正は弾く", () => {
-  assert.ok(AnswerRequest.safeParse({ answers: { "A と B のどちらにしますか？": "B" } }).success);
+test("AnswerRequest: accepts the 4 shapes and rejects invalid ones", () => {
+  assert.ok(AnswerRequest.safeParse({ answers: { "Which do you choose, A or B?": "B" } }).success);
   assert.ok(AnswerRequest.safeParse({ approve: true }).success);
   assert.ok(AnswerRequest.safeParse({ approve: true, set_mode_auto: true }).success);
-  assert.ok(AnswerRequest.safeParse({ approve: false, reason: "範囲が広い" }).success);
+  assert.ok(AnswerRequest.safeParse({ approve: false, reason: "too broad" }).success);
   assert.ok(AnswerRequest.safeParse({ fallback: true }).success);
 
   assert.ok(!AnswerRequest.safeParse({ answers: { q: 1 } }).success);
@@ -99,7 +99,7 @@ test("AnswerRequest: 4 形を通し、不正は弾く", () => {
   assert.ok(!AnswerRequest.safeParse({}).success);
 });
 
-test("canTransition: 許可 7 件が true", () => {
+test("canTransition: the 7 allowed transitions are true", () => {
   const allowed: [string, string][] = [
     ["pending", "answer_submitted"],
     ["pending", "fallback"],
@@ -112,13 +112,13 @@ test("canTransition: 許可 7 件が true", () => {
   for (const [from, to] of allowed) {
     assert.equal(canTransition(from as DecisionStatus, to as DecisionStatus), true, `${from}→${to}`);
   }
-  // 許可表の外はすべて false(全 64 組のうち 7 件だけが true)
+  // everything outside the allow table is false (only 7 of all 64 pairs are true)
   let trues = 0;
   for (const from of DecisionStatus.options) for (const to of DecisionStatus.options) if (canTransition(from, to)) trues++;
   assert.equal(trues, 7);
 });
 
-test("canTransition: 不正な遷移と終端", () => {
+test("canTransition: invalid transitions and terminal states", () => {
   assert.equal(canTransition("answered", "pending"), false);
   assert.equal(canTransition("answer_submitted", "pending"), false);
   assert.equal(canTransition("pending", "answered"), false);

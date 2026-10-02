@@ -48,9 +48,9 @@ async function waitForPending(env: Env): Promise<any> {
   throw new Error("decision was not registered");
 }
 
-const QUESTION = "A と B のどちらにしますか？";
+const QUESTION = "Which do you choose, A or B?";
 const askInput = {
-  questions: [{ question: QUESTION, header: "選択", options: [{ label: "A" }, { label: "B" }], multiSelect: false }],
+  questions: [{ question: QUESTION, header: "Choice", options: [{ label: "A" }, { label: "B" }], multiSelect: false }],
 };
 
 function stdin(env: Env, scratch: string, toolName: string, toolInput: unknown, mode: string, toolUseId: string): string {
@@ -67,7 +67,7 @@ function stdin(env: Env, scratch: string, toolName: string, toolInput: unknown, 
   });
 }
 
-test("(a) plan mode の AskUserQuestion は説明なしで登録され none / plan_mode", async () => {
+test("(a) AskUserQuestion in plan mode is registered without explanation as none / plan_mode", async () => {
   const env = await setup();
   const hook = runHook(env.hookArgs, stdin(env, tmp(), "AskUserQuestion", askInput, "plan", "tu-a"));
   const d = await waitForPending(env);
@@ -82,9 +82,9 @@ test("(a) plan mode の AskUserQuestion は説明なしで登録され none / pl
   assert.deepEqual(j.hookSpecificOutput.updatedInput.answers, { [QUESTION]: "A" });
 });
 
-test("(b) ExitPlanMode(影響範囲と可逆性の節あり)は登録され、GUI の承認で allow", async () => {
+test("(b) ExitPlanMode (with a scope and reversibility section) is registered and allowed on GUI approval", async () => {
   const env = await setup();
-  const plan = "# 計画\n\n## 手順\n\n1. 直す。\n\n## 影響範囲と可逆性\n\n1 ファイルだけ。git revert で戻せる。\n";
+  const plan = "# Plan\n\n## Steps\n\n1. Fix it.\n\n## Scope and reversibility\n\nOne file only. Revertable with git revert.\n";
   const hook = runHook(env.hookArgs, stdin(env, tmp(), "ExitPlanMode", { plan, planFilePath: "/x/plan.md" }, "plan", "tu-b"));
   const d = await waitForPending(env);
   assert.equal(d.kind, "approve_plan");
@@ -96,7 +96,7 @@ test("(b) ExitPlanMode(影響範囲と可逆性の節あり)は登録され、GU
   assert.equal(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision, "allow");
 });
 
-test("(c) 2 分以内の denied_explain があり説明ファイルが無いと none / loop_guard で登録", async () => {
+test("(c) a denied_explain within 2 minutes and no explanation file registers as none / loop_guard", async () => {
   const env = await setup();
   const scratch = tmp();
   const session = {
@@ -125,11 +125,11 @@ test("(c) 2 分以内の denied_explain があり説明ファイルが無いと 
 });
 
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-  test(`(cancel) wait 中の hook に ${sig} → 無出力 exit 0、decision は cancelled`, async () => {
+  test(`(cancel) ${sig} to a waiting hook -> no output, exit 0, decision cancelled`, async () => {
     const env = await setup();
     const hook = spawnHook(env.hookArgs, stdin(env, tmp(), "AskUserQuestion", askInput, "plan", `tu-cancel-${sig}`));
     const d = await waitForPending(env);
-    // 登録直後は signal handler 設置前の可能性があるので、wait に入るのを待つ
+    // the signal handler may not be installed right after registration, so wait until it is waiting
     await new Promise((r) => setTimeout(r, 300));
     hook.signal(sig);
     const out = await hook.result;
@@ -140,7 +140,7 @@ for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
   });
 }
 
-test("(cancel) POST /cancel: answer_submitted は answer_lost、終端は 409、token 無しは 401", async () => {
+test("(cancel) POST /cancel: answer_submitted is answer_lost, terminal is 409, no token is 401", async () => {
   const env = await setup();
   const hook = runHook(env.hookArgs, stdin(env, tmp(), "AskUserQuestion", askInput, "plan", "tu-cancel-api"));
   const d = await waitForPending(env);
@@ -155,9 +155,9 @@ test("(cancel) POST /cancel: answer_submitted は answer_lost、終端は 409、
   assert.equal(((await c1.json()) as any).status, "cancelled");
   const c2 = await call(env, `/api/decisions/${d.id}/cancel`, {});
   assert.equal(c2.status, 409);
-  await hook; // wait が 410 で終わり hook も降りる
+  await hook; // wait ends with 410 and the hook exits too
 
-  // hook 無しで登録 → 回答 → cancel は answer_lost
+  // register without hook -> answer -> cancel gives answer_lost
   const created = await call(env, "/api/decisions", {
     tool_use_id: "tu-cancel-api2",
     kind: "answer_question",

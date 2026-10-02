@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LANGS, isLang, type Lang } from "./config.js";
 
 export interface Target {
   settingsFile: string;
@@ -9,12 +10,14 @@ export interface Target {
   observe: boolean;
   dryRun: boolean;
   noSkill: boolean;
-  /** skill を配置・削除・診断する対象か(`--settings` 指定時は `--skill` が無ければ false) */
+  /** Whether to place / remove / diagnose the skill (false with `--settings` unless `--skill` is given) */
   handleSkill: boolean;
   noAutostart: boolean;
   server: string;
   dataDir: string;
-  /** hook の args に足す(既定値と違うときだけ) */
+  /** `--lang`; undefined when not given */
+  lang: Lang | undefined;
+  /** Extra args for the hook (only when they differ from the defaults) */
   hookArgs: string[];
 }
 
@@ -24,6 +27,7 @@ export function parseTarget(argv: string[]): Target {
   let settings: string | undefined;
   let project = false;
   let skill = false;
+  let lang: Lang | undefined;
   const t = {
     timeout: 3600,
     observe: false,
@@ -38,7 +42,7 @@ export function parseTarget(argv: string[]): Target {
     const a = argv[i]!;
     const val = (): string => {
       const v = argv[++i];
-      if (v === undefined) throw new Error(`${a} に値がありません`);
+      if (v === undefined) throw new Error(`${a} needs a value`);
       return v;
     };
     if (a === "--settings") settings = resolve(val());
@@ -50,11 +54,15 @@ export function parseTarget(argv: string[]): Target {
     else if (a === "--no-autostart") t.noAutostart = true;
     else if (a === "--timeout") {
       const n = Number(val());
-      if (!Number.isInteger(n) || n < 15) throw new Error("--timeout は 15 以上の整数(秒)");
+      if (!Number.isInteger(n) || n < 15) throw new Error("--timeout must be an integer of 15 or more (seconds)");
       t.timeout = n;
     } else if (a === "--server") t.server = val().replace(/\/+$/, "");
-    else if (a === "--data-dir") t.dataDir = resolve(val());
-    else throw new Error(`不明な引数: ${a}`);
+    else if (a === "--lang") {
+      const v = val();
+      if (!isLang(v)) throw new Error(`--lang must be one of: ${LANGS.join(", ")}`);
+      lang = v;
+    } else if (a === "--data-dir") t.dataDir = resolve(val());
+    else throw new Error(`unknown argument: ${a}`);
   }
   const base = project ? join(process.cwd(), ".claude") : join(homedir(), ".claude");
   const hookArgs: string[] = [];
@@ -62,6 +70,7 @@ export function parseTarget(argv: string[]): Target {
   if (t.server !== DEFAULT_SERVER) hookArgs.push("--server", t.server);
   return {
     ...t,
+    lang,
     hookArgs,
     handleSkill: !t.noSkill && (settings === undefined || skill),
     settingsFile: settings ?? join(base, "settings.json"),
@@ -70,7 +79,7 @@ export function parseTarget(argv: string[]): Target {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-/** リポジトリ根(src/settings も dist/settings も 2 つ上) */
+/** Repository root (two levels up from both src/settings and dist/settings) */
 export const REPO_ROOT = resolve(here, "../..");
 export const CLI_PATH = join(REPO_ROOT, "dist", "cli.js");
 export const SKILL_SOURCE = join(REPO_ROOT, "skills", "ukagai-explain", "SKILL.md");

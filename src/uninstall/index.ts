@@ -26,22 +26,22 @@ export async function run(argv: string[]): Promise<number> {
 
     if (t.dryRun) {
       const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
-      process.stdout.write(diff === "" ? "settings: 変更なし\n" : diff);
-      if (skillExists) process.stdout.write(`skill: ${skillFile} を削除\n`);
-      process.stdout.write("(--dry-run: 何も書いていません)\n");
+      process.stdout.write(diff === "" ? "settings: no changes\n" : diff);
+      if (skillExists) process.stdout.write(`skill: remove ${skillFile}\n`);
+      process.stdout.write("(--dry-run: nothing was written)\n");
       return 0;
     }
 
     const out: string[] = [];
     if (fileExists && changed) {
       const bak = await writeSettings(t.settingsFile, after);
-      out.push(`settings: ${t.settingsFile} から ukagai の hook を除去`);
+      out.push(`settings: removed the ukagai hooks from ${t.settingsFile}`);
       if (bak) out.push(`backup:   ${bak}`);
-    } else out.push("settings: ukagai の hook は登録されていません");
+    } else out.push("settings: no ukagai hooks are registered");
     if (skillExists) {
       await rm(skillFile);
       await rmdir(t.skillDir).catch(() => undefined);
-      out.push(`skill:    ${skillFile} を削除`);
+      out.push(`skill:    removed ${skillFile}`);
     }
     process.stdout.write(out.join("\n") + "\n");
     return 0;

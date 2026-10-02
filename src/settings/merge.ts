@@ -17,10 +17,10 @@ export async function readSettings(file: string): Promise<Settings> {
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new Error(`${file} は JSON として読めません: ${(err as Error).message}`);
+    throw new Error(`${file} is not valid JSON: ${(err as Error).message}`);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`${file} の最上位がオブジェクトではありません`);
+    throw new Error(`${file} does not contain a JSON object at the top level`);
   }
   return parsed as Settings;
 }
@@ -29,7 +29,7 @@ export function serialize(s: Settings): string {
   return JSON.stringify(s, null, 2) + "\n";
 }
 
-/** 書く前に <file>.bak-<ISO時刻> へコピーしてから書く。無ければ bak は作らない */
+/** Copy to <file>.bak-<ISO time> before writing. No bak is made if the file does not exist */
 export async function writeSettings(file: string, s: Settings): Promise<string | null> {
   let bak: string | null = null;
   try {
@@ -48,7 +48,7 @@ function hooksOf(s: Settings): Record<string, unknown> {
   const h = s["hooks"];
   if (h === undefined) return {};
   if (typeof h !== "object" || h === null || Array.isArray(h)) {
-    throw new Error("settings の hooks がオブジェクトではありません");
+    throw new Error("hooks in settings is not an object");
   }
   return h as Record<string, unknown>;
 }
@@ -69,7 +69,7 @@ function stripManaged(groups: unknown): unknown[] {
   return out;
 }
 
-/** 印付きを置き換え、他は保持。入力は変更しない */
+/** Replace the marked entries and keep the rest. The input is not modified */
 export function mergeHooks(existing: Settings, entries: Record<string, MatcherGroup[]>): Settings {
   const removed = removeHooks(existing);
   const hooks: Record<string, unknown> = { ...hooksOf(removed) };
@@ -80,7 +80,7 @@ export function mergeHooks(existing: Settings, entries: Record<string, MatcherGr
   return { ...removed, hooks };
 }
 
-/** 印付きだけ除去。空になった event と空の hooks は消す */
+/** Remove only the marked entries. Events and hooks that become empty are dropped */
 export function removeHooks(existing: Settings): Settings {
   if (existing["hooks"] === undefined) return { ...existing };
   const hooks: Record<string, unknown> = {};

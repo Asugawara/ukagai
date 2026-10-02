@@ -1,26 +1,26 @@
-# 検証 01: PreToolUse hook による AskUserQuestion への回答注入
+# Verification 01: Injecting answers into AskUserQuestion via a PreToolUse hook
 
-- 実施日: 2026-10-02
-- Claude Code: `2.1.287 (Claude Code)`(`claude --version`)
-- Node: v24.11.0(hook の実行系)
-- 対話セッションは Herdr の隣 pane で `claude --settings verification/settings.json --model sonnet` として起動(モデルは Sonnet 5.5、グローバル設定の `defaultMode` が `auto` のため auto mode で起動)
-- 使ったもの: `verification/hook.mjs`、`verification/settings.json`、hook の生ログ `verification/log/T*.json`
-- 一次情報の対応表: hook ログ = `verification/log/<試験名>-<timestamp>.json`、transcript = `~/.claude/projects/-Users-user-dev-ukagai/<session_id>.jsonl`
+- Date: 2026-10-02
+- Claude Code: `2.1.287 (Claude Code)` (`claude --version`)
+- Node: v24.11.0 (runtime for the hook)
+- The interactive session was started in the pane next to Herdr as `claude --settings verification/settings.json --model sonnet` (model Sonnet 5.5; started in auto mode because the global setting `defaultMode` is `auto`)
+- Used: `verification/hook.mjs`, `verification/settings.json`, raw hook logs `verification/log/T*.json`
+- Primary-source mapping: hook log = `verification/log/<test name>-<timestamp>.json`, transcript = `~/.claude/projects/-Users-user-dev-ukagai/<session_id>.jsonl`
 
-## 結果表
+## Results table
 
-| 試験 | 条件 | 結果 | 一言 |
+| Test | Condition | Result | Summary |
 |---|---|---|---|
-| T1 | 対話 × auto | **通った** | 質問 UI は出ず、hook の `answers` がそのまま回答になった。Claude は「B」と復唱 |
-| T2 | 非対話(`claude -p`、permission host なし)× auto | **通らない(hook が発火しない)** | `-p` では AskUserQuestion がツール一覧に無い。hook は呼ばれず、Claude は「この環境で使えません」と文章で聞き返した |
-| T3a | 対話 × wait、回答ファイルを置かず 60 秒超 | **条件付き: timeout で通常 UI に落ちる** | 60.056 秒で hook が SIGTERM を受けて終了。transcript に `hook_cancelled`(`timedOut: true`)。画面に通常の質問 UI が出た。警告文は画面に出ない |
-| T3a' | T3a の UI 表示中に answer.json を置く | **拾わない** | hook プロセスは既に死んでいる。10 秒待っても UI は消えず、answer.json も残ったまま。手で「A」を選ぶと通常どおり続いた |
-| T3b | 対話 × wait、answer.json を先に置いて質問させる | **通った** | hook が 0 秒で拾い、`answers` を注入。answer.json は hook が消費 |
-| T3c | 対話 × wait、質問から 29 秒後に answer.json を置く | **通った** | hook は待機中(Herdr の状態は `working` のまま、`blocked` にならない)、29 秒後に拾って注入。Claude は「A」と復唱 |
-| T4 | 対話 × deny(理由: ask_decision を使え) | **条件付き: 理由には従うが、ツールが無いと文章で聞く** | Claude は `ToolSearch` で `ask_decision` を探し、見つからず、文章で「A か B か」と聞いて止まった |
-| T5 | 対話 × auto × ExitPlanMode(`--permission-mode plan`) | **通った** | 計画承認 UI は出ず「User approved Claude's plan」になった。ただし承認後の権限モードは `manual`(編集に都度確認)になり、直後の Write で許可プロンプトが出た |
+| T1 | interactive × auto | **Passed** | No question UI appeared; the hook's `answers` became the answer as is. Claude repeated "B" back |
+| T2 | non-interactive (`claude -p`, no permission host) × auto | **Does not pass (hook does not fire)** | With `-p`, AskUserQuestion is not in the tool list. The hook was not called, and Claude asked back in prose, saying it could not use it in this environment |
+| T3a | interactive × wait, no answer file, over 60 seconds | **Conditional: falls back to the normal UI on timeout** | The hook received SIGTERM at 60.056 seconds and exited. The transcript has `hook_cancelled` (`timedOut: true`). The normal question UI appeared on screen. No warning is shown on screen |
+| T3a' | Place answer.json while the T3a UI is displayed | **Not picked up** | The hook process is already dead. The UI did not go away after waiting 10 seconds, and answer.json remained. Selecting "A" by hand continued as usual |
+| T3b | interactive × wait, place answer.json first, then ask the question | **Passed** | The hook picked it up at 0 seconds and injected `answers`. The hook consumed answer.json |
+| T3c | interactive × wait, place answer.json 29 seconds after the question | **Passed** | The hook was waiting (Herdr status stayed `working`, never `blocked`), picked it up after 29 seconds and injected it. Claude repeated "A" back |
+| T4 | interactive × deny (reason: use ask_decision) | **Conditional: follows the reason, but asks in prose if the tool is missing** | Claude searched for `ask_decision` with `ToolSearch`, did not find it, and stopped after asking "A or B?" in prose |
+| T5 | interactive × auto × ExitPlanMode (`--permission-mode plan`) | **Passed** | The plan approval UI did not appear and it became "User approved Claude's plan". However, the permission mode after approval became `manual` (confirm each edit), and a permission prompt appeared at the immediately following Write |
 
-## hook の stdin JSON の形(T1 で受信した実物、`verification/log/T1-*.json` の `stdin`)
+## Shape of the hook's stdin JSON (the real thing received in T1, `stdin` in `verification/log/T1-*.json`)
 
 ```json
 {
@@ -50,11 +50,11 @@
 }
 ```
 
-- `tool_input.questions[].options[]` には `label` と `description` が入る。`answers` は含まれない(公式ドキュメントどおり Claude 側は設定しない)。
-- `tool_use_id` と `transcript_path` が入るので、外部 UI 側で質問と回答を突き合わせる鍵になる。
-- Sonnet は「A と B のどちらにしますか」と指示しても末尾に「？」を付けて `question` を生成した(T1・T3・T4 の 5 回とも同じ文字列)。`answers` のキーは `question` と完全一致させる必要があるため、hook 側では stdin の `question` をそのままキーに使うべき。文字列を事前に決め打ちすると一致しない可能性がある(T3b/T3c は決め打ちで偶然一致した。不一致時の挙動は未検証)。
+- `tool_input.questions[].options[]` contains `label` and `description`. `answers` is not included (Claude does not set it, as in the official documentation).
+- `tool_use_id` and `transcript_path` are included, so they serve as keys for matching questions and answers on the external UI side.
+- Even though Sonnet was instructed with "A と B のどちらにしますか" (no question mark), it generated `question` with a trailing "？" (the same string in all 5 runs of T1, T3 and T4). The keys of `answers` must match `question` exactly, so the hook should use the `question` from stdin as the key as is. Hard-coding the string in advance may not match (T3b/T3c matched by coincidence with a hard-coded string. Behavior on mismatch is unverified).
 
-## hook が返した JSON(T1、`verification/log/T1-*.json` の `stdout`)
+## JSON returned by the hook (T1, `stdout` in `verification/log/T1-*.json`)
 
 ```json
 {
@@ -69,11 +69,11 @@
 }
 ```
 
-## 各試験の観察
+## Observations per test
 
-### T1 対話 × auto(session `00000000-0000-4000-8000-000000000001`)
+### T1 interactive × auto (session `00000000-0000-4000-8000-000000000001`)
 
-画面(`herdr agent read probe --source recent-unwrapped`):
+Screen (`herdr agent read probe --source recent-unwrapped`):
 
 ```
 ❯ AskUserQuestion を使って『A と B のどちらにしますか』と選択肢 A・B
@@ -87,11 +87,11 @@
 ✻ Worked for 4s · done 12:09
 ```
 
-- 質問 UI(選択肢リスト)は画面に出なかった。Herdr の agent 状態は `working` → `done` で、`blocked`(質問・承認 UI の検出)を経由していない。
-- hook の所要時間は 67 ms(transcript の `hook_success.durationMs`)。
-- 警告文は画面にも transcript にも無い。
+- The question UI (list of options) did not appear on screen. Herdr's agent status went `working` → `done`, without passing through `blocked` (detection of a question or approval UI).
+- The hook took 67 ms (`hook_success.durationMs` in the transcript).
+- There is no warning text on screen or in the transcript.
 
-transcript の該当行(抜粋):
+Relevant transcript lines (excerpt):
 
 ```jsonl
 // 行 29: Claude が出した tool_use。入力に answers は無い(モデルが出した原文)
@@ -102,17 +102,21 @@ transcript の該当行(抜粋):
 {"type":"user","message":{"content":[{"type":"tool_result","content":"Your questions have been answered: \"A と B のどちらにしますか？\"=\"B\". You can now continue with these answers in mind.","tool_use_id":"toolu_01C9XvdLwhw5t7NsMYWcdF4R"}]},"toolUseResult":{"questions":[...],"answers":{"A と B のどちらにしますか？":"B"}}}
 ```
 
-- 「transcript の tool_use 入力に answers が入っているか」への答え: tool_use(行 29)の `input` には入らない。注入後の値は `toolUseResult.answers`(行 31)と `hook_success.stdout`(行 30)に残る。
+(Comments in the block above, translated: line 29 = tool_use emitted by Claude, with no answers in the input (the model's original output); line 30 = the hook's result; line 31 = tool_result, with answers in toolUseResult.)
 
-### T2 非対話 × auto(session `00000000-0000-4000-8000-000000000003`)
+- Answer to "are answers in the transcript's tool_use input?": they are not in the `input` of the tool_use (line 29). The injected values remain in `toolUseResult.answers` (line 31) and `hook_success.stdout` (line 30).
 
-実行:
+### T2 non-interactive × auto (session `00000000-0000-4000-8000-000000000003`)
+
+Run:
 
 ```
 UKAGAI_MODE=auto claude -p --settings verification/settings.json --output-format json --model sonnet "<T1 と同じ文>"
 ```
 
-出力(`result` のみ、exit 0、stderr 空):
+(`<T1 と同じ文>` means "the same sentence as T1".)
+
+Output (`result` only, exit 0, stderr empty):
 
 ```
 `AskUserQuestion` はこの環境で使えません。ツール一覧にも、遅延ツールの検索結果にもありませんでした。そのためダイアログでは聞けず、回答も受け取れていません。
@@ -120,16 +124,16 @@ UKAGAI_MODE=auto claude -p --settings verification/settings.json --output-format
 代わりにここで聞きます。**A と B のどちらにしますか。** 返信してもらえれば、その内容を一行で復唱します。
 ```
 
-- `verification/log/` に新しいファイルは作られず、hook は一度も呼ばれていない。
-- transcript の `prompt_snapshot.tools` に載っていたツール名: `Agent, Bash, Edit, ListAgents, Read, ReportFindings, ScheduleWakeup, ShareOnboardingGuide, Skill, ToolSearch, Workflow, Write`。AskUserQuestion は無い。
-- Claude は `ToolSearch {"query":"select:AskUserQuestion"}` を呼び、結果は `No matching deferred tools found`。
-- 公式ドキュメントの「`-p` では permission host がある場合だけ AskUserQuestion を提供する」の記述と一致する。`--permission-prompt-tool` を付けた場合は本検証では試していない(推測: ドキュメントどおりならツールが提供され hook が発火するはずだが、未確認)。
+- No new file was created in `verification/log/`, and the hook was never called.
+- Tool names in `prompt_snapshot.tools` in the transcript: `Agent, Bash, Edit, ListAgents, Read, ReportFindings, ScheduleWakeup, ShareOnboardingGuide, Skill, ToolSearch, Workflow, Write`. AskUserQuestion is not there.
+- Claude called `ToolSearch {"query":"select:AskUserQuestion"}`, and the result was `No matching deferred tools found`.
+- This agrees with the official documentation's statement that "`-p` provides AskUserQuestion only when there is a permission host". The case with `--permission-prompt-tool` was not tried in this verification (speculation: per the documentation the tool should be provided and the hook should fire, but this is unconfirmed).
 
-### T3 対話 × wait(session `00000000-0000-4000-8000-000000000004`)
+### T3 interactive × wait (session `00000000-0000-4000-8000-000000000004`)
 
-#### T3a: answer.json を置かずに待つ
+#### T3a: waiting without placing answer.json
 
-hook ログ(`verification/log/T3a-*.json`、抜粋):
+Hook log (`verification/log/T3a-*.json`, excerpt):
 
 ```json
 "started_at": "2026-10-02T03:11:29.883Z",
@@ -140,13 +144,13 @@ hook ログ(`verification/log/T3a-*.json`、抜粋):
                  {"at":"2026-10-02T03:12:29.858Z","msg":"received SIGTERM"} ]
 ```
 
-transcript の該当行(行 30):
+Relevant transcript line (line 30):
 
 ```jsonl
 {"attachment":{"type":"hook_cancelled","hookName":"PreToolUse:AskUserQuestion","toolUseID":"toolu_0122etacZmjCja5X9ygeaVdu","hookEvent":"PreToolUse","command":"node /Users/user/dev/ukagai/verification/hook.mjs","durationMs":60056,"timedOut":true,"timeoutMs":60000},"timestamp":"2026-10-02T03:12:29.860Z"}
 ```
 
-timeout 直後の画面(`--source visible`。この間 Herdr の状態は `blocked`):
+Screen right after the timeout (`--source visible`. During this time Herdr's status is `blocked`):
 
 ```
 ❯ AskUserQuestion を使って『A と B のどちらにしますか』と選択肢 A・B
@@ -167,32 +171,32 @@ A と B のどちらにしますか？
 Enter to select · ↑/↓ to navigate · Esc to cancel
 ```
 
-- hook は settings の `timeout: 60` ちょうどで SIGTERM を受けて終了し(`pgrep` でプロセスが消えていることを確認)、ツールは通常の質問 UI に落ちた。エラーにもツール失敗にもならない。
-- 画面に hook の timeout を知らせる警告は出ていない(transcript に `hook_cancelled` 行が残るだけ)。
-- UI 表示中に `answer.json` を置いて 10 秒待っても状態は `blocked` のままで、`answer.json` も残ったまま(hook は既に死んでいるので拾えない)。
-- 手で Enter(選択肢 1 = A)を押すと通常どおり進み、tool_result は `"A と B のどちらにしますか？"="A"`、Claude は「回答は『A』でした」と復唱。
+- The hook received SIGTERM at exactly the `timeout: 60` in settings and exited (confirmed with `pgrep` that the process was gone), and the tool fell back to the normal question UI. It is neither an error nor a tool failure.
+- No warning about the hook timeout appears on screen (only a `hook_cancelled` line remains in the transcript).
+- Even after placing `answer.json` while the UI was displayed and waiting 10 seconds, the status stayed `blocked` and `answer.json` remained (the hook is already dead, so it cannot pick it up).
+- Pressing Enter by hand (option 1 = A) continued as usual; the tool_result was `"A と B のどちらにしますか？"="A"`, and Claude repeated back "回答は『A』でした".
 
-#### T3b: answer.json を先に置いてから質問させる
+#### T3b: placing answer.json first, then asking the question
 
-- hook ログ `T3b-*.json`: `"wait: answer.json found after 0s"`、`answers: {"A と B のどちらにしますか？": "B"}`、exit 0。
-- 画面: `User answered Claude's questions: · A と B のどちらにしますか？ → B`、復唱「B」。質問 UI は出ない。
-- hook が `answer.json` を消費(unlink)した。
+- Hook log `T3b-*.json`: `"wait: answer.json found after 0s"`, `answers: {"A と B のどちらにしますか？": "B"}`, exit 0.
+- Screen: `User answered Claude's questions: · A と B のどちらにしますか？ → B`, repeated back "B". The question UI does not appear.
+- The hook consumed (unlinked) `answer.json`.
 
-#### T3c: 質問から 29 秒後に answer.json を置く
+#### T3c: placing answer.json 29 seconds after the question
 
-- hook ログ `T3c-*.json`: `started_at 03:14:49.642Z`、`"wait: still waiting (19s)"`、`"wait: answer.json found after 29s"`、`ended_at 03:15:18.684Z`、exit 0。
-- 待機中: `herdr agent wait probe --until blocked --timeout 20000` が timeout した(= Herdr は質問 UI を検出していない)。`pgrep` で hook プロセス(pid 42830)が生きていることを確認。
-- `answer.json`(`{"A と B のどちらにしますか？": "A"}`)を置いた直後に hook が拾い、Claude は「回答は『A』でした」と復唱。画面は `Sautéed for 33s · done`。
+- Hook log `T3c-*.json`: `started_at 03:14:49.642Z`, `"wait: still waiting (19s)"`, `"wait: answer.json found after 29s"`, `ended_at 03:15:18.684Z`, exit 0.
+- While waiting: `herdr agent wait probe --until blocked --timeout 20000` timed out (= Herdr did not detect a question UI). Confirmed with `pgrep` that the hook process (pid 42830) was alive.
+- The hook picked up `answer.json` (`{"A と B のどちらにしますか？": "A"}`) immediately after it was placed, and Claude repeated back "回答は『A』でした". The screen showed `Sautéed for 33s · done`.
 
-### T4 対話 × deny(session `00000000-0000-4000-8000-000000000005`)
+### T4 interactive × deny (session `00000000-0000-4000-8000-000000000005`)
 
-hook が返した JSON(`T4-*.json`):
+JSON returned by the hook (`T4-*.json`):
 
 ```json
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"文章で質問せず、MCP ツール ask_decision を使ってください"}}
 ```
 
-画面:
+Screen:
 
 ```
 ❯ AskUserQuestion を使って『A と B のどちらにしますか』と選択肢 A・B
@@ -211,7 +215,7 @@ hook が返した JSON(`T4-*.json`):
 ✻ Brewed for 9s · done 12:16
 ```
 
-transcript の該当行(抜粋):
+Relevant transcript lines (excerpt):
 
 ```
 行 30: tool_use AskUserQuestion {"questions":[{"question":"A と B のどちらにしますか？", ...}]}
@@ -221,23 +225,25 @@ transcript の該当行(抜粋):
 行 45: text 「質問できませんでした。... もしくはここで「A」か「B」と直接答えてもらえれば、それを復唱します。」
 ```
 
-- Claude は理由文に従って `ask_decision` を探した(1 回)。存在しないので、文章で聞き直してターンを終えた。止まりはしない。
-- 実際に `ask_decision` を MCP で提供した場合に使うかは本検証では試していない。
+(Line numbers: 30 = tool_use, 31 = tool_result error, 41 = ToolSearch call, 42 = result, 45 = text.)
 
-### T5 対話 × auto × ExitPlanMode(session `00000000-0000-4000-8000-000000000006`)
+- Claude followed the reason text and searched for `ask_decision` (once). Because it does not exist, it asked again in prose and ended the turn. It does not hang.
+- Whether it would actually use `ask_decision` if it were provided over MCP was not tried in this verification.
 
-- `verification/settings.json` の matcher を `AskUserQuestion|ExitPlanMode` に変更し、`--permission-mode plan` で起動。起動直後の状態行は `⏸ plan mode on`。
-- プロンプト: 「verification/t5-note.md という新規ファイルに『T5 検証メモ』という 1 行だけを書く作業の計画を立て、ExitPlanMode で私に承認を求めてください。承認されるまで実装しないでください。」
+### T5 interactive × auto × ExitPlanMode (session `00000000-0000-4000-8000-000000000006`)
 
-hook の stdin(`T5-*.json`、`tool_input`。公式ドキュメントどおり `plan` と `planFilePath` が注入されている):
+- Changed the matcher in `verification/settings.json` to `AskUserQuestion|ExitPlanMode` and started with `--permission-mode plan`. The status line right after startup was `⏸ plan mode on`.
+- Prompt: 「verification/t5-note.md という新規ファイルに『T5 検証メモ』という 1 行だけを書く作業の計画を立て、ExitPlanMode で私に承認を求めてください。承認されるまで実装しないでください。」
+
+Hook stdin (`T5-*.json`, `tool_input`. `plan` and `planFilePath` are injected, as in the official documentation):
 
 ```json
 {"plan": "# T5 検証メモ作成計画\n\n## Context\n...", "planFilePath": "/Users/user/.claude/plans/verification-t5-note-md-t5-1-curried-valiant.md"}
 ```
 
-hook は `permissionDecision: "allow"` と `updatedInput: <tool_input をそのまま>` を返した(所要 73 ms)。
+The hook returned `permissionDecision: "allow"` and `updatedInput: <tool_input as is>` (took 73 ms).
 
-transcript の該当行(抜粋):
+Relevant transcript lines (excerpt):
 
 ```
 行 49: tool_use ExitPlanMode {"plan": "...", "planFilePath": "..."}
@@ -248,7 +254,9 @@ transcript の該当行(抜粋):
 行 57: tool_result "The user doesn't want to proceed with this tool use. ..."(検証側が Esc で拒否)
 ```
 
-画面(承認直後):
+(Line numbers: 49 = tool_use, 50 = hook_success, 51 = tool_result, 52 = plan_mode_exit, 56 = Write tool_use, 57 = tool_result; the verifier rejected it with Esc.)
+
+Screen (right after approval):
 
 ```
 ⏺ User approved Claude's plan
@@ -269,28 +277,28 @@ transcript の該当行(抜粋):
    3. No
 ```
 
-Esc で拒否した後の状態行: `⏸ manual mode on`
+Status line after rejecting with Esc: `⏸ manual mode on`
 
-- 計画承認 UI(通常は「承認して自動編集 / 手動承認 / 却下」を選ぶ)は出ず、hook の allow だけで「User approved Claude's plan」になった。Herdr も `blocked` を検出していない(`blocked` になったのは次の Write の許可プロンプト)。
-- 承認後の権限モードは `manual`(状態行表示)。セッション開始時のグローバル既定 `auto` には戻らず、通常の承認 UI で「auto-accept edits」を選んだときの `acceptEdits` にもならない。注入で承認した場合、承認後のモードを選ぶ経路が無い。transcript には承認後の `permission-mode` レコードは追記されていない(`plan` の記録が 3 件のみ)。
-- `verification/t5-note.md` は作成していない(Write を拒否)。
+- The plan approval UI (normally where you choose "approve and auto-edit / manual approval / reject") did not appear, and the hook's allow alone produced "User approved Claude's plan". Herdr also did not detect `blocked` (it became `blocked` at the permission prompt of the next Write).
+- The permission mode after approval is `manual` (as shown in the status line). It does not return to the session-start global default `auto`, nor does it become the `acceptEdits` you get when choosing "auto-accept edits" in the normal approval UI. When approving by injection, there is no path for choosing the mode after approval. No post-approval `permission-mode` record was appended to the transcript (only 3 `plan` records).
+- `verification/t5-note.md` was not created (the Write was rejected).
 
-## timeout の挙動まとめ
+## Summary of timeout behavior
 
-- settings の `timeout`(秒)に達すると、Claude Code は hook プロセスに SIGTERM を送り(T3a で 60.056 秒)、hook の出力を捨て、ツールは通常の権限フロー(= 標準の質問 UI)に進む。transcript に `hook_cancelled`(`timedOut: true, timeoutMs`)が残る。画面に警告は出ない。
-- timeout 後に回答を用意しても、その呼び出しの hook には届かない。拾わせるには hook プロセスが生きている間(= `timeout` 以内)に回答が要る。
-- `timeout` 内であれば hook はブロックし続け、Claude Code 側は「ツール実行中」として待つ(T3c で 29 秒)。この間 Herdr は `working` と判定し、質問 UI は出ない。
-- `timeout` の上限値や、`timeout` を長くした場合の副作用(例: 状態行の表示、`Notification` hook の発火)は未検証。公式ドキュメントでは command 型の既定は 600 秒。
+- When the settings `timeout` (seconds) is reached, Claude Code sends SIGTERM to the hook process (60.056 seconds in T3a), discards the hook's output, and the tool proceeds to the normal permission flow (= the standard question UI). A `hook_cancelled` (`timedOut: true, timeoutMs`) remains in the transcript. No warning appears on screen.
+- Even if an answer is prepared after the timeout, it does not reach the hook of that call. For the hook to pick it up, the answer is needed while the hook process is alive (= within `timeout`).
+- Within `timeout`, the hook keeps blocking, and Claude Code waits treating it as "tool running" (29 seconds in T3c). During this time Herdr judges it as `working`, and no question UI appears.
+- The upper limit of `timeout`, and side effects of lengthening `timeout` (e.g. status line display, firing of the `Notification` hook), are unverified. In the official documentation the default for the command type is 600 seconds.
 
-## 未検証(推測の扱い)
+## Unverified (how speculation is handled)
 
-- `answers` のキーが `question` と一致しないとき、または `answers` が一部欠けているときの挙動。
-- `-p` に `--permission-prompt-tool` を付けた場合に hook が発火するか。
-- MCP ツール `ask_decision` を実際に提供した状態で deny 理由に従うか(T4 は存在しない状態のみ)。
-- `multiSelect: true` の質問に対する `answers` の形(ドキュメントでは「ラベルをカンマで結合」)。
-- Claude Code 以外のバージョン、Sonnet 以外のモデルでの再現。
+- Behavior when a key of `answers` does not match `question`, or when `answers` is partially missing.
+- Whether the hook fires when `-p` is combined with `--permission-prompt-tool`.
+- Whether the deny reason is followed when the MCP tool `ask_decision` is actually provided (T4 covers only the case where it does not exist).
+- The shape of `answers` for a question with `multiSelect: true` (the documentation says "labels joined by commas").
+- Reproduction on Claude Code versions other than this one, and on models other than Sonnet.
 
-## 判定
+## Verdict
 
-- 実装に進んで良いか: **進んで良い。** 対話セッションでも `allow` + `updatedInput.answers` による注入は通り(T1、T3b、T3c)、ExitPlanMode の承認注入も通る(T5)。
-- 方式: **注入方式。** deny 代替方式(T4)は Claude がツールを探すところまでは従うが、応答が文章での聞き直しになり、注入方式のように回答を 1 往復で返せない。注入方式の制約は「hook の `timeout` 以内に回答が要る(超えると標準 UI に落ちる)」と「ExitPlanMode の注入承認後は `manual` モードになる」の 2 点。
+- Whether to proceed to implementation: **Yes, proceed.** Injection via `allow` + `updatedInput.answers` works in interactive sessions too (T1, T3b, T3c), and approval injection for ExitPlanMode also works (T5).
+- Approach: **Injection.** The deny-alternative approach (T4) is followed up to Claude searching for the tool, but the response becomes asking again in prose, so unlike injection it cannot return the answer in one round trip. The injection approach has two constraints: "an answer is needed within the hook's `timeout` (beyond it, it falls back to the standard UI)" and "after injected approval of ExitPlanMode, the mode becomes `manual`".
