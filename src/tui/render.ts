@@ -281,11 +281,11 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     : [
         t(lang, "hint_move"),
         ...(q.multi ? [t(lang, "hint_toggle")] : []),
-        t(lang, "hint_answer") + (m.todoCode.length ? ` · ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
+        t(lang, "hint_answer") + (m.todoCode.length ? ` ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
         t(lang, "hint_free"),
         t(lang, "hint_none"),
         ...(m.footnotes.length ? [t(lang, "hint_evidence")] : []),
-      ].join(" · ");
+      ].join(" ");
   return { lines, focus, hint };
 }
 
@@ -434,8 +434,8 @@ export function renderFrame(v: View, size: Size): Frame {
 
     // Right: when it overflows, scroll so the card under the cursor is visible (or to the manually scrolled position). The hint stays on the bottom row
     let right = rightColumn(v, m, rightW, winRows);
-    // The hint may take two rows when it does not fit on one
-    const hintRows = (r: Column, w: number): string[] => wrap(`${DIM}${r.hint}${RESET}`, w).slice(0, 2);
+    // The hint is one row (cut at the column width)
+    const hintRows = (r: Column, w: number): string[] => [truncate(`${DIM}${r.hint}${RESET}`, w)];
     const rightOver = right.lines.length + 1 + hintRows(right, rightW).length > winRows;
     let rcol: string[];
     let rightMax = 0;

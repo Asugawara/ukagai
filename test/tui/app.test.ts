@@ -10,13 +10,11 @@ const ch = (c: string): Key => ({ name: "char", ch: c });
 const enter: Key = { name: "enter" };
 let t = 1000;
 const press = (app: App, ...keys: Key[]) => keys.flatMap((k) => app.handle(k, (t += 10)));
-/** Let the undo window pass (costly / irreversible answers wait before they are sent) */
-const release = (app: App) => app.tick((t += 10_000));
 
 test("single select: starts on the recommended option, j moves = selects, Enter sends answers (original label)", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
-  assert.deepEqual([...press(app, enter), ...release(app)], [
+  assert.deepEqual(press(app, enter), [
     { type: "answer", id: "d1", body: { answers: { [Q]: "SSE (Recommended)" } } },
   ]);
 });
@@ -24,7 +22,7 @@ test("single select: starts on the recommended option, j moves = selects, Enter 
 test("j moves to WebSocket and sends; a double submit is ignored", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
-  const eff = [...press(app, ch("j"), enter), ...release(app)];
+  const eff = press(app, ch("j"), enter);
   assert.equal((eff[0] as { body: { answers: Record<string, string> } }).body.answers[Q], "WebSocket");
   assert.deepEqual(press(app, enter), []);
 });
@@ -32,7 +30,7 @@ test("j moves to WebSocket and sends; a double submit is ignored", () => {
 test("free text: i, type, Enter to confirm, Enter to send (replaces the selection)", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
-  const eff = press(app, ch("i"), ch("あ"), ch("い"), { name: "backspace" }, ch("x"), enter, enter).concat(release(app));
+  const eff = press(app, ch("i"), ch("あ"), ch("い"), { name: "backspace" }, ch("x"), enter, enter);
   assert.deepEqual((eff[0] as { body: unknown }).body, { answers: { [Q]: "あx" } });
 });
 
@@ -115,7 +113,7 @@ test("blocker: Enter alone sends the Done option; c copies the first code block"
   const app = new App();
   app.upsert(blockerDecision(), t);
   assert.deepEqual(press(app, ch("c")), [{ type: "copy", text: "gcloud auth login\ngcloud auth application-default login" }]);
-  assert.deepEqual([...press(app, enter), ...release(app)], [
+  assert.deepEqual(press(app, enter), [
     { type: "answer", id: "d1", body: { answers: { [BLOCKER_Q]: "Done. Continue (Recommended)" } } },
   ]);
 });

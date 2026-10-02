@@ -50,8 +50,8 @@ Keys: j/k move  gg/G top/bottom  Space multi-select  Enter submit  i free text
       . expand / collapse a long recommendation or plan scope
       n none of these (pick a reason with j/k, Enter to send, i for a note; on a plan n rejects)
       e jump the background to the next footnote (evidence)
-      Enter twice confirms an option whose risk says it cannot be undone (or any answer when irreversible);
-      after sending, u / Esc undoes it during the grace period (reversible 2s, costly 3s, irreversible 5s; none for reversible + file)
+      Enter twice confirms an option whose risk says it cannot be undone (or any answer when irreversible).
+      Answers are sent at once.
 `,
   serve: `Usage: ukagai serve [options]
 

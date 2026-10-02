@@ -23,7 +23,7 @@ test("140x40: heading, chips, recommendation, cards, background, hints, status l
     "Whether the GUI update channel uses SSE or WebSocket",
     "Why this decision is needed now", "What I checked", "hook", "serve",
     "Recommendation", "I recommend SSE", "▸ ● SSE", "○ WebSocket", "One-way delivery from the server to the GUI", "Free text",
-    "j/k move · Enter answer · i free text", "Pending 1", "h/l switch  b list  q quit",
+    "j/k move Enter send i text", "Pending 1", "h/l switch  b list  q quit",
   ]) assert.ok(out.includes(s), `missing: ${s}`);
   assert.ok(lines.some((l) => l.includes(" │ ") && l.includes("◄") === false && l.includes("SSE")), "two columns");
   assert.ok(lines.some((l) => l.includes("Background") && l.includes("Decision")), "column headings");
@@ -71,7 +71,7 @@ test("without an explanation (multi-select): raw options and checkboxes", () => 
     request: { questions: [{ question: "Which ones to include?", header: "Target", multiSelect: true, options: [{ label: "A", description: "a is first" }, { label: "B", description: "b is second" }] }] },
   } as never);
   const out = stripAnsi(render(viewOf(d), { cols: 140, rows: 30 }));
-  for (const s of ["Which ones to include?", "[ ] A", "a is first", "Space toggle", "The agent did not write an explanation"]) assert.ok(out.includes(s), s);
+  for (const s of ["Which ones to include?", "[ ] A", "a is first", "Space pick", "The agent did not write an explanation"]) assert.ok(out.includes(s), s);
 });
 
 test("a plan shows approve / auto / reject buttons", () => {
@@ -113,7 +113,7 @@ test("blocker: without pbcopy the hint says copy is unsupported", () => {
   app.copySupported = false;
   app.upsert(blockerDecision(), NOW);
   const out = stripAnsi(render(app.view(NOW), { cols: 140, rows: 40 }));
-  assert.ok(out.includes("copy unsupported"));
+  assert.ok(out.includes("no copy"));
   assert.ok(!out.includes("c copy"));
 });
 
@@ -138,7 +138,7 @@ test("ja: the main UI strings are Japanese", () => {
   const out = stripAnsi(render(viewOf(decision(withExplanation(V2_MD)), "ja"), { cols: 140, rows: 40 }));
   for (const s of [
     "戻すのにコストがかかる", "推奨", "自由記述", "背景", "判断",
-    "j/k 移動 · Enter 回答 · i 自由記述", "保留 1", "h/l 切替  b 一覧  q 終了",
+    "j/k 移動 Enter 送信 i 記述", "保留 1", "h/l 切替  b 一覧  q 終了",
   ]) assert.ok(out.includes(s), `missing: ${s}`);
   // headings written in the file are shown as written (not translated)
   assert.ok(out.includes("Why this decision is needed now"));
