@@ -1,0 +1,12 @@
+{
+  "valid": false,
+  "missing": [
+    "checked"
+  ],
+  "has": {
+    "mermaid": true,
+    "diff": false,
+    "table": true
+  },
+  "question": "How should the GUI receive update notifications from the server?"
+}

@@ -23,8 +23,8 @@ It has to be decided.
 ## Options
 | Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| A | a | b |
-| B | a | b |
+| A | a | Revert it |
+| B | a | Revert it |
 ## Recommendation
 I recommend A. If C, choose B.
 `;

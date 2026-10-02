@@ -29,3 +29,7 @@ flowchart LR
   I -->|--project| P[.claude/settings.json]
   I -->|--settings| F[any file]
 ```
+
+## What I checked
+
+- `~/.claude/settings.json` has no ukagai hook yet (read the file).
