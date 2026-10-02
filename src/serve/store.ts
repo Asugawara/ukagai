@@ -44,6 +44,20 @@ export type AnswerPatch =
 export const SESSION_PANEL_OPEN_EVENT = "ukagai.session_panel_open";
 
 const READY: readonly DecisionStatus[] = ["answer_submitted", "fallback"];
+const CLOSED: readonly DecisionStatus[] = ["answered", "hook_disconnected", "answer_lost", "cancelled", "denied_explain"];
+const EVENT_KEYS = [
+  "session_id",
+  "cwd",
+  "hook_event_name",
+  "tool_name",
+  "tool_use_id",
+  "agent_id",
+  "agent_type",
+  "received_at",
+  "escaped_question",
+  "observe",
+  "notification_type",
+] as const;
 const LIVE: readonly DecisionStatus[] = ["pending", "answer_submitted"];
 
 function stat(values: number[]): { count: number; median_ms: number | null; mean_ms: number | null } {
@@ -153,7 +167,9 @@ export class Store {
 
   create(req: CreateDecisionRequest, context: DecisionContext): { decision: Decision; created: boolean } {
     const existing = this.findByToolUse(req.tool_use_id);
-    if (existing) return { decision: existing, created: false };
+    if (existing && !(existing.status === "denied_explain" && req.status !== "denied_explain")) {
+      return { decision: existing, created: false };
+    }
 
     const denied = req.status === "denied_explain";
     const now = Date.now();
@@ -264,12 +280,13 @@ export class Store {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
     this.extendLease(d, timeoutMs);
-    if (!READY.includes(d.status) && !signal?.aborted) {
+    const settled = () => READY.includes(d.status) || CLOSED.includes(d.status);
+    if (!settled() && !signal?.aborted) {
       await new Promise<void>((resolve) => {
         const set = this.waiters.get(id) ?? new Set();
         this.waiters.set(id, set);
         const onChange = () => {
-          if (READY.includes(d.status)) finish();
+          if (settled()) finish();
         };
         const finish = () => {
           clearTimeout(timer);
@@ -338,7 +355,11 @@ export class Store {
   }
 
   addEvent(ev: EventInput): void {
-    appendFileSync(this.eventsFile, JSON.stringify(ev) + "\n");
+    // 生の hook 入力(tool_input / tool_response / prompt など)は保存しない
+    const src = ev as Record<string, unknown>;
+    const kept: Record<string, unknown> = {};
+    for (const k of EVENT_KEYS) if (src[k] !== undefined) kept[k] = src[k];
+    appendFileSync(this.eventsFile, JSON.stringify(kept) + "\n");
     this.applyEvent(ev, true);
   }
 
@@ -373,6 +394,19 @@ export class Store {
     this.touchSession(ev.session_id, { state, cwd: ev.cwd }, live, Number.isFinite(at) ? ev.received_at : undefined);
     if (live && (ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "Stop")) {
       this.cancelRecentlyDisconnected(ev.session_id);
+    }
+    if (live && ev.hook_event_name === "UserPromptSubmit") this.cancelPending(ev.session_id);
+  }
+
+  /** 人がターミナルで次の発話をした = pending の判断はもう待たれていない */
+  private cancelPending(sessionId: string): void {
+    for (const d of this.decisions.values()) {
+      if (d.session.session_id !== sessionId || d.status !== "pending") continue;
+      this.transition(d, "cancelled");
+      delete d.lease_until;
+      this.persist(d);
+      this.emit("decision.updated", d);
+      this.notify(d.id);
     }
   }
 

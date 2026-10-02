@@ -228,11 +228,13 @@ stateDiagram-v2
 | 認可 | エンドポイント |
 |---|---|
 | Bearer のみ | `POST /api/decisions`、`GET /api/decisions/:id/wait`、`POST /api/decisions/:id/ack`、`GET /api/sessions/:id/pending-mode-switch`、`POST .../consume` |
-| cookie か Bearer | `POST /api/decisions/:id/answer`、`POST /api/events`、`GET /api/decisions`、`GET /api/decisions/:id`、`GET /api/sessions`、`GET /api/metrics`、`GET /api/stream` |
+| cookie か Bearer | `POST /api/decisions/:id/answer`、`POST /api/events`(cookie だけのときは `hook_event_name` が `ukagai.session_panel_open` の event のみ。他は 403)、`GET /api/decisions`、`GET /api/decisions/:id`、`GET /api/sessions`、`GET /api/metrics`、`GET /api/stream` |
 | 認可なし | `GET /healthz`、`GET /`、`GET /public/*` |
 - **Host**: `127.0.0.1:4818` と `localhost:4818` 以外は 400(DNS rebinding 対策)。
 - **Content-Type**: **すべての POST**(本文の無い ack / consume を含む)は `application/json` 必須(違えば 415)。本文が無い場合は `{}` を送る。検査の順は Host(400)→ 認可(401)→ Content-Type(415)→ 本文(400)。
 - **パス**: `transcript_path` は `~/.claude/projects/` 配下、`explanation.path` は `<scratchpad_dir>/ukagai/` か `~/.ukagai/explain/` 配下、`cwd` は実在ディレクトリに限る(`isAllowedTranscriptPath` / `isAllowedExplanationPath`。`..` と symlink を解決してから判定)。
+- **cookie の限界**: cookie は `GET /` で無認可に発行される。同一機の他プロセスは `curl -c` で取得できる。これは MVP の限界(計画 7 節)。cookie の保持は 1000 件までで、超えると古い順に捨てる。
+- **wait の終端**: `GET /api/decisions/:id/wait` は、判断が `answered` / `hook_disconnected` / `answer_lost` / `cancelled` / `denied_explain` のとき(待機中にそうなった場合も含む)即座に 410 `{error, status}` を返す。hook は非 200 を error として無出力で終える。
 - 限界: 同一ユーザーの他プロセスが `~/.ukagai/token` を読めば API を叩ける(計画 7 節)。
 
 ## エラー応答

@@ -16,11 +16,13 @@ import {
   type DecisionSession,
 } from "../contract.js";
 import type { SseHub } from "./sse.js";
-import { HttpError, type AnswerPatch, type Store } from "./store.js";
+import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
 const CONTEXT_GUARD_MS = 1500;
 const MAX_WAIT_MS = 600000;
+const MAX_COOKIES = 1000;
+const WAIT_GONE: readonly DecisionStatus[] = ["answered", "hook_disconnected", "answer_lost", "cancelled", "denied_explain"];
 
 export type AppDeps = {
   store: Store;
@@ -64,6 +66,7 @@ export function createApp(deps: AppDeps): Hono {
     const v = getCookie(c, COOKIE_NAME);
     return v !== undefined && cookies.has(v);
   };
+  const cookieOnly = (c: Context): boolean => !bearerOk(c) && cookieOk(c);
   const auth = (mode: "bearer" | "any"): MiddlewareHandler => async (c, next) => {
     if (bearerOk(c) || (mode === "any" && cookieOk(c))) return next();
     return c.json({ error: "unauthorized" }, 401);
@@ -116,13 +119,19 @@ export function createApp(deps: AppDeps): Hono {
     if (!cookieOk(c)) {
       const value = randomBytes(24).toString("hex");
       cookies.add(value);
+      if (cookies.size > MAX_COOKIES) cookies.delete(cookies.values().next().value as string);
       setCookie(c, COOKIE_NAME, value, { httpOnly: true, sameSite: "Strict", path: "/" });
     }
     return c.html(html);
   });
 
   app.get("/public/*", async (c) => {
-    const rel = decodeURIComponent(new URL(c.req.url).pathname.slice("/public/".length));
+    let rel: string;
+    try {
+      rel = decodeURIComponent(new URL(c.req.url).pathname.slice("/public/".length));
+    } catch {
+      return c.json({ error: "not found" }, 404);
+    }
     const root = resolve(deps.publicDir);
     const file = resolve(root, rel);
     if (file !== root && !file.startsWith(root + sep)) return c.json({ error: "not found" }, 404);
@@ -143,11 +152,13 @@ export function createApp(deps: AppDeps): Hono {
     if (!isAllowedTranscriptPath(req.session.transcript_path, deps.home)) {
       return c.json({ error: "transcript_path not allowed" }, 400);
     }
-    if (req.explanation && !isAllowedExplanationPath(req.explanation.path, req.session.scratchpad_dir, deps.home)) {
+    if (req.explanation && req.explanation.path !== "" && !isAllowedExplanationPath(req.explanation.path, req.session.scratchpad_dir, deps.home)) {
       return c.json({ error: "explanation.path not allowed" }, 400);
     }
     const existing = store.findByToolUse(req.tool_use_id);
-    if (existing) return c.json(existing, 200);
+    if (existing && !(existing.status === "denied_explain" && req.status !== "denied_explain")) {
+      return c.json(existing, 200);
+    }
 
     let context: DecisionContext = {};
     if (req.status !== "denied_explain") {
@@ -176,7 +187,11 @@ export function createApp(deps: AppDeps): Hono {
     const raw = Number(c.req.query("timeout_ms") ?? POLL_TIMEOUT_MS);
     const timeoutMs = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 0), MAX_WAIT_MS) : POLL_TIMEOUT_MS;
     const d = await store.wait(id, timeoutMs, c.req.raw.signal);
-    if (!d) return c.body(null, 204);
+    if (!d) {
+      const cur = store.get(id);
+      if (cur && WAIT_GONE.includes(cur.status)) return c.json({ error: "decision is closed", status: cur.status }, 410);
+      return c.body(null, 204);
+    }
     return c.json({ response: d.response });
   });
 
@@ -200,6 +215,9 @@ export function createApp(deps: AppDeps): Hono {
 
   app.post("/api/events", auth("any"), jsonOnly, async (c) => {
     const ev = await parse(c, EventInput);
+    if (cookieOnly(c) && ev.hook_event_name !== SESSION_PANEL_OPEN_EVENT) {
+      return c.json({ error: "cookie may only send ukagai.session_panel_open" }, 403);
+    }
     store.addEvent(ev);
     return c.body(null, 204);
   });

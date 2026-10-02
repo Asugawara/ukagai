@@ -1,7 +1,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { request as httpRequest } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { start, type ServeHandle } from "../../src/serve/index.js";
@@ -384,15 +384,14 @@ test("セッション状態と pending-mode-switch", async () => {
   assert.equal(await state(), "waiting_decision");
   await ev("Stop");
   assert.equal(await state(), "idle");
-  await ev("UserPromptSubmit");
-  assert.equal(await state(), "working");
-  await ev("SessionEnd");
-  assert.equal(await state(), "ended");
-
   const pms = () => api(env, "/api/sessions/sess-1/pending-mode-switch").then((r) => r.json()) as Promise<{ pending: boolean }>;
   assert.equal((await pms()).pending, false);
   const a = await api(env, `/api/decisions/${d.id}/answer`, { body: { approve: true, set_mode_auto: true } });
   assert.equal(a.status, 200);
+  await ev("UserPromptSubmit");
+  assert.equal(await state(), "working");
+  await ev("SessionEnd");
+  assert.equal(await state(), "ended");
   assert.equal((await pms()).pending, true);
   const c1 = await api(env, "/api/sessions/sess-1/pending-mode-switch/consume", { body: {} });
   assert.deepEqual(await c1.json(), { consumed: true });
@@ -453,4 +452,80 @@ test("文脈: 許可された transcript から直前のテキスト・ツール
   assert.equal(d2.context.last_assistant_text, "親のテキスト");
   assert.equal(d2.context.ai_title, "親のタイトル");
   assert.equal(d2.session.title, "親のタイトル");
+});
+
+test("F2: hook_disconnected の判断への wait は 50ms 以内に 410", async () => {
+  const env = await setup({ leaseGraceMs: 30 });
+  const created = (await (await api(env, "/api/decisions", { body: decisionBody(env, "tu-f2") })).json()) as { id: string };
+  for (let i = 0; i < 100; i++) {
+    const d = (await (await api(env, `/api/decisions/${created.id}`)).json()) as { status: string };
+    if (d.status === "hook_disconnected") break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  const t0 = Date.now();
+  const r = await api(env, `/api/decisions/${created.id}/wait?timeout_ms=5000`);
+  assert.equal(r.status, 410);
+  assert.ok(Date.now() - t0 < 50);
+  assert.deepEqual(await r.json(), { error: "decision is closed", status: "hook_disconnected" });
+});
+
+test("F3: events.jsonl に tool_input などの生入力を保存しない", async () => {
+  const env = await setup();
+  const r = await api(env, "/api/events", {
+    body: {
+      session_id: "s",
+      transcript_path: "/x",
+      cwd: "/c",
+      hook_event_name: "PostToolUse",
+      tool_name: "Write",
+      tool_input: { content: "SECRET-CONTENT" },
+      tool_response: { x: "SECRET-RESPONSE" },
+      prompt: "SECRET-PROMPT",
+      received_at: new Date().toISOString(),
+    },
+  });
+  assert.equal(r.status, 204);
+  const text = readFileSync(join(env.dataDir, "events.jsonl"), "utf8");
+  assert.ok(!text.includes("SECRET"));
+  assert.ok(text.includes("PostToolUse"));
+});
+
+test("F5: UserPromptSubmit が pending の判断に来たら cancelled", async () => {
+  const env = await setup();
+  const created = (await (await api(env, "/api/decisions", { body: decisionBody(env, "tu-f5") })).json()) as { id: string };
+  const r = await api(env, "/api/events", {
+    body: { session_id: "sess-1", transcript_path: "/x", cwd: "/c", hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() },
+  });
+  assert.equal(r.status, 204);
+  const d = (await (await api(env, `/api/decisions/${created.id}`)).json()) as { status: string };
+  assert.equal(d.status, "cancelled");
+});
+
+test("F6: cookie だけの POST /api/events は session_panel_open 以外 403", async () => {
+  const env = await setup();
+  const home = await fetch(env.url + "/");
+  const cookie = (home.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const post = (name: string) =>
+    fetch(env.url + "/api/events", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ session_id: "s", transcript_path: "/x", cwd: "/c", hook_event_name: name, received_at: new Date().toISOString() }),
+    });
+  assert.equal((await post("UserPromptSubmit")).status, 403);
+  assert.equal((await post("ukagai.session_panel_open")).status, 204);
+});
+
+test("M1: /public/% は 404", async () => {
+  const env = await setup();
+  assert.equal((await fetch(env.url + "/public/%")).status, 404);
+});
+
+test("M3: denied_explain と同じ tool_use_id の本登録は新規作成される", async () => {
+  const env = await setup();
+  const denied = await api(env, "/api/decisions", { body: decisionBody(env, "tu-m3", { status: "denied_explain" }) });
+  assert.equal(denied.status, 201);
+  const real = await api(env, "/api/decisions", { body: decisionBody(env, "tu-m3") });
+  assert.equal(real.status, 201);
+  const d = (await real.json()) as { status: string };
+  assert.equal(d.status, "pending");
 });

@@ -68,7 +68,7 @@ async function collectGit(cwd: string): Promise<Context> {
   const [branch, status, stat, diff] = await Promise.all([
     runGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
     runGit(cwd, ["status", "--porcelain"]),
-    runGit(cwd, ["diff", "--stat", "--no-ext-diff"]),
+    runGit(cwd, ["diff", "--stat", "--no-ext-diff", "--no-textconv"]),
     runGit(cwd, ["diff", "--no-ext-diff", "--no-textconv"]),
   ]);
   const ctx: Context = {};
