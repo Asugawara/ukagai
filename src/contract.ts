@@ -347,3 +347,24 @@ export function isAllowedExplanationPath(p: string, scratchpadDir: string | unde
   if (scratchpadDir && isUnder(p, join(scratchpadDir, "ukagai"))) return true;
   return isUnder(p, join(home, ".ukagai", "explain"));
 }
+
+// ---- GET /api/decisions/:id/history ----
+
+export const HistoryEntry = z.object({
+  /** ISO timestamp of the human instruction (empty string if the transcript line had none) */
+  at: z.string(),
+  text: z.string(),
+});
+export type HistoryEntry = z.infer<typeof HistoryEntry>;
+
+export const SessionHistory = z.object({
+  session_id: z.string(),
+  ai_title: z.string().optional(),
+  /** Number of human instructions in the transcript */
+  total: z.number().int().nonnegative(),
+  /** The first instruction (max 4000 chars, cut with a trailing …). null if none or unreadable */
+  first: HistoryEntry.nullable(),
+  /** The last 20 instructions in chronological order (max 500 chars each). May overlap `first` */
+  recent: z.array(HistoryEntry),
+});
+export type SessionHistory = z.infer<typeof SessionHistory>;

@@ -17,6 +17,7 @@ import {
 } from "../contract.js";
 import type { Lang } from "../settings/config.js";
 import type { SseHub } from "./sse.js";
+import { collectHistory } from "./history.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
@@ -202,6 +203,12 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/decisions/:id", auth("any"), (c) => {
     const d = store.get(c.req.param("id"));
     return d ? c.json(d) : c.json({ error: "decision not found" }, 404);
+  });
+
+  app.get("/api/decisions/:id/history", auth("any"), async (c) => {
+    const d = store.get(c.req.param("id"));
+    if (!d) return c.json({ error: "decision not found" }, 404);
+    return c.json(await collectHistory(d.session, { home: deps.home }));
   });
 
   app.get("/api/decisions/:id/wait", auth("bearer"), async (c) => {
