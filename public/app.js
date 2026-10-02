@@ -34,12 +34,23 @@ function showBanner(msg) {
   b.hidden = false;
 }
 
+// server 再起動で cookie が失効したら GET / を取り直して cookie を更新する(同時に呼ばれても 1 回)
+let refreshing = null;
+function refreshAuth() {
+  refreshing ??= fetch("/", { credentials: "same-origin", cache: "no-store" })
+    .then((r) => r.ok, () => false)
+    .finally(() => { refreshing = null; });
+  return refreshing;
+}
+
 async function api(path, init) {
-  const res = await fetch(path, {
+  const go = () => fetch(path, {
     credentials: "same-origin",
     ...init,
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
   });
+  let res = await go();
+  if (res.status === 401 && (await refreshAuth())) res = await go();
   if (res.status === 401) {
     showBanner("ページを再読み込みしてください");
     throw new Error("unauthorized");
@@ -60,10 +71,26 @@ function sanitize(html) {
     .replace(/<script\b[\s\S]*?<\/script\s*>/gi, "")
     .replace(/<\/?script\b[^>]*>/gi, "")
     .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/<img\b[^>]*?\ssrc\s*=\s*(?:"\s*(?:https?:)?\/\/[^"]*"|'\s*(?:https?:)?\/\/[^']*'|(?:https?:)?\/\/[^\s>]*)[^>]*>/gi, "")
+    .replace(/\ssrcset\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     .replace(/\s(href|src|xlink:href|action|formaction)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi, "");
 }
 
+// 実体化した後の最終防衛: 外部オリジンの画像は data: 以外すべて外す(実体参照で regex をすり抜けたものも)
+function dropExternalImages(container) {
+  for (const img of container.querySelectorAll("img")) {
+    const src = (img.getAttribute("src") ?? "").trim();
+    let external = false;
+    try { const u = new URL(src, location.href); external = u.protocol !== "data:" && u.origin !== location.origin; } catch { external = true; }
+    if (external) img.remove();
+  }
+}
+
 // ---- 表示補助 ----
+
+// 見出し用の平文(Markdown の記号を除く)
+const plainMd = (t) => t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+const NONE_REASONS = { loop_guard: "書き直しの指示に従わなかったため", plan_mode: "plan mode のため", not_required: "説明を要求していないため" };
 
 const hasExplanation = (d) => !!d.explanation && d.explanation.attached_via !== "none";
 
@@ -72,6 +99,11 @@ function cwdTail(d) {
 }
 
 function titleOf(d) {
+  const t = rawTitleOf(d);
+  return d.kind === "approve_plan" ? plainMd(t) || "計画の承認" : t;
+}
+
+function rawTitleOf(d) {
   let t = d.explanation?.title;
   if (!t && hasExplanation(d) && d.kind === "answer_question") t = parseFrontMatter(d.explanation.markdown).fm.title;
   if (t) return t;
@@ -125,17 +157,48 @@ const pendingList = () =>
 const kindLabel = (d) => (d.kind === "approve_plan" ? "📋 計画" : "❓ 質問");
 
 // ---- トースト ----
+// 右列の送信ボタンの真上(.actions の上端に重ねる)に縦に積む。最大 3 枚。判断が無いときは右下
+const toastBox = el("div", { class: "toasts", role: "status" });
+document.body.append(toastBox);
+const TOAST_MAX = 3;
+function toast(msg, { kind = "", ms = 2000 } = {}) {
+  const t = el("div", { class: `toast ${kind}`.trim(), text: msg });
+  toastBox.append(t);
+  while (toastBox.children.length > TOAST_MAX) toastBox.firstElementChild.remove();
+  setTimeout(() => t.remove(), ms);
+}
+function placeToasts() {
+  const a = document.querySelector("#decision .actions");
+  if (a) { if (toastBox.parentElement !== a) a.prepend(toastBox); } else if (toastBox.parentElement !== document.body) document.body.append(toastBox);
+  toastBox.classList.toggle("floating", toastBox.parentElement === document.body);
+}
 
-let toastTimer = null;
-function toast(msg) {
-  const t = $("toast");
-  t.textContent = msg;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), 2000);
+const clip = (t, n = 40) => (t.length > n ? t.slice(0, n) + "…" : t);
+const LOST_TEXT = {
+  answer_lost: (t) => `${t} は届きませんでした(ターミナルに落ちました)`,
+  hook_disconnected: (t) => `${t} は届きませんでした(hook が切断されました)`,
+  cancelled: (t) => `${t} は届きませんでした(キャンセルされました)`,
+  fallback: (t) => `${t} は届きませんでした(ターミナルで答える扱いになりました)`,
+};
+// 表示中でない判断の状態が変わったとき
+function notifyBackground(prev, d) {
+  if (!prev || prev.status === d.status) return;
+  const t = clip(titleOf(d));
+  if (LOST_TEXT[d.status]) toast(LOST_TEXT[d.status](t), { kind: "lost", ms: 4000 });
+  else if (d.status === "answered") toast(`${t} 届きました`, { kind: "soft" });
 }
 
 // ---- 保留ボタン / タイトル ----
+
+// 保留ボタン: 1100px 以上は右上固定、未満は右列の見出しの右端(インライン)
+const narrowQuery = matchMedia("(max-width: 1099px)");
+function placePending() {
+  const btn = $("pending-btn");
+  const slot = narrowQuery.matches ? document.querySelector("#decision .title-row") : null;
+  if (slot) { if (btn.parentElement !== slot) slot.append(btn); } else if (btn.parentElement !== document.body) document.body.prepend(btn);
+}
+narrowQuery.addEventListener("change", placePending);
+const titleRow = (title) => el("div", { class: "title-row" }, title);
 
 function renderHeader() {
   const n = pendingList().length;
@@ -256,6 +319,9 @@ async function send(d, body) {
   }
 }
 
+// 説明の表と対応が取れない生の選択肢: (Recommended) 等の接尾辞は外して推奨バッジにする。回答値は元の label
+const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label) });
+
 const kbd = (t) => el("kbd", { class: "kbd", text: t });
 const keyLine = (...parts) => el("div", { class: "keys" }, ...parts.flatMap(([ks, label]) => [...ks.map(kbd), el("span", { text: label })]));
 const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
@@ -290,6 +356,51 @@ function markClamps(root, dr) {
 }
 
 function renderRight(d) {
+  document.body.append(toastBox); // replaceChildren で消えないように退避
+  renderRightBody(d);
+  placeToasts();
+  placePending();
+  clampMeta();
+}
+
+// 計画本文の「影響範囲と可逆性」の節(照合名)を右列に出す。無ければ null
+function impactBox(d) {
+  const tmp = el("div", { class: "md" });
+  tmp.innerHTML = sanitize(window.marked.parse(d.request.plan ?? "", { async: false }));
+  dropExternalImages(tmp);
+  const sec = findSection(sectionsOf(tmp), "影響範囲と可逆性");
+  const nodes = sec?.nodes.slice(1) ?? [];
+  if (!nodes.some((n) => (n.textContent ?? "").trim())) return null;
+  const body = el("div", { class: "clampable impact-body md" }, ...nodes);
+  callouts(body);
+  return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: "影響範囲と可逆性" }), body);
+}
+
+// meta-line は折り返して見せる。3 行目以降は隠して末尾を … にする
+function clampMeta() {
+  for (const line of document.querySelectorAll("#decision .meta-line")) {
+    line.querySelector(".meta-more")?.remove();
+    const kids = [...line.children];
+    for (const k of kids) k.hidden = false;
+    const centers = kids.map((k) => { const r = k.getBoundingClientRect(); return r.top + r.height / 2; });
+    const rows = [];
+    centers.forEach((c, i) => { if (!rows.length || c > centers[rows.at(-1)] + 8) rows.push(i); });
+    if (rows.length <= 2) continue;
+    let keep = rows[2];
+    for (let i = keep; i < kids.length; i++) kids[i].hidden = true;
+    const more = el("span", { class: "meta-more", text: "…" });
+    line.append(more);
+    const rowOf = (y) => rows.filter((r) => centers[r] <= y + 8).length;
+    while (keep > 1) {
+      const r = more.getBoundingClientRect();
+      if (rowOf(r.top + r.height / 2) <= 2) break;
+      kids[--keep].hidden = true;
+    }
+  }
+}
+window.addEventListener("resize", () => { clampMeta(); refreshWide(); });
+
+function renderRightBody(d) {
   const root = $("decision");
   root.classList.remove("expanded");
   if (!drawerOpen()) document.activeElement?.blur?.(); // フォーカスを body に戻し、キーを document で受ける
@@ -315,21 +426,21 @@ function renderRight(d) {
       if (v2) {
         box.append(el("div", { class: "head" },
           isBlocker(d) ? el("div", { class: "blocker-band", text: "人の作業待ち" }) : null,
-          el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)));
+          titleRow(el("div", { class: "v2-title", text: titleOf(d) })), metaLine(d)));
         if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: "人にしてほしいこと" }), v2.todoBox));
         if (v2.recBox) box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), el("div", { class: "clampable rec-body" }, v2.recBox)));
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
-          ...v2.extras.map((o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: SUFFIX_RE.test(o.label) })),
+          ...v2.extras.map(rawItem),
         ];
       } else {
         const title = titleOf(d);
         // title と質問文が同じなら 1 つだけ。違う(session.title)ときは title の下に質問文を出す
         box.append(el("div", { class: "head" },
           title === q.question ? el("div", { class: "header", text: q.header }) : null,
-          el("div", { class: "question", text: title }), metaLine(d)));
+          titleRow(el("div", { class: "question", text: title })), metaLine(d)));
         if (title !== q.question) box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
-        items = q.options.map((o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: SUFFIX_RE.test(o.label) }));
+        items = q.options.map(rawItem);
       }
       if (single) {
         if (dr.cursor == null) dr.cursor = Math.max(0, items.findIndex((i) => i.pref));
@@ -429,8 +540,10 @@ function renderRight(d) {
 
   // approve_plan
   const qsBox = el("div", { class: "qs" },
-    el("div", { class: "head" }, el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)),
+    el("div", { class: "head" }, titleRow(el("div", { class: "v2-title", text: titleOf(d) })), metaLine(d)),
     el("div", { class: "plan-q", text: "この計画を承認しますか" }));
+  const impact = impactBox(d);
+  if (impact) qsBox.append(impact);
   root.append(qsBox);
   const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: false }) }, el("span", { text: "承認" }), kbd("y"));
   const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: "承認して auto" }), kbd("a"));
@@ -459,8 +572,10 @@ function renderRight(d) {
       buttons.forEach((b, k) => b.classList.toggle("cursor", k === i));
     },
     get cursor() { return dr.cursor ?? 0; },
+    toggleExpand: () => toggleExpand(dr),
   };
   if (!closed) ui.setCursor(dr.cursor ?? 0);
+  markClamps(root, dr);
 }
 
 function startReject(d) {
@@ -509,7 +624,11 @@ async function renderMermaid(codeEl) {
     const { svg } = await m.render(id, source);
     const box = el("div", { class: "mermaid-ok" });
     box.innerHTML = svg;
+    const el0 = box.querySelector("svg");
+    const natural = el0?.viewBox?.baseVal?.width || parseFloat(el0?.style.maxWidth) || 0;
+    if (natural) box.dataset.natural = String(natural);
     pre.replaceWith(box);
+    refreshWide();
   } catch (e) {
     document.getElementById(id)?.remove();
     document.getElementById("d" + id)?.remove();
@@ -517,6 +636,36 @@ async function renderMermaid(codeEl) {
     pre.before(el("div", { class: "mermaid-err", text: `Mermaid の描画に失敗しました: ${msg}` }));
     pre.textContent = source;
   }
+}
+
+// 図の自然幅が列幅の 1.5 倍を超えるとき、「全幅で見る f」のチップを図の上に出す
+const WIDE_RATIO = 1.5;
+function refreshWide() {
+  const full = document.body.classList.contains("fullwide");
+  for (const box of document.querySelectorAll("#background .mermaid-ok")) {
+    const natural = Number(box.dataset.natural || 0);
+    const wide = full || (natural > 0 && natural > box.clientWidth * WIDE_RATIO && box.clientWidth > 0);
+    box.classList.toggle("wide", wide);
+    const chip = box.querySelector(".wide-chip");
+    if (wide && !chip) box.prepend(el("button", { class: "wide-chip", type: "button", tabindex: "-1", onclick: () => setFullwide(!document.body.classList.contains("fullwide")) }, el("span", { text: "全幅で見る " }), kbd("f")));
+    else if (!wide && chip) chip.remove();
+    const svg = box.querySelector("svg");
+    if (svg) {
+      if (full && natural) { svg.style.width = `${natural}px`; svg.style.maxWidth = "none"; svg.style.maxHeight = "none"; }
+      else { svg.style.removeProperty("width"); svg.style.removeProperty("max-width"); svg.style.removeProperty("max-height"); }
+    }
+    const c2 = box.querySelector(".wide-chip");
+    if (c2) c2.firstChild.textContent = full ? "戻る " : "全幅で見る ";
+  }
+}
+
+// 全幅表示(判断列を隠して背景だけを広く)。Enter は無効にして誤送信を防ぐ
+const hasWide = () => !!document.querySelector("#background .mermaid-ok.wide");
+function setFullwide(on) {
+  if (on && !hasWide()) return;
+  document.body.classList.toggle("fullwide", on);
+  document.activeElement?.blur?.();
+  refreshWide();
 }
 
 // 9 行を超える pre は <details> に畳む
@@ -579,6 +728,7 @@ async function enhance(container) {
 
 async function renderMarkdown(container, md) {
   container.innerHTML = sanitize(window.marked.parse(md, { async: false }));
+  dropExternalImages(container);
   await enhance(container);
 }
 
@@ -587,6 +737,9 @@ async function renderMarkdown(container, md) {
 const SUFFIX_RE = /\s*[(（]\s*(recommended|推奨)\s*[)）]\s*$/i;
 const stripSuffix = (s) => s.replace(SUFFIX_RE, "");
 const normLabel = (s) => stripSuffix(s.normalize("NFKC")).replace(/\s/g, "").toLowerCase();
+// ラベルに HTML が含まれていても表のセル(textContent)と比べられるよう、ラベル側も一度テキストにする(DOMParser は何も実行・読み込みしない)
+const labelText = (s) => new DOMParser().parseFromString(s, "text/html").body.textContent ?? s;
+const sameLabel = (a, b) => normLabel(a) === normLabel(b) || normLabel(labelText(a)) === normLabel(b);
 const normHeading = (s) => s.normalize("NFKC").replace(/\s/g, "").replace(/[と・]/g, "").toLowerCase();
 
 // h1〜h3 で節に切る。節は同じか浅い次の見出しの直前まで
@@ -623,6 +776,7 @@ function buildModel(d) {
   const { fm, body } = parseFrontMatter(d.explanation.markdown);
   const left = el("div", { class: "md" });
   left.innerHTML = sanitize(window.marked.parse(body, { async: false }));
+  dropExternalImages(left);
   m.left = left;
   const qs = d.request.questions;
   if (qs.length === 1) {
@@ -633,7 +787,7 @@ function buildModel(d) {
     const table = optSec?.nodes.find((n) => n.tagName === "TABLE") ?? optSec?.nodes.map((n) => n.querySelector?.("table")).find(Boolean);
     const v2 = table ? parseOptionsTable(table, qs[0].options, fm) : null;
     if (v2) {
-      for (const n of optSec.nodes) n.remove();
+      if (v2.cards.length) for (const n of optSec.nodes) n.remove(); // 1 つも対応が取れなければ、表は左に残す
       const todoSec = (fm.type === "blocker" || d.explanation.type === "blocker") ? findSection(secs, "人にしてほしいこと") : undefined;
       if (todoSec && todoSec !== optSec) {
         const todoBox = el("div", { class: "md" });
@@ -672,7 +826,7 @@ function parseOptionsTable(table, options, fm) {
   for (const tr of trs.slice(1)) {
     const row = cells(tr);
     const tds = [...tr.children];
-    const o = options.find((o) => normLabel(o.label) === normLabel(row[0] ?? ""));
+    const o = options.find((o) => sameLabel(o.label, row[0] ?? ""));
     if (!o || cards.some((c) => c.option === o)) continue;
     let lines;
     if (hi >= 0 && ri >= 0) lines = [{ text: row[hi] ?? "", cell: tds[hi] }, { text: row[ri] ?? "", muted: true, cell: tds[ri] }];
@@ -680,9 +834,9 @@ function parseOptionsTable(table, options, fm) {
     lines = lines.filter((l) => l.text && !/^[-—ー]+$/.test(l.text));
     cards.push({ option: o, label: stripSuffix(row[0]), lines, suffix: SUFFIX_RE.test(row[0]), recommended: false });
   }
-  if (!cards.length) return null;
-  const want = fm.recommended ? normLabel(fm.recommended) : null;
-  const byFm = want ? cards.filter((c) => normLabel(c.option.label) === want) : [];
+  // 行が 1 つも照合できなくても v2 は捨てない(全 option が生のカードになる)
+  const want = fm.recommended ? fm.recommended : null;
+  const byFm = want ? cards.filter((c) => sameLabel(c.option.label, want)) : [];
   for (const c of byFm.length ? byFm : cards.filter((c) => c.suffix)) c.recommended = true;
   const extras = options.filter((o) => !cards.some((c) => c.option === o));
   return { cards, extras };
@@ -713,20 +867,24 @@ function renderLeft(d) {
     root.append(modelFor(d).left);
     return;
   }
-  const reason = ex?.none_reason ?? "";
+  const code = ex?.none_reason ?? "";
+  const reason = NONE_REASONS[code] ?? code;
   root.append(el("div", { class: "bg-note", text: `エージェントは説明を書きませんでした${reason ? `(理由: ${reason})` : ""}` }));
 }
 
 // ---- 表示の切り替え ----
 
 function renderAll() {
+  document.body.classList.remove("fullwide");
   const d = decisions.get(shownId);
   $("main").hidden = !d;
   $("empty").hidden = !!d;
   renderHeader();
   renderList();
-  renderLeft(d);
+  const left = renderLeft(d);
   renderRight(d);
+  refreshWide();
+  left?.then?.(refreshWide);
 }
 
 function show(id) {
@@ -742,6 +900,7 @@ function advance() {
 function upsert(d) {
   const prev = decisions.get(d.id);
   decisions.set(d.id, d);
+  if (d.id !== shownId) notifyBackground(prev, d);
   if (d.id === shownId) {
     if (d.status !== "pending") {
       toast(STATUS_TEXT[d.status] ?? "更新されました");
@@ -762,11 +921,21 @@ function upsert(d) {
 async function loadAll() {
   const ds = await api("/api/decisions?status=pending");
   const seen = new Set();
-  for (const d of ds) { decisions.set(d.id, d); seen.add(d.id); }
-  // SSE の取りこぼしで、手元では pending のまま変わっていたものを取り直す
+  for (const d of ds) {
+    seen.add(d.id);
+    if (decisions.has(d.id) && decisions.get(d.id).status !== d.status) upsert(d);
+    else decisions.set(d.id, d);
+  }
+  // SSE の取りこぼし・server 再起動で、手元では pending のまま変わった / 消えたものを取り直す
   for (const d of [...decisions.values()]) {
     if (d.status === "pending" && !seen.has(d.id)) {
-      try { decisions.set(d.id, await api(`/api/decisions/${d.id}`)); } catch {}
+      try { upsert(await api(`/api/decisions/${d.id}`)); }
+      catch (e) {
+        if (e.message === "unauthorized") throw e;
+        decisions.delete(d.id); // 取れない(404 等)= 消えた
+        models.delete(d.id);
+        drafts.delete(d.id);
+      }
     }
   }
   const cur = decisions.get(shownId);
@@ -774,11 +943,27 @@ async function loadAll() {
   else { renderHeader(); renderList(); }
 }
 
+// SSE。切れたら cookie を取り直して 2 秒後(以後 2 倍、上限 5 秒)に再接続し、open で保留を同期する
+let es = null;
+let retryMs = 2000;
+let retryTimer = null;
 function connect() {
-  const es = new EventSource("/api/stream");
+  clearTimeout(retryTimer);
+  es?.close();
+  es = new EventSource("/api/stream");
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
-  es.addEventListener("open", () => loadAll().catch(() => {}));
+  es.addEventListener("open", () => {
+    retryMs = 2000;
+    $("banner").hidden = true;
+    loadAll().catch(() => {});
+  });
+  es.addEventListener("error", () => {
+    es.close();
+    const wait = retryMs;
+    retryMs = Math.min(5000, retryMs * 2);
+    retryTimer = setTimeout(async () => { await refreshAuth(); connect(); }, wait);
+  });
 }
 
 // ---- キーボード ----
@@ -795,7 +980,7 @@ function cycle(step) {
 // IME(日本語入力)が有効だと keydown の key が "Process"、keyCode が 229 になり文字が取れない。
 // テキスト欄の外では物理キー(code)から割り当てキーを決める
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", Period: ".",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -833,8 +1018,15 @@ document.addEventListener("keydown", (ev) => {
   const typing = t instanceof HTMLInputElement && t.type === "text";
   // テキスト欄で IME 変換中のキーは入力に回す。欄の外では IME が有効でも物理キーで判定する(logicalKey)
   if (typing && (ev.isComposing || ev.keyCode === 229)) return;
+  if (document.body.classList.contains("fullwide")) {
+    const k = logicalKey(ev);
+    if (k === "Escape" || k === "f" || k === "Tab") { ev.preventDefault(); setFullwide(false); }
+    else if (k === "Enter") ev.preventDefault(); // 全幅中は送信しない
+    return;
+  }
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
+  if (!typing && key === "f" && hasWide()) { ev.preventDefault(); setFullwide(true); return; }
   if (key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
   if (!typing && (key === "h" || key === "l" || key === "ArrowLeft" || key === "ArrowRight")) {
     ev.preventDefault();
@@ -902,7 +1094,8 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if (key === "Enter" && isBtn) return;
-  if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
+  if (key === ".") { ev.preventDefault(); ui.toggleExpand(); }
+  else if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
   else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
   else if (key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
   else if (key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }

@@ -31,8 +31,12 @@ body {
 .badge.reversible { color: var(--fg); }
 .badge.none { color: var(--yellow); border-color: var(--yellow); }
 .head { margin-bottom: 10px; }
-.has-pending-btn .blocker-band, .has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } /* 保留ボタン(保留 N + ← →)の幅ぶん */
-.meta-line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 13px; max-height: 3.4em; overflow: hidden; }
+@media (min-width: 1100px) { .has-pending-btn .blocker-band, .has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } } /* 右上固定の保留ボタン(保留 N + ← →)の幅ぶん。1100px 未満は見出しの右端にインライン */
+.title-row { display: flex; align-items: flex-start; gap: 8px; }
+.title-row > :first-child { flex: 1; min-width: 0; }
+.title-row .pending-btn { position: static; flex: none; margin-top: 2px; }
+.meta-line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 13px; }
+.meta-more { color: var(--muted); }
 .chips { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; }
 .chip { font-size: 13px; font-weight: 700; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); border-radius: 4px; padding: 0 6px; line-height: 20px; overflow-wrap: anywhere; }
 .chip.repo { --c: var(--repo); }
@@ -131,6 +135,13 @@ pre code { background: none; padding: 0; }
 .diff span { white-space: pre; }
 .mermaid-err { color: var(--red); font-size: 13px; margin-top: 6px; }
 .mermaid-ok svg { max-height: 42vh; width: auto; max-width: 100%; }
+.mermaid-ok.wide { overflow-x: auto; }
+.wide-chip { display: block; font: inherit; font-size: 12px; line-height: 18px; padding: 1px 8px; margin: 0 0 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted); cursor: pointer; }
+
+/* 全幅表示: 判断列を隠して背景だけを広く(Esc / f / Tab で戻る。Enter は無効) */
+body.fullwide main { grid-template-columns: minmax(0, 1fr); }
+body.fullwide #decision, body.fullwide .pending-btn { display: none; }
+body.fullwide #background { border-right: 0; }
 details { margin: 8px 0; }
 details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 
@@ -151,7 +162,12 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .row .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 /* トースト */
-.toast { position: fixed; right: 16px; bottom: 16px; z-index: 60; background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: 0 2px 10px #0004; }
+/* 送信ボタン群(.actions)の真上に縦に積む。判断が無いときだけ右下固定 */
+.toasts { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; z-index: 60; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.toasts.floating { position: fixed; left: auto; right: 16px; bottom: 16px; margin: 0; max-width: min(420px, calc(100vw - 32px)); }
+.toast { background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: 0 2px 10px #0004; overflow-wrap: anywhere; }
+.toast.lost { background: var(--red); color: #fff; font-weight: 600; }
+.toast.soft { background: var(--panel); color: var(--muted); border: 1px solid var(--line); box-shadow: none; }
 
 /* 強調: 太字 = 決め手、リスク欄の太字は赤 */
 .md strong, .rec strong, .opt .desc strong { color: var(--accent); font-weight: 700; }
@@ -180,11 +196,16 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .copy-btn { position: absolute; top: 12px; right: 6px; font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }
 
 /* 長い説明の折りたたみ(`.` で展開): 推奨は約 6 行、カード本文は各 3 行 */
+.impact { position: relative; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.impact-cap { font-size: 11px; font-weight: 700; color: var(--muted); }
+.impact-body { max-height: calc(8 * 1.6em); overflow: hidden; }
+.impact.has-more .impact-body { -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.impact .more-chip { position: absolute; right: 8px; bottom: 6px; }
 .rec { position: relative; }
 .rec-body { max-height: calc(6 * 1.6em); overflow: hidden; }
 .rec.has-more .rec-body { -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
 .opt .desc.clampable { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
-.expanded .rec-body { max-height: none; -webkit-mask-image: none; mask-image: none; }
+.expanded .rec-body, .expanded .impact-body { max-height: none; -webkit-mask-image: none; mask-image: none; }
 .expanded .opt .desc.clampable { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
 .more-chip { font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted); cursor: pointer; }
 .rec .more-chip { position: absolute; right: 8px; bottom: 6px; }
