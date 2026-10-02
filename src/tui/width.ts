@@ -1,4 +1,4 @@
-// 端末の表示幅(全角 2 桁)と、それに基づく折り返し。ANSI を含む文字列も扱う。
+// Terminal display width (full-width characters take 2 columns) and wrapping based on it. Handles strings containing ANSI.
 
 const segmenter = new Intl.Segmenter("ja", { granularity: "grapheme" });
 
@@ -29,12 +29,12 @@ function isWide(cp: number): boolean {
 function graphemeWidth(g: string): number {
   const cp = g.codePointAt(0) ?? 0;
   if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) return 0;
-  // 結合文字だけの塊
+  // A run of combining characters only
   if (/^\p{M}+$/u.test(g)) return 0;
   return isWide(cp) ? 2 : 1;
 }
 
-/** 表示幅。ANSI は数えない */
+/** Display width; ANSI sequences are not counted */
 export function width(s: string): number {
   let w = 0;
   for (const { segment } of segmenter.segment(stripAnsi(s))) w += graphemeWidth(segment);
@@ -58,7 +58,7 @@ function tokens(s: string): Token[] {
   return out;
 }
 
-/** 表示幅 max に収まるよう切る(ANSI は保つ)。切ったら末尾に reset を付ける */
+/** Cut to fit display width max (ANSI is preserved). Appends a reset when cut */
 export function truncate(s: string, max: number): string {
   if (width(s) <= max) return s;
   let w = 0;
@@ -78,22 +78,22 @@ export function padEnd(s: string, w: number): string {
   return gap > 0 ? s + " ".repeat(gap) : s;
 }
 
-// 行頭に置かない文字(句読点・閉じ括弧)。折り返しで来そうなら、直前の 1 文字を一緒に次の行へ送る
+// Characters that must not start a line (punctuation, closing brackets). If wrapping would put one there, move the previous character to the next line with it
 const NO_LINE_START = new Set(Array.from("。、，．）」』】〕〉》！？：；,.!?)]}"));
 
 /**
- * 表示幅 max で折り返す。空白で切れる所は空白で、無ければ(日本語など)文字単位で切る。
- * ANSI の装飾は行をまたいで引き継ぐ(行末で reset、次行頭で再掲)。
+ * Wrap at display width max. Break at spaces where possible, otherwise per character (Japanese etc.).
+ * ANSI decoration carries across lines (reset at the end of a line, re-applied at the start of the next).
  */
 export function wrap(s: string, max: number): string[] {
   if (max < 1) return [s];
   const lines: string[] = [];
   let cur = "";
   let curW = 0;
-  let active = ""; // 現在有効な SGR
-  let lastBreak = -1; // cur 内で空白の直後の位置(文字列 index)
+  let active = ""; // Currently active SGR
+  let lastBreak = -1; // Position in cur right after a space (string index)
   let widthAtBreak = 0;
-  let lastCharAt = -1; // cur 内で直前の文字が始まる位置(文字列 index)
+  let lastCharAt = -1; // Position in cur where the previous character starts (string index)
   let lastCharW = 0;
   const flush = (text: string) => lines.push(active && !text.endsWith("\x1b[0m") ? text + "\x1b[0m" : text);
 
@@ -113,7 +113,7 @@ export function wrap(s: string, max: number): string[] {
     }
     if (curW + t.w > max) {
       if (t.text === " ") {
-        // 行末の空白は捨てる
+        // Drop trailing spaces at the end of a line
         flush(cur.replace(/ +$/, ""));
         cur = active;
         curW = 0;
@@ -127,7 +127,7 @@ export function wrap(s: string, max: number): string[] {
         cur = active + tail;
         curW = curW - widthAtBreak;
       } else if (NO_LINE_START.has(t.text) && lastCharAt > 0 && lastCharW > 0 && cur[lastCharAt] !== " ") {
-        // 禁則: 句読点を行頭に置かない。直前の 1 文字を一緒に次の行へ
+        // Kinsoku: do not start a line with punctuation; move the previous character to the next line with it
         const head = cur.slice(0, lastCharAt);
         flush(/\x1b\[/.test(head) && !head.endsWith("\x1b[0m") ? head + "\x1b[0m" : head);
         cur = active + cur.slice(lastCharAt);
@@ -152,7 +152,7 @@ export function wrap(s: string, max: number): string[] {
   return lines;
 }
 
-/** 表示桁 [from, from+max) を切り出す(ANSI は保つ)。全角の途中で切れる桁は空白にする */
+/** Slice display columns [from, from+max) (ANSI is preserved). A column that splits a full-width character becomes a space */
 export function sliceCols(s: string, from: number, max: number): string {
   let w = 0;
   let out = "";
@@ -168,7 +168,7 @@ export function sliceCols(s: string, from: number, max: number): string {
     w = end;
     if (end <= from) continue;
     if (!started && w - t.w < from) {
-      // 左端で全角が割れた
+      // A full-width character was split at the left edge
       out += " ".repeat(end - from);
       started = true;
       continue;

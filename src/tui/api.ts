@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Decision } from "../contract.js";
 
-// server への薄い fetch。認可は <data-dir>/token の Bearer(hook の Client と同じ)。
+// Thin fetch wrapper for the server. Auth is the Bearer token in <data-dir>/token (same as the hook client).
 
 export class ApiError extends Error {
   constructor(
@@ -39,10 +39,10 @@ export class TuiApi {
 
   private async fetch(path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<Response> {
     const method = init.method ?? "GET";
-    // server を再起動すると token が作り直される。401 なら token を読み直して 1 度だけやり直す
+    // Restarting the server regenerates the token. On 401, re-read the token and retry once
     for (let retried = false; ; retried = true) {
       const token = await this.getToken();
-      if (!token) throw new ApiError(`token が読めません(${join(this.dataDir, "token")})`);
+      if (!token) throw new ApiError(`cannot read the token (${join(this.dataDir, "token")})`);
       const res = await fetch(this.server + path, {
         method,
         headers: {
@@ -88,7 +88,7 @@ export class TuiApi {
     return Decision.parse(await res.json());
   }
 
-  /** SSE を購読する。つながったら onOpen。切れたら(正常終了も含め)返る。例外は接続失敗 */
+  /** Subscribe to SSE. Calls onOpen once connected and returns when the stream ends (including a clean end). Throws on connection failure */
   async stream(onEvent: (e: StreamEvent) => void, signal: AbortSignal, onOpen?: () => void): Promise<void> {
     const res = await this.fetch("/api/stream", { signal });
     if (!res.ok || !res.body) throw new ApiError(`HTTP ${res.status}`, res.status);
@@ -110,7 +110,7 @@ export class TuiApi {
   }
 }
 
-/** 1 イベント分のテキスト → decision.created / decision.updated のみ */
+/** Text of one event, keeping only decision.created / decision.updated */
 export function parseSse(block: string): StreamEvent | null {
   let event = "";
   const data: string[] = [];

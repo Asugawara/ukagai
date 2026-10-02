@@ -1,9 +1,50 @@
 import type { Decision } from "../../src/contract.js";
 
+/** The question text of the default decision. */
+export const Q = "Should notifications use SSE or WebSocket?";
+
+/** A v2 explanation (English headings, the canonical form). */
 export const V2_MD = `---
 ukagai: 1
-question: 通知は SSE と WebSocket のどちらにしますか？
-title: GUI の更新通知を SSE と WebSocket のどちらにするか
+question: ${Q}
+title: Whether the GUI update channel uses SSE or WebSocket
+reversibility: costly
+scope: repo
+recommended: SSE
+---
+
+## Why this decision is needed now
+
+Before the server implements \`/api/stream\`, the **delivery mechanism** has to be chosen.
+
+## Options
+
+| Option | What happens if chosen | Risks and how to undo |
+|---|---|---|
+| SSE | One-way delivery from the server to the GUI. | If you later need **two-way**, rewrite it (about 1 day). |
+| WebSocket | Two-way is possible. | Adds a dependency. |
+
+## Recommendation
+
+I recommend SSE. It is the smaller implementation.
+
+## Diagram
+
+\`\`\`mermaid
+flowchart LR
+  H[hook] --> S[serve]
+\`\`\`
+
+## What I checked
+
+- There is no WebSocket dependency.
+`;
+
+/** The same explanation with Japanese heading aliases (must render the same screen). */
+export const V2_MD_JA = `---
+ukagai: 1
+question: ${Q}
+title: Whether the GUI update channel uses SSE or WebSocket
 reversibility: costly
 scope: repo
 recommended: SSE
@@ -11,18 +52,18 @@ recommended: SSE
 
 ## なぜ今この判断が要るか
 
-server が \`/api/stream\` を実装する前に、**通知の方式**を決める必要があります。
+Before the server implements \`/api/stream\`, the **delivery mechanism** has to be chosen.
 
 ## 選択肢
 
 | 選択肢 | 選ぶと起きること | リスクと戻し方 |
 |---|---|---|
-| SSE | server から GUI への一方向配信になる。 | **双方向**にしたくなったら書き直す(約 1 日)。 |
-| WebSocket | 双方向にできる。 | 依存が増える。 |
+| SSE | One-way delivery from the server to the GUI. | If you later need **two-way**, rewrite it (about 1 day). |
+| WebSocket | Two-way is possible. | Adds a dependency. |
 
 ## 推奨
 
-SSE を推します。実装が小さく済みます。
+I recommend SSE. It is the smaller implementation.
 
 ## 図
 
@@ -33,7 +74,7 @@ flowchart LR
 
 ## 確かめたこと
 
-- WebSocket の依存は無い。
+- There is no WebSocket dependency.
 `;
 
 export function decision(over: Partial<Decision> & Record<string, unknown> = {}): Decision {
@@ -45,12 +86,12 @@ export function decision(over: Partial<Decision> & Record<string, unknown> = {})
     request: {
       questions: [
         {
-          question: "通知は SSE と WebSocket のどちらにしますか？",
-          header: "方式",
+          question: Q,
+          header: "Method",
           multiSelect: false,
           options: [
-            { label: "SSE (Recommended)", description: "一方向" },
-            { label: "WebSocket", description: "双方向" },
+            { label: "SSE (Recommended)", description: "One-way" },
+            { label: "WebSocket", description: "Two-way" },
           ],
         },
       ],
@@ -75,28 +116,89 @@ export function withExplanation(markdown: string, over: Record<string, unknown> 
   } as Partial<Decision>;
 }
 
-import { readFileSync } from "node:fs";
+export const BLOCKER_Q = "The gcloud authentication has expired. Did you take care of it?";
 
-export const BLOCKER_MD = readFileSync(new URL("../explain-fixtures/pass-blocker.md", import.meta.url), "utf8");
+export const BLOCKER_MD = `---
+ukagai: 1
+question: ${BLOCKER_Q}
+type: blocker
+title: Run \`gcloud auth login\` because the gcloud authentication has expired
+recommended: Done. Continue
+reversibility: reversible
+scope: machine
+---
 
-/** blocker(人の作業待ち)の判断。説明は pass-blocker.md */
-export function blockerDecision(over: Partial<Decision> & Record<string, unknown> = {}): Decision {
+## Why I stopped
+
+\`gcloud run deploy\` failed with an authentication error. A browser login is required and I cannot do it.
+
+\`\`\`
+ERROR: (gcloud.run.deploy) You do not currently have an active account selected.
+Please run: $ gcloud auth login
+\`\`\`
+
+## What you need to do
+
+1. Run the following in a terminal and log in in the browser.
+2. Also refresh the application default credentials.
+
+\`\`\`sh
+gcloud auth login
+gcloud auth application-default login
+\`\`\`
+
+## Options
+
+| Option | What happens if chosen | Risks and how to undo |
+|---|---|---|
+| Done. Continue | Retry the same deploy and continue. | If the login did not work, it stops again with the same error. |
+| Skip this step and continue | Skip the deploy and go on with the rest. | Nothing is deployed. Deploy by hand later to undo. |
+| Stop here | Stop the work here. | Changes made so far remain. Resuming continues from there. |
+`;
+
+/** The same blocker with Japanese heading aliases and Japanese option labels. */
+export const BLOCKER_MD_JA = `---
+ukagai: 1
+question: ${BLOCKER_Q}
+type: blocker
+title: Run \`gcloud auth login\` because the gcloud authentication has expired
+recommended: 対応した。続けて
+reversibility: reversible
+scope: machine
+---
+
+## なぜ止まったか
+
+\`gcloud run deploy\` failed with an authentication error.
+
+## 人にしてほしいこと
+
+1. Run the following in a terminal.
+
+\`\`\`sh
+gcloud auth login
+\`\`\`
+
+## 選択肢
+
+| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+|---|---|---|
+| 対応した。続けて | Retry the deploy. | It may stop again. |
+| この手順は飛ばして続けて | Skip the deploy. | Nothing is deployed. |
+| ここで中断 | Stop here. | Changes remain. |
+`;
+
+const BLOCKER_OPTIONS = [
+  { label: "Done. Continue (Recommended)", description: "Retry" },
+  { label: "Skip this step and continue", description: "Skip" },
+  { label: "Stop here", description: "Stop" },
+];
+
+/** A blocker (waiting for the human) decision. The explanation is BLOCKER_MD. */
+export function blockerDecision(over: Partial<Decision> & Record<string, unknown> = {}, md = BLOCKER_MD, options = BLOCKER_OPTIONS): Decision {
   return decision({
-    request: {
-      questions: [
-        {
-          question: "gcloud の認証が切れています。対応できましたか？",
-          header: "作業待ち",
-          multiSelect: false,
-          options: [
-            { label: "対応した。続けて (Recommended)", description: "再試行する" },
-            { label: "この手順は飛ばして続けて", description: "飛ばす" },
-            { label: "ここで中断", description: "止める" },
-          ],
-        },
-      ],
-    },
-    ...withExplanation(BLOCKER_MD, { type: "blocker" }),
+    request: { questions: [{ question: BLOCKER_Q, header: "Waiting", multiSelect: false, options }] },
+    ...withExplanation(md, { type: "blocker" }),
     ...over,
   } as never);
 }

@@ -3,8 +3,10 @@ import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.
 import { buildModel, hasExplanation, isBlocker, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
+import type { Lang } from "../settings/config.js";
+import { t, type MessageKey } from "./i18n.js";
 
-// 状態遷移(I/O なし)。キーを渡すと、呼び出し側が実行する Effect を返す。
+// State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
 export type Effect =
   | { type: "answer"; id: string; body: Record<string, unknown> }
@@ -19,60 +21,62 @@ interface Draft {
 }
 
 export const TOAST_MS = 2000;
-/** ホイール 1 ノッチの行数 */
+/** Rows per wheel notch */
 export const WHEEL_LINES = 3;
-/** ← → 1 回の横スクロール量(桁) */
+/** Columns per ← → horizontal scroll */
 export const HSCROLL_STEP = 8;
-/** 「f で全幅表示」の案内を出しておく時間 */
+/** How long the "f for full width" hint stays up */
 export const FULL_HINT_MS = 6000;
 
-const STATUS_TEXT: Record<string, string> = {
-  answer_submitted: "届けています…",
-  answered: "届きました",
-  answer_lost: "ターミナルに落ちました(hook が切断)",
-  hook_disconnected: "hook が切断されました",
-  fallback: "ターミナルで答えます",
-  cancelled: "キャンセルされました",
+const STATUS_KEY: Record<string, MessageKey> = {
+  answer_submitted: "status_answer_submitted",
+  answered: "status_answered",
+  answer_lost: "status_answer_lost",
+  hook_disconnected: "status_hook_disconnected",
+  fallback: "status_fallback",
+  cancelled: "status_cancelled",
 };
 
 export class App {
+  /** Display language (set by index.ts) */
+  lang: Lang = "en";
   readonly decisions = new Map<string, Decision>();
   shownId: string | null = null;
   mode: Mode = "normal";
-  /** 背景(上下配置では画面全体)の先頭行 */
+  /** First row of the background (the whole screen in the stacked layout) */
   scroll = 0;
-  /** 判断列の先頭行。null ならカーソルに追従 */
+  /** First row of the decision column; null follows the cursor */
   rscroll: number | null = null;
   focus: Focus = "decision";
-  /** 幅超過の図の横位置(桁) */
+  /** Horizontal position of a too-wide diagram (columns) */
   hscroll = 0;
-  /** 背景を全幅で表示(判断の列を隠す) */
+  /** Show the background at full width (hides the decision column) */
   full = false;
-  /** 直近に描いた画面の寸法(スクロールの量と範囲に使う) */
+  /** Dimensions of the last drawn screen (used for scroll amounts and ranges) */
   private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax"> = {
     wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0,
   };
-  /** 「f で全幅表示」の案内は判断ごとに 1 回。出した判断と、いつまで出すか */
+  /** The "f for full width" hint is shown once per decision: which decisions have had it, and until when */
   private hinted = new Set<string>();
   private hintUntil = 0;
-  /** クリップボードに送れるか(pbcopy の有無。index.ts が決める) */
+  /** Whether copying to the clipboard is possible (whether pbcopy exists; decided by index.ts) */
   copySupported = true;
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason"; text: string } | null = null;
   private listIndex = 0;
   private lastG = 0;
-  /** 長い推奨を全文で出している判断 */
+  /** Decisions showing a long recommendation in full */
   private recFull = new Set<string>();
   private toast: { text: string; until: number } | null = null;
   private sending = new Set<string>();
   private sent = new Set<string>();
-  /** 接続先(フッターの「接続できません」に出す。index.ts が決める) */
+  /** Server address (shown in the footer "cannot connect" message; set by index.ts) */
   server = "";
   private down = false;
   private restoredUntil = 0;
 
-  // ---- データ ----
+  // ---- Data ----
 
   pending(): Decision[] {
     return [...this.decisions.values()]
@@ -80,7 +84,7 @@ export class App {
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
-  /** 起動時・再取得時の一覧(pending のみ)。手元で pending のまま一覧から消えたものは取り直す対象として返す */
+  /** The list at startup / refetch (pending only). Decisions still pending locally but missing from the list are returned to be re-fetched */
   replacePending(list: Decision[], now: number): string[] {
     const seen = new Set<string>();
     for (const d of list) {
@@ -96,8 +100,8 @@ export class App {
   upsert(d: Decision, now: number): void {
     this.decisions.set(d.id, d);
     if (d.status !== "pending" && this.sent.has(d.id)) {
-      const t = STATUS_TEXT[d.status];
-      if (t) this.showToast(t, now);
+      const key = STATUS_KEY[d.status];
+      if (key) this.showToast(t(this.lang, key), now);
       if (d.status !== "answer_submitted") this.sent.delete(d.id);
     }
     if (d.id === this.shownId) {
@@ -107,7 +111,7 @@ export class App {
     }
   }
 
-  /** SSE の接続状態。切れたら「接続できません」、つながり直したら 2 秒「再接続しました」 */
+  /** SSE connection state: "cannot connect" while down, and "reconnected" for 2 seconds after it comes back */
   setConnected(ok: boolean, now: number): void {
     if (!ok) this.down = true;
     else if (this.down) {
@@ -116,7 +120,7 @@ export class App {
     }
   }
 
-  /** server に無くなった判断を手元から除く */
+  /** Remove a decision the server no longer has */
   drop(id: string, now: number): void {
     this.decisions.delete(id);
     this.models.delete(id);
@@ -134,7 +138,7 @@ export class App {
 
   private show(id: string | null): void {
     this.shownId = id;
-    // 判断をまたいでフォーカスを引き継がない(背景に残ると j / Enter が背景のスクロールになり、誤答のもと)
+    // Focus does not carry over between decisions (left on the background, j / Enter would scroll it and cause wrong answers)
     this.focus = "decision";
     this.scroll = 0;
     this.rscroll = null;
@@ -149,13 +153,13 @@ export class App {
     this.show(this.pending()[0]?.id ?? null);
   }
 
-  // ---- 取り出し ----
+  // ---- Accessors ----
 
   model(): ScreenModel | null {
     const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
     if (!d) return null;
     let m = this.models.get(d.id);
-    if (!m) this.models.set(d.id, (m = buildModel(d)));
+    if (!m) this.models.set(d.id, (m = buildModel(d, this.lang)));
     return m;
   }
 
@@ -164,7 +168,7 @@ export class App {
     if (!dr) {
       const q = m.question;
       dr = { cursor: q?.initialCursor ?? 0, sel: new Set(), free: { on: false, text: "" }, reason: "" };
-      // 単一選択は移動 = 選択。初期位置(推奨、無ければ先頭)を選んでおく
+      // Single select: moving = selecting. Pre-select the initial position (the recommended option, else the first)
       if (q && !q.multi && q.cards[dr.cursor]) dr.sel.add(q.cards[dr.cursor]!.value);
       this.drafts.set(m.id, dr);
     }
@@ -181,9 +185,9 @@ export class App {
             index: this.listIndex,
             items: pending.map((d): ListItem => ({
               blocker: isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}),
-              title: titleOf(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}),
+              title: titleOf(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}, this.lang),
               chips: chipsOf(d),
-              kindLabel: d.kind === "approve_plan" ? "計画" : "質問",
+              kindLabel: t(this.lang, d.kind === "approve_plan" ? "kind_plan" : "kind_question"),
               createdAt: d.created_at,
               noExplanation: d.kind === "answer_question" && !hasExplanation(d),
               current: d.id === this.shownId,
@@ -199,6 +203,7 @@ export class App {
       reason: dr?.reason ?? "",
       pending: pending.length,
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
+      lang: this.lang,
       conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
       list,
       copy: this.copySupported,
@@ -213,7 +218,7 @@ export class App {
     };
   }
 
-  /** 描いた画面の寸法を受け取り、スクロール位置を範囲に収める。案内を出し始めたら true(描き直す) */
+  /** Take the drawn screen dimensions and clamp the scroll positions. Returns true when a hint just started (redraw) */
   syncFrame(f: Frame, now = Date.now()): boolean {
     this.frame = f;
     this.scroll = Math.max(0, Math.min(this.scroll, f.scrollMax));
@@ -227,12 +232,12 @@ export class App {
     return false;
   }
 
-  /** 左右配置のときだけフォーカスが意味を持つ。全幅表示中は背景 */
+  /** Focus matters only in the side-by-side layout. At full width it is the background */
   private effectiveFocus(): Focus {
     return this.frame.wide ? (this.full ? "background" : this.focus) : "decision";
   }
 
-  /** 背景(上下配置では画面全体)を to へ。現在の見え方 cur から相対で動かすときは呼び出し側が計算する */
+  /** Move the background (the whole screen in the stacked layout) to `to`. For relative moves from the current view `cur`, the caller computes the target */
   private setScroll(to: number): void {
     this.scroll = Math.max(0, Math.min(this.frame.scrollMax, to));
   }
@@ -246,12 +251,12 @@ export class App {
     } else if (f.wide) {
       this.setScroll(this.scroll + d);
     } else {
-      // 上下配置は 0 のときカーソル追従。いま見えている位置から動かす
+      // In the stacked layout 0 follows the cursor; move from the position currently visible
       this.setScroll((this.scroll || f.off) + d);
     }
   }
 
-  // ---- キー ----
+  // ---- Keys ----
 
   handle(key: Key, now: number): Effect[] {
     const m = this.model();
@@ -289,7 +294,7 @@ export class App {
       case "list-close": this.mode = "normal"; return [];
       case "scroll": {
         const n = a.unit === "half" ? Math.max(1, Math.floor(this.frame.bodyRows / 2)) : 1;
-        // 上下配置は 0 のときカーソル追従。いま見えている位置から動かす
+        // In the stacked layout 0 follows the cursor; move from the position currently visible
         this.setScroll((this.frame.wide ? this.scroll : this.scroll || this.frame.off) + a.delta * n);
         return [];
       }
@@ -335,7 +340,7 @@ export class App {
     this.show(list[(i + step + list.length) % list.length]!.id);
   }
 
-  /** カーソルが止まれる数。質問はカード + 自由記述、計画はボタン 3 つ */
+  /** Number of positions the cursor can rest on: cards + free text for a question, 3 buttons for a plan */
   private slots(m: ScreenModel): number {
     if (m.kind === "plan") return 3;
     return m.question ? m.question.cards.length + 1 : 0;
@@ -349,7 +354,7 @@ export class App {
     this.rscroll = null;
     const q = m.question;
     if (!q || q.multi) return;
-    // 単一選択は移動 = 選択
+    // Single select: moving = selecting
     if (dr.cursor < q.cards.length) {
       dr.sel = new Set([q.cards[dr.cursor]!.value]);
       dr.free.on = false;
@@ -426,7 +431,7 @@ export class App {
     if (!q) return [];
     if (dr.cursor === q.cards.length && !dr.free.text.trim()) return this.startFree(m, dr);
     if (!this.complete(m, dr)) return [];
-    // 回答は元の option.label で返す
+    // The answer uses the original option.label
     const picked = q.cards.map((c) => c.value).filter((v) => dr.sel.has(v));
     if (dr.free.on && !q.multi) picked.length = 0;
     if (dr.free.on && dr.free.text.trim()) picked.push(dr.free.text.trim());
@@ -439,19 +444,20 @@ export class App {
     return [{ type: "answer", id: m.id, body }];
   }
 
-  // ---- 送信の結果 ----
+  // ---- Submission results ----
 
   answered(updated: Decision, now: number): void {
     this.sending.delete(updated.id);
     this.sent.add(updated.id);
     this.decisions.set(updated.id, updated);
-    this.showToast(STATUS_TEXT[updated.status] ?? "送信しました", now);
+    const key = STATUS_KEY[updated.status];
+    this.showToast(t(this.lang, key ?? "sent"), now);
     if (updated.id === this.shownId) this.advance(now);
   }
 
   failed(id: string, message: string, now: number): void {
     this.sending.delete(id);
-    this.showToast(`送信に失敗しました: ${message}`, now);
+    this.showToast(t(this.lang, "send_failed", { message }), now);
   }
 
   note(text: string, now: number): void {

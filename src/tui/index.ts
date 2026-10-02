@@ -6,17 +6,26 @@ import { refetch as syncOnce, streamLoop } from "./sync.js";
 import { App, type Effect } from "./app.js";
 import { ESC_TIMEOUT_MS, KeyParser } from "./keys.js";
 import { renderFrame } from "./render.js";
+import { isLang, readConfig, type Lang } from "../settings/config.js";
+import { t } from "./i18n.js";
 
 const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h";
 const LEAVE_SCREEN = "\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l";
 const REFETCH_MS = 5000;
 
-interface Options {
+export interface Options {
   server: string;
   dataDir: string;
+  /** Set by `--lang`; wins over config.json */
+  lang?: Lang;
 }
 
-function parseArgs(argv: string[]): Options {
+/** `--lang` wins; otherwise `lang` from <data-dir>/config.json (default en). */
+export async function resolveLang(opts: Pick<Options, "dataDir" | "lang">): Promise<Lang> {
+  return opts.lang ?? (await readConfig(opts.dataDir)).lang;
+}
+
+export function parseArgs(argv: string[]): Options {
   const opts: Options = { server: "http://127.0.0.1:4818", dataDir: join(homedir(), ".ukagai") };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -26,6 +35,9 @@ function parseArgs(argv: string[]): Options {
     } else if (a === "--data-dir") {
       const v = argv[++i];
       if (v) opts.dataDir = v;
+    } else if (a === "--lang") {
+      const v = argv[++i];
+      if (isLang(v)) opts.lang = v;
     }
   }
   return opts;
@@ -34,18 +46,19 @@ function parseArgs(argv: string[]): Options {
 export async function run(argv: string[]): Promise<number> {
   const opts = parseArgs(argv);
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    process.stderr.write("ukagai tui: TTY で実行してください\n");
+    process.stderr.write("ukagai tui: run in a TTY\n");
     return 1;
   }
   const api = new TuiApi(opts.server, opts.dataDir);
   const app = new App();
   app.server = opts.server;
+  app.lang = await resolveLang(opts);
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());
   } catch (e) {
     const why = e instanceof ApiError ? `(${e.message})` : "";
-    process.stderr.write(`ukagai tui: server に接続できません(${opts.server})${why}。claude を起動すると自動で立ち上がります\n`);
+    process.stderr.write(`ukagai tui: cannot connect to the server (${opts.server})${why}. It starts automatically when you launch claude\n`);
     return 1;
   }
 
@@ -62,7 +75,7 @@ export async function run(argv: string[]): Promise<number> {
     let frame = renderFrame(app.view(Date.now()), { cols, rows });
     if (app.syncFrame(frame)) frame = renderFrame(app.view(Date.now()), { cols, rows });
     let buf = "";
-    // 行末で消去すると最終桁まで書いた行の末尾 1 文字が消えるので、先に消してから書く
+    // Erasing at the end of the line would drop the last character of a line written to the final column, so erase first and then write
     for (let r = 0; r < rows; r++) buf += `\x1b[${r + 1};1H\x1b[0m\x1b[2K${frame.lines[r] ?? ""}\x1b[0m`;
     out.write(buf);
   };
@@ -75,7 +88,7 @@ export async function run(argv: string[]): Promise<number> {
       await syncOnce(api, app);
       schedule();
     } catch {
-      // 切れているあいだは SSE の再接続と次の再取得に任せる
+      // While disconnected, leave it to the SSE reconnect and the next refetch
     }
   };
 
@@ -104,11 +117,11 @@ export async function run(argv: string[]): Promise<number> {
           if (!app.copySupported) continue;
           const p = spawn("pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] });
           p.on("error", () => {
-            app.note("コピーできませんでした", Date.now());
+            app.note(t(app.lang, "copy_failed"), Date.now());
             schedule();
           });
           p.on("close", (code) => {
-            app.note(code === 0 ? "コピーしました" : "コピーできませんでした", Date.now());
+            app.note(t(app.lang, code === 0 ? "copied" : "copy_failed"), Date.now());
             schedule();
           });
           p.stdin.on("error", () => {});
@@ -146,7 +159,7 @@ export async function run(argv: string[]): Promise<number> {
     process.on("SIGTERM", () => quit(0));
     process.on("SIGHUP", () => quit(0));
 
-    // 経過時間・トーストの更新と、SSE が使えない場合の再取得
+    // Refresh elapsed times and toasts, and refetch in case SSE is unavailable
     const tick = setInterval(schedule, 1000);
     const poll = setInterval(() => void refetch(), REFETCH_MS);
 
@@ -154,7 +167,7 @@ export async function run(argv: string[]): Promise<number> {
     schedule();
   });
 
-  // SSE。切れたら 2 秒後(以後 5 秒上限)に再接続し、つながるたびに一覧を同期する
+  // SSE: on a drop, reconnect after 2 seconds (capped at 5 afterwards) and sync the list each time it connects
   void streamLoop(api, app, abort.signal, { onChange: schedule });
 
   return finished;
