@@ -209,7 +209,7 @@ scope: file | repo | machine | external
 ## 選択肢
 | 選択肢 | 選ぶと起きること | リスクと戻し方 |
 ## 推奨
-(最後の 1 文に「〜なら B」)
+(推す選択肢と理由。最後の 1 文は、別の選択肢が正しくなる条件)
 ## 図  (reversible 以外、または machine / external のとき。Mermaid)
 ```
 
