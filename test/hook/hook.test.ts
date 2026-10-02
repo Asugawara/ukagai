@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEscapedQuestion } from "../../src/hook/context-hooks.js";
 import { dataDirWithToken, fakeServer, json, runHook, tmpDir, writeFile, type Fake, type Handler } from "./helpers.js";
 
 const fx = (n: string) => JSON.parse(readFileSync(fileURLToPath(new URL(`../fixtures/${n}`, import.meta.url)), "utf8"));
@@ -394,6 +395,16 @@ test("Stop: 「どちらにしますか？」→ escaped_question: true の even
     const evs = f.calls.filter((c) => c.path === "/api/events");
     assert.equal(evs[1]?.body.escaped_question, undefined);
   });
+});
+
+test("isEscapedQuestion: 末尾が ？/? のときだけ true(記号は無視、キーワードは見ない)", () => {
+  assert.equal(isEscapedQuestion("A と B のどちらにしますか？"), true);
+  assert.equal(isEscapedQuestion("次はどうしますか？**"), true);
+  assert.equal(isEscapedQuestion("「どうしますか？」"), true);
+  assert.equal(isEscapedQuestion("Which one?"), true);
+  assert.equal(isEscapedQuestion("『A と B のどちらにしますか？』への回答は『A』でした。"), false);
+  assert.equal(isEscapedQuestion("教えてください。"), false);
+  assert.equal(isEscapedQuestion(undefined), false);
 });
 
 test("SessionEnd / UserPromptSubmit は event を送る", async () => {

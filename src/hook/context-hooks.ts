@@ -10,12 +10,10 @@ const OBSERVED = new Set(["UserPromptSubmit", "Stop", "SubagentStop", "PostToolU
 const ASYNC_EVENT_TIMEOUT_MS = 1500;
 /** SessionEnd は sync(budget 1.5 秒)なので短く */
 const SESSION_END_TIMEOUT_MS = 500;
-const ESCAPE_WORDS = ["どちら", "よろしいですか", "教えてください"];
-
+/** 末尾(空白と Markdown の記号を除く)が ？ / ? なら、文章で質問したとみなす */
 export function isEscapedQuestion(text: string | undefined): boolean {
   if (!text) return false;
-  const t = text.trimEnd();
-  return /[？?]$/.test(t) || ESCAPE_WORDS.some((w) => t.includes(w));
+  return /[？?][\s*_」』)）]*$/.test(text);
 }
 
 /** spec 8 節の 3 行。dir は説明ファイルの置き場そのもの */
