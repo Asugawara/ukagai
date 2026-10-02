@@ -3,102 +3,106 @@
 const SUBCOMMANDS = ["serve", "hook", "install", "uninstall", "doctor", "tui"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
-const USAGE = `ukagai - 判断を 1 か所に集める hooks + GUI
+const USAGE = `ukagai - hooks + GUI that gather Claude Code's decisions in one place
 
-使い方: ukagai <command> [options]
+Usage: ukagai <command> [options]
 
-コマンド:
-  serve      GUI と API の server を起動する
-  hook       Claude Code の hook から呼ばれる(stdin に JSON)
-  install    Claude Code の settings に hook と skill を登録する
-  uninstall  install が登録したものだけを外す
-  doctor     登録と接続の状態を診断する
-  tui        ターミナルで判断に答える(GUI と同じ画面、vim 風キー)
+Commands:
+  serve      Start the GUI and API server
+  hook       Called from Claude Code hooks (JSON on stdin)
+  install    Register the hooks and skill in Claude Code settings
+  uninstall  Remove only what install registered
+  doctor     Diagnose registration and connectivity
+  tui        Answer decisions in the terminal (same screen as the GUI, vim-style keys)
 
-オプション:
-  -h, --help  この使い方を表示する
+Options:
+  -h, --help  Show this help
 `;
 
-const SETTINGS_OPTIONS = `  --settings <file>  対象の settings ファイル(既定: ~/.claude/settings.json)
-                     指定すると skill は扱わない(扱うなら --skill)
-  --project          <cwd>/.claude/ を対象にする
-  --skill            --settings 指定時にも skill を扱う
-  --no-skill         skill を扱わない
-  -h, --help         この使い方を表示する
+const SETTINGS_OPTIONS = `  --settings <file>  Target settings file (default: ~/.claude/settings.json)
+                     The skill is left alone when this is given (use --skill to include it)
+  --project          Target <cwd>/.claude/
+  --skill            Handle the skill even with --settings
+  --no-skill         Leave the skill alone
+  -h, --help         Show this help
 `;
 
-const SERVER_OPTIONS = `  --server <url>     server の URL(既定以外なら hook にも渡す)
-  --data-dir <dir>   token などの置き場(既定以外なら hook にも渡す)
+const SERVER_OPTIONS = `  --server <url>     Server URL (passed to the hook too when not the default)
+  --data-dir <dir>   Where the token etc. live (passed to the hook too when not the default)
 `;
 
 const HELP: Record<Subcommand, string> = {
-  tui: `使い方: ukagai tui [options]
+  tui: `Usage: ukagai tui [options]
 
-ターミナルで判断を表示し、キーボードだけで答える。server が起動している必要がある。
+Show decisions in the terminal and answer with the keyboard only. The server must be running.
 
-オプション:
-  --server <url>     server の URL(既定: http://127.0.0.1:4818)
-  --data-dir <dir>   token の置き場(既定: ~/.ukagai)
-  -h, --help         この使い方を表示する
+Options:
+  --server <url>     Server URL (default: http://127.0.0.1:4818)
+  --data-dir <dir>   Where the token lives (default: ~/.ukagai)
+  --lang <en|ja>     Display language (default: the config.json setting)
+  -h, --help         Show this help
 
-キー: j/k 移動  gg/G 先頭/末尾  Space 複数選択  Enter 送信  i 自由記述
-      h/l・[ ] 保留の切替  b 一覧  y/a/n 計画の承認/auto/却下  q 終了
-      PgUp/PgDn・ホイール 背景のスクロール  Tab 背景/判断の列の切替
-      ←→・横ホイール 幅超過の図の横スクロール(Home/End は背景列にフォーカスがあるとき)  f 背景を全幅で表示
-      c blocker のコマンドをコピー  Ctrl-C 終了  Ctrl-U/D 背景の半ページ
-      . 長い推奨・計画の影響範囲の全文/折りたたみ
+Keys: j/k move  gg/G top/bottom  Space multi-select  Enter submit  i free text
+      h/l, [ ] switch pending decision  b list  y/a/n approve / auto / reject a plan  q quit
+      PgUp/PgDn, wheel scroll the background  Tab switch background / decision column
+      Left/Right, horizontal wheel scroll a wide diagram (Home/End when the background column is focused)  f show the background full-width
+      c copy the blocker command  Ctrl-C quit  Ctrl-U/D half-page the background
+      . expand / collapse a long recommendation or plan scope
 `,
-  serve: `使い方: ukagai serve [options]
+  serve: `Usage: ukagai serve [options]
 
-GUI と API の server を起動する。
+Start the GUI and API server.
 
-オプション:
-  --port <n>              待ち受けポート(既定: 4818)
-  --host <host>           127.0.0.1 のみ(他は受け付けない)
-  --data-dir <dir>        データの置き場(既定: ~/.ukagai)
-  --lease-grace-ms <ms>   lease の猶予(既定: 10000)
-  -h, --help              この使い方を表示する
+Options:
+  --port <n>              Listening port (default: 4818)
+  --host <host>           127.0.0.1 only (anything else is rejected)
+  --data-dir <dir>        Data directory (default: ~/.ukagai)
+  --lease-grace-ms <ms>   Lease grace period (default: 10000)
+  -h, --help              Show this help
 `,
-  hook: `使い方: ukagai hook [options]   (stdin に hook の JSON)
+  hook: `Usage: ukagai hook [options]   (hook JSON on stdin)
 
-Claude Code の hook から呼ばれる。失敗しても何も出力せず exit 0。
+Called from Claude Code hooks. Prints nothing and exits 0 even on failure.
 
-オプション:
-  --budget <sec>        hook の持ち時間(既定: 590)
-  --observe             観測のみ
-  --no-autostart        SessionStart で server を自動起動しない
-  --server <url>        server の URL(既定: http://127.0.0.1:4818)
-  --data-dir <dir>      token の置き場(既定: ~/.ukagai)
-  --deny-template <A|B> deny 理由文の文体(既定 A)
-  --poll-timeout-ms <ms>  1 回の long-poll の長さ(test 用)
-  -h, --help            この使い方を表示する
+Options:
+  --budget <sec>        Time the hook may take (default: 590)
+  --observe             Observe only
+  --no-autostart        Do not auto-start the server on SessionStart
+  --server <url>        Server URL (default: http://127.0.0.1:4818)
+  --data-dir <dir>      Where the token lives (default: ~/.ukagai)
+  --deny-template <A|B> Wording style of the deny reason (default: A)
+  --poll-timeout-ms <ms>  Length of one long-poll (for tests)
+  -h, --help            Show this help
 `,
-  install: `使い方: ukagai install [options]
+  install: `Usage: ukagai install [options]
 
-Claude Code の settings に hook を登録し、skill を配置する。
+Register the hooks in Claude Code settings and place the skill.
 
-オプション:
-  --observe          観測のみの hook にする
-  --no-autostart     SessionStart で server を自動起動しない hook にする
-  --timeout <sec>    PreToolUse の timeout(15 以上、既定: 3600)
-  --dry-run          差分だけ表示し、何も書かない
+Options:
+  --lang <en|ja>     Display language of the GUI / TUI, written to <data-dir>/config.json
+                     (asked interactively on a TTY when omitted; an existing config is kept otherwise)
+  --observe          Install observe-only hooks
+  --no-autostart     Install hooks that do not auto-start the server on SessionStart
+  --timeout <sec>    PreToolUse timeout (15 or more, default: 3600)
+  --dry-run          Print the diff only; write nothing
 ${SERVER_OPTIONS}${SETTINGS_OPTIONS}`,
-  uninstall: `使い方: ukagai uninstall [options]
+  uninstall: `Usage: ukagai uninstall [options]
 
-install が登録した hook と skill だけを外す。settings の特定に使う引数以外は無視する。
+Remove only the hooks and skill that install registered. Arguments other than those that locate the settings are ignored.
+<data-dir>/config.json is kept.
 
-オプション:
-  --dry-run          差分だけ表示し、何も書かない
-  --server <url>     settings の特定に使う(server の URL)
-  --data-dir <dir>   settings の特定に使う(データの置き場)
+Options:
+  --dry-run          Print the diff only; write nothing
+  --server <url>     Used to locate the settings (server URL)
+  --data-dir <dir>   Used to locate the settings (data directory)
 ${SETTINGS_OPTIONS}`,
-  doctor: `使い方: ukagai doctor [options]
+  doctor: `Usage: ukagai doctor [options]
 
-登録と接続の状態を診断する。settings の特定に使う引数以外は無視する。
+Diagnose registration and connectivity. Arguments other than those that locate the settings are ignored.
 
-オプション:
-  --server <url>     診断する server の URL(既定: http://127.0.0.1:4818)
-  --data-dir <dir>   token などの置き場(既定: ~/.ukagai)
+Options:
+  --server <url>     Server URL to diagnose (default: http://127.0.0.1:4818)
+  --data-dir <dir>   Where the token etc. live (default: ~/.ukagai)
 ${SETTINGS_OPTIONS}`,
 };
 
@@ -121,7 +125,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (name === "hook") {
-    // フェイルオープン: 読み込みに失敗しても stdout は空、exit 0
+    // Fail-open: if loading fails, stdout stays empty and the exit code is 0
     try {
       const mod = (await import("./hook/index.js")) as { run: (argv: string[]) => Promise<number> };
       return await mod.run(rest);

@@ -1,6 +1,7 @@
 {
   "name": "ukagai",
   "version": "0.0.0",
+  "description": "Hooks + GUI that gather a coding agent's decisions in one place, with the agent's own explanation.",
   "private": true,
   "type": "module",
   "bin": {

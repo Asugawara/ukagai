@@ -1,8 +1,8 @@
-/** install が登録する hook を 1 か所で定義する(docs/strategy/03 3 節の表) */
+/** Defines in one place the hooks that install registers (table in docs/strategy/03 section 3) */
 
 export const MANAGED_FLAG = "--managed-by";
 export const MANAGED_VALUE = "ukagai";
-export const STATUS_MESSAGE = "ukagai: GUI で回答待ち";
+export const STATUS_MESSAGE = "ukagai: waiting for an answer in the GUI";
 export const DECISION_MATCHER = "AskUserQuestion|ExitPlanMode";
 
 export interface HookCommand {
@@ -24,9 +24,9 @@ export interface BuildOptions {
   cli: string;
   timeout: number;
   observe: boolean;
-  /** false なら SessionStart の hook に --no-autostart を渡す。省略は true */
+  /** If false, pass --no-autostart to the SessionStart hook. Defaults to true */
   autostart?: boolean;
-  /** 全 hook に渡す共通の引数(--data-dir / --server) */
+  /** Common args passed to every hook (--data-dir / --server) */
   hookArgs?: string[];
 }
 
@@ -43,7 +43,7 @@ export const HOOK_EVENTS = [
   "Notification",
 ] as const;
 
-/** 印: args に `--managed-by ukagai` を含む(settings の schema に未知のキーを足さない) */
+/** Marker: args contain `--managed-by ukagai` (avoids adding unknown keys to the settings schema) */
 export function isManagedHook(h: unknown): boolean {
   if (typeof h !== "object" || h === null) return false;
   const args = (h as { args?: unknown }).args;

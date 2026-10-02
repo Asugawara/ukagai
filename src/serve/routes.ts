@@ -15,6 +15,7 @@ import {
   type DecisionContext,
   type DecisionSession,
 } from "../contract.js";
+import type { Lang } from "../settings/config.js";
 import type { SseHub } from "./sse.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
@@ -30,6 +31,8 @@ export type AppDeps = {
   token: string;
   publicDir: string;
   home: string;
+  /** Display language of the GUI / TUI (config.json, read at startup). Defaults to en */
+  lang?: Lang;
   getPort: () => number;
   collect: (session: DecisionSession) => Promise<DecisionContext>;
 };
@@ -105,7 +108,7 @@ export function createApp(deps: AppDeps): Hono {
     return r.data;
   }
 
-  // ---- 認可なし ----
+  // ---- No authorization ----
 
   app.get("/healthz", (c) => c.json({ ok: true }));
 
@@ -122,13 +125,18 @@ export function createApp(deps: AppDeps): Hono {
       if (cookies.size > MAX_COOKIES) cookies.delete(cookies.values().next().value as string);
       setCookie(c, COOKIE_NAME, value, { httpOnly: true, sameSite: "Strict", path: "/" });
     }
-    // app.js / app.css の URL に更新時刻の版を付け、古い版が残らないようにする(vendor は変えない)
+    // Add an mtime version to the app.js / app.css URLs so stale copies do not linger (vendor is left unchanged)
     for (const name of ["app.js", "app.css"]) {
       try {
         const v = Math.floor((await stat(join(deps.publicDir, name))).mtimeMs).toString(36);
         html = html.replace(`"/public/${name}"`, `"/public/${name}?v=${v}"`);
       } catch {}
     }
+    const lang = deps.lang ?? "en";
+    html = html.replace(/<html(\s[^>]*)?>/i, (_m, attrs: string | undefined) => {
+      const rest = (attrs ?? "").replace(/\s(?:lang|data-lang)="[^"]*"/gi, "");
+      return `<html lang="${lang}" data-lang="${lang}"${rest}>`;
+    });
     c.header("Cache-Control", "no-store");
     return c.html(html);
   });
@@ -148,7 +156,7 @@ export function createApp(deps: AppDeps): Hono {
       return new Response(new Uint8Array(body), {
         headers: {
           "Content-Type": MIME[extname(file).toLowerCase()] ?? "application/octet-stream",
-          // ブラウザの経験則キャッシュで古い app.js / app.css が残らないように毎回取り直させる
+          // Force a refetch every time so the browser's heuristic cache does not keep a stale app.js / app.css
           "Cache-Control": "no-cache",
         },
       });
@@ -180,6 +188,8 @@ export function createApp(deps: AppDeps): Hono {
     const { decision, created } = store.create(req, context);
     return c.json(decision, created ? 201 : 200);
   });
+
+  app.get("/api/config", auth("any"), (c) => c.json({ lang: deps.lang ?? "en" }));
 
   app.get("/api/decisions", auth("any"), (c) => {
     const q = c.req.query("status");

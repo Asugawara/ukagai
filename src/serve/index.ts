@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
 import { LEASE_GRACE_MS } from "../contract.js";
+import { readConfig } from "../settings/config.js";
 import { collectContext } from "./context.js";
 import { createApp } from "./routes.js";
 import { SseHub } from "./sse.js";
@@ -19,7 +20,7 @@ export type ServeOptions = {
   port?: number;
   dataDir?: string;
   leaseGraceMs?: number;
-  /** transcript / explanation の許可範囲の基準。既定は os.homedir() */
+  /** Base of the allowed range for transcript / explanation paths. Defaults to os.homedir() */
   home?: string;
 };
 
@@ -42,6 +43,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   });
   store.load();
 
+  const { lang } = await readConfig(dataDir);
   const token = randomBytes(32).toString("hex");
 
   let port = opts.port ?? DEFAULT_PORT;
@@ -50,6 +52,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     hub,
     token,
     home,
+    lang,
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
     collect: (session) => collectContext(session, { home }),
@@ -63,7 +66,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     });
     s.once("error", reject);
   });
-  // 待ち受けに成功してから書く(ポート使用中で落ちる 2 つ目が、動いている server の token を壊さない)
+  // Write only after listening succeeds (a second server that dies on a busy port must not clobber the running server's token)
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const tokenFile = join(dataDir, "token");
   writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
@@ -103,17 +106,17 @@ export async function run(argv: string[]): Promise<number> {
     return 2;
   }
   if (values.host !== undefined && values.host !== HOST) {
-    process.stderr.write(`ukagai serve: --host は ${HOST} 固定です\n`);
+    process.stderr.write(`ukagai serve: --host is fixed to ${HOST}\n`);
     return 2;
   }
   const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    process.stderr.write("ukagai serve: --port が不正です\n");
+    process.stderr.write("ukagai serve: invalid --port\n");
     return 2;
   }
   const leaseGraceMs = values["lease-grace-ms"] === undefined ? undefined : Number(values["lease-grace-ms"]);
   if (leaseGraceMs !== undefined && !(leaseGraceMs >= 0)) {
-    process.stderr.write("ukagai serve: --lease-grace-ms が不正です\n");
+    process.stderr.write("ukagai serve: invalid --lease-grace-ms\n");
     return 2;
   }
 
@@ -122,7 +125,7 @@ export async function run(argv: string[]): Promise<number> {
     handle = await start({ port, dataDir: values["data-dir"], leaseGraceMs });
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
-    const msg = e?.code === "EADDRINUSE" ? `ポート ${port} は使用中です(server は起動済みかもしれません)` : err instanceof Error ? err.message : String(err);
+    const msg = e?.code === "EADDRINUSE" ? `Port ${port} is in use (a server may already be running)` : err instanceof Error ? err.message : String(err);
     process.stderr.write(`ukagai serve: ${msg}\n`);
     return 1;
   }

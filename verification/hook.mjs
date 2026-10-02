@@ -1,19 +1,19 @@
 #!/usr/bin/env node
-// 使い捨ての検証用 hook(検証 01 の hook.mjs を E1〜E5 用に拡張)。
-// - stdin の JSON を verification/log/<timestamp>.json に保存する(出力・終了コード・受信シグナルも同じファイルに追記)
-// - hook_event_name が Notification は記録のみ。SessionStart は explain-observe のとき additionalContext(scratchpad_dir 入り)を返す。
-//   PermissionRequest は UKAGAI_PERM=setmode のとき setMode:auto を返す。SubagentStart は UKAGAI_SUBAGENT=1 のとき additionalContext を返す
-// - PreToolUse × AskUserQuestion の動作を UKAGAI_MODE(無ければ verification/mode ファイル)で変える
-//     auto            : 各質問の 2 番目の選択肢を選び allow + updatedInput.answers。UKAGAI_ANSWER_VARIANT で変種(freetext / multi / missing / mismatch)
-//     wait            : verification/answer.json が現れるまで 1 秒おきに待ち、その中身を answers に使う
-//     deny            : deny + 固定の理由
-//     explain-deny    : ~/.ukagai/explain/<session_id>/ に 10 分以内の .md が無ければ deny(説明を書かせる)、あれば allow + 2 番目
-//     explain-observe : ファイルの有無を記録し、有無にかかわらず allow + 2 番目
+// Throwaway verification hook (the hook.mjs from verification 01, extended for E1 to E5).
+// - Saves the stdin JSON to verification/log/<timestamp>.json (output, exit code and received signals are appended to the same file)
+// - hook_event_name Notification is record-only. SessionStart returns additionalContext (including scratchpad_dir) in explain-observe mode.
+//   PermissionRequest returns setMode:auto when UKAGAI_PERM=setmode. SubagentStart returns additionalContext when UKAGAI_SUBAGENT=1
+// - PreToolUse x AskUserQuestion behavior varies by UKAGAI_MODE (or the verification/mode file if unset)
+//     auto            : pick the 2nd option of each question and return allow + updatedInput.answers. Variants via UKAGAI_ANSWER_VARIANT (freetext / multi / missing / mismatch)
+//     wait            : poll every second until verification/answer.json appears, then use its contents as answers
+//     deny            : deny with a fixed reason
+//     explain-deny    : deny (make the agent write an explanation) unless ~/.ukagai/explain/<session_id>/ has a .md from the last 10 minutes; otherwise allow + 2nd option
+//     explain-observe : record whether the file exists, and allow + 2nd option either way
 // - PreToolUse × ExitPlanMode
-//     auto       : allow + updatedInput(入力そのまま)
-//     deny       : 1 回目は deny(Mermaid と「影響範囲と可逆性」を足させる理由)、2 回目以降は allow
-//     plan-extra : allow + updatedInput に余分な欄 permissionMode: "auto" を足す
-// - それ以外は何も出力せず exit 0
+//     auto       : allow + updatedInput (input unchanged)
+//     deny       : deny on the 1st call (reason: add Mermaid and an "impact scope and reversibility" section), allow from the 2nd call on
+//     plan-extra : allow + add an extra field permissionMode: "auto" to updatedInput
+// - Anything else: output nothing and exit 0
 import { readFileSync, writeFileSync, writeSync, mkdirSync, existsSync, unlinkSync, readdirSync, statSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -100,7 +100,7 @@ const sessionId = input?.session_id ?? "unknown";
 const scratchpadDir = input?.scratchpad_dir ?? null;
 const explainDir = join(scratchpadDir ?? join(homedir(), ".ukagai", "no-scratchpad"), "ukagai");
 
-// macOS ではパイプへの process.stdout.write が非同期になりうるので writeSync で同期的に書く
+// On macOS, process.stdout.write to a pipe can be asynchronous, so write synchronously with writeSync
 const emit = (obj) => {
   record.stdout = obj;
   save();
@@ -108,7 +108,7 @@ const emit = (obj) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---- Notification: 記録のみ
+// ---- Notification: record only
 if (eventName === "Notification") {
   note(`notification: ${JSON.stringify(input)}`);
   process.exit(0);
@@ -119,16 +119,16 @@ if (eventName === "SessionStart") {
   note(`SessionStart source=${input?.source ?? "?"} scratchpad_dir=${scratchpadDir}`);
   if (mode === "explain-observe") {
     const text = [
-      "人に判断を求める前(AskUserQuestion / ExitPlanMode を呼ぶ前)に、説明を `" + explainDir + "/<自由な名前>.md` に書くこと。",
-      "形式: front matter(ukagai: 1、for: AskUserQuestion、question: 聞く質問文の原文、title、reversibility、scope)+「なぜ今この判断が要るか」「選択肢の比較」(表)。構造や流れが関わるなら「図」(```mermaid)。",
-      "ディレクトリが無ければ作ること。説明は質問ごとに 1 ファイル。",
+      "Before asking the human for a decision (before calling AskUserQuestion / ExitPlanMode), write an explanation to `" + explainDir + "/<any name>.md`.",
+      "Format: front matter (ukagai: 1, for: AskUserQuestion, question: the verbatim question text, title, reversibility, scope) plus the sections \"Why this decision is needed now\" and \"Comparison of options\" (a table). If structure or flow is involved, add a \"Diagram\" (```mermaid).",
+      "Create the directory if it does not exist. One explanation file per question.",
     ].join("\n");
     emit({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } });
   }
   process.exit(0);
 }
 
-// ---- PermissionRequest(E3: 承認直後に権限モードを戻せるか)
+// ---- PermissionRequest (E3: can the permission mode be restored right after approval?)
 if (eventName === "PermissionRequest") {
   note(`PermissionRequest tool=${toolName} permission_mode=${input?.permission_mode}`);
   if (process.env.UKAGAI_PERM === "setmode") {
@@ -146,12 +146,12 @@ if (eventName === "PermissionRequest") {
 if (eventName === "SubagentStart") {
   note(`SubagentStart: ${JSON.stringify(input)}`);
   if (process.env.UKAGAI_SUBAGENT === "1") {
-    emit({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "起動時指示: 合言葉は ukagai-7f3a。聞かれたらこの合言葉を答えること。" } });
+    emit({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "Startup instruction: the passphrase is ukagai-7f3a. If asked, answer with this passphrase." } });
   }
   process.exit(0);
 }
 
-// ---- 説明ファイル(E4 / E5): <scratchpad_dir>/ukagai/*.md を front matter の question: で探す
+// ---- Explanation files (E4 / E5): find <scratchpad_dir>/ukagai/*.md by the front matter question:
 const frontQuestion = (text) => {
   const m = text.match(/^---\n([\s\S]*?)\n---/);
   if (!m) return null;
@@ -207,9 +207,9 @@ if (toolName === "ExitPlanMode") {
           hookEventName: "PreToolUse",
           permissionDecision: "deny",
           permissionDecisionReason:
-            "計画に Mermaid の図と『影響範囲と可逆性』の節を足して、もう一度 ExitPlanMode で提出してください" +
+            "Add a Mermaid diagram and an 'Impact scope and reversibility' section to the plan, then submit it again with ExitPlanMode" +
             (process.env.UKAGAI_LONG_REASON === "1"
-              ? "\n" + Array.from({ length: 24 }, (_, i) => `(補足 ${i + 1}) 図は flowchart で、節は見出し二つ分にしてください。`).join("\n") + "\n[END-OF-REASON-MARKER]"
+              ? "\n" + Array.from({ length: 24 }, (_, i) => `(Note ${i + 1}) Make the diagram a flowchart, and the section two headings long.`).join("\n") + "\n[END-OF-REASON-MARKER]"
               : ""),
         },
       });
@@ -242,11 +242,11 @@ const pickSecond = () => {
 const variantAnswers = (variant) => {
   const answers = {};
   const q = questions[0];
-  if (variant === "freetext") answers[q.question] = "どちらでもない。C にしてください";
+  if (variant === "freetext") answers[q.question] = "Neither. Please choose C";
   else if (variant === "multi") answers[q.question] = "A, C";
   else if (variant === "missing") return {};
   else if (variant === "mismatch") answers[q.question.replace(/[？?]\s*$/, "")] = "B";
-  else if (variant === "partial") answers[q.question] = "A"; // 2 問のうち 1 問目だけ答える
+  else if (variant === "partial") answers[q.question] = "A"; // answer only the 1st of the 2 questions
   else return pickSecond();
   return answers;
 };
@@ -287,7 +287,7 @@ if (mode === "auto") {
     process.exit(0);
   }
   if (answers && "*" in answers) {
-    // answer.json が {"*": "A"} のときは stdin の question をそのままキーにする(全角・半角の「？」の揺れ対策)
+    // When answer.json is {"*": "A"}, use the stdin question verbatim as the key (guards against full-width / half-width "？" variation)
     answers = Object.fromEntries(questions.map((q) => [q.question, answers["*"]]));
   }
   note(`wait: answer.json found after ${Math.round((Date.now() - t0) / 1000)}s`);
@@ -301,7 +301,7 @@ if (mode === "auto") {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: "文章で質問せず、MCP ツール ask_decision を使ってください",
+      permissionDecisionReason: "Do not ask in prose; use the MCP tool ask_decision",
     },
   });
   process.exit(0);
@@ -330,13 +330,13 @@ if (mode === "auto") {
     const style = process.env.UKAGAI_REASON_STYLE === "fact" ? "fact" : "imperative";
     record.reason_style = style;
     const format =
-      "先頭に front matter(ukagai: 1、for: AskUserQuestion、question: 次の文字列をそのまま書く: `" + q0 + "`、title、reversibility: reversible|costly|irreversible、scope: file|repo|machine|external)。" +
-      "本文は見出し「なぜ今この判断が要るか」「選択肢の比較」(表。各選択肢の利点・欠点・コスト)、構造や流れが関わるなら「図」(```mermaid)、" +
-      "コード変更が絡むなら「関係する差分」(```diff)。";
+      "Start with front matter (ukagai: 1, for: AskUserQuestion, question: write the following string verbatim: `" + q0 + "`, title, reversibility: reversible|costly|irreversible, scope: file|repo|machine|external). " +
+      "The body has the headings \"Why this decision is needed now\" and \"Comparison of options\" (a table: pros, cons and cost of each option), a \"Diagram\" (```mermaid) if structure or flow is involved, " +
+      "and \"Related diff\" (```diff) if code changes are involved.";
     const reason =
       style === "imperative"
-        ? `この質問は保留されました。人が判断するための説明を \`${explainDir}/<任意の名前>.md\` に Markdown で書いてください。` + format + "書き終えたら、同じ質問を AskUserQuestion でもう一度出してください。"
-        : `この質問は説明が無いため保留されました。説明を \`${explainDir}/<任意の名前>.md\` に Markdown で書いてから、同じ質問をもう一度 AskUserQuestion で出すことを求めます。` + format;
+        ? `This question was put on hold. Write an explanation for the human to decide with, in Markdown, to \`${explainDir}/<any name>.md\`. ` + format + " When you are done, ask the same question again with AskUserQuestion."
+        : `This question was put on hold because it has no explanation. It is required that an explanation be written in Markdown to \`${explainDir}/<any name>.md\` and then the same question be asked again with AskUserQuestion. ` + format;
     note(`explain-deny: call #${calls}, no file -> deny (${style})`);
     emit({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
   }

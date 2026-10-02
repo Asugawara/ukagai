@@ -2,46 +2,69 @@
 
 Agents ask. Humans decide. One place for every coding agent's questions, with the context to answer them.
 
-コーディングエージェントが人に求める「判断」(AskUserQuestion / 計画承認)を Claude Code の hook で横取りし、localhost の GUI に集め、エージェント自身が書いた説明(なぜ・推奨・選択肢の表・Mermaid 図・差分)と一緒に答えられるようにするツール。MCP は使わない。
+ukagai intercepts the decisions a coding agent asks a human for (Claude Code's `AskUserQuestion` and plan approval) with hooks, and collects them in a localhost GUI (or a terminal UI). Each decision comes with an explanation the agent wrote itself: why now, a recommendation, an options table, a Mermaid diagram and the related diff. No MCP is involved: it is hooks + a skill + a GUI.
 
-## 使い方(開発中)
+## Requirements
 
-```
+- Node.js >= 22
+- Claude Code
+
+## Install
+
+```sh
+git clone <this repo> && cd ukagai
 npm ci
 npm run build
-npm run vendor                      # marked / mermaid を public/vendor/ に同梱
-node dist/cli.js serve              # 127.0.0.1:4818
-node dist/cli.js install --dry-run  # ~/.claude/settings.json への登録内容を確認
-node dist/cli.js install            # 登録(バックアップを取る)。uninstall で元に戻す
-node dist/cli.js doctor             # 登録と server の診断
-node dist/cli.js tui                # ターミナルで同じ判断画面。移動: j/k・↑↓、gg/G(先頭/末尾)、Space(複数選択)、Enter(送信)、i(自由記述)、c(blocker のコマンドをコピー)、y/a/n(計画の承認 / auto / 却下)、h/l・[ ](保留の切替)、b(一覧)、q・Ctrl-C(終了)。背景: PgUp/PgDn・Ctrl-U/D・ホイール、Tab(背景/判断の列を切替)、幅超過の図は Tab 不要で ←→・横ホイール(Home/End は背景列にフォーカスがあるとき)、f(全幅)。.(長い推奨・計画の「影響範囲と可逆性」を全文/折りたたみ。計画カードは判断列のボタンの上に出す)。server が止まるとフッターに赤で「接続できません … 再接続中…」を出し、2→4→5 秒で再接続して保留を同期(復帰時は緑で「再接続しました」)
-node dist/cli.js tui --server http://127.0.0.1:4832 --data-dir /tmp/ukagai-x   # 別の server に接続
+npm run vendor                              # bundle marked / mermaid into public/vendor/
+node dist/cli.js install --dry-run          # preview the changes to ~/.claude/settings.json
+node dist/cli.js install --lang en          # register hooks + skill; --lang en|ja picks the GUI / TUI language
 ```
 
-`install` 後は `claude` を起動するだけで server が立ち、その日最初のセッションでブラウザが開く。手動で `serve` を打つ必要はない。止めるときは `pkill -f "cli.js serve"`、自動起動を止めるには `install --no-autostart`。
+`--lang` is stored in `<data-dir>/config.json` (default data dir: `~/.ukagai`). Without `--lang`, `install` asks on a TTY (Enter for `en`), uses `en` otherwise, and keeps an existing config. The agent writes its explanations in the same language.
 
-`npm test` の GUI のテスト(`test/gui/`)は `agent-browser` がある環境でだけ走る(無ければ skip)。
+`install` backs up your settings before writing. To try it without touching your real settings, write to a separate file and start a test session with it:
 
-開発中のセッションに hook をかけないときは `install --settings <file>` で別ファイルに書き、テスト用セッションを `claude --settings <file>` で起動する。`--settings` では skill は触らない。skill も試すなら `--skill` を付ける。
+```sh
+node dist/cli.js install --settings /tmp/ukagai-settings.json --data-dir /tmp/ukagai-data --lang ja
+claude --settings /tmp/ukagai-settings.json
+```
 
-## ドキュメント
+With `--settings` the skill is left alone; add `--skill` to place it too.
 
-| パス | 内容 |
+## Usage
+
+**GUI.** After `install`, just start `claude`: the server starts automatically and the browser opens on the first session of the day. You can also run it yourself with `node dist/cli.js serve` (http://127.0.0.1:4818). Stop it with `pkill -f "cli.js serve"`; turn off auto-start with `install --no-autostart`.
+
+**TUI.** `node dist/cli.js tui` shows the same decision screen in the terminal with vim-style keys: `j`/`k` move, `Space` multi-select, `Enter` submit, `i` free text, `y`/`a`/`n` approve / auto / reject a plan, `h`/`l` switch pending decisions, `b` list, `q` quit. Use `--server <url>` and `--data-dir <dir>` to connect to another server, and `--lang en|ja` to override the display language. See `ukagai tui --help` for all keys.
+
+**What the agent does.** When the agent calls `AskUserQuestion` or `ExitPlanMode`, the `PreToolUse` hook first denies the call once and asks the agent to write an explanation file (the `ukagai-explain` skill teaches the format). On the retry, the hook registers the decision with the server, waits for your answer in the GUI / TUI, and injects it back as the tool's result. If the server is unreachable, the hook prints nothing and Claude Code falls back to its normal prompt.
+
+Check the setup any time with `node dist/cli.js doctor`.
+
+## Development
+
+```sh
+npm run typecheck
+npm test              # GUI tests (test/gui/) run only when agent-browser is available
+npm run dev:serve
+```
+
+| Path | Content |
 |---|---|
-| `docs/strategy/00-overview.md` | 戦略の要約。何を作るか、なぜか、名前の決定 |
-| `docs/strategy/02-mvp-plan.md` | 旧 MVP 計画(指標と打ち切り条件は有効。技術決定は 03 に置き換え) |
-| `docs/strategy/03-mvp-implementation-plan.md` | 現行の MVP 実装計画(hook + GUI 方式、分割と担当、日程、リスク) |
-| `docs/spec/api.md` | server の API、状態遷移、認可 |
-| `docs/spec/explain.md` | エージェントが書く説明ファイル(v2: title / recommended / 推奨 / 選択肢の表)の仕様と hook の判定規則 |
-| `skills/ukagai-explain/SKILL.md` | 説明の書き方を Claude に教える skill(`install`(`--settings` なし、または `--skill`)が配置する) |
-| `docs/verification/01-askuserquestion-injection.md` | PreToolUse hook で AskUserQuestion / ExitPlanMode に回答を注入できることの実機検証 |
-| `docs/verification/02-hook-limits.md` | hook の timeout 上限、answers の変種、deny で説明を書かせる往復などの実機検証 |
-| `docs/verification/03-e2e.md` | serve + hook + GUI + install を Claude Code 本体で通した E2E 検証 |
+| `docs/strategy/` | Strategy and the current MVP implementation plan (`03-*`) |
+| `docs/spec/api.md` | Server API, state transitions, authorization |
+| `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
+| `docs/verification/` | Records of real-environment verification |
 | (removed before publication) |
-| (removed before publication) |
+| `skills/ukagai-explain/SKILL.md` | The skill that teaches Claude how to write explanations |
 
-TUI の図は beautiful-mermaid(MIT)で描く。
+TUI diagrams are rendered with beautiful-mermaid (MIT).
 
-## 状態
+## Uninstall
 
-2026-10-02: MVP の実装(server / hook / GUI / install / 説明の仕様と skill)が main に入り、Claude Code 本体での E2E が通った。次は dogfood と指標の計測(03 の 6 節)。
+```sh
+node dist/cli.js uninstall --dry-run
+node dist/cli.js uninstall
+```
+
+This removes only the hooks and skill that `install` registered (pass the same `--settings` / `--project` you installed with). `<data-dir>/config.json` is kept.

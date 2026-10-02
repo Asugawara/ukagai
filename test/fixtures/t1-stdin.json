@@ -13,16 +13,16 @@
   "tool_input": {
     "questions": [
       {
-        "question": "A と B のどちらにしますか？",
-        "header": "選択",
+        "question": "Which do you choose, A or B?",
+        "header": "Choice",
         "options": [
           {
             "label": "A",
-            "description": "選択肢 A"
+            "description": "Option A"
           },
           {
             "label": "B",
-            "description": "選択肢 B"
+            "description": "Option B"
           }
         ],
         "multiSelect": false

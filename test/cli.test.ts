@@ -12,7 +12,7 @@ function runCli(args: string[], input?: string) {
   });
 }
 
-test("--help は exit 0 で 5 つのサブコマンド名を含む", () => {
+test("--help exits 0 and lists the subcommand names", () => {
   const r = runCli(["--help"]);
   assert.equal(r.status, 0);
   for (const name of ["serve", "hook", "install", "uninstall", "doctor"]) {
@@ -20,19 +20,19 @@ test("--help は exit 0 で 5 つのサブコマンド名を含む", () => {
   }
 });
 
-test("未知のサブコマンドは exit 2", () => {
+test("unknown subcommand exits 2", () => {
   const r = runCli(["nope"]);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /nope/);
 });
 
-test("hook スタブは JSON を stdin で受けて stdout 空・exit 0", () => {
+test("hook reads JSON on stdin, prints nothing, exits 0", () => {
   const r = runCli(["hook"], JSON.stringify({ tool_name: "Bash" }));
   assert.equal(r.status, 0);
   assert.equal(r.stdout, "");
 });
 
-test("tui --help は exit 0、TTY でなければ exit 1", () => {
+test("tui --help exits 0; without a TTY, tui exits 1", () => {
   const h = runCli(["tui", "--help"]);
   assert.equal(h.status, 0);
   assert.match(h.stdout, /--data-dir/);

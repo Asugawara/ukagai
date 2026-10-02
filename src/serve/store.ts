@@ -84,7 +84,7 @@ export class Store {
   private waiters = new Map<string, Set<() => void>>();
   private monitor: NodeJS.Timeout | undefined;
 
-  // events から再構築する集計
+  // Aggregates rebuilt from events
   private escapedQuestions = 0;
   private blockersDetected = 0;
   private panelOpens = 0;
@@ -100,7 +100,7 @@ export class Store {
     this.eventsFile = join(opts.dir, "events.jsonl");
   }
 
-  // ---- 永続化と復元 ----
+  // ---- Persistence and restore ----
 
   load(): void {
     if (existsSync(this.decisionsFile)) {
@@ -112,11 +112,11 @@ export class Store {
           this.decisions.set(d.id, d);
           this.byToolUse.set(d.tool_use_id, d.id);
         } catch {
-          // 壊れた行は読み飛ばす
+          // Skip malformed lines
         }
       }
     }
-    // 再起動では hook との接続が切れている。canTransition の外の特例
+    // After a restart the connection to the hook is gone. A special case outside canTransition
     for (const d of this.decisions.values()) {
       if (LIVE.includes(d.status)) {
         d.status = "hook_disconnected";
@@ -130,7 +130,7 @@ export class Store {
         try {
           this.applyEvent(JSON.parse(line) as EventInput, false);
         } catch {
-          // 壊れた行は読み飛ばす
+          // Skip malformed lines
         }
       }
     }
@@ -150,7 +150,7 @@ export class Store {
     for (const fn of [...set]) fn();
   }
 
-  // ---- 判断 ----
+  // ---- Decisions ----
 
   get(id: string): Decision | undefined {
     return this.decisions.get(id);
@@ -261,7 +261,7 @@ export class Store {
     return d;
   }
 
-  /** hook が SIGTERM / SIGINT / SIGHUP で降りる時の通知。pending は cancelled、answer_submitted は answer_lost */
+  /** Notification when the hook exits on SIGTERM / SIGINT / SIGHUP. pending becomes cancelled, answer_submitted becomes answer_lost */
   cancel(id: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
@@ -290,7 +290,7 @@ export class Store {
     d.lease_until = new Date(Date.now() + timeoutMs + this.opts.leaseGraceMs).toISOString();
   }
 
-  /** answer_submitted / fallback になるか timeout するまで待つ。timeout は undefined */
+  /** Wait until the decision becomes answer_submitted / fallback or times out. A timeout yields undefined */
   async wait(id: string, timeoutMs: number, signal?: AbortSignal): Promise<Decision | undefined> {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
@@ -319,7 +319,7 @@ export class Store {
     return READY.includes(d.status) ? d : undefined;
   }
 
-  // ---- lease の監視 ----
+  // ---- Lease monitoring ----
 
   startMonitor(): void {
     const interval = Math.min(1000, Math.max(20, Math.floor(this.opts.leaseGraceMs / 2)));
@@ -344,7 +344,7 @@ export class Store {
     this.monitor = undefined;
   }
 
-  // ---- セッションと events ----
+  // ---- Sessions and events ----
 
   private touchSession(
     sessionId: string,
@@ -370,7 +370,7 @@ export class Store {
   }
 
   addEvent(ev: EventInput): void {
-    // 生の hook 入力(tool_input / tool_response / prompt など)は保存しない
+    // Raw hook input (tool_input / tool_response / prompt, etc.) is not stored
     const src = ev as Record<string, unknown>;
     const kept: Record<string, unknown> = {};
     for (const k of EVENT_KEYS) if (src[k] !== undefined) kept[k] = src[k];
@@ -414,7 +414,7 @@ export class Store {
     if (live && ev.hook_event_name === "UserPromptSubmit") this.cancelPending(ev.session_id);
   }
 
-  /** 人がターミナルで次の発話をした = pending の判断はもう待たれていない */
+  /** The human spoke next in the terminal = the pending decision is no longer being waited for */
   private cancelPending(sessionId: string): void {
     for (const d of this.decisions.values()) {
       if (d.session.session_id !== sessionId || d.status !== "pending") continue;
@@ -438,7 +438,7 @@ export class Store {
     }
   }
 
-  // ---- 「承認して auto」 ----
+  // ---- "Approve and auto" ----
 
   getModeSwitch(sessionId: string): PendingModeSwitch {
     const m = this.modeSwitches.get(sessionId);
@@ -460,7 +460,7 @@ export class Store {
     return pending;
   }
 
-  // ---- 集計 ----
+  // ---- Aggregation ----
 
   metrics(): Metrics {
     const count = { answered: 0, fallback: 0, hook_disconnected: 0, answer_lost: 0, cancelled: 0 };

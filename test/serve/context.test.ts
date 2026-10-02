@@ -12,7 +12,7 @@ const session = (cwd: string, home: string) => ({
   transcript_path: join(home, ".claude", "projects", "p", "s.jsonl"),
 });
 
-test("存在しない cwd・transcript は空の context", async () => {
+test("nonexistent cwd / transcript gives empty context", async () => {
   const home = mkdtempSync(join(tmpdir(), "ukagai-ctx-"));
   try {
     assert.deepEqual(await collectContext(session("/nonexistent-ukagai", home), { home }), {});
@@ -21,7 +21,7 @@ test("存在しない cwd・transcript は空の context", async () => {
   }
 });
 
-test("git リポジトリでない cwd でも落ちずに空", async () => {
+test("a cwd that is not a git repo gives empty without crashing", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ukagai-ctx-"));
   try {
     assert.deepEqual(await collectContext(session(dir, dir), { home: dir }), {});
@@ -30,8 +30,8 @@ test("git リポジトリでない cwd でも落ちずに空", async () => {
   }
 });
 
-test("リポジトリの cwd では branch が取れ、diff は 200 KB 以内", async () => {
-  // 開発リポジトリ(process.cwd())は大きく、並列テストの負荷で git が timeout して揺れるので、小さな一時リポジトリで見る
+test("in a repo cwd the branch is read and the diff is within 200 KB", async () => {
+  // the dev repo (process.cwd()) is large and git times out under parallel test load, so use a small temp repo
   const home = mkdtempSync(join(tmpdir(), "ukagai-ctx-"));
   const repo = join(home, "repo");
   try {
@@ -42,7 +42,7 @@ test("リポジトリの cwd では branch が取れ、diff は 200 KB 以内", 
     writeFileSync(join(repo, "a.txt"), "x".repeat(300 * 1024));
     git("add", "a.txt");
     writeFileSync(join(repo, "a.txt"), "y".repeat(300 * 1024));
-    // 小さなリポジトリでも、並列テストの負荷で git が 500ms の timeout を超えることがあるので 3 回まで試す
+    // even a small repo can exceed git's 500ms timeout under parallel load, so retry up to 3 times
     let ctx = await collectContext(session(repo, home), { home });
     for (let i = 0; i < 2 && ctx.branch === undefined; i++) {
       ctx = await collectContext(session(repo, home), { home });
@@ -54,7 +54,7 @@ test("リポジトリの cwd では branch が取れ、diff は 200 KB 以内", 
   }
 });
 
-test("許可外の transcript_path は読まない", async () => {
+test("a transcript_path outside the allowed area is not read", async () => {
   const home = mkdtempSync(join(tmpdir(), "ukagai-ctx-"));
   try {
     const s = { ...session("/nonexistent-ukagai", home), transcript_path: "/etc/passwd" };

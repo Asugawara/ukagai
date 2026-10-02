@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { configPath, readConfig } from "../settings/config.js";
 import { HOOK_EVENTS } from "../settings/hooks-spec.js";
 import { findManaged, readSettings } from "../settings/merge.js";
 import { parseTarget } from "../settings/target.js";
@@ -27,35 +28,36 @@ export async function run(argv: string[]): Promise<number> {
   let cli: string | undefined;
   for (const ev of HOOK_EVENTS) {
     const h = findManaged(settings, ev);
-    add(h !== undefined, `hook ${ev}`, h ? "" : "未登録");
+    add(h !== undefined, `hook ${ev}`, h ? "" : "not registered");
     if (h && node === undefined) {
       node = typeof h["command"] === "string" ? h["command"] : undefined;
       const args = h["args"];
       cli = Array.isArray(args) && typeof args[0] === "string" ? args[0] : undefined;
     }
   }
-  if (node !== undefined) add(await exists(node), "node の実在", node);
-  if (cli !== undefined) add(await exists(cli), "cli の実在", cli);
+  if (node !== undefined) add(await exists(node), "node exists", node);
+  if (cli !== undefined) add(await exists(cli), "cli exists", cli);
 
   try {
     const res = await fetch(`${t.server}/healthz`, { signal: AbortSignal.timeout(2000) });
     add(res.status === 200, `server ${t.server}/healthz`, `HTTP ${res.status}`);
   } catch (err) {
-    add(false, `server ${t.server}/healthz`, `接続できません(${(err as Error).cause instanceof Error ? ((err as Error).cause as Error).message : (err as Error).message})`);
+    add(false, `server ${t.server}/healthz`, `cannot connect (${(err as Error).cause instanceof Error ? ((err as Error).cause as Error).message : (err as Error).message})`);
   }
   add(await exists(join(t.dataDir, "token")), "token", join(t.dataDir, "token"));
   if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
-  else add(true, "skill ukagai-explain", "対象外");
+  else add(true, "skill ukagai-explain", "not handled");
 
   const ss = findManaged(settings, "SessionStart");
   const off = Array.isArray(ss?.["args"]) && (ss["args"] as unknown[]).includes("--no-autostart");
-  add(true, "autostart", off ? "off(--no-autostart)" : "on");
+  add(true, "autostart", off ? "off (--no-autostart)" : "on");
+  add(true, "lang", `${(await readConfig(t.dataDir)).lang} (${configPath(t.dataDir)})`);
   add(true, "serve.log", join(t.dataDir, "serve.log"));
-  let opened = "(なし)";
+  let opened = "(none)";
   try {
     opened = (await readFile(join(t.dataDir, "gui-opened"), "utf8")).trim() || opened;
   } catch {
-    // 未記録
+    // not recorded
   }
   add(true, "gui-opened", opened);
 
@@ -64,6 +66,6 @@ export async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${ok ? "○" : "×"}  ${name.padEnd(w)}  ${note}\n`.replace(/\s+\n$/, "\n"));
   }
   const bad = rows.filter((r) => !r[0]).length;
-  process.stdout.write(bad === 0 ? "問題なし\n" : `${bad} 件の問題があります\n`);
+  process.stdout.write(bad === 0 ? "no problems\n" : `${bad} problem(s) found\n`);
   return bad === 0 ? 0 : 1;
 }

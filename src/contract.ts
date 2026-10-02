@@ -2,20 +2,20 @@ import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { z } from "zod";
 
-// ---- 定数 ----
+// ---- Constants ----
 
-/** multiSelect の answers 値の区切り。E2 の結果で確定するまで仮。 */
+/** Separator for multiSelect answer values. Provisional until confirmed by the E2 result. */
 export const MULTI_SELECT_SEPARATOR = ", ";
 export const POLL_TIMEOUT_MS = 25000;
 export const LEASE_GRACE_MS = 10000;
 export const DENY_LINK_WINDOW_MS = 120000;
 export const RECENCY_WINDOW_MS = 600000;
-/** 「承認して auto」の記録が失効するまで */
+/** How long an "approve and auto" record lasts before it expires */
 export const MODE_SWITCH_TTL_MS = 120000;
-/** lease 切れからこの時間内に UserPromptSubmit / Stop が来たら cancelled */
+/** If UserPromptSubmit / Stop arrives within this time after the lease expires, the decision is cancelled */
 export const CANCEL_WINDOW_MS = 10000;
 
-// ---- hook の stdin(知らないキーは通す) ----
+// ---- hook stdin (unknown keys pass through) ----
 
 export const HookInputBase = z.looseObject({
   session_id: z.string(),
@@ -48,20 +48,20 @@ export const AskUserQuestionItem = z.looseObject({
   multiSelect: z.boolean().optional(),
 });
 
-/** AskUserQuestion の tool_input */
+/** tool_input of AskUserQuestion */
 export const AskUserQuestionInput = z.looseObject({
   questions: z.array(AskUserQuestionItem).min(1).max(4),
 });
 export type AskUserQuestionInput = z.infer<typeof AskUserQuestionInput>;
 
-/** ExitPlanMode の tool_input */
+/** tool_input of ExitPlanMode */
 export const ExitPlanModeInput = z.looseObject({
   plan: z.string(),
   planFilePath: z.string(),
 });
 export type ExitPlanModeInput = z.infer<typeof ExitPlanModeInput>;
 
-// ---- hook の stdout ----
+// ---- hook stdout ----
 
 export const PreToolUseAllow = z.object({
   hookSpecificOutput: z.looseObject({
@@ -159,7 +159,7 @@ export const Explanation = z.object({
   has: z.object({ mermaid: z.boolean(), table: z.boolean(), diff: z.boolean() }),
   match: z.enum(["question", "recency"]),
   attached_via: z.enum(["first_call", "after_deny", "none"]),
-  // not_required は予約(どの経路も設定しない。GUI / TUI が表示文だけ持つ)
+  // not_required is reserved (no path sets it; the GUI / TUI only carry display text for it)
   none_reason: z.enum(["plan_mode", "loop_guard", "not_required"]).optional(),
 });
 export type Explanation = z.infer<typeof Explanation>;
@@ -184,7 +184,7 @@ export const Decision = z.object({
   context: DecisionContext,
   explanation: Explanation.optional(),
   first_denied_at: z.string().optional(),
-  /** denied_explain のときだけ。deny した理由の MissingCode(spec explain.md 4 節) */
+  /** Only for denied_explain. The MissingCode of the deny reason (spec explain.md section 4) */
   missing: z.array(z.string()).optional(),
   status: DecisionStatus,
   lease_until: z.string().optional(),
@@ -193,23 +193,23 @@ export const Decision = z.object({
 });
 export type Decision = z.infer<typeof Decision>;
 
-// ---- API の入出力 ----
+// ---- API input / output ----
 
-/** hook が POST /api/decisions に送るもの(context は server が集める) */
+/** What the hook sends to POST /api/decisions (the server gathers the context) */
 export const CreateDecisionRequest = z.object({
   tool_use_id: z.string(),
   kind: DecisionKind,
   session: DecisionSession,
   request: DecisionRequestBody,
   explanation: Explanation.optional(),
-  /** 説明なしの deny を記録するときだけ `denied_explain`(GUI には出ない) */
+  /** `denied_explain` only when recording a deny without an explanation (not shown in the GUI) */
   status: z.literal("denied_explain").optional(),
-  /** denied_explain のときだけ。deny した理由の MissingCode */
+  /** Only for denied_explain. The MissingCode of the deny reason */
   missing: z.array(z.string()).optional(),
 });
 export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequest>;
 
-/** POST /api/decisions/:id/answer。キーの組が互いに排他になるよう strict にしてある */
+/** POST /api/decisions/:id/answer. Strict so that the key sets are mutually exclusive */
 export const AnswerRequest = z.union([
   z.strictObject({ answers: z.record(z.string(), z.string()) }),
   z.strictObject({ approve: z.literal(true), set_mode_auto: z.boolean().optional() }),
@@ -218,13 +218,13 @@ export const AnswerRequest = z.union([
 ]);
 export type AnswerRequest = z.infer<typeof AnswerRequest>;
 
-/** GET /api/decisions/:id/wait の 200 の本文(204 は本文なし) */
+/** Body of a 200 from GET /api/decisions/:id/wait (204 has no body) */
 export const WaitResponse = z.object({
   response: DecisionResponse,
 });
 export type WaitResponse = z.infer<typeof WaitResponse>;
 
-/** POST /api/events。観測 hook の生 JSON + 受信時刻 */
+/** POST /api/events. Raw JSON of an observing hook + receive time */
 export const EventInput = HookInputBase.extend({
   received_at: z.string(),
   escaped_question: z.boolean().optional(),
@@ -251,9 +251,9 @@ const DurationStat = z.object({
   mean_ms: z.number().nullable(),
 });
 
-/** GET /api/metrics。計画 2 節の (a')(b)(d) と (c) の補助指標 */
+/** GET /api/metrics. Metrics (a')(b)(d) from plan section 2, plus the auxiliary metric (c) */
 export const Metrics = z.object({
-  // (a') GUI 回答率。分子 = answered、分母 = total(answered + 他の 5 種)
+  // (a') GUI answer rate. Numerator = answered, denominator = total (answered + the other 5 kinds)
   a: z.object({
     answered: z.number().int().nonnegative(),
     fallback: z.number().int().nonnegative(),
@@ -261,20 +261,20 @@ export const Metrics = z.object({
     answer_lost: z.number().int().nonnegative(),
     cancelled: z.number().int().nonnegative(),
     escaped_question: z.number().int().nonnegative(),
-    // Stop で blocker 語彙を検知した回数。分母(total)には含めない
+    // Number of times Stop detected blocker vocabulary. Not included in the denominator (total)
     blocker_detected: z.number().int().nonnegative(),
     total: z.number().int().nonnegative(),
     rate: z.number().nullable(),
   }),
-  // (b) 判断 1 件の所要時間。human = created_at → decided_at、agent = first_denied_at → created_at
+  // (b) Time per decision. human = created_at → decided_at, agent = first_denied_at → created_at
   b: z.object({
     human: DurationStat,
     agent: DurationStat,
     baseline: DurationStat,
   }),
-  // (c) 補助: GUI のセッション一覧を開いた回数
+  // (c) Auxiliary: number of times the GUI session list was opened
   c: z.object({ session_panel_opens: z.number().int().nonnegative() }),
-  // (d) 説明の添付。plan_mode の判断は total から除く
+  // (d) Explanation attachment. plan_mode decisions are excluded from total
   d: z.object({
     first_call: z.number().int().nonnegative(),
     after_deny: z.number().int().nonnegative(),
@@ -292,11 +292,11 @@ export const PendingModeSwitch = z.union([
 ]);
 export type PendingModeSwitch = z.infer<typeof PendingModeSwitch>;
 
-/** POST /api/sessions/:id/pending-mode-switch/consume。未消費の記録があれば true */
+/** POST /api/sessions/:id/pending-mode-switch/consume. True if there was an unconsumed record */
 export const ConsumeModeSwitchResponse = z.object({ consumed: z.boolean() });
 export type ConsumeModeSwitchResponse = z.infer<typeof ConsumeModeSwitchResponse>;
 
-// ---- 状態遷移 ----
+// ---- State transitions ----
 
 const TRANSITIONS: Record<DecisionStatus, readonly DecisionStatus[]> = {
   pending: ["answer_submitted", "fallback", "hook_disconnected", "cancelled"],
@@ -313,9 +313,9 @@ export function canTransition(from: DecisionStatus, to: DecisionStatus): boolean
   return TRANSITIONS[from]?.includes(to) ?? false;
 }
 
-// ---- パス検証 ----
+// ---- Path validation ----
 
-/** 実パス化。存在しない末尾は、存在する最も深い祖先を実パス化して付け直す */
+/** Resolve to a real path. For a non-existent tail, resolve the deepest existing ancestor and re-append the rest */
 function realish(p: string): string {
   const abs = resolve(p);
   const rest: string[] = [];
