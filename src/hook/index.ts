@@ -4,7 +4,7 @@ import { observeDecisionTool, observedEvent, permissionRequest, sessionContext, 
 import { handleDecision } from "./decision.js";
 import { parseArgs } from "./options.js";
 
-/** Stop hook 全体の上限 */
+/** Overall limit of the Stop hook */
 const STOP_TOTAL_MS = 1900;
 const DECISION_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 
@@ -18,7 +18,7 @@ function write(out: Record<string, unknown> | null | undefined): void {
   if (out) process.stdout.write(JSON.stringify(out));
 }
 
-/** フェイルオープン: どの経路でも例外は握りつぶし、常に 0 を返す */
+/** Fail open: swallow every exception and always return 0 */
 export async function run(argv: string[]): Promise<number> {
   process.stdout.on("error", () => {});
   const startedAt = Date.now();
@@ -52,7 +52,7 @@ export async function run(argv: string[]): Promise<number> {
     try {
       process.stderr.write(`ukagai hook: ${err instanceof Error ? err.message : String(err)}\n`);
     } catch {
-      // 何もしない
+      // nothing to do
     }
   }
   return 0;

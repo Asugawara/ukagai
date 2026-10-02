@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": true
+  },
+  "question": "gcloud の認証が切れています。対応できましたか？"
+}

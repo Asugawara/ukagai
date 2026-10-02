@@ -5,15 +5,15 @@ import { POLL_TIMEOUT_MS } from "../contract.js";
 export type DenyTemplate = "A" | "B";
 
 export interface HookOptions {
-  /** hook の持ち時間(秒) */
+  /** Time budget of the hook (seconds) */
   budgetSec: number;
   observe: boolean;
-  /** SessionStart で server の自動起動と GUI を開くのをしない */
+  /** Do not auto-start the server or open the GUI on SessionStart */
   noAutostart: boolean;
   server: string;
   dataDir: string;
   pollTimeoutMs: number;
-  /** deny 理由文の版(docs/spec/explain.md 7 節。E4 で確定するまで切り替え可) */
+  /** Variant of the deny reason (docs/spec/explain.md section 7) */
   denyTemplate: DenyTemplate;
 }
 

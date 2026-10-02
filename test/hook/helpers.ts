@@ -25,7 +25,7 @@ export interface Fake {
   close: () => Promise<void>;
 }
 
-/** handler が true を返せば応答済み。それ以外は既定の応答 */
+/** If the handler returns true the response is already sent; otherwise the default response is used */
 export async function fakeServer(handler: Handler = () => false): Promise<Fake> {
   const calls: Recorded[] = [];
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -85,7 +85,7 @@ export function tmpDir(prefix = "ukagai-hook-"): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
-/** token 入りの data-dir を作る */
+/** Create a data-dir that holds a token */
 export function dataDirWithToken(): string {
   const d = tmpDir();
   writeFileSync(join(d, "token"), "test-token\n");
@@ -109,7 +109,7 @@ export interface RunningHook {
   result: Promise<HookResult>;
 }
 
-/** 子プロセスにシグナルを送れる runHook */
+/** runHook that can send a signal to the child process */
 export function spawnHook(args: string[], input: string): RunningHook {
   const t0 = Date.now();
   const p = spawn(process.execPath, ["--import", "tsx", cli, "hook", ...args], { stdio: ["pipe", "pipe", "pipe"] });

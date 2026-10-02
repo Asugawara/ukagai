@@ -1,302 +1,346 @@
-# 説明ファイルの仕様
+# Explanation file specification
 
-エージェントが人に判断を求める前に書く「説明」の形式と、hook(`src/hook/explain.ts`)が行う検査の規則。実装計画は `docs/strategy/03-mvp-implementation-plan.md` の 3 節「説明の経路」。この文書の規則が実装と fixture(`test/explain-fixtures/`)の正になる。
+The format of the "explanation" an agent writes before asking a human to decide, and the rules of the checks the hook (`src/hook/explain.ts`) performs. For the implementation plan see section 3, "The explanation path", of `docs/strategy/03-mvp-implementation-plan.md`. The rules in this document are the source of truth for the implementation and the fixtures (`test/explain-fixtures/`).
 
-**v2 の方針**: 人が GUI で矢印キーと Enter だけで決められるように、エージェントに判断材料を考え抜かせる。GUI は `AskUserQuestion` の生の質問文・選択肢をそのまま出さず、説明ファイル(`title` / 「推奨」節 / 「選択肢」の表)で判断画面を組む。説明ファイルが判断材料の本体になる。
+**Policy (v2)**: make the agent think through the decision material so that a human can decide with arrow keys and Enter only in the GUI. The GUI does not show the raw question and options of `AskUserQuestion` as they are; it builds the decision screen from the explanation file (`title` / the "Recommendation" section / the "Options" table). The explanation file is the body of the decision material.
 
-## 1. 置き場
+**Language.** English is the canonical format; Japanese aliases are accepted (section 3.1 and the alias table in section 13). The hook tells the agent which language to write the explanation in via the SessionStart context (section 8), based on `lang` in `<data-dir>/config.json`.
 
-| 優先 | 場所 |
+## 1. Location
+
+| Priority | Place |
 |---|---|
-| 1 | `<scratchpad_dir>/ukagai/<自由な名前>.md`(`scratchpad_dir` は hook の stdin の値) |
-| 2 | `scratchpad_dir` が無いとき: `~/.ukagai/explain/<session_id>/<自由な名前>.md` |
+| 1 | `<scratchpad_dir>/ukagai/<any name>.md` (`scratchpad_dir` is the value in the hook's stdin) |
+| 2 | When there is no `scratchpad_dir`: `~/.ukagai/explain/<session_id>/<any name>.md` |
 
-- リポジトリの中には置かない。
-- 拡張子は `.md`。名前は自由。`.used.md` で終わるものは使用済みで、探索の対象外。
-- hook は使ったファイルを `<名前>.used.md` に rename する。server は本文を Decision に複写する(scratchpad は一時領域)。
-- 改行は読み込み時に LF へ正規化する。
+- Never put it inside the repository.
+- The extension is `.md`; the name is free. Files ending in `.used.md` are used and are excluded from the lookup.
+- The hook renames the file it used to `<name>.used.md`. The server copies the body into the Decision (the scratchpad is temporary).
+- Line endings are normalized to LF when reading.
 
-## 2. front matter
+## 2. Front matter
 
-ファイルの先頭行が `---` で、次の `---` までを front matter とする。書式は YAML の部分集合: 1 行 1 項目の `key: value`。値は 1 行のスカラーで、前後を `"` で囲んでもよい(囲んだ場合は外側の `"` だけを外す。エスケープは解釈しない)。値に `: ` や `#` を含むときは `"` で囲む。未知のキーは無視する。
+The first line of the file is `---`, and everything up to the next `---` is the front matter. The syntax is a subset of YAML: one `key: value` per line. A value is a one-line scalar and may be wrapped in `"` (only the outer `"` is removed; escapes are not interpreted). Wrap the value in `"` when it contains `: ` or `#`. Unknown keys are ignored.
 
-| 欄 | 必須 | 値 | 意味 |
+| Field | Required | Value | Meaning |
 |---|---|---|---|
-| `ukagai` | 必須 | `1` | 形式のバージョン。`1` 以外は不正 |
-| `question` | 必須 | 文字列 | `AskUserQuestion` の `questions[0].question` を**一字一句そのまま**。照合は完全一致(空白・全角半角の正規化はしない)。質問が複数のときも `questions[0]` だけを使う |
-| `type` | 任意 | `decision` / `blocker` | 説明の種類。無い・`decision` = 人に判断を求める(従来)。`blocker` = 人にしかできない作業(認証・権限付与・2 要素認証・鍵の配置・物理操作)で進めなくなった(3.2 節の blocker の必須節、12 節)。これ以外の値は不正(`type` を missing) |
-| `title` | 必須 | 文字列 | 人向けの「決めてほしいこと」1 文(例: `判断ログの保存形式を JSONL と SQLite のどちらにするか`)。GUI の判断見出し。`question` は照合用で GUI には出さない |
-| `reversibility` | 必須 | `reversible` / `costly` / `irreversible` | 決めた後に戻せるか。`reversible` = 簡単に戻せる、`costly` = 戻せるが手間かコストがかかる、`irreversible` = 戻せない |
-| `scope` | 必須 | `file` / `repo` / `machine` / `external` | 影響の範囲。`file` = 数ファイル、`repo` = リポジトリ全体、`machine` = この機械(リポジトリ外のファイル・設定・プロセス)、`external` = 他人・他システム(push、公開、課金、メッセージ送信) |
-| `recommended` | 必須 | 文字列 | 推す選択肢のラベル。ラベル照合(下記)で `questions[0].options[].label` のどれかと一致すること(stdin で選択肢が分かるときだけ照合。分からなければ空でなければよい) |
+| `ukagai` | Required | `1` | Format version. Anything other than `1` is invalid |
+| `question` | Required | string | `questions[0].question` of `AskUserQuestion`, **verbatim**. Matching is exact (no normalization of whitespace or full-width / half-width). With several questions only `questions[0]` is used |
+| `type` | Optional | `decision` / `blocker` | The kind of explanation. Absent or `decision` = asks a human to decide (the original). `blocker` = progress is blocked by work only a human can do (authentication, permission grants, two-factor authentication, placing a key, physical operations); see the blocker required sections in section 3.2 and section 12. Any other value is invalid (`type` is reported missing) |
+| `title` | Required | string | The decision for the human in one sentence (example: `Choose JSONL or SQLite as the storage format of the decision log`). The decision heading in the GUI. `question` is for matching and is not shown in the GUI |
+| `reversibility` | Required | `reversible` / `costly` / `irreversible` | Whether the decision can be undone. `reversible` = easy to undo, `costly` = can be undone at some effort or cost, `irreversible` = cannot be undone |
+| `scope` | Required | `file` / `repo` / `machine` / `external` | The range of impact. `file` = a few files, `repo` = the whole repository, `machine` = this machine (files, settings and processes outside the repository), `external` = other people or systems (push, publish, billing, sending messages) |
+| `recommended` | Required | string | The label of the option you recommend. By label matching (below) it must equal one of `questions[0].options[].label` (matched only when the options are known from stdin; otherwise it only has to be non-empty) |
 
-**ラベル照合**(`normalizeLabel`。hook と GUI で同じ規則): 両辺を NFKC → 末尾の `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）` を除去 → 空白(全種)を削除 → 小文字化、にして完全一致で比べる。
+**Label matching** (`normalizeLabel`; the same rule in the hook and the GUI): normalize both sides by NFKC → strip a trailing `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）` → remove all whitespace → lowercase, then compare for exact equality.
 
-「`scope` が `machine` 以上」= `machine` / `external`(順序は `file` < `repo` < `machine` < `external`)。図の必須条件(3.2)に使う。
+"`scope` is `machine` or above" = `machine` / `external` (the order is `file` < `repo` < `machine` < `external`). Used for the diagram requirement (3.2).
 
-## 3. 本文
+## 3. Body
 
-### 3.1 見出しの照合
+### 3.1 Heading matching
 
-- 見出しは ATX 形式(`#` 1〜6 個 + 空白 + 文字列)。コードフェンス(```` ``` ````、`~~~`)の内側の行は見出しとして扱わない。
-- 節は、その見出しから、同じか浅いレベルの次の見出しの直前まで(深い見出しは節に含む)。
-- 照合は**正規化した一致**: 見出しの文字列と必須の見出し名の両方に同じ正規化をかける。**完全一致を優先**し、完全一致が無ければ部分一致(見出しが必須名を含めば一致)。「選択肢」が先に出る「推奨する選択肢」に誤って当たらないため。
-- 正規化 = Unicode NFKC(全角半角を統一)→ 空白(全種)を削除 → 「と」と「・」を削除 → 小文字化。
-- 同じ段階(完全一致どうし、部分一致どうし)で一致する見出しが複数あれば、最初のものを使う。
+- Headings are ATX (1–6 `#` + space + text). Lines inside code fences (```` ``` ````, `~~~`) are not headings.
+- A section runs from its heading to just before the next heading of the same or a shallower level (deeper headings belong to the section).
+- Matching is **normalized matching**: the same normalization is applied to the heading text and to every accepted name. **An exact match wins**; without an exact match, a partial match (the heading contains an accepted name). This keeps "Options" from hitting a preceding "Recommended options".
+- Each section has an **English name and a Japanese alias** (the table below). A heading matches when it matches either. Exact matches on any name are tried first, then partial matches on any name. English names are case-insensitive.
+- Normalization = Unicode NFKC (unify full-width / half-width) → remove all whitespace → remove 「と」 and 「・」 → lowercase.
+- When several headings match at the same stage (exact among exact, partial among partial), the first one is used.
 
-| コード | 必須の見出し名 | 正規化後 |
-|---|---|---|
-| `why` | なぜ今この判断が要るか | なぜ今この判断が要るか |
-| `options` | 選択肢 | 選択肢 |
-| `recommend` | 推奨 | 推奨 |
-| `diagram` | 図 | 図 |
-| (計画) | 影響範囲と可逆性 | 影響範囲可逆性 |
+The names are exported from `src/hook/explain.ts` as `SECTION`:
 
-「関係する差分」は照合の対象にしない(3.2 節)。
+| Code | English name | Japanese alias | Normalized (English) |
+|---|---|---|---|
+| `why` | Why this decision is needed now | なぜ今この判断が要るか | whythisdecisionisneedednow |
+| `options` | Options | 選択肢 | options |
+| `recommend` | Recommendation | 推奨 | recommendation |
+| `diagram` | Diagram | 図 | diagram |
+| (blocker) `why` | Why I stopped | なぜ止まったか | whyistopped |
+| (blocker) `todo` | What you need to do | 人にしてほしいこと | whatyouneedtodo |
+| (plan) `impact` | Scope and reversibility | 影響範囲と可逆性 | scopeandreversibility |
 
-### 3.2 必須条件
+"What I checked" (確かめたこと) and "Related diff" (関係する差分) are not matched (section 3.2).
 
-| 節 | 条件 |
+`findSection(headings, total, names)` takes an array of names.
+
+### 3.2 Required conditions
+
+| Section | Condition |
 |---|---|
-| なぜ今この判断が要るか | 常に必須。節に空でない行が 1 行以上。状況と、**人でなければ決められない理由**(エージェントが知り得ないこと)を書く(内容は検査しない) |
-| 選択肢 | 常に必須。節の中に 3.3 の表。旧見出し「選択肢の比較」も部分一致で通る |
-| 推奨 | 常に必須。節に空でない行が 1 行以上。どれを推すか、理由(目安 3 文、上限 5 文・400 文字)、**別の選択肢が正しくなる条件**(「〜なら B」)を書く(内容は検査しない) |
-| 図 | **`reversibility` が `reversible` 以外、または `scope` が `machine` / `external` のとき必須**(`repo` + `reversible` は任意)。節の中に ` ```mermaid ` のコードブロックが 1 つ以上。`scope` か `reversibility` が欠落・不正なときは必須として扱う(安全側)。必須でも、選択肢の違いが図に出ないなら描かず表の行を詳しくする(skill の指針。検査しない) |
-| 確かめたこと | 任意。file:line、コマンドの結果。推測は「推測」と書く。検査しない |
-| 関係する差分 | コード変更が絡むときに書く。hook は判定できないので**検査しない**(任意)。` ```diff ` で 20 行以内 |
+| Why this decision is needed now | Always required. At least one non-empty line in the section. Write the situation and **why only a human can decide** (what the agent cannot know) (the content is not checked) |
+| Options | Always required. A table of 3.3 inside the section. A heading such as "Options compared" (選択肢の比較) also passes by partial match |
+| Recommendation | Always required. At least one non-empty line in the section. Write which option you recommend, the reason (aim for 3 sentences, limit 5 sentences and 400 characters), and **the condition under which another option is right** ("if …, B") (the content is checked only for the condition words; see `recommend_cond`) |
+| Diagram | **Required when `reversibility` is anything but `reversible`, or `scope` is `machine` / `external`** (`repo` + `reversible` is optional). At least one ` ```mermaid ` code block inside the section. When `scope` or `reversibility` is missing or invalid it is treated as required (the safe side). Even when required, if the difference between the options does not show in a diagram, do not draw one and make the table rows more detailed (guidance in the skill; not checked) |
+| What I checked | Optional. file:line and command results. Mark guesses as guesses. Not checked |
+| Related diff | Write it when code changes are involved. The hook cannot judge it, so it is **not checked** (optional). At most 20 lines in a ` ```diff ` block |
 
-**`type: blocker` のとき**(選択肢は固定の 3 つ: `対応した。続けて (Recommended)` / `この手順は飛ばして続けて` / `ここで中断`。`recommended` は `対応した。続けて`。`reversibility` / `scope` は通常どおり、たいてい `reversible` / `machine`):
+**When `type: blocker`** (the options are exactly 3: `Done. Continue (Recommended)` / `Skip this step and continue` / `Stop here`; `recommended` is `Done. Continue`; `reversibility` / `scope` as usual, typically `reversible` / `machine`). The Japanese labels `対応した。続けて` / `この手順は飛ばして続けて` / `ここで中断` are accepted as aliases (exported as `BLOCKER_LABELS`):
 
-| 節 | 条件 |
+| Section | Condition |
 |---|---|
-| なぜ止まったか | 必須(コード `why`)。節に空でない行が 1 行以上。失敗したコマンドとエラーの抜粋(` ``` ` で 10 行以内)を含める(内容は検査しない)。「なぜ今この判断が要るか」の代わり |
-| 人にしてほしいこと | **blocker では必須**(コード `todo`)。番号付きの手順と、人がそのまま打てるコマンドの fenced code block。節の中に ` ``` ` のコードブロックが 1 つ以上あることを検査する(内容は検査しない) |
-| 選択肢 | 通常どおり(3.3 の表。先頭列 = 上の 3 ラベル) |
-| 推奨 / 図 | **要求しない** |
+| Why I stopped | Required (code `why`). At least one non-empty line in the section. Include the failed command and an excerpt of the error (at most 10 lines in ` ``` `) (the content is not checked). Replaces "Why this decision is needed now" |
+| What you need to do | **Required for a blocker** (code `todo`). Numbered steps, and a fenced code block with commands the human can type as they are. Checked: at least one ` ``` ` code block inside the section (the content is not checked) |
+| Options | As usual (the table of 3.3; first column = the 3 labels above) |
+| Recommendation / Diagram | **Not required** |
 
-`type` が無い・`decision` のときは従来どおりで、`todo` は要求しない。
+When `type` is absent or `decision`, nothing changes and `todo` is not required.
 
-### 3.3 表の最低条件
+### 3.3 Minimum table conditions
 
-「選択肢」の節の中に、GFM の表(ヘッダ行 + 区切り行 `|---|` + データ行)が次を満たすこと。
+Inside the "Options" section there must be a GFM table (header row + separator row `|---|` + data rows) that satisfies all of the following.
 
-1. ヘッダの列のうち、正規化後(3.1 の見出し正規化)に `起きること` を含む列と `リスク` を含む列がある(推奨の列名: 「選ぶと起きること」「リスクと戻し方」。他の列は自由)。**先頭列 = 選択肢のラベル**。旧列(利点・欠点・コスト)の表はここで落ちる。
-2. データ行が `max(2, 選択肢数)` 以上。選択肢数は stdin の `questions[0].options` の数で、分からないときは 2。
-3. 各データ行の上記 2 列のセルが空でない。空白のみ、または `-` `—` `ー` のみは空とみなす。
-4. stdin から選択肢が分かるときは、各ラベルについて、先頭セルが `normalizeLabel` で一致する行がある。
+1. Among the header cells there is a column matching `COLUMN_HAPPENS` (`/happens|outcome|起きること/i`) and a column matching `COLUMN_RISK` (`/risk|リスク/i`) (recommended column names: "What happens if chosen" and "Risks and how to undo"; other columns are free). The header cell text is NFKC-normalized before the test. **The first column = the option label.** A table with the old columns (pros / cons / cost) fails here.
+2. At least `max(2, number of options)` data rows. The number of options is the count of `questions[0].options` from stdin, and 2 when unknown.
+3. In every data row the cells of those 2 columns are non-empty. Whitespace only, or only `-` `—` `ー`, counts as empty.
+4. When the options are known from stdin, for each label there is a row whose first cell matches by `normalizeLabel`.
 
-節の中に表が複数あれば、どれか 1 つが満たせばよい。
+If a section has several tables, one of them satisfying the conditions is enough.
 
-### 3.4 `has`(記録用の事実)
+### 3.4 `has` (facts for the record)
 
-検査の合否とは別に、本文全体について記録する(`explanation.has`、(d) の集計用)。
+Recorded separately from pass / fail, for the whole body (`explanation.has`, used for the (d) tally).
 
-| 欄 | 条件 |
+| Field | Condition |
 |---|---|
-| `mermaid` | ` ```mermaid ` のコードブロックが本文のどこかにある |
-| `table` | GFM の表(ヘッダ行 + 区切り行)が本文のどこかにある(列や行の条件は問わない) |
-| `diff` | ` ```diff ` のコードブロックが本文のどこかにある |
+| `mermaid` | There is a ` ```mermaid ` code block anywhere in the body |
+| `table` | There is a GFM table (header row + separator row) anywhere in the body (columns and rows are not checked) |
+| `diff` | There is a ` ```diff ` code block anywhere in the body |
 
-### 3.5 強調の記法(任意。hook は検査しない)
+### 3.5 Emphasis syntax (optional; the hook does not check)
 
-- 判断の決め手になる語句だけを `**太字**` にする(skill の助言: 1 文に 1 つまで、説明全体で 8 箇所まで。hook は検査しない)。GUI は accent 色で描き、「リスクと戻し方」の中だけ赤で描く。
-- 戻せない結果・他人や外部システムに及ぶ影響は callout にする: `> [!WARNING]`(戻すのにコストがかかる)、`> [!CAUTION]`(戻せない)。1〜2 行。
-- 確かめた事実のうち判断を左右するものは `> [!NOTE]`(補足)、有用な示唆は `> [!TIP]`(ヒント)でもよい。
-- GUI は callout を色付きの箱にする(NOTE = accent、TIP = green、WARNING = yellow、CAUTION = red)。記法が違っても壊れず、素の引用として出る。
+- Use `**bold**` only for the phrases that decide the matter (skill advice: at most one per sentence and 8 in the whole explanation; the hook does not check). The GUI draws it in the accent color, and only inside "Risks and how to undo" in red.
+- Make irreversible results and effects on other people or external systems a callout: `> [!WARNING]` (undoing costs something), `> [!CAUTION]` (cannot be undone). 1–2 lines.
+- A checked fact that sways the decision may use `> [!NOTE]` (supplement), and a useful hint `> [!TIP]`.
+- The GUI renders a callout as a colored box (NOTE = accent, TIP = green, WARNING = yellow, CAUTION = red). A different syntax does not break; it appears as a plain quote.
 
-### 3.6 長さの上限
+### 3.6 Length limits
 
-GUI の右列で選択肢カードが画面外に押し出されないよう、長さを検査する。文字数は NFKC 後の code point 数(全角半角は同じ 1 文字)。節の本文はコードブロックと空行を除く。
+So that option cards are not pushed off screen in the right column of the GUI, lengths are checked. Characters are code points after NFKC (full-width and half-width are the same 1 character). The body of a section excludes code blocks and blank lines.
 
-| 対象 | 上限 | コード |
+| Target | Limit | Code |
 |---|---|---|
-| 「推奨」の節の本文 | 400 文字、かつ 5 文(検査の上限。skill の目安は 3 文) | `recommend_long` |
-| 「選択肢」の表の「選ぶと起きること」「リスクと戻し方」のセル | 各 160 文字(文数は検査しない。skill の目安は 2 文) | `cell_long` |
-| 「なぜ今この判断が要るか」(blocker は「なぜ止まったか」)の本文 | 600 文字 | `why_long` |
+| Body of the "Recommendation" section | 400 characters and 5 sentences (the check limit; the skill aims for 3 sentences) | `recommend_long` |
+| Cells of "What happens if chosen" and "Risks and how to undo" in the options table | 160 characters each (sentences are not counted; the skill aims for 2 sentences) | `cell_long` |
+| Body of "Why this decision is needed now" ("Why I stopped" for a blocker) | 600 characters | `why_long` |
 
-- 文の区切りは `。` `!` `?`(NFKC 後なので `！` `？` も)と、直後が空白か末尾の `.`(`file.ts` や `0.5` は区切らない)。
-- `cell_long` は 3.3 を満たした表だけを見る。blocker では `recommend_long` / `recommend_cond` を評価しない(推奨の節が無いため)。
-- 詳細・根拠・ログは「確かめたこと」の節に書く(検査しない)。
+- Sentences are split on `。` `!` `?` (also `！` `？` after NFKC) and on a `.` followed by whitespace or the end (`file.ts` and `0.5` are not split).
+- `cell_long` looks only at tables that satisfy 3.3. For a blocker `recommend_long` / `recommend_cond` are not evaluated (there is no Recommendation section).
+- Put details, evidence and logs in the "What I checked" section (not checked).
 
-## 4. 検査結果
+## 4. Check result
 
-検査は次の `missing` コードを**この順で**列挙する。`missing` が空のとき `valid: true`。
+The check lists the following `missing` codes **in this order**. When `missing` is empty, `valid: true`.
 
-| コード | 条件(これを満たさないとき追加) | deny 理由文での呼び名 |
+| Code | Condition (added when it is not satisfied) | Name in the deny reason |
 |---|---|---|
-| `file` | 説明ファイルが見つからない(この場合は他のコードを評価しない) | 説明ファイル本体 |
-| `front_matter` | front matter が無い、閉じていない、または `ukagai` が `1` でない | front matter(`ukagai: 1`) |
-| `question` | `question` が無い、または空 | `question` |
-| `type` | `type` があるのに `decision` / `blocker` のどちらでもない(以降は decision として評価) | `type`(decision / blocker) |
-| `title` | `title` が無い、または空 | `title`(決めてほしいこと 1 文) |
-| `reversibility` | 無い、または値が集合外 | `reversibility` |
-| `scope` | 無い、または値が集合外 | `scope` |
-| `recommended` | 無い・空、またはラベル照合で `options[].label` のどれにも一致しない(labels が分かるとき) | `recommended`(推す選択肢のラベル) |
-| `why` | 「なぜ今この判断が要るか」(blocker では「なぜ止まったか」)の節が無い、または空 | 「なぜ今この判断が要るか」の節 |
-| `why_long` | `why` の節が 3.6 の上限を超える(`why` が落ちたときは評価しない) | 「なぜ今この判断が要るか」の節が長い(600 文字以内。詳細は「確かめたこと」へ) |
-| `options` | 「選択肢」の節が無い | 「選択肢」の節 |
-| `table` | `options` があるのに 3.3 の表が無い(`options` が無いときは評価しない) | 選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行) |
-| `cell_long` | 3.3 を満たす表のセルが 3.6 の上限を超える(`table` が落ちたときは評価しない) | 選択肢の表のセルが長い(各セル 160 文字以内) |
-| `todo` | `type: blocker` なのに、「人にしてほしいこと」の節が無い・空、または節の中にコードブロックが無い | 「人にしてほしいこと」の節(コマンドのコードブロック付き) |
-| `recommend` | (blocker では評価しない)「推奨」の節が無い、または空 | 「推奨」の節 |
-| `recommend_long` | (blocker では評価しない)「推奨」の節が 3.6 の上限を超える(`recommend` が落ちたときは評価しない) | 「推奨」の節が長い(5 文・400 文字以内) |
-| `recommend_cond` | (blocker では評価しない)「推奨」の節の本文(コードブロックと callout の行を除く)に、`なら`(`ならない` / `ならず` は除く)/ `なければ`(`なければなら…` は除く。「でなければ」を含む)/ `場合` / `とき`(`ときどき` は除く)/ `であれば` / `際は` / `際に` / `\bif\b` / `\bwhen\b` / `\bunless\b`(英字は大小無視)のいずれも無い(`recommend` が落ちたときは評価しない。`recommend_long` の直後) | 「推奨」に別の選択肢が正しくなる条件(「〜なら B」「〜の場合は B」「〜のときは B」「〜であれば B」のいずれかで書く) |
-| `multi` | (検査ではなく 5 節の手順 0 で使う)`questions` が 2 つ以上 | 質問は 1 回に 1 問 |
-| `diagram` | (blocker では評価しない)図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
+| `file` | The explanation file is not found (no other code is evaluated in this case) | the explanation file itself |
+| `front_matter` | No front matter, it is not closed, or `ukagai` is not `1` | front matter (`ukagai: 1`) |
+| `question` | `question` is absent or empty | `question` |
+| `type` | `type` exists but is neither `decision` nor `blocker` (evaluated as decision from then on) | `type` (decision / blocker) |
+| `title` | `title` is absent or empty | `title` (the decision for the human, in one sentence) |
+| `reversibility` | Absent, or the value is outside the set | `reversibility` |
+| `scope` | Absent, or the value is outside the set | `scope` |
+| `recommended` | Absent or empty, or by label matching it matches none of `options[].label` (when labels are known) | `recommended` (label of the option you recommend) |
+| `why` | The "Why this decision is needed now" section ("Why I stopped" for a blocker) is absent or empty | the "Why this decision is needed now" section |
+| `why_long` | The `why` section exceeds the limit of 3.6 (not evaluated when `why` failed) | the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked") |
+| `options` | The "Options" section is absent | the "Options" section |
+| `table` | `options` exists but there is no table of 3.3 (not evaluated when `options` is absent) | the options table (first column is the label; columns for what happens if chosen and for risks and how to undo; one row per option) |
+| `cell_long` | A cell of a table satisfying 3.3 exceeds the limit of 3.6 (not evaluated when `table` failed) | a cell in the options table is too long (at most 160 characters per cell) |
+| `todo` | `type: blocker` but the "What you need to do" section is absent or empty, or has no code block | the "What you need to do" section (with a code block of commands) |
+| `recommend` | (not evaluated for a blocker) The "Recommendation" section is absent or empty | the "Recommendation" section |
+| `recommend_long` | (not evaluated for a blocker) The "Recommendation" section exceeds the limit of 3.6 (not evaluated when `recommend` failed) | the "Recommendation" section is too long (at most 5 sentences and 400 characters) |
+| `recommend_cond` | (not evaluated for a blocker) The body of the "Recommendation" section (excluding code blocks and callout lines) contains none of the words matched by `RECOMMEND_COND`: `なら` (not `ならない` / `ならず`) / `なければ` (not `なければなら…`; includes 「でなければ」) / `場合` / `とき` (not `ときどき`) / `であれば` / `際は` / `際に` / `\bif\b` / `\bwhen\b` / `\bunless\b` / `\botherwise\b` / `\bin case\b` (Latin letters are case-insensitive) (not evaluated when `recommend` failed; right after `recommend_long`) | a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.) |
+| `multi` | (not a check; used in step 0 of section 5) `questions` has two or more entries | one question per call |
+| `diagram` | (not evaluated for a blocker) A diagram is required (3.2) but the "Diagram" section or the ` ```mermaid ` block is absent | a "Diagram" section with a Mermaid diagram |
+| `impact` | (plans only, section 9) The "Scope and reversibility" section is absent or empty | the "Scope and reversibility" section |
 
-- front matter が無いときは `front_matter` だけを追加し、`question` `title` `reversibility` `scope` `recommended` は評価しない(図の必須判定は安全側で「必須」)。
-- 検査の入力は「ファイル全文」と、任意の `labels`(`questions[0].options[].label` の配列。`validateExplanation(markdown, kind, labels?)`)。
-- `question` の欄そのものの形式検査と、stdin の質問文との照合(次節の手順 1)は別物。検査は欄の有無だけを見る。
+- Without front matter only `front_matter` is added, and `question` `title` `reversibility` `scope` `recommended` are not evaluated (the diagram requirement is judged "required" on the safe side).
+- The input of the check is "the whole file" and an optional `labels` (an array of `questions[0].options[].label`; `validateExplanation(markdown, kind, labels?)`).
+- The format check of the `question` field itself and the matching against the question in stdin (step 1 of the next section) are separate. The check looks only at whether the field exists.
 
-## 5. hook の判定手順(PreToolUse × AskUserQuestion)
+## 5. The hook's procedure (PreToolUse × AskUserQuestion)
 
-`permission_mode === "plan"` のときは説明を要求しない(6 節)。それ以外:
+When `permission_mode === "plan"` no explanation is required (section 6). Otherwise:
 
-0. **多問なら deny**: `questions.length > 1` なら、探索より前に `permissionDecision: "deny"` を返し `denied_explain` として登録する(`explanation` は付けない)。理由文は次(7 節にも再掲、600 文字以内、URL なし): `AskUserQuestion は 1 回に 1 問にしてください(今回は N 問)。GUI は 1 問ずつ、説明ファイルと一緒に表示します。最初の質問から順に、1 問ごとに説明ファイルを書いて AskUserQuestion を 1 問だけで出し直してください。文章で聞き直してはいけません。` ループ保険: 同じ `session_id + agent_id` で `questions.length > 1` の `denied_explain` が **2 分以内**にあれば deny せず手順 1 に進む(説明が無ければ `attached_via: none` / `none_reason: loop_guard`)。質問文は照合しない(分けた後の 1 問目は別の質問文になるため)。
-1. **探索**: 置き場(1 節)の `.md`(`.used.md` を除く)から、front matter の `question` が `questions[0].question` と**完全一致**するものを探す(複数あれば更新時刻が最新のもの。`match: question`)。無ければ、**10 分以内**(E4 で確定)に書かれた(更新時刻)未使用ファイルがちょうど 1 つならそれを使う(`match: recency`)。0 個または 2 個以上なら「見つからない」(`file`)。
-2. **検査と登録**: 見つかったファイルを 4 節の検査にかける。通れば Decision に登録する。`attached_via` は、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が直近 **2 分以内**(E4 で確定)にあれば `after_deny`、無ければ `first_call`。使ったファイルは `<名前>.used.md` に rename する。
-3. **deny**: 見つからない / 検査が落ちたら、`permissionDecision: "deny"` + 7 節の理由文を返し、`denied_explain` として登録する(GUI には出さない)。
-4. **ループ保険**: 手順 3 の時点で、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が **2 分以内**(E4 で確定)に既にあれば、deny せず説明なしで GUI に出す(`attached_via: none`、`none_reason: loop_guard`、GUI に「説明なし」の印)。
+0. **Deny when there are several questions**: when `questions.length > 1`, before any lookup return `permissionDecision: "deny"` and register it as `denied_explain` (no `explanation` attached). The reason is the following (repeated in section 7; at most 600 characters; no URL): `Ask one question per AskUserQuestion call (this call had N). The GUI shows one question at a time, with its explanation file. Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose.` Loop guard: when a `denied_explain` with `questions.length > 1` exists for the same `session_id + agent_id` **within 2 minutes**, do not deny and go to step 1 (with no explanation: `attached_via: none` / `none_reason: loop_guard`). The question text is not compared (the first question after splitting has a different text).
+1. **Lookup**: among the `.md` files (excluding `.used.md`) in the location (section 1), look for one whose front matter `question` **exactly matches** `questions[0].question` (the latest mtime if several; `match: question`). If there is none, use the unused file written **within 10 minutes** (by mtime) if there is exactly one (`match: recency`). With zero or two or more it is "not found" (`file`).
+2. **Check and register**: run the file found through the check of section 4. If it passes, register the Decision. `attached_via` is `after_deny` when a `denied_explain` for the same `session_id + agent_id + questions[0].question` exists within the last **2 minutes**, otherwise `first_call`. The file used is renamed to `<name>.used.md`.
+3. **Deny**: when not found or the check fails, return `permissionDecision: "deny"` + the reason of section 7 and register it as `denied_explain` (not shown in the GUI).
+4. **Loop guard**: at the time of step 3, when a `denied_explain` for the same `session_id + agent_id + questions[0].question` already exists within **2 minutes**, do not deny and show it in the GUI without an explanation (`attached_via: none`, `none_reason: loop_guard`, with a "no explanation" mark in the GUI).
 
-## 6. plan mode
+## 6. Plan mode
 
-`permission_mode === "plan"` の AskUserQuestion は説明ファイルを要求しない。探索もしない。`attached_via: none`、`none_reason: plan_mode`。(d) の分母から除く。
+An `AskUserQuestion` with `permission_mode === "plan"` does not require an explanation file and does no lookup. `attached_via: none`, `none_reason: plan_mode`. It is excluded from the denominator of (d).
 
-## 7. deny 理由文のテンプレート
+## 7. Deny reason templates
 
-2 種類を用意する。E4 の結果(往復 2 回で通ったのは命令文 7 本中 6、事実 + 依頼 2/2)により**既定は版 A**。`--deny-template` で版 B に切り替えられる。
+There are two. By the result of E4 (round trips of 2 passed for 6 of 7 imperative sentences, and 2/2 for fact + request) **variant A is the default**. `--deny-template` switches to variant B.
 
-プレースホルダ:
+Placeholders:
 
-- `{path}`: 保存先の絶対パス(`<scratchpad_dir>/ukagai/explain.md`。名前は自由だが例を 1 つ示す)
-- `{question}`: `questions[0].question` の原文
-- `{missing}`: 4 節の「呼び名」(`recommended` `title` なども含む。呼び名が長いため 600 文字の切り詰めが効きやすい)を `、` で連結したもの(`todo` = 「人にしてほしいこと」の節(コマンドのコードブロック付き)、`type` = `type`(decision / blocker))
+- `{path}`: absolute save path (`<scratchpad_dir>/ukagai/explain.md`; any name is fine but one example is shown)
+- `{question}`: the verbatim `questions[0].question`
+- `{missing}`: the "names" of section 4 (including `recommended`, `title`, etc.; because the names are long the 600-character cut is likely to apply) joined with `; ` (`todo` = the "What you need to do" section (with a code block of commands), `type` = `type` (decision / blocker))
 
-共通の制約: **GUI の URL・ポート・API パスを書かない**(Claude 自身に `curl` で回答させないため)。展開後の全文は **600 文字以内**(ただし下の「最小テンプレート」を埋め込むときは **1200 文字以内**)。超えるときは `{missing}` を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。`{question}` は原文でなければ照合できないので切り詰めない。
+Common constraints: **do not write the GUI URL, port or API path** (so that Claude does not answer by itself with `curl`). The expanded text is **at most 600 characters** (**at most 1200 characters** when the "minimal template" below is embedded). When it is exceeded, `{missing}` is cut to "... and N more", and if it is still too long the last sentence is dropped. `{question}` is never cut because matching needs the verbatim text.
 
-### 版 A: 命令文
-
-```
-AskUserQuestion の前に、人が判断するための説明ファイルを書いてください。足りない項目: {missing}。
-保存先: {path}(同じディレクトリなら名前は自由)。front matter の question: には次の文字列を一字一句そのまま入れること: {question}
-書式の全体は skill ukagai-explain。書き終えたら同じ質問をもう一度 AskUserQuestion で出してください。文章で聞き直してはいけません。
-```
-
-### 版 B: 事実 + 依頼
+### Variant A: imperative
 
 ```
-この判断に付ける説明ファイル(ukagai 形式)が、まだ条件を満たしていません。足りない項目: {missing}。
-{path} に書いていただけますか(同じディレクトリなら名前は自由です)。front matter の question: は「{question}」と完全に同じにしてください。
-書式の全体は skill ukagai-explain にあります。書けたら、同じ質問をもう一度 AskUserQuestion で出してください。
+First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: {missing}.
+Save to: {path} (any name in the same directory). Put exactly this string in the front matter question: {question}
+The full format is in skill ukagai-explain. When done, call AskUserQuestion again with the same question. Do not ask in prose.
 ```
 
-どちらの版も、冒頭に「まず skill ukagai-explain を読んでください(読んでいなければ)。」の 1 句を付ける(版 B は「…読んでいただけますか(読んでいなければ)。」)。
+### Variant B: fact + request
 
-### 最小テンプレート(Q4-04)
+```
+Could you first read skill ukagai-explain (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: {missing}.
+Could you write {path} (any name in the same directory is fine)? The front matter question: must be identical to "{question}".
+The full format is in skill ukagai-explain. When done, please call AskUserQuestion again with the same question.
+```
 
-`missing` に `file` / `front_matter` / `question` / `title` / `recommended` のどれかがあるとき(= 最初の deny で書式が分からないとき)、`保存先:` の行の直後に、次をコードブロック 1 つで貼る。`question:` には実際の質問文を埋める(この場合「一字一句そのまま入れること」の文は省く)。`table` など他のコードだけが欠けるときは貼らない(短いまま)。
+### Minimal template (Q4-04)
+
+When `missing` contains any of `file` / `front_matter` / `question` / `title` / `recommended` (= the format is unknown at the first deny), paste the following as one code block right after the `Save to:` line. `question:` holds the real question text (in this case the sentence "Put exactly this string…" is omitted). When only other codes such as `table` are missing, it is not pasted (the reason stays short). The placeholder under Recommendation must not contain any word that satisfies `RECOMMEND_COND` (if / when / unless / otherwise / in case), so leaving it as it is does not pass `recommend_cond`.
 
 ```
 ---
 ukagai: 1
 question: {question}
-title: <人に決めてほしいこと 1 文>
-recommended: <推す選択肢のラベル>
+title: <the decision for the human, in one sentence>
+recommended: <label of the option you recommend>
 reversibility: reversible | costly | irreversible
 scope: file | repo | machine | external
 ---
-## なぜ今この判断が要るか
-## 選択肢
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
-## 推奨
-(推す選択肢と理由。最後の 1 文は、別の選択肢が正しくなる条件)
-## 図  (reversible 以外、または machine / external のとき。Mermaid)
+## Why this decision is needed now
+## Options
+| Option | What happens if chosen | Risks and how to undo |
+## Recommendation
+(the option you recommend and why; the last sentence names the condition that makes another option right)
+## Diagram  (Mermaid; for anything not reversible, or scope machine / external)
 ```
 
-見つかったファイルが `type: blocker` のときは、欠けが 1 つでもあれば blocker 用を貼る: front matter に `type: blocker` と `recommended: 対応した。続けて`、`reversibility: reversible`、`scope: machine`、節は「なぜ止まったか」「人にしてほしいこと」「選択肢」(表の見出しと固定 3 ラベルの行。推奨・図は無い)。
-### 多問の deny 理由文(手順 0)
+When the file found has `type: blocker`, the blocker template is pasted whenever anything at all is missing: the front matter has `type: blocker`, `recommended: Done. Continue`, `reversibility: reversible`, `scope: machine`; the sections are "Why I stopped", "What you need to do" and "Options" (the table header and the rows of the 3 fixed labels; no Recommendation or Diagram).
 
-`AskUserQuestion は 1 回に 1 問にしてください(今回は N 問)。GUI は 1 問ずつ、説明ファイルと一緒に表示します。最初の質問から順に、1 問ごとに説明ファイルを書いて AskUserQuestion を 1 問だけで出し直してください。文章で聞き直してはいけません。` 版 A / B の区別は無い。
+### Deny reason for several questions (step 0)
 
-## 8. SessionStart / SubagentStart の additionalContext
+`Ask one question per AskUserQuestion call (this call had N). The GUI shows one question at a time, with its explanation file. Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose.` There is no A / B distinction.
 
-どちらも sync で返す。5 行以内。`{置き場の絶対パス}` は 1 節で決まる `<scratchpad_dir>/ukagai/` または `~/.ukagai/explain/<session_id>/`。URL は書かない。列挙値を書く(E5 で、書かないと `reversibility` / `scope` が自由文になると分かった)。
+## 8. additionalContext of SessionStart / SubagentStart
+
+Both return synchronously. At most 5 lines. `{absolute location}` is the `<scratchpad_dir>/ukagai/` or `~/.ukagai/explain/<session_id>/` decided in section 1. No URL. The enumerated values are written (E5 found that without them `reversibility` / `scope` become free text). All of it is English.
+
+The hook reads `lang` with `readConfig(dataDir)` (`<data-dir>/config.json`; default `en`) and adds one sentence to line 2:
+
+- `en`: `Write the explanation file in English.`
+- `ja`: `Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese.`
 
 ```
-人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。
-聞くときは、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
-front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。推奨は 1 文目に推す選択肢と理由、最後の 1 文に「〜なら B」(目安 3 文、上限 5 文・400 文字)、表のセルは目安 2 文(上限 160 文字)。図は、戻しにくい(reversible 以外)か scope が machine / external で、選択肢の違いが構造や流れに出るときだけ Mermaid で描く。
-文章で質問せず、AskUserQuestion は最初から 1 問ずつ順に出し(まとめて出さない)、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
-認証・権限など人の作業で止まるときは、文章で終えず blocker 形式の説明を書いて AskUserQuestion(対応した / 飛ばして続ける / 中断)で聞く。人が対応したら同じ作業を再試行する。
+Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.
+When you do ask, write the explanation the human reads as Markdown in {absolute location}/ following skill ukagai-explain. {language sentence}
+front matter: question is the AskUserQuestion question verbatim, title is the decision for the human in one sentence, recommended is the label of the option you recommend, reversibility is reversible / costly / irreversible, scope is file / repo / machine / external. Body: "Why this decision is needed now", "Options" (table: first column is the label; columns for what happens if chosen and for risks and how to undo), "Recommendation" (reason, and the condition under which another option is right). Recommendation: first sentence names the option and why, last sentence is "if ..., B" (at most 5 sentences and 400 characters); table cells at most 160 characters. Draw a Mermaid diagram only when the decision is hard to undo (anything but reversible) or scope is machine / external, and the options differ in structure or flow.
+Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section. No explanation file is needed for AskUserQuestion in plan mode.
+When stopped by human work such as authentication or permissions, do not end in prose: write a blocker-format explanation and ask with AskUserQuestion (Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work.
 ```
 
-サブエージェント内では AskUserQuestion が提供されないため判断は発生しない(Claude Code 2.1.287 で確認)。SubagentStart の additionalContext は届くが、使われる場面はない。
+`AskUserQuestion` is not provided inside a subagent, so no decision arises there (confirmed with Claude Code 2.1.287). The additionalContext of SubagentStart arrives but is never used.
 
-### 8.1 SessionStart の自動起動(hook の挙動)
+### 8.1 SessionStart autostart (the hook's behavior)
 
-- SessionStart の hook は additionalContext を返す前に `GET /healthz`(300 ms)で server を確かめる。届かず、server URL が `127.0.0.1` / `localhost` なら `cli.js serve` を detached で起動し(log は `<data-dir>/serve.log`)、最大 2 秒 healthz を待つ。全体で 2.5 秒以内。
-- server に届いたとき、`<data-dir>/gui-opened` の日付(ローカル `YYYY-MM-DD`)が今日でなければ `open`(darwin)/ `xdg-open`(linux)で GUI を開き、今日の日付を書く。
-- `--no-autostart` なら何もしない(`install --no-autostart` で SessionStart の args に入る)。SubagentStart では何もしない。失敗は握りつぶす(フェイルオープン)。
+- Before returning additionalContext, the SessionStart hook checks the server with `GET /healthz` (300 ms). When it is unreachable and the server URL is `127.0.0.1` / `localhost`, it starts `cli.js serve` detached (log in `<data-dir>/serve.log`) and waits up to 2 seconds for healthz. At most 2.5 seconds overall.
+- When the server is reachable and the date (local `YYYY-MM-DD`) in `<data-dir>/gui-opened` is not today, it opens the GUI with `open` (darwin) / `xdg-open` (linux) and writes today's date.
+- With `--no-autostart` it does nothing (`install --no-autostart` puts it in the SessionStart args). SubagentStart does nothing. Failures are swallowed (fail open).
 
 ## 9. ExitPlanMode
 
-- 別ファイルは要求しない。`tool_input.plan`(計画本文)を検査する。
-- 検査: 3.1 の照合規則で「影響範囲と可逆性」(正規化後 `影響範囲可逆性`)に一致する見出しがあり、その節に空でない行が 1 行以上ある。見出しのレベルは問わない。無ければ `missing: ["impact"]`。
-- Mermaid は**推奨**で、要求しない。無ければ `has.mermaid: false` として (d) に数える。
-- 不備のときの deny は**同一セッション(`session_id`)で 1 回まで**。2 回目以降は deny せず登録する(`attached_via: none`、`none_reason: loop_guard`)。
-- 通ったときの `attached_via` は `first_call`(deny 済みなら `after_deny`)。`explanation.markdown` には計画本文を入れる。
-- plan mode 中でも要求する(ExitPlanMode は plan mode でしか呼ばれない)。6 節の免除は AskUserQuestion だけ。
-- deny 理由文は 7 節の版に準じ、`{missing}` を「「影響範囲と可逆性」の節」、`{path}` / `{question}` の行を省く。
+- No separate file is required. `tool_input.plan` (the plan body) is checked.
+- Check: by the matching rules of 3.1, there is a heading matching "Scope and reversibility" (影響範囲と可逆性), and the section has at least one non-empty line. The heading level does not matter. Otherwise `missing: ["impact"]`.
+- Mermaid is **recommended** and not required. Without it `has.mermaid: false` is counted in (d).
+- A deny for a defect happens **at most once per session (`session_id`)**. From the second time it does not deny and registers (`attached_via: none`, `none_reason: loop_guard`).
+- When it passes, `attached_via` is `first_call` (`after_deny` if denied before). `explanation.markdown` holds the plan body.
+- It is required even in plan mode (ExitPlanMode is only called in plan mode). The exemption of section 6 is for AskUserQuestion only.
+- The deny reason follows the variant of section 7, with `{missing}` = "the "Scope and reversibility" section" and the `{path}` / `{question}` lines omitted.
 
-## 10. Mermaid の扱い
+## 10. Handling of Mermaid
 
-hook は Mermaid の構文を検査しない(コードブロックの有無だけを見る)。GUI は描画に失敗したら、コードをそのまま表示してエラーを添える。
+The hook does not check Mermaid syntax (it only checks whether the code block exists). When rendering fails, the GUI shows the code as it is with an error attached.
 
-## 11. fixture
+## 11. Fixtures
 
-`test/explain-fixtures/` に 17。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表は `labels` を渡さない前提(データ行 2 以上、ラベル照合なし)で判定する。
+`test/explain-fixtures/` has 20. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
 
-| ファイル | valid | missing |
+The fixtures are written in English. The `question:` line keeps the original question text, because `expected.json` records it. Three Japanese variants (`*-ja.md`, with the same `expected.json` contents) exercise the Japanese aliases.
+
+| File | valid | missing |
 |---|---|---|
-| `pass-design.md` | true | なし |
-| `pass-naming.md` | true | なし |
-| `pass-destructive.md` | true | なし |
+| `pass-design.md` | true | none |
+| `pass-design-ja.md` | true | none (Japanese headings and columns) |
+| `pass-naming.md` | true | none |
+| `pass-destructive.md` | true | none |
 | `fail-no-table.md` | false | `table` |
+| `fail-no-table-ja.md` | false | `table` (Japanese) |
 | `fail-no-recommended.md` | false | `recommended` |
-| `fail-old-columns.md` | false | `table`(利点・欠点・コストの旧表) |
+| `fail-old-columns.md` | false | `table` (the old pros / cons / cost table) |
 | `fail-no-recommend-section.md` | false | `recommend` |
 | `fail-no-question.md` | false | `question` |
 | `fail-no-diagram-when-required.md` | false | `diagram` |
-| `plan-heading-variant.md` | true | なし |
-| `pass-blocker.md` | true | なし(`type: blocker`、`todo` にコードブロック、3 行の表、推奨節・図なし) |
+| `plan-heading-variant.md` | true | none |
+| `pass-blocker.md` | true | none (`type: blocker`, a code block in `todo`, a 3-row table, no Recommendation or Diagram) |
+| `pass-blocker-ja.md` | true | none (Japanese headings and fixed labels) |
 | `fail-blocker-no-todo.md` | false | `todo` |
-| `fail-bad-type.md` | false | `type`(`type: foo`) |
+| `fail-bad-type.md` | false | `type` (`type: foo`) |
 | `fail-no-recommend-cond.md` | false | `recommend_cond` |
 | `fail-cell-long.md` | false | `cell_long` |
 | `fail-recommend-long.md` | false | `recommend_long` |
 | `fail-why-long.md` | false | `why_long` |
 
-## 12. Stop hook の保険(文章で止まった blocker)
+## 12. Stop hook safeguard (a blocker stopped in prose)
 
-エージェントが blocker 形式を使わず、文章で「認証してください」と言って turn を終えたときの保険。
+A safeguard for when the agent does not use the blocker format and ends the turn in prose such as "please authenticate".
 
-- `Stop` は **sync**(`async: false`、timeout 5)。`SubagentStop` は async のまま。
-- 次のとき何も返さない: `stop_hook_active === true`(Claude Code は Stop hook で続行させた後の Stop に付ける。**続行は 1 回限り**でループしない)、`permission_mode === "plan"`、`--observe`、`last_assistant_message` が無い、ブロッカー語彙に一致しない。
-- `stop_hook_active` が false で `last_assistant_message` がブロッカー語彙に一致したら、stdout に `{"decision":"block","reason":"<理由文>"}` を返す。理由文(600 文字以内、URL なし。`src/hook/blocker.ts` の `BLOCKER_REASON`):
-  `人の作業(認証・権限など)が要るなら、文章で終えずに ukagai の blocker 形式で聞いてください: skill ukagai-explain の「人の作業で止まったとき」に従って説明ファイル(type: blocker、「なぜ止まったか」「人にしてほしいこと」「選択肢」)を書き、AskUserQuestion を選択肢「対応した。続けて (Recommended)」「この手順は飛ばして続けて」「ここで中断」で出してください。人の作業が要らないなら、そのまま終えて構いません。`
-- ブロッカー語彙(`src/hook/blocker.ts`、大小無視): 文を「。」「.」改行で区切り、**同じ文に「対象語」と「詰まり語」の両方**が含まれるときだけ一致にする。
-  - 対象語(`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵|login|sign[ -]?in|api[ _-]?key|APIキー|API キー|\bauth\b`
-  - 詰まり語(`BLOCKER_STUCK`): `ない|無い|なく|なければ|無く|無ければ|ありません|切れ|失敗|必要|してください|お願い|できません|進められません|進めません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked`
-  - 否定の否定(`BLOCKER_SAFE`): 「問題ありません」「問題なく」「支障ない」「エラーなく」に加え、「わけではありません / わけではない」「必要(は|も)?(ありません|ない|無い|なく)」「問題(は|も)?なかった」「要りません」「不要」も照合前に文から除く(「認証は問題ありません」「権限は必要ありません」を当たりにしない)
-  - 一致する例: 「gcloud の認証がないため進められません」「gcloud auth login をしてください」「APIキーが必要です」「Permission denied (403)」「トークンが期限切れです。再ログインしてください」。一致しない例: 「権限エラーになったわけではありません」「認証は不要です」「認証は有効です」「権限の実装を終えました」「どちらにしますか？」(片方だけ)。
-  - `escaped_question`(末尾が ？)の判定とは独立。
-- 観測 event(`POST /api/events`)は今までどおり送り、**実際に `decision: block` を返した Stop だけ** `blocker_detected: true` を足す(`stop_hook_active` / plan mode / `--observe` で block しなかった Stop には付けない)。POST は 1000 ms で打ち切り、hook 全体は 1.9 秒以内に返す。失敗しても何も出力しない(フェイルオープン)。
+- `Stop` is **sync** (`async: false`, timeout 5). `SubagentStop` stays async.
+- It returns nothing when: `stop_hook_active === true` (Claude Code sets it on the Stop after a Stop hook made it continue; **the continuation happens once** and does not loop), `permission_mode === "plan"`, `--observe`, `last_assistant_message` is absent, or the blocker vocabulary does not match.
+- When `stop_hook_active` is false and `last_assistant_message` matches the blocker vocabulary, it writes `{"decision":"block","reason":"<reason>"}` to stdout. The reason (at most 600 characters, no URL; `BLOCKER_REASON` in `src/hook/blocker.ts`):
+  `If human work (authentication, permissions, etc.) is needed, do not just end with prose; ask in ukagai's blocker format: following "When stopped by human work" in skill ukagai-explain, write an explanation file (type: blocker, with "Why I stopped", "What you need to do" and "Options") and call AskUserQuestion with the options "Done. Continue (Recommended)", "Skip this step and continue" and "Stop here". If no human work is needed, you may simply end.`
+- Blocker vocabulary (`src/hook/blocker.ts`, case-insensitive; **intentionally bilingual**, English and Japanese): split the text into sentences on 「。」 「.」 and newlines, and match only when **the same sentence contains both a "target word" and a "stuck word"**.
+  - Target words (`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵|login|sign[ -]?in|api[ _-]?key|APIキー|API キー|\bauth\b`
+  - Stuck words (`BLOCKER_STUCK`): `ない|無い|なく|なければ|無く|無ければ|ありません|切れ|失敗|必要|してください|お願い|できません|進められません|進めません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked`
+  - Double negatives (`BLOCKER_SAFE`): besides 「問題ありません」 「問題なく」 「支障ない」 「エラーなく」, also 「わけではありません / わけではない」 「必要(は|も)?(ありません|ない|無い|なく)」 「問題(は|も)?なかった」 「要りません」 「不要」 are removed from the sentence before matching (so that 「認証は問題ありません」 and 「権限は必要ありません」 are not hits).
+  - Matching examples: `gcloud の認証がないため進められません`, `gcloud auth login をしてください`, `APIキーが必要です`, `Permission denied (403)`, `I could not log in: the token has expired`. Non-matching examples: `権限エラーになったわけではありません`, `認証は不要です`, `認証は有効です`, `Login works and all tests passed`, `Which one?` (only one kind of word).
+  - Independent of the `escaped_question` check (the end is ？).
+- The observed event (`POST /api/events`) is still sent as before, and `blocker_detected: true` is added **only to a Stop that actually returned `decision: block`** (not to a Stop that did not block because of `stop_hook_active` / plan mode / `--observe`). The POST is cut at 1000 ms and the whole hook returns within 1.9 seconds. Even on failure it prints nothing (fail open).
 
-## 既知の制約
+## 13. Alias table (English name ↔ Japanese alias)
 
-- deny の `missing`(コード列)は `denied_explain` の Decision に残る(`missing?: string[]`)。多問 deny は `["multi"]`。
-- plan mode の多問は deny せず、従来どおり生の質問文・選択肢で GUI に出る。
-- `question` が複数行の質問文は front matter の 1 行スカラーで完全一致できず、recency に頼る。
-- recency は別の質問向けのファイルも拾いうる(10 分以内にちょうど 1 つあれば `match: recency` で添付される)。
-- 見出し照合は完全一致を優先するが、完全一致が無いと部分一致になる。「図」は部分一致なので、先に出る「図解」などの見出しに当たり、本来の「図」の節を隠しうる。
-- ExitPlanMode の `after_deny` には時間窓が無く(同一セッションの denied_explain があれば成立)、server の `first_denied_at`(120 秒窓)とずれうる。
+English is canonical and preferred; the Japanese alias is accepted anywhere the English is. They can be mixed in one file. The constants are exported from `src/hook/explain.ts` (the GUI keeps the same content as constants in `public/app.js`).
+
+| Kind | English (canonical) | Japanese alias |
+|---|---|---|
+| Section | Why this decision is needed now | なぜ今この判断が要るか |
+| Section | Options | 選択肢 |
+| Section | Recommendation | 推奨 |
+| Section | Diagram | 図 |
+| Section | What I checked | 確かめたこと |
+| Section | Related diff | 関係する差分 |
+| Section (blocker) | Why I stopped | なぜ止まったか |
+| Section (blocker) | What you need to do | 人にしてほしいこと |
+| Section (plan) | Scope and reversibility | 影響範囲と可逆性 |
+| Table column | `/happens\|outcome/i`, e.g. "What happens if chosen" | 起きること, e.g. 「選ぶと起きること」 |
+| Table column | `/risk/i`, e.g. "Risks and how to undo" | リスク, e.g. 「リスクと戻し方」 |
+| Blocker label | Done. Continue | 対応した。続けて |
+| Blocker label | Skip this step and continue | この手順は飛ばして続けて |
+| Blocker label | Stop here | ここで中断 |
+| Label suffix | `(Recommended)` | `(推奨)` |
+| Recommendation condition | if / when / unless / otherwise / in case | なら / 場合 / とき / であれば / 際は / 際に |
+
+GUI and TUI show the section headings as written in the file (they are not translated). Only the UI's own text follows the display language.
+
+## Known limitations
+
+- The `missing` codes of a deny remain in the `denied_explain` Decision (`missing?: string[]`). A multi-question deny is `["multi"]`.
+- A multi-question call in plan mode is not denied; as before it appears in the GUI with the raw question text and options.
+- A `question` that spans several lines cannot match exactly as a one-line front matter scalar, so it relies on recency.
+- Recency can also pick up a file meant for another question (when exactly one exists within 10 minutes it is attached with `match: recency`).
+- Heading matching prefers an exact match, but without one it becomes a partial match. "Diagram" is a partial match, so it can hit an earlier heading such as "Diagram notes" and hide the real "Diagram" section.
+- The `after_deny` of ExitPlanMode has no time window (it holds whenever the session has a denied_explain) and can drift from the server's `first_denied_at` (120-second window).

@@ -26,7 +26,7 @@ import { join } from "node:path";
 
 type Out = Record<string, unknown>;
 
-/** シグナル受信後に cancel を待つ上限 */
+/** Upper bound for waiting on cancel after a signal */
 const CANCEL_TIMEOUT_MS = 300;
 
 const NO_HAS = { mermaid: false, table: false, diff: false };
@@ -47,7 +47,7 @@ function allow(updatedInput: Record<string, unknown>): Out {
   };
 }
 
-/** 説明なしの印。path / markdown は空、match は固定値(docs/spec/api.md 参照) */
+/** Marker for "no explanation": path / markdown are empty, match is a fixed value (see docs/spec/api.md) */
 function noExplanation(none_reason: "plan_mode" | "loop_guard"): Explanation {
   return { path: "", markdown: "", has: NO_HAS, match: "question", attached_via: "none", none_reason };
 }
@@ -73,11 +73,11 @@ export function buildOutput(
     return allow({ ...toolInput, answers: response.answers });
   }
   if (response.approve === true) return allow(toolInput);
-  if (response.approve === false) return deny(response.reason ?? "却下されました。");
+  if (response.approve === false) return deny(response.reason ?? "Rejected.");
   return null;
 }
 
-/** PreToolUse × AskUserQuestion / ExitPlanMode。stdout に書く JSON、無出力なら null。例外は呼び元が握る */
+/** PreToolUse × AskUserQuestion / ExitPlanMode. Returns the JSON for stdout, or null for no output. The caller swallows exceptions */
 export async function handleDecision(
   input: PreToolUseInput,
   opts: HookOptions,
@@ -108,7 +108,7 @@ export async function handleDecision(
       explanation = noExplanation("plan_mode");
     } else {
       const dir = explainDir(input.scratchpad_dir, opts.dataDir, input.session_id);
-      // 1 判断 = 1 問 = 1 説明。多問は説明の探索より前に deny する(質問文は見ず session + agent で数える)
+      // One decision = one question = one explanation. Multiple questions are denied before looking for an explanation (counted per session + agent, ignoring the question text)
       let multiGuarded = false;
       if (parsed.data.questions.length > 1) {
         const prior = await client.listDeniedExplain(input.session_id);
@@ -131,7 +131,7 @@ export async function handleDecision(
       const found = await findExplanation(dir, q0.question);
       const v = found ? validateExplanation(found.markdown, "answer_question", q0.options.map((o) => o.label)) : null;
       const denied = await client.listDeniedExplain(input.session_id);
-      if (!denied) return null; // server 不在: 保険は効かせず通常 UI へ
+      if (!denied) return null; // server absent: skip the safeguard and fall back to the normal UI
       const now = Date.now();
       const linked = denied
         .filter(
@@ -211,11 +211,11 @@ export async function handleDecision(
     try {
       await markUsed(usedPath);
     } catch {
-      // rename 失敗は判断に影響しない
+      // a failed rename does not affect the decision
     }
   }
 
-  // Esc / ctrl+c で来る終了シグナル: server に cancel を 1 回だけ伝え、何も出力せず終わる
+  // Termination signal from Esc / ctrl+c: tell the server to cancel once, print nothing, and exit
   const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
   let cancelling = false;
   const onSignal = () => {
@@ -225,7 +225,7 @@ export async function handleDecision(
   };
   for (const s of signals) process.on(s, onSignal);
   try {
-    // long-poll。残りが poll timeout + 5 秒を切ったら自分で降りる
+    // Long-poll. Step down on our own when less than the poll timeout + 5 seconds remain
     const marginSec = opts.pollTimeoutMs / 1000 + 5;
     for (;;) {
       const remainingSec = opts.budgetSec - (Date.now() - startedAt) / 1000;

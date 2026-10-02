@@ -1,21 +1,21 @@
 ---
 ukagai: 1
 question: テストの実行は node:test と vitest のどちらにしますか？
-title: テストランナーを node:test と vitest のどちらにするか
+title: Choose node:test or vitest as the test runner
 reversibility: reversible
 scope: file
 recommended: node:test
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-W3 のテストを書き始める前に、ランナーを決めます。CLAUDE.md は `node:test` + `tsx` と定めています。
+Decide the runner before starting to write W3's tests. CLAUDE.md specifies `node:test` + `tsx`.
 
-## 選択肢
+## Options
 
-- node:test: 依存が増えない。モックの機能は少ない。
-- vitest: 機能は多い。依存が増え、CLAUDE.md の方針から外れる。
+- node:test: No new dependency. Fewer mocking features.
+- vitest: More features. Adds a dependency and departs from the CLAUDE.md policy.
 
-## 推奨
+## Recommendation
 
-node:test を推します。CLAUDE.md の方針どおりで、依存が増えません。テストを並列に走らせたいなら vitest が正しくなります。
+I recommend node:test. It follows the CLAUDE.md policy and adds no dependency. vitest becomes the right choice if you want to run tests in parallel.

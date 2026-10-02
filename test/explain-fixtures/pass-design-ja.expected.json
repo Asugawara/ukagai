@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": true,
+    "table": true,
+    "diff": false
+  },
+  "question": "GUI への更新通知は SSE と WebSocket のどちらにしますか？"
+}

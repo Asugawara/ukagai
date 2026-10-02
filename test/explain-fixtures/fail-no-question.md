@@ -1,31 +1,31 @@
 ---
 ukagai: 1
-title: hook の設定ファイルの置き場をユーザー設定とプロジェクト設定のどちらにするか
+title: Put the hook settings in user settings or project settings
 reversibility: costly
 scope: repo
-recommended: ユーザー設定
+recommended: User settings
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-`ukagai install` が書く先を決める必要があります。既定の置き場で、利用者が自分のセッションに hook をかけるかどうかが変わります。
+We must decide where `ukagai install` writes. The default location decides whether users put the hook on their own sessions.
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| ユーザー設定 | `~/.claude/settings.json` に書き、全プロジェクトで効く。 | 全セッションに hook がかかる。`ukagai uninstall` で戻せる。 |
-| プロジェクト設定 | `.claude/settings.json` に書き、そのリポジトリに閉じる。 | プロジェクトごとに install が要る。ファイルを消せば戻せる。 |
+| User settings | Writes to `~/.claude/settings.json` and applies to all projects. | The hook applies to every session. Undo with `ukagai uninstall`. |
+| Project settings | Writes to `.claude/settings.json` and stays within that repository. | Install is needed per project. Undo by deleting the file. |
 
-## 推奨
+## Recommendation
 
-ユーザー設定を推します。1 回の install で全プロジェクトに効きます。影響を 1 リポジトリに閉じたいならプロジェクト設定が正しくなります。
+I recommend user settings. One install covers all projects. Project settings become the right choice if you want to confine the impact to one repository.
 
-## 図
+## Diagram
 
 ```mermaid
 flowchart LR
-  I[ukagai install] -->|既定| U[~/.claude/settings.json]
+  I[ukagai install] -->|default| U[~/.claude/settings.json]
   I -->|--project| P[.claude/settings.json]
-  I -->|--settings| F[任意のファイル]
+  I -->|--settings| F[any file]
 ```

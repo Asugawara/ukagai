@@ -42,7 +42,7 @@ async function healthy(server: string, deps: AutostartDeps): Promise<boolean> {
   }
 }
 
-/** SessionStart: server を起こし、その日最初なら GUI を開く。例外は投げない */
+/** SessionStart: start the server and open the GUI on the first session of the day. Never throws */
 export async function autostart(opts: HookOptions, deps: AutostartDeps = defaultDeps): Promise<void> {
   if (opts.noAutostart) return;
   try {
@@ -70,7 +70,7 @@ export async function autostart(opts: HookOptions, deps: AutostartDeps = default
     try {
       last = readFileSync(marker, "utf8").trim();
     } catch {
-      // 無ければ初回
+      // no marker: first time
     }
     if (last === today) return;
     const opener = deps.platform === "darwin" ? "open" : deps.platform === "linux" ? "xdg-open" : undefined;
@@ -79,6 +79,6 @@ export async function autostart(opts: HookOptions, deps: AutostartDeps = default
     writeFileSync(marker, today + "\n");
     deps.spawn(opener, [`${opts.server}/`], { detached: true, stdio: "ignore" }).unref();
   } catch {
-    // フェイルオープン
+    // fail open
   }
 }

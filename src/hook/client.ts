@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { WaitResponse, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
 
 const SHORT_TIMEOUT_MS = 1000;
-/** server の文脈収集が最大 1.5 秒かかるので登録だけ長め */
+/** Registration gets a longer timeout because the server's context collection takes up to 1.5 seconds */
 const CREATE_TIMEOUT_MS = 3000;
 
 export type WaitResult =
@@ -30,7 +30,7 @@ export class Client {
     return this.token;
   }
 
-  /** token が無い・接続不可・timeout は null(接続不可扱い) */
+  /** A missing token, no connection or a timeout yields null (treated as unreachable) */
   private async request(
     method: string,
     path: string,
@@ -63,7 +63,7 @@ export class Client {
     }
   }
 
-  /** 登録。成功で Decision(最低限 id を持つもの)、それ以外は null */
+  /** Register. Returns the Decision (at least with an id) on success, otherwise null */
   async createDecision(
     body: CreateDecisionRequest,
   ): Promise<Pick<Decision, "id"> | null> {
@@ -73,7 +73,7 @@ export class Client {
     return j && typeof j.id === "string" ? { id: j.id } : null;
   }
 
-  /** denied_explain の一覧(session_id で絞る)。接続不可は null */
+  /** List of denied_explain decisions (filtered by session_id). null when unreachable */
   async listDeniedExplain(sessionId: string): Promise<Decision[] | null> {
     const q = new URLSearchParams({ status: "denied_explain" });
     const r = await this.request("GET", `/api/decisions?${q}`, undefined, SHORT_TIMEOUT_MS);
@@ -122,7 +122,7 @@ export class Client {
     return r !== null && r.status >= 200 && r.status < 300;
   }
 
-  /** 200 で本文 `{pending: boolean}`。それ以外は false */
+  /** On 200 the body is `{pending: boolean}`. Anything else is false */
   async getPendingModeSwitch(sessionId: string): Promise<boolean> {
     const r = await this.request(
       "GET",

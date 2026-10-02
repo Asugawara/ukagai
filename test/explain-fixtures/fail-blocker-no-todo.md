@@ -2,24 +2,24 @@
 ukagai: 1
 question: gcloud の認証が切れています。対応できましたか？
 type: blocker
-title: gcloud の認証が切れているので `gcloud auth login` をしてほしい
-recommended: 対応した。続けて
+title: gcloud authentication has expired; please run `gcloud auth login`
+recommended: Done. Continue
 reversibility: reversible
 scope: machine
 ---
 
-## なぜ止まったか
+## Why I stopped
 
-`gcloud run deploy` が認証エラーで失敗しました。
+`gcloud run deploy` failed with an authentication error.
 
 ```
 ERROR: (gcloud.run.deploy) You do not currently have an active account selected.
 ```
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| 対応した。続けて | 同じデプロイを再試行して続ける。 | 認証が通っていなければ、また止まる。 |
-| この手順は飛ばして続けて | デプロイを飛ばして進める。 | あとで手動でデプロイすれば戻せる。 |
-| ここで中断 | 作業をここで止める。 | 再開すれば続けられる。 |
+| Done. Continue | Retry the same deploy and carry on. | If authentication did not succeed, it stops again. |
+| Skip this step and continue | Skip the deploy and proceed. | Undo by deploying manually later. |
+| Stop here | Stop the work here. | Resume to continue. |

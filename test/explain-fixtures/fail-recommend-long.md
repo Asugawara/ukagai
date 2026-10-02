@@ -1,37 +1,37 @@
 ---
 ukagai: 1
 question: GUI への更新通知は SSE と WebSocket のどちらにしますか？
-title: GUI の更新通知を SSE と WebSocket のどちらにするか
+title: Choose SSE or WebSocket for GUI update notifications
 reversibility: costly
 scope: repo
 recommended: SSE
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-W3 の server が `/api/stream` を実装する前に、通知の方式を決める必要があります。方式によって server の配信コードと `public/` の受信コードの両方が変わり、後から替えると両方を直すことになります。通知の要件(GUI を誰が何秒で更新したいか)は私からは分からず、双方向の操作を将来足す予定があるかどうかは人にしか決められません。
+W3's server must settle the notification mechanism before it implements `/api/stream`. The choice changes both the server's delivery code and the receiving code in `public/`, so switching later means rewriting both. I cannot tell the notification requirements (who wants the GUI updated, and within how many seconds), and only a human can say whether two-way operations are planned.
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| SSE | server から GUI への一方向配信になる。`EventSource` が自動再接続し、Hono で数十行で書ける。 | 双方向にしたくなったら WebSocket へ替える。配信と受信の両方を書き直す(約 1 日)。 |
-| WebSocket | 双方向にできる。再接続と ping を自前で書く。 | 依存が増え、実装が約 1.5 日かかる。替えるときは配信と受信の両方を直す。 |
+| SSE | One-way delivery from the server to the GUI. `EventSource` reconnects automatically, and Hono needs only a few dozen lines. | If two-way becomes necessary, switch to WebSocket. Both delivery and receiving must be rewritten (about 1 day). |
+| WebSocket | Two-way is possible. Reconnection and ping must be written by hand. | Adds a dependency and takes about 1.5 days. Switching later means fixing both delivery and receiving. |
 
-## 推奨
+## Recommendation
 
-SSE を推します。通知は一方向で足ります。再接続は標準で任せられます。実装が小さく済みます。依存も増えません。テストも書きやすいです。運用も楽です。WebSocket は双方向が要るときに選びます。
+I recommend SSE. One-way delivery is enough. Reconnection is handled by the standard. The implementation stays small. No dependency is added. Tests are easy to write. Operation is easy. Choose WebSocket when two-way is needed.
 
-## 図
+## Diagram
 
 ```mermaid
 flowchart LR
   H[hook] -->|POST /api/decisions| S[serve]
-  S -->|SSE: decision.created| B[ブラウザ]
+  S -->|SSE: decision.created| B[browser]
   B -->|POST /answer| S
-  S -->|wait の 200| H
+  S -->|200 for wait| H
 ```
 
-## 確かめたこと
+## What I checked
 
-- `src/server/` に WebSocket の依存は無い(`package.json` を確認)。
+- `src/server/` has no WebSocket dependency (checked `package.json`).

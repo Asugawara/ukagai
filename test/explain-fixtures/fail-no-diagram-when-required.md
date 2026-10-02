@@ -1,23 +1,23 @@
 ---
 ukagai: 1
 question: 検証用の hook ログは ~/.ukagai/log に置いてよいですか？
-title: 検証用の hook ログを ~/.ukagai/log に置くか、リポジトリ内に置くか
+title: Put the verification hook log in ~/.ukagai/log or inside the repository
 reversibility: reversible
 scope: machine
 recommended: ~/.ukagai/log
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-`hook --observe` が時刻を書き出す先が要ります。`~/.ukagai/` はリポジトリの外にあるので、この機械のファイルシステムを変更することになります。リポジトリ外に書いてよいかは人が決めることです。
+`hook --observe` needs a place to write timestamps. `~/.ukagai/` is outside the repository, so this changes the filesystem of this machine. Whether to write outside the repository is for a human to decide.
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| `~/.ukagai/log` | 他の状態と同じ場所にまとまる。 | リポジトリから見えない。ディレクトリを消せば戻せる。 |
-| `verification/log` | リポジトリ内で見える。 | 誤って commit しうる。`.gitignore` の追記が要る。 |
+| `~/.ukagai/log` | Gathered in the same place as the other state. | Not visible from the repository. Undo by deleting the directory. |
+| `verification/log` | Visible inside the repository. | Might be committed by mistake. Needs an entry in `.gitignore`. |
 
-## 推奨
+## Recommendation
 
-`~/.ukagai/log` を推します。他の状態と同じ場所にまとまり、誤 commit の心配がありません。ログを PR に添えたいなら `verification/log` が正しくなります。
+I recommend `~/.ukagai/log`. It is gathered with the other state, and there is no risk of an accidental commit. `verification/log` becomes the right choice if you want to attach the log to a PR.

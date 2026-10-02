@@ -1,22 +1,22 @@
-# 説明ファイルの検査を src/hook/explain.ts に実装する計画
+# Plan: implement the explanation file validation in src/hook/explain.ts
 
-## 目的
+## Goal
 
-`docs/spec/explain.md` の規則を、hook の検査として実装する。
+Implement the rules of `docs/spec/explain.md` as hook validation.
 
-## 手順
+## Steps
 
-1. front matter と見出しのパーサを書く。
-2. 4 節の `missing` コードを順に評価する。
-3. `test/explain-fixtures/` の 7 つが期待どおり判定されることをテストにする。
+1. Write the parsers for front matter and headings.
+2. Evaluate the `missing` codes of section 4 in order.
+3. Write tests that check the fixtures in `test/explain-fixtures/` are judged as expected.
 
-## 影響範囲・可逆性
+## Scope and reversibility of the change
 
-変更するのは `src/hook/explain.ts` と `test/hook/explain.test.ts` の 2 ファイルだけで、新しい依存は足さない。git の revert で元に戻せる。
+Only two files change, `src/hook/explain.ts` and `test/hook/explain.test.ts`, and no new dependency is added. A git revert restores the original.
 
-## 構成
+## Structure
 
 ```mermaid
 flowchart LR
-  I[stdin] --> P[parse] --> C[check] --> O[deny / 登録]
+  I[stdin] --> P[parse] --> C[check] --> O[deny / register]
 ```
