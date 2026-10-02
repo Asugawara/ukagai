@@ -62,6 +62,8 @@ export class App {
   private input: { kind: "free" | "reason"; text: string } | null = null;
   private listIndex = 0;
   private lastG = 0;
+  /** 長い推奨を全文で出している判断 */
+  private recFull = new Set<string>();
   private toast: { text: string; until: number } | null = null;
   private sending = new Set<string>();
   private sent = new Set<string>();
@@ -172,6 +174,7 @@ export class App {
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
       list,
       copy: this.copySupported,
+      recFull: this.shownId !== null && this.recFull.has(this.shownId),
       scroll: this.scroll,
       rscroll: this.rscroll,
       focus: this.focus,
@@ -283,6 +286,11 @@ export class App {
       case "copy": {
         const text = m.todoCode[0];
         return text ? [{ type: "copy", text }] : [];
+      }
+      case "rec": {
+        if (this.recFull.has(m.id)) this.recFull.delete(m.id);
+        else this.recFull.add(m.id);
+        return [];
       }
       case "submit": return this.submit(m, dr, now);
       case "approve": return this.send(m, { approve: true, set_mode_auto: false }, now);

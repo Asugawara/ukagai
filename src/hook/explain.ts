@@ -19,6 +19,9 @@ export type MissingCode =
   | "table"
   | "todo"
   | "recommend"
+  | "recommend_long"
+  | "cell_long"
+  | "why_long"
   | "diagram"
   | "impact"
   | "multi";
@@ -51,6 +54,9 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   table: "選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行)",
   todo: "「人にしてほしいこと」の節(コマンドのコードブロック付き)",
   recommend: "「推奨」の節",
+  recommend_long: "「推奨」の節が長い(3 文・400 文字以内)",
+  cell_long: "選択肢の表のセルが長い(各セル 2 文・160 文字以内)",
+  why_long: "「なぜ今この判断が要るか」の節が長い(600 文字以内。詳細は「確かめたこと」へ)",
   diagram: "「図」の節と Mermaid の図",
   impact: "「影響範囲と可逆性」の節",
   multi: "質問は 1 回に 1 問",
@@ -226,6 +232,37 @@ function tableOk(t: Table, labels: string[] | undefined): boolean {
   return true;
 }
 
+/** 長さの上限(spec 3.2)。文字数は NFKC 後の code point 数 */
+export const LIMITS = { recommendChars: 400, recommendSentences: 5, cellChars: 160, whyChars: 600 };
+
+function cpLength(s: string): number {
+  return [...s.normalize("NFKC")].length;
+}
+
+/** 節の本文(見出し・コードブロック・空行を除く) */
+function sectionText(lines: string[], inFence: boolean[], s: Section): string {
+  return lines
+    .slice(s.start + 1, s.end)
+    .filter((l, i) => !inFence[s.start + 1 + i] && l.trim() !== "")
+    .map((l) => l.trim())
+    .join("\n");
+}
+
+/** 文の数。`。` `!` `?` と、直後が空白か末尾の `.` で区切る(`file.ts` や `0.5` は区切らない) */
+function countSentences(text: string): number {
+  return text
+    .normalize("NFKC")
+    .split(/[。!?]+|\.(?=\s|$)/u)
+    .filter((x) => x.trim() !== "").length;
+}
+
+/** 「起きること」「リスク」列のセルのいずれかが上限を超える */
+function tableCellsLong(t: Table): boolean {
+  const norm = t.header.map(normalizeHeading);
+  const cols = ["起きること", "リスク"].map((k) => norm.findIndex((h) => h.includes(normalizeHeading(k))));
+  return t.rows.some((r) => cols.some((c) => cpLength(r[c] ?? "") > LIMITS.cellChars));
+}
+
 function hasContent(lines: string[], s: Section): boolean {
   return lines.slice(s.start + 1, s.end).some((l) => l.trim() !== "");
 }
@@ -273,12 +310,15 @@ export function validateExplanation(
   const blocker = f["type"] === "blocker";
   const why = findSection(headings, lines.length, blocker ? "なぜ止まったか" : "なぜ今この判断が要るか");
   if (!why || !hasContent(lines, why)) missing.push("why");
+  else if (cpLength(sectionText(lines, inFence, why)) > LIMITS.whyChars) missing.push("why_long");
 
   const options = findSection(headings, lines.length, "選択肢");
   if (!options) missing.push("options");
   else {
     const tables = findTables(lines, inFence, options.start + 1, options.end);
-    if (!tables.some((t) => tableOk(t, labels))) missing.push("table");
+    const okTables = tables.filter((t) => tableOk(t, labels));
+    if (okTables.length === 0) missing.push("table");
+    else if (okTables.some((t) => tableCellsLong(t))) missing.push("cell_long");
   }
 
   if (blocker) {
@@ -289,6 +329,12 @@ export function validateExplanation(
   } else {
     const recommend = findSection(headings, lines.length, "推奨");
     if (!recommend || !hasContent(lines, recommend)) missing.push("recommend");
+    else {
+      const text = sectionText(lines, inFence, recommend);
+      if (cpLength(text) > LIMITS.recommendChars || countSentences(text) > LIMITS.recommendSentences) {
+        missing.push("recommend_long");
+      }
+    }
   }
 
   const scope = f["scope"] ?? "";

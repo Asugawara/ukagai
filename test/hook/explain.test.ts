@@ -17,8 +17,8 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("fixture が 13 ある", () => {
-  assert.equal(mdFiles.length, 13);
+test("fixture が 16 ある", () => {
+  assert.equal(mdFiles.length, 16);
 });
 
 for (const f of mdFiles) {
@@ -201,4 +201,20 @@ test("blocker のラベルが揃わないと table 不備、todo のコードブ
 test("type が decision なら todo は要らず、従来どおり recommend が要る", () => {
   assert.equal(validateExplanation(GOOD.replace("ukagai: 1", "ukagai: 1\ntype: decision")).valid, true);
   assert.deepEqual(validateExplanation(BLOCKER.replace("type: blocker", "type: decision")).missing, ["why", "recommend", "diagram"]);
+});
+
+test("長さの上限: 推奨は 400 文字 / 5 文、セルは 160 文字、なぜは 600 文字。全角半角は同じ 1 文字", () => {
+  const rec = (body: string) => GOOD.replace("A を推す。C なら B。", body);
+  assert.equal(validateExplanation(rec("あ".repeat(400))).valid, true);
+  assert.deepEqual(validateExplanation(rec("あ".repeat(401))).missing, ["recommend_long"]);
+  assert.deepEqual(validateExplanation(rec("Ａ".repeat(401))).missing, ["recommend_long"]);
+  assert.equal(validateExplanation(rec("一。二。三。四。五。")).valid, true);
+  assert.deepEqual(validateExplanation(rec("一。二。三。四。五。六。")).missing, ["recommend_long"]);
+  assert.equal(validateExplanation(rec("file.ts と 0.5 を使う。")).valid, true);
+  assert.equal(validateExplanation(rec("```\n" + "あ".repeat(500) + "\n```\nA を推す。")).valid, true);
+  assert.deepEqual(validateExplanation(GOOD.replace("| A | a | b |", `| A | ${"あ".repeat(161)} | b |`)).missing, ["cell_long"]);
+  assert.deepEqual(validateExplanation(GOOD.replace("| A | a | b |", `| A | a | ${"あ".repeat(161)} |`)).missing, ["cell_long"]);
+  assert.equal(validateExplanation(GOOD.replace("| A | a | b |", `| A | ${"あ".repeat(160)} | b |`)).valid, true);
+  assert.deepEqual(validateExplanation(GOOD.replace("理由\n", "あ".repeat(601) + "\n")).missing, ["why_long"]);
+  assert.equal(validateExplanation(GOOD.replace("理由\n", "あ".repeat(600) + "\n")).valid, true);
 });

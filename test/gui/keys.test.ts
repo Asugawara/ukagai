@@ -78,13 +78,14 @@ async function api(path: string, body?: unknown) {
 }
 
 type Opt = { label: string; description?: string };
-type Seed = { title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean };
+type Seed = { title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string };
 
 /** 判断を投入する。既定は v2 の説明付きの単一選択(A / B(Recommended) / C) */
 async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }> {
   const n = ++seq;
   const title = s.title ?? `キー操作の確認 ${n}`;
-  const question = `テスト用の質問 ${n}: A と B と C のどれにしますか？`;
+  const fmQuestion = s.markdown ? /^question: (.+)$/m.exec(s.markdown)![1]! : undefined;
+  const question = fmQuestion ?? `テスト用の質問 ${n}: A と B と C のどれにしますか？`;
   const options = s.options ?? [{ label: "A", description: "A の説明" }, { label: "B (Recommended)", description: "B の説明" }, { label: "C", description: "C の説明" }];
   const explain = s.explain ?? true;
   const body: Record<string, unknown> = {
@@ -96,7 +97,7 @@ async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }
   if (explain) {
     body.explanation = {
       path: "", title, question, reversibility: "reversible", scope: "file",
-      markdown: SEED_MD.replace("__QUESTION__", question).replace("__TITLE__", title),
+      markdown: s.markdown ?? SEED_MD.replace("__QUESTION__", question).replace("__TITLE__", title),
       has: { mermaid: false, table: true, diff: false }, match: "question", attached_via: "first_call",
     };
   }
@@ -431,4 +432,36 @@ gui("blocker: 橙の帯と「人にしてほしいこと」が右列にあり、
   press("Enter");
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(Object.values(d.response.answers)[0], "対応した。続けて (Recommended)");
+});
+
+gui("長い推奨は 6 行で折りたたまれ、選択肢カードと送信ボタンは画面内。`.` で全文が見える", async () => {
+  const sentence = "この説明は長い推奨を再現するための一文で、折りたたみの確認に使います。";
+  const markdown = SEED_MD.replace("B を推します。理由は確認用だからです。", sentence.repeat(10) + "末尾の一文です。");
+  await seedQuestion({ markdown });
+  ab("set", "viewport", "1440", "900");
+  await reopen();
+  const rect = (sel: string) => ev<{ top: number; bottom: number }>(`JSON.stringify((r => ({ top: r.top, bottom: r.bottom }))(document.querySelector("${sel}").getBoundingClientRect()))`);
+  const vh = ev<number>(`window.innerHeight`);
+  const inView = (sel: string) => { const r = rect(sel); return r.top >= 0 && r.bottom <= vh; };
+  assert.equal(inView("#decision .opt:last-of-type"), true);
+  assert.equal(inView("#submit"), true);
+  assert.equal(ev<boolean>(`document.querySelector("#decision .rec-body").scrollHeight > document.querySelector("#decision .rec-body").clientHeight + 1`), true); // 折りたたまれている
+  assert.equal(ev<string>(`document.querySelector("#decision .rec .more-chip").textContent`), "全文 .");
+  press(".");
+  assert.equal(ev<boolean>(`document.querySelector("#decision .rec-body").scrollHeight <= document.querySelector("#decision .rec-body").clientHeight + 1`), true); // 全文が見える
+  assert.equal(ev<boolean>(`document.querySelector("#decision .rec-body").textContent.includes("末尾の一文です。")`), true);
+  const r = rect("#decision .rec-body");
+  assert.ok(r.bottom - r.top > 6 * 1.6 * 13, "展開で 6 行より高くなる");
+  press(".");
+  assert.equal(ev<boolean>(`document.querySelector("#decision .rec-body").scrollHeight > document.querySelector("#decision .rec-body").clientHeight + 1`), true); // もう一度 . で折りたたむ
+});
+
+gui("hook の上限内の説明(pass-design.md)ではクランプが発動せず、右列が 900px に収まる", async () => {
+  const markdown = readFileSync(new URL("../explain-fixtures/pass-design.md", import.meta.url), "utf8");
+  await seedQuestion({ markdown, options: [{ label: "SSE (Recommended)", description: "SSE" }, { label: "WebSocket", description: "WS" }] });
+  ab("set", "viewport", "1440", "900");
+  await reopen();
+  assert.equal(ev<number>(`document.querySelectorAll("#decision .more-chip").length`), 0);
+  assert.equal(ev<boolean>(`document.getElementById("decision").scrollHeight <= document.getElementById("decision").clientHeight`), true);
+  assert.equal(ev<boolean>(`document.getElementById("decision").clientHeight <= 900`), true);
 });

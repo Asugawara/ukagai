@@ -269,8 +269,29 @@ async function copyCode(pre) {
   }
 }
 
+// 長い推奨・カード本文の折りたたみ(CSS で 6 行 / 3 行)。折りたたみで溢れる要素にだけ「全文 .」のチップを付ける。
+// 展開状態は判断ごとの draft に持ち、`.` かチップのクリックで全体を切り替える
+function toggleExpand(dr) {
+  dr.expanded = !dr.expanded;
+  const root = $("decision");
+  root.classList.toggle("expanded", dr.expanded);
+  for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = dr.expanded ? "折りたたむ " : "全文 ";
+}
+function markClamps(root, dr) {
+  root.classList.remove("expanded");
+  for (const c of root.querySelectorAll(".clampable")) {
+    if (c.scrollHeight <= c.clientHeight + 1) continue;
+    const host = c.parentElement;
+    host.classList.add("has-more");
+    if (host.querySelector(".more-chip")) continue;
+    host.append(el("button", { class: "more-chip", type: "button", tabindex: "-1", onclick: () => toggleExpand(dr) }, el("span", { text: "全文 " }), kbd(".")));
+  }
+  if (dr.expanded) { root.classList.add("expanded"); for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = "折りたたむ "; }
+}
+
 function renderRight(d) {
   const root = $("decision");
+  root.classList.remove("expanded");
   if (!drawerOpen()) document.activeElement?.blur?.(); // フォーカスを body に戻し、キーを document で受ける
   root.replaceChildren();
   ui = null;
@@ -296,7 +317,7 @@ function renderRight(d) {
           isBlocker(d) ? el("div", { class: "blocker-band", text: "人の作業待ち" }) : null,
           el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)));
         if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: "人にしてほしいこと" }), v2.todoBox));
-        if (v2.recBox) box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), v2.recBox));
+        if (v2.recBox) box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), el("div", { class: "clampable rec-body" }, v2.recBox)));
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
           ...v2.extras.map((o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: SUFFIX_RE.test(o.label) })),
@@ -331,7 +352,7 @@ function renderRight(d) {
         });
         const lab = el("div", { class: "lab" }, el("span", { text: it.label }), it.badge ? el("span", { class: "rec-badge", text: "推奨" }) : null);
         const card = el("label", { class: "opt" + (it.badge ? " rec" : "") }, input,
-          el("span", { class: "grow" }, lab, ...it.lines.map((l) => el("div", { class: l.muted ? "desc muted" : "desc" }, l.cell ? inlineClone(l.cell) : l.text))));
+          el("span", { class: "grow" }, lab, ...it.lines.map((l) => el("div", { class: (l.muted ? "desc muted" : "desc") + " clampable" }, l.cell ? inlineClone(l.cell) : l.text))));
         if (single) { const idx = cards.length; cards.push({ input, card }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
         box.append(card);
       }
@@ -399,8 +420,10 @@ function renderRight(d) {
         if (select && !multi && !closed) cards[i].input.click();
       },
       get cursor() { return dr.cursor ?? 0; },
+      toggleExpand: () => toggleExpand(dr),
     };
     if (single && !closed) ui.setCursor(dr.cursor, false);
+    markClamps(root, dr);
     return;
   }
 
@@ -772,7 +795,7 @@ function cycle(step) {
 // IME(日本語入力)が有効だと keydown の key が "Process"、keyCode が 229 になり文字が取れない。
 // テキスト欄の外では物理キー(code)から割り当てキーを決める
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -849,6 +872,9 @@ document.addEventListener("keydown", (ev) => {
       if (!n) return;
       ev.preventDefault();
       ui.setCursor(gg || key === "Home" ? 0 : n - 1, true);
+    } else if (key === ".") {
+      ev.preventDefault();
+      ui.toggleExpand();
     } else if (key === "c") {
       if (!ui.copy) return;
       ev.preventDefault();
