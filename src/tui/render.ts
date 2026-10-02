@@ -1,12 +1,14 @@
 import { BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, STRONG_RISK, YELLOW, inline, renderMarkdown, renderMarkdownRich, type Rendered } from "./markdown.js";
 import { elapsed, type Card, type Chip, type ScreenModel } from "./model.js";
+import type { Lang } from "../settings/config.js";
+import { t } from "./i18n.js";
 import { padEnd, sliceCols, truncate, width, wrap } from "./width.js";
 
-// ScreenModel + 操作状態 → 画面(文字列)。I/O なし。
+// ScreenModel + interaction state to screen (strings). No I/O.
 
 export interface ListItem {
   title: string;
-  /** 人の作業待ち */
+  /** Waiting for the human */
   blocker: boolean;
   chips: Chip[];
   kindLabel: string;
@@ -17,34 +19,36 @@ export interface ListItem {
 
 export interface View {
   model: ScreenModel | null;
-  /** カード(+ 末尾の自由記述)の位置。計画ではボタンの位置 */
+  /** Display language */
+  lang: Lang;
+  /** Position of the card (plus the trailing free text); the button position for a plan */
   cursor: number;
   selected: ReadonlySet<string>;
   free: { on: boolean; text: string };
-  /** 入力中(自由記述 / 却下理由)の文字列。null なら入力していない */
+  /** Text being typed (free text / rejection reason); null when not typing */
   input: { kind: "free" | "reason"; text: string } | null;
   reason: string;
   pending: number;
   toast: string | null;
-  /** server との接続。切れている間は左端に赤で出し、戻ったら短く知らせる */
+  /** Connection to the server: shown in red at the left while down, and briefly announced when restored */
   conn: { state: "down"; server: string } | { state: "restored" } | null;
-  /** クリップボードに送れるか */
+  /** Whether copying to the clipboard is possible */
   copy: boolean;
-  /** 長い推奨ボックスを全文で表示(`.`) */
+  /** Show a long recommendation box in full (`.`) */
   recFull: boolean;
-  /** 一覧を開いているとき */
+  /** When the list is open */
   list: { items: ListItem[]; index: number } | null;
-  /** 背景(上下配置では画面全体)の先頭行 */
+  /** First row of the background (the whole screen in the stacked layout) */
   scroll: number;
-  /** 判断列の先頭行。null ならカーソルに追従 */
+  /** First row of the decision column; null follows the cursor */
   rscroll: number | null;
-  /** 反転表示する列(左右配置のとき) */
+  /** Column shown inverted (side-by-side layout) */
   focus: "background" | "decision";
-  /** 幅超過の図の横位置(桁) */
+  /** Horizontal position of a too-wide diagram (columns) */
   hscroll: number;
-  /** 背景を全幅で表示(判断の列を隠す) */
+  /** Show the background at full width (hides the decision column) */
   full: boolean;
-  /** 「図が列幅を超えています」の案内を出す */
+  /** Show the "diagram too wide" hint */
   fullHint: boolean;
   now: number;
 }
@@ -57,30 +61,30 @@ export interface Size {
 export interface Frame {
   text: string;
   lines: string[];
-  /** 背景(上下配置では画面全体)を下に送れる最大量。画面外に続きが無ければ 0 */
+  /** Maximum amount the background (whole screen in the stacked layout) can scroll down; 0 if nothing continues off screen */
   scrollMax: number;
-  /** 左右配置か */
+  /** Whether the layout is side by side */
   wide: boolean;
-  /** 左右配置で、右の列が始まる桁(0 始まり) */
+  /** In the side-by-side layout, the column where the right column starts (0-based) */
   split: number;
-  /** 判断列を下に送れる最大量と、いま見えている先頭行 */
+  /** Maximum amount the decision column can scroll down, and the first row currently visible */
   rightMax: number;
   rightOff: number;
-  /** 上下配置でいま見えている先頭行 */
+  /** First row currently visible in the stacked layout */
   off: number;
-  /** 本文の窓の行数(半画面スクロールの目安) */
+  /** Rows in the body window (basis for half-screen scrolling) */
   bodyRows: number;
-  /** 図の横スクロールの最大量(0 ならずらせる図が無い) */
+  /** Maximum horizontal scroll of diagrams (0 if no diagram can be shifted) */
   hMax: number;
-  /** 背景を全幅表示中 */
+  /** Whether the background is shown at full width */
   full: boolean;
-  /** 列幅を超える図があり、端末の全幅なら収まる */
+  /** A diagram exceeds the column width but fits the full terminal width */
   figOver: boolean;
 }
 
 export const WIDE_COLS = 120;
 
-/** 左右配置の判断列の幅。残りを背景に充てる */
+/** Width of the decision column in the side-by-side layout; the rest goes to the background */
 export const decisionWidth = (cols: number): number => Math.max(44, Math.min(58, Math.round(cols * 0.34)));
 
 const CHIP_COLOR: Record<Chip["kind"], string> = { repo: MAGENTA, branch: GREEN, worktree: YELLOW };
@@ -92,31 +96,31 @@ const BADGE_BLOCKER = "\x1b[43;30m";
 const chip = (c: Chip): string => `${CHIP_COLOR[c.kind]}${c.text}${RESET}`;
 export const chipsText = (chips: Chip[]): string => chips.map(chip).join(" ");
 
-function metaLine(m: ScreenModel, now: number, cols: number): string {
+function metaLine(m: ScreenModel, now: number, cols: number, lang: Lang): string {
   const parts = [chipsText(m.chips), `${DIM}${m.cwd}${RESET}`];
-  if (m.reversibility === "irreversible") parts.push(`${BADGE_IRREVERSIBLE} 元に戻せない ${RESET}`);
-  else if (m.reversibility === "costly") parts.push(`${BADGE_COSTLY} 戻すのにコストがかかる ${RESET}`);
+  if (m.reversibility === "irreversible") parts.push(`${BADGE_IRREVERSIBLE} ${t(lang, "irreversible")} ${RESET}`);
+  else if (m.reversibility === "costly") parts.push(`${BADGE_COSTLY} ${t(lang, "costly")} ${RESET}`);
   if (m.scope) parts.push(`${DIM}${m.scope}${RESET}`);
-  parts.push(`${DIM}${elapsed(m.createdAt, now)}${RESET}`);
+  parts.push(`${DIM}${elapsed(m.createdAt, now, lang)}${RESET}`);
   const line = parts.join("  ");
-  // 収まらないときは cwd を落とす(chips と可逆性は残す)
+  // When it does not fit, drop the cwd (keep chips and reversibility)
   return width(line) <= cols ? line : parts.filter((_, i) => i !== 1).join("  ");
 }
 
-// ---- 右: 判断 ----
+// ---- Right: decision ----
 
 interface Column {
   lines: string[];
-  /** カーソル位置のカードが占める行 [start, end) */
+  /** Rows [start, end) occupied by the card under the cursor */
   focus: [number, number];
   hint: string;
 }
 
-function cardLines(card: Card, w: number, o: { cursor: boolean; selected: boolean; multi: boolean }): string[] {
+function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; selected: boolean; multi: boolean }): string[] {
   const mark = o.multi ? (o.selected ? "[x]" : "[ ]") : o.selected ? "●" : "○";
   const lead = `${o.cursor ? `${BOLD}▸${RESET}` : " "} ${o.selected ? CYAN : ""}${mark}${RESET} `;
   const label = o.cursor ? `${BOLD}${card.label}${RESET}` : card.label;
-  const head = `${label}${card.recommended ? `  ${BADGE_REC} 推奨 ${RESET}` : ""}`;
+  const head = `${label}${card.recommended ? `  ${BADGE_REC} ${t(lang, "recommended_badge")} ${RESET}` : ""}`;
   const pad = " ".repeat(width(lead));
   const out = wrap(head, Math.max(8, w - width(lead))).map((l, k) => (k === 0 ? lead : pad) + l);
   for (const l of card.lines) {
@@ -126,17 +130,17 @@ function cardLines(card: Card, w: number, o: { cursor: boolean; selected: boolea
   return out;
 }
 
-/** 推奨ボックスが列の高さの半分を超えるとき、本文を何行で切るか */
+/** How many body rows to keep when the recommendation box exceeds half the column height */
 const REC_CUT_ROWS = 8;
 
-function recBox(text: string, w: number, o: { rows: number; full: boolean; title?: string; always?: boolean }): string[] {
+function recBox(text: string, w: number, o: { rows: number; full: boolean; lang: Lang; title?: string; always?: boolean }): string[] {
   const inner = Math.max(10, w - 4);
-  const title = o.title ?? "推奨";
-  let body = renderMarkdown(text, inner);
+  const title = o.title ?? t(o.lang, "recommendation");
+  let body = renderMarkdown(text, inner, { lang: o.lang });
   if (body.length > REC_CUT_ROWS && (o.always || body.length + 2 > o.rows / 2)) {
     body = o.full
-      ? [...body, `${DIM}… (. で折りたたむ)${RESET}`]
-      : [...body.slice(0, REC_CUT_ROWS), `${DIM}… (. で全文)${RESET}`];
+      ? [...body, `${DIM}${t(o.lang, "rec_collapse")}${RESET}`]
+      : [...body.slice(0, REC_CUT_ROWS), `${DIM}${t(o.lang, "rec_expand")}${RESET}`];
   }
   const top = `${DIM}┌─${RESET} ${BOLD}${title}${RESET} ${DIM}${"─".repeat(Math.max(0, w - 5 - width(title)))}┐${RESET}`;
   const bottom = `${DIM}└${"─".repeat(Math.max(0, w - 2))}┘${RESET}`;
@@ -144,18 +148,19 @@ function recBox(text: string, w: number, o: { rows: number; full: boolean; title
 }
 
 function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
+  const lang = v.lang;
   const lines: string[] = [];
   let focus: [number, number] = [0, 0];
 
   if (m.unsupported) {
     lines.push(...wrap(`${YELLOW}${m.unsupported}${RESET}`, w));
-    return { lines, focus, hint: "h/l 保留の切替" };
+    return { lines, focus, hint: t(lang, "hint_unsupported") };
   }
 
   if (m.kind === "plan") {
-    if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, title: "影響範囲と可逆性", always: true }), "");
-    lines.push(`${BOLD}この計画を承認しますか${RESET}`, "");
-    const buttons: [string, string][] = [["y", "承認"], ["a", "承認して auto"], ["n", "却下"]];
+    if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, lang, title: t(lang, "impact_title"), always: true }), "");
+    lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
+    const buttons: [string, string][] = [["y", t(lang, "approve")], ["a", t(lang, "approve_auto")], ["n", t(lang, "reject")]];
     buttons.forEach(([k, label], i) => {
       const start = lines.length;
       const on = v.cursor === i;
@@ -163,14 +168,14 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
       if (on) focus = [start, lines.length];
     });
     if (v.input?.kind === "reason") {
-      lines.push("", ...wrap(`  理由: ${v.input.text}▏`, w));
+      lines.push("", ...wrap(`  ${t(lang, "reason")}: ${v.input.text}▏`, w));
     } else if (v.reason) {
-      lines.push("", ...wrap(`${DIM}  理由: ${v.reason}${RESET}`, w));
+      lines.push("", ...wrap(`${DIM}  ${t(lang, "reason")}: ${v.reason}${RESET}`, w));
     }
     return {
       lines,
       focus,
-      hint: v.input ? "Enter 却下を送る · Esc 取りやめ" : "j/k 移動 · Enter 決定 · y 承認 · a auto · n 却下 · . 影響範囲の全文",
+      hint: v.input ? t(lang, "hint_plan_input") : t(lang, "hint_plan"),
     };
   }
 
@@ -182,13 +187,13 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
       lines.push("");
     }
   }
-  if (m.todo) lines.push(`${BOLD}${YELLOW}人にしてほしいこと${RESET}`, ...renderMarkdown(m.todo, w), "");
-  if (m.recommendation) lines.push(...recBox(m.recommendation, w, { rows, full: v.recFull }), "");
+  if (m.todo) lines.push(`${BOLD}${YELLOW}${t(lang, "todo_title")}${RESET}`, ...renderMarkdown(m.todo, w, { lang }), "");
+  if (m.recommendation) lines.push(...recBox(m.recommendation, w, { rows, full: v.recFull, lang }), "");
 
   q.cards.forEach((c, i) => {
     const start = lines.length;
     const on = v.cursor === i;
-    lines.push(...cardLines(c, w, { cursor: on, selected: v.selected.has(c.value), multi: q.multi }));
+    lines.push(...cardLines(c, w, lang, { cursor: on, selected: v.selected.has(c.value), multi: q.multi }));
     if (on) focus = [start, lines.length];
     lines.push("");
   });
@@ -198,28 +203,33 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   const typing = v.input?.kind === "free";
   const ftext = typing ? `${v.input!.text}▏` : v.free.text;
   const lead = `${fon ? `${BOLD}▸${RESET}` : " "} ${v.free.on ? CYAN : ""}${q.multi ? (v.free.on ? "[x]" : "[ ]") : v.free.on ? "●" : "○"}${RESET} `;
-  lines.push(`${lead}${fon ? BOLD : ""}自由記述${RESET}  ${CYAN}i${RESET}`);
+  lines.push(`${lead}${fon ? BOLD : ""}${t(lang, "free_text")}${RESET}  ${CYAN}i${RESET}`);
   if (ftext) for (const x of wrap(ftext, Math.max(8, w - width(lead)))) lines.push(" ".repeat(width(lead)) + x);
   if (fon) focus = [fstart, lines.length];
 
   const hint = typing
-    ? "Enter 確定 · Esc 取りやめ"
-    : `j/k 移動 · ${q.multi ? "Space 切替 · " : ""}Enter 回答${m.todoCode.length ? ` · ${v.copy ? "c コピー" : "コピー非対応"}` : ""} · i 自由記述`;
+    ? t(lang, "hint_input")
+    : [
+        t(lang, "hint_move"),
+        ...(q.multi ? [t(lang, "hint_toggle")] : []),
+        t(lang, "hint_answer") + (m.todoCode.length ? ` · ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
+        t(lang, "hint_free"),
+      ].join(" · ");
   return { lines, focus, hint };
 }
 
-// ---- 左: 背景 ----
+// ---- Left: background ----
 
-function leftColumn(m: ScreenModel, w: number, fullHint = true): Rendered {
+function leftColumn(m: ScreenModel, w: number, lang: Lang, fullHint = true): Rendered {
   if (m.backgroundNote) {
     const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
     return { lines, wide: lines.map(() => null) };
   }
-  if (m.background) return renderMarkdownRich(m.background, w, { fullHint });
+  if (m.background) return renderMarkdownRich(m.background, w, { fullHint, lang });
   return { lines: [], wide: [] };
 }
 
-/** 幅超過の図の行だけ hoff 桁ずらす。ずらせる最大量と、図の最大幅も返す */
+/** Shift only the rows of too-wide diagrams by hoff columns. Also returns the maximum shift and the widest diagram */
 function shifted(r: Rendered, w: number, hoff: number): { lines: string[]; hMax: number; figW: number } {
   const figW = Math.max(0, ...r.wide.map((l) => (l ? width(l) : 0)));
   const hMax = Math.max(0, figW - w);
@@ -227,7 +237,7 @@ function shifted(r: Rendered, w: number, hoff: number): { lines: string[]; hMax:
   return { lines: r.lines.map((l, i) => (r.wide[i] ? sliceCols(r.wide[i]!, off, w) : l)), hMax, figW };
 }
 
-// ---- 画面 ----
+// ---- Screen ----
 
 function window(lines: string[], rows: number, offset: number): string[] {
   const out = lines.slice(offset, offset + rows);
@@ -237,51 +247,52 @@ function window(lines: string[], rows: number, offset: number): string[] {
 
 function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; hint?: boolean; hscrollable?: boolean } = {}): string {
   const hscrollable = o.hscrollable ?? false;
+  const lang = v.lang;
   let left: string;
-  if (v.list) left = `${DIM}j/k 移動  Enter 表示  Esc 戻る${RESET}`;
-  else if (o.full) left = `保留 ${v.pending}  ${DIM}f / Esc で戻る  ←→ 横スクロール  j/k PgUp/PgDn 縦  q 終了${RESET}`;
+  if (v.list) left = `${DIM}${t(lang, "footer_list")}${RESET}`;
+  else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_full")}${RESET}`;
   else {
-    left = `保留 ${v.pending}  ${DIM}h/l 切替${hscrollable ? "  ←→ 図を横スクロール" : ""}  b 一覧  q 終了${overflow ? "  PgUp/PgDn 背景をスクロール · Tab 列の切替" : ""}${RESET}`;
+    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
   }
-  if (v.conn?.state === "down") left = `${BOLD}${RED}接続できません(${v.conn.server}) 再接続中…${RESET}  ${left}`;
-  else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}再接続しました${RESET}  ${left}`;
+  if (v.conn?.state === "down") left = `${BOLD}${RED}${t(lang, "cannot_connect", { server: v.conn.server })}${RESET}  ${left}`;
+  else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}${t(lang, "reconnected")}${RESET}  ${left}`;
   if (v.toast) left += `  ${BOLD}${GREEN}${v.toast}${RESET}`;
-  if (o.hint) left += `  ${BOLD}${YELLOW}図が列幅を超えています: f で全幅表示${RESET}`;
+  if (o.hint) left += `  ${BOLD}${YELLOW}${t(lang, "fig_over_hint")}${RESET}`;
   return truncate(left, cols);
 }
 
 function listBody(v: View, cols: number, rows: number): string[] {
-  const out: string[] = [`${BOLD}保留の一覧${RESET}`, ""];
+  const out: string[] = [`${BOLD}${t(v.lang, "list_title")}${RESET}`, ""];
   const l = v.list!;
   l.items.forEach((it, i) => {
     const on = i === l.index;
-    const meta = [it.kindLabel, elapsed(it.createdAt, v.now), it.noExplanation ? "説明なし" : "", it.current ? "表示中" : ""]
+    const meta = [it.kindLabel, elapsed(it.createdAt, v.now, v.lang), it.noExplanation ? t(v.lang, "no_explanation") : "", it.current ? t(v.lang, "current") : ""]
       .filter(Boolean)
       .join(" · ");
-    const mark = it.blocker ? `${BADGE_BLOCKER} 作業 ${RESET} ` : "";
+    const mark = it.blocker ? `${BADGE_BLOCKER} ${t(v.lang, "task_badge")} ${RESET} ` : "";
     out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${mark}${on ? BOLD : ""}${it.title}${RESET}`, cols));
     out.push(truncate(`    ${chipsText(it.chips)}  ${DIM}${meta}${RESET}`, cols));
   });
   return window(out, rows, 0);
 }
 
-/** 右端に置く簡易スクロールバー(`│` の列に `█` で位置)。size 行ぶん */
+/** A simple scrollbar for the right edge (`█` marks the position in a `│` column), size rows tall */
 function scrollbar(size: number, total: number, off: number, max: number): string[] {
   const len = Math.max(1, Math.min(size, Math.round((size * size) / total)));
   const start = max > 0 ? Math.round((off / max) * (size - len)) : 0;
   return Array.from({ length: size }, (_, i) => (i >= start && i < start + len ? "█" : `${DIM}│${RESET}`));
 }
 
-/** 最下行の `▲▼ 1-20/58` */
+/** The `▲▼ 1-20/58` indicator on the last row */
 function position(off: number, max: number, size: number, total: number, h?: { off: number; figW: number }): string {
   const hs = h && h.off > 0 ? ` ◀▶ ${h.off}/${h.figW}` : "";
   return `${DIM}${off > 0 ? "▲" : " "}${off < max ? "▼" : " "} ${off + 1}-${Math.min(total, off + size)}/${total}${hs}${RESET}`;
 }
 
-/** 溢れる列に、窓・スクロールバー・位置表示をかぶせる。w は列の幅(バー込み) */
+/** Overlay a window, scrollbar and position indicator on an overflowing column. w is the column width including the bar */
 function scrolled(all: string[], size: number, off: number, w: number, tail: string[], h?: { off: number; figW: number }): string[] {
   const max = all.length - size;
-  // 縦に収まるなら、バーも ▲▼ の位置も出さない(横にずれているときの ◀▶ だけ残す)
+  // When it fits vertically, show neither the bar nor the ▲▼ position (keep only ◀▶ when shifted sideways)
   const bar = max > 0 ? scrollbar(size, all.length, off, max) : new Array<string>(size).fill(" ");
   const body = window(all, size, off).map((l, i) => `${padEnd(truncate(l, w - 1), w - 1)}${bar[i]}`);
   const pos = max > 0 ? position(off, max, size, all.length, h) : h && h.off > 0 ? `${DIM}◀▶ ${h.off}/${h.figW}${RESET}` : "";
@@ -302,13 +313,13 @@ export function renderFrame(v: View, size: Size): Frame {
 
   if (!m) {
     const body = new Array<string>(Math.max(0, rows - 1)).fill("");
-    const msg = "判断待ちはありません";
+    const msg = t(v.lang, "empty");
     const row = Math.floor((rows - 1) / 2);
     body[row] = " ".repeat(Math.max(0, Math.floor((cols - width(msg)) / 2))) + `${DIM}${msg}${RESET}`;
     return fin(body, []);
   }
 
-  const head = [...(m.blocker ? [`${BADGE_BLOCKER} 人の作業待ち ${RESET}`] : []), metaLine(m, v.now, cols), ...wrap(`${BOLD}${m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
+  const head = [...(m.blocker ? [`${BADGE_BLOCKER} ${t(v.lang, "waiting_for_you")} ${RESET}`] : []), metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
   const bodyRows = Math.max(1, rows - head.length - 1);
 
   if (cols >= WIDE_COLS) {
@@ -316,13 +327,13 @@ export function renderFrame(v: View, size: Size): Frame {
     const full = v.full;
     const rightW = decisionWidth(cols);
     const leftW = full ? cols : cols - SEP.length - rightW;
-    // 見出し行(フォーカスのある列を反転)を 1 行取り、残りが列の窓
+    // Take one row for the heading (the focused column inverted); the rest is the column window
     const winRows = Math.max(1, bodyRows - 1);
-    // フォーカス中は反転 + 左に ▶(モノクロでも分かる)。もう一方は dim
+    // The focused heading is inverted with a ▶ on the left (visible even in monochrome); the other is dim
     const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ▶ ${label} ${RESET}` : `${DIM}   ${label}${RESET}`, w);
 
-    // 左: 溢れる(縦に長い、または横にずらせる図がある)ときは右端にバー、最下行に位置。収まるときはそのまま
-    let leftR = leftColumn(m, leftW);
+    // Left: when it overflows (tall, or has a diagram that can shift sideways) put a bar on the right edge and the position on the last row; otherwise leave it as is
+    let leftR = leftColumn(m, leftW, v.lang);
     const hasWide = leftR.wide.some(Boolean);
     const leftOver = leftR.lines.length > winRows || hasWide;
     let scrollMax = 0;
@@ -332,7 +343,7 @@ export function renderFrame(v: View, size: Size): Frame {
     let textW = leftW;
     if (leftOver) {
       textW = leftW - 1;
-      leftR = leftColumn(m, textW);
+      leftR = leftColumn(m, textW, v.lang);
       const sh = shifted(leftR, textW, v.hscroll);
       hMax = sh.hMax;
       figW = sh.figW;
@@ -345,11 +356,11 @@ export function renderFrame(v: View, size: Size): Frame {
     const meta = { scrollMax, wide: true, bodyRows: winRows, hMax, full, figOver };
 
     if (full) {
-      const body = [heading("背景(全幅)", cols, true), ...left.map((l) => truncate(l, cols))];
+      const body = [heading(t(v.lang, "bg_full_title"), cols, true), ...left.map((l) => truncate(l, cols))];
       return fin(body, head, { ...meta, split: cols }, leftOver);
     }
 
-    // 右: 溢れるときはカーソルのカードが見える位置まで送る(手でスクロールしたらその位置)。ヒントは最下段に固定
+    // Right: when it overflows, scroll so the card under the cursor is visible (or to the manually scrolled position). The hint stays on the bottom row
     let right = rightColumn(v, m, rightW, winRows);
     const rightOver = right.lines.length + 2 > winRows;
     let rcol: string[];
@@ -366,15 +377,15 @@ export function renderFrame(v: View, size: Size): Frame {
     } else rcol = window([...right.lines, "", `${DIM}${right.hint}${RESET}`], winRows, 0);
 
     const body = [
-      `${heading("背景", leftW, v.focus === "background")}${DIM}${SEP}${RESET}${heading("判断", rightW, v.focus === "decision")}`,
+      `${heading(t(v.lang, "bg_title"), leftW, v.focus === "background")}${DIM}${SEP}${RESET}${heading(t(v.lang, "decision_title"), rightW, v.focus === "decision")}`,
       ...left.map((l, i) => `${padEnd(truncate(l, leftW), leftW)}${DIM}${SEP}${RESET}${truncate(rcol[i] ?? "", rightW)}`),
     ];
     return fin(body, head, { ...meta, split: leftW + SEP.length, rightMax, rightOff }, leftOver || rightOver);
   }
 
-  // 狭い: 上下。判断を先に置き(いつも届くように)、背景を下に続ける
+  // Narrow: stacked. Put the decision first (so it is always reachable) and continue with the background below
   const right = rightColumn(v, m, cols - 1, bodyRows);
-  const leftR = leftColumn(m, cols - 1, false);
+  const leftR = leftColumn(m, cols - 1, v.lang, false);
   const sh = shifted(leftR, cols - 1, v.hscroll);
   const leftAll = sh.lines;
   const all = [...right.lines, "", `${DIM}${right.hint}${RESET}`, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];

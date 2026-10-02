@@ -1,18 +1,18 @@
 import { renderMermaidASCII } from "beautiful-mermaid";
 import { width } from "./width.js";
 
-// ```mermaid ブロック → 端末の罫線テキスト(beautiful-mermaid、同期・DOM 無し)。
-// 図は幅に依らず同じ絵なので、定義ごとに 1 度だけ描いて覚えておく。
+// ```mermaid block to terminal box-drawing text (beautiful-mermaid, synchronous, no DOM).
+// A diagram looks the same regardless of width, so draw each definition once and remember it.
 
-/** これを超えて描画にかかったら失敗扱いにする(同期処理なので事後の判定) */
+/** Rendering that takes longer than this counts as a failure (judged after the fact since it is synchronous) */
 export const RENDER_BUDGET_MS = 2000;
 
 export type MermaidResult = { ok: true; lines: string[]; width: number } | { ok: false };
 
 const cache = new Map<string, MermaidResult>();
 
-// beautiful-mermaid は文字幅を 1 と数えるので、全角文字のままだと箱がずれる。
-// 全角 1 文字を「私用領域 2 文字」に置き換えて描き、描いたあとで全角に戻す。
+// beautiful-mermaid counts every character as width 1, so full-width characters would misalign the boxes.
+// Replace each full-width character with two private-use characters, draw, then restore the full-width character.
 const WIDE_BASE = 0xe000;
 const WIDE_MARK = "";
 
@@ -39,9 +39,9 @@ function restoreWide(line: string, table: string[]): string {
   return line.replace(/([-])/g, (_, c: string) => table[c.charCodeAt(0) - WIDE_BASE] ?? "?");
 }
 
-// beautiful-mermaid は `A-->B`(空白なし)を矢印ごと 1 ノード名 `A--` と読む(GUI の mermaid.js は読める)。
-// 描く前に、矢印の前後へ空白を補う。ラベル([] () {} "" ||)の中は触らない。
-// `--x` / `--o` は空白があっても読めず辺が消えるので、`-->` に置き換える(端の記号だけ失う)。
+// beautiful-mermaid reads `A-->B` (no spaces) as a single node name `A--` including the arrow (the GUI mermaid.js reads it fine).
+// Before drawing, add spaces around arrows. Leave the inside of labels ([] () {} "" ||) alone.
+// `--x` / `--o` are not read even with spaces and the edge disappears, so replace them with `-->` (only the end marker is lost).
 const ARROW_RE = /<-->|<?-{2,}>|-{3,}|-\.+->|={2,}>|--[xo]/g;
 const FLOW_RE = /^\s*(?:flowchart|graph|stateDiagram(?:-v2)?)\b/m;
 

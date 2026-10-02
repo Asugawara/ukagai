@@ -1,8 +1,10 @@
-import { findTables, scanFences, toLines } from "../hook/explain.js";
+import { COLUMN_RISK, findTables, scanFences, toLines } from "../hook/explain.js";
+import type { Lang } from "../settings/config.js";
+import { t, type MessageKey } from "./i18n.js";
 import { renderMermaid } from "./mermaid.js";
 import { padEnd, sliceCols, wrap, width } from "./width.js";
 
-// Markdown の端末描画。行は表示幅 w 以内に折り返し済みで返す。
+// Terminal rendering of Markdown. Lines are returned already wrapped to display width w.
 
 export const RESET = "\x1b[0m";
 export const BOLD = "\x1b[1m";
@@ -17,13 +19,13 @@ export const STRONG = "\x1b[1;36m";
 export const STRONG_RISK = "\x1b[1;31m";
 
 export interface InlineOpts {
-  /** `**強調**` の色(既定: cyan 太字。リスク列は赤) */
+  /** Color of `**strong**` (default: bold cyan; red in the risk column) */
   strong?: string;
-  /** 範囲の外側の装飾。span を閉じたあとに再掲する */
+  /** Decoration outside the span, re-applied after the span closes */
   base?: string;
 }
 
-/** `**強調**` / `` `code` `` / `*em*` / リンクを ANSI に。前後の装飾は base に戻す */
+/** Turn `**strong**` / `` `code` `` / `*em*` / links into ANSI, returning to base decoration afterwards */
 export function inline(text: string, opts: InlineOpts = {}): string {
   const strong = opts.strong ?? STRONG;
   const base = opts.base ?? "";
@@ -37,18 +39,18 @@ export function inline(text: string, opts: InlineOpts = {}): string {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t: string, u: string) => `${t} ${DIM}(${u})${close}`);
 }
 
-const CALLOUTS: Record<string, { label: string; color: string }> = {
-  NOTE: { label: "補足", color: BLUE },
-  TIP: { label: "ヒント", color: GREEN },
-  WARNING: { label: "注意", color: YELLOW },
-  CAUTION: { label: "警告", color: RED },
+const CALLOUTS: Record<string, { label: MessageKey; color: string }> = {
+  NOTE: { label: "callout_note", color: BLUE },
+  TIP: { label: "callout_tip", color: GREEN },
+  WARNING: { label: "callout_warning", color: YELLOW },
+  CAUTION: { label: "callout_caution", color: RED },
 };
 
 function isCjk(ch: string | undefined): boolean {
   return ch !== undefined && width(ch) === 2;
 }
 
-/** 段落の行を 1 本に。日本語どうしの改行には空白を入れない */
+/** Join paragraph lines into one. No space is inserted at a line break between two CJK characters */
 function joinSoft(lines: string[]): string {
   let out = "";
   for (const raw of lines) {
@@ -66,11 +68,11 @@ function diffLine(l: string): string {
   return l;
 }
 
-/** 表を、列幅をそろえた罫線なしのテキストにする。収まらないときは広い列から縮めてセルを折り返す */
+/** Render a table as aligned text without borders. When it does not fit, shrink the widest columns first and wrap cells */
 function renderTable(header: string[], rows: string[][], w: number): string[] {
   const cols = header.length;
   const GAP = 2;
-  const isRisk = header.map((h) => h.normalize("NFKC").includes("リスク"));
+  const isRisk = header.map((h) => COLUMN_RISK.test(h.normalize("NFKC")));
   const cell = (r: string[], c: number, strong?: string) => inline(r[c] ?? "", strong ? { strong } : {});
   const natural = Array.from({ length: cols }, (_, c) =>
     Math.max(width(header[c] ?? ""), ...rows.map((r) => width(cell(r, c)))),
@@ -107,21 +109,24 @@ function renderTable(header: string[], rows: string[][], w: number): string[] {
 
 export interface Rendered {
   lines: string[];
-  /** 幅超過の図の行は、切り詰める前の全体(行ごと。それ以外は null)。横スクロールの対象 */
+  /** For too-wide diagram rows, the full row before truncation (null for other rows); these are what scrolls sideways */
   wide: (string | null)[];
 }
 
 export interface MarkdownOpts {
-  /** 図の注記に「f で全幅」を添える(全幅表示に切り替えられるとき) */
+  /** Add "f for full width" to the diagram note (when switching to full width is possible) */
   fullHint?: boolean;
+  /** Display language for UI-owned strings (callout labels, diagram notes) */
+  lang?: Lang;
 }
 
-/** Markdown → 端末の行(表示幅 w 以内に折り返し済み) */
+/** Markdown to terminal lines (already wrapped to display width w) */
 export function renderMarkdown(markdown: string, w: number, opts: MarkdownOpts = {}): string[] {
   return renderMarkdownRich(markdown, w, opts).lines;
 }
 
 export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOpts = {}): Rendered {
+  const lang = opts.lang ?? "en";
   const lines = toLines(markdown);
   const { inFence, blocks } = scanFences(lines);
   const out: string[] = [];
@@ -141,14 +146,14 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
         const fig = renderMermaid(body.join("\n"));
         if (fig.ok) {
           if (fig.width > w) {
-            out.push(...wrap(`${DIM}(図: 幅 ${fig.width} 桁。←→ / 横ホイールでスクロール${opts.fullHint === false ? "" : " · f で全幅"})${RESET}`, w));
+            out.push(...wrap(`${DIM}${t(lang, opts.fullHint === false ? "figure_note" : "figure_note_full", { width: fig.width })}${RESET}`, w));
             for (const l of fig.lines) {
               if (width(l) > w) wideRows.set(out.length, l);
               out.push(sliceCols(l, 0, w));
             }
           } else out.push(...fig.lines);
         } else {
-          out.push(`${DIM}(図: 描画に失敗。以下は定義)${RESET}`);
+          out.push(`${DIM}${t(lang, "figure_failed")}${RESET}`);
           for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
         }
       } else if (block.lang === "diff") {
@@ -194,7 +199,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       const bodyLines = spec ? [...(m![2]! ? [m![2]!] : []), ...quote.slice(1)] : quote;
       const color = spec?.color ?? DIM;
       const bar = `${color}▌${RESET} `;
-      if (spec) out.push(`${color}▌ ${BOLD}${spec.label}${RESET}`);
+      if (spec) out.push(`${color}▌ ${BOLD}${t(lang, spec.label)}${RESET}`);
       const paras: string[][] = [[]];
       for (const l of bodyLines) {
         if (l.trim() === "") paras.push([]);
@@ -223,7 +228,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       wrap(inline(joinSoft(item)), Math.max(8, w - width(lead))).forEach((l, k) => out.push((k === 0 ? lead : pad) + l));
       continue;
     }
-    // 段落
+    // Paragraph
     const para: string[] = [];
     while (
       i < lines.length &&

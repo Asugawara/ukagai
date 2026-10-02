@@ -39,6 +39,7 @@ const HELP: Record<Subcommand, string> = {
 オプション:
   --server <url>     server の URL(既定: http://127.0.0.1:4818)
   --data-dir <dir>   token の置き場(既定: ~/.ukagai)
+  --lang <en|ja>     Display language (default: lang in <data-dir>/config.json)
   -h, --help         この使い方を表示する
 
 キー: j/k 移動  gg/G 先頭/末尾  Space 複数選択  Enter 送信  i 自由記述

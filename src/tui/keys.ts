@@ -1,14 +1,14 @@
-// 端末の入力バイト列 → キー → 操作(Action)。副作用なし。
+// Terminal input bytes to keys to actions. No side effects.
 
 export type Key =
   | { name: "char"; ch: string }
   | { name: "up" | "down" | "left" | "right" | "enter" | "esc" | "backspace" | "tab" | "ctrl-c" | "ctrl-d" | "ctrl-u" | "pgup" | "pgdn" | "home" | "end" }
-  /** 横ホイール(SGR の button 66 = 左、67 = 右) */
+  /** Horizontal wheel (SGR button 66 = left, 67 = right) */
   | { name: "hwheel"; dir: "left" | "right" }
-  /** マウスホイール(SGR 報告)。x / y は 1 始まりの端末座標 */
+  /** Mouse wheel (SGR report). x / y are 1-based terminal coordinates */
   | { name: "wheel"; dir: "up" | "down"; x: number; y: number };
 
-/** Esc 単独と矢印のエスケープ列を分ける待ち時間 */
+/** How long to wait to tell a lone Esc from an arrow escape sequence */
 export const ESC_TIMEOUT_MS = 30;
 
 const CSI: Record<string, Key["name"]> = {
@@ -33,13 +33,13 @@ const CSI: Record<string, Key["name"]> = {
 };
 
 /**
- * 入力のチャンクをキー列にする。チャンク末尾の `ESC` や `ESC [` は続きが来るかもしれないので保留し、
- * 呼び出し側が ESC_TIMEOUT_MS 後に flush() する。
+ * Turn an input chunk into keys. A trailing `ESC` or `ESC [` may be continued by the next chunk, so it is held and
+ * the caller flush()es it after ESC_TIMEOUT_MS.
  */
 export class KeyParser {
   private pending = "";
 
-  /** 保留中の入力があるか(タイマーを張る目安) */
+  /** Whether input is being held (a hint to arm the timer) */
   get hasPending(): boolean {
     return this.pending !== "";
   }
@@ -57,7 +57,7 @@ export class KeyParser {
           this.pending = s.slice(i);
           break;
         }
-        // SGR マウス報告 `ESC [ < b ; x ; y M|m`。ホイールだけ拾い、クリックやドラッグは捨てる
+        // SGR mouse report `ESC [ < b ; x ; y M|m`. Only the wheel is picked up; clicks and drags are dropped
         const mouse = /^\[<(\d+);(\d+);(\d+)([Mm])/.exec(rest);
         if (mouse) {
           const b = Number(mouse[1]);
@@ -85,7 +85,7 @@ export class KeyParser {
     return keys;
   }
 
-  /** 保留していた入力を確定する(ESC 単独 → esc。中途半端な列は捨てる) */
+  /** Commit held input (a lone ESC becomes esc; incomplete sequences are dropped) */
   flush(): Key[] {
     const p = this.pending;
     this.pending = "";
@@ -107,11 +107,11 @@ export class KeyParser {
   }
 }
 
-// ---- 操作 ----
+// ---- Actions ----
 
 export type Mode = "normal" | "input" | "list";
 export type Kind = "question" | "plan";
-/** 矢印や j/k が効く列。背景 = 左の説明、decision = 右の判断 */
+/** The column that arrows and j/k act on. background = the left explanation, decision = the right-hand decision */
 export type Focus = "background" | "decision";
 
 export type Action =
@@ -130,14 +130,14 @@ export type Action =
   | { type: "approve" }
   | { type: "approve-auto" }
   | { type: "reject" }
-  /** 背景を半画面(half)または 1 行(line)スクロール */
+  /** Scroll the background half a screen (half) or one row (line) */
   | { type: "scroll"; delta: 1 | -1; unit: "half" | "line" }
   | { type: "scroll-edge"; to: "top" | "bottom" }
   | { type: "focus" }
-  /** 幅超過の図を 1 歩(8 桁)横へ */
+  /** Move a too-wide diagram one step (8 columns) sideways */
   | { type: "hscroll"; delta: 1 | -1 }
   | { type: "hscroll-edge"; to: "start" | "end" }
-  /** 背景の全幅表示の入り切り */
+  /** Toggle full-width display of the background */
   | { type: "full" }
   | { type: "input-char"; ch: string }
   | { type: "input-backspace" }
@@ -151,20 +151,20 @@ export interface KeyContext {
   mode: Mode;
   kind: Kind;
   focus?: Focus;
-  /** 左右配置か(上下配置では背景側のキーは ← → だけ) */
+  /** Whether the layout is side by side (in the stacked layout the only background keys are ← →) */
   wide?: boolean;
-  /** 背景の全幅表示中 */
+  /** Whether the background is shown at full width */
   full?: boolean;
-  /** 横にずらせる図があるか */
+  /** Whether there is a diagram that can be shifted sideways */
   hscrollable?: boolean;
-  /** gg の 1 つ目の g の時刻(無ければ 0) */
+  /** Time of the first g of gg (0 if none) */
   lastG: number;
   now: number;
 }
 
 export const GG_WINDOW_MS = 1000;
 
-/** キーを操作にする。lastG は次回の文脈に渡す */
+/** Turn a key into an action. lastG is passed to the next context */
 export function interpret(key: Key, ctx: KeyContext): { action: Action | null; lastG: number } {
   const done = (action: Action | null, lastG = 0) => ({ action, lastG });
   if (key.name === "ctrl-c") return done({ type: "quit" });
@@ -197,7 +197,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   const goRight = key.name === "right" || ch === "l";
 
   if (ctx.full) {
-    // 判断が見えていないので、決定につながるキーは効かせない
+    // The decision is not visible, so keys that lead to a decision are disabled
     if (key.name === "tab" || key.name === "esc" || ch === "f") return done({ type: "full" });
     if (ctx.hscrollable && goLeft) return done({ type: "hscroll", delta: -1 });
     if (ctx.hscrollable && goRight) return done({ type: "hscroll", delta: 1 });
@@ -217,7 +217,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (key.name === "tab") return done({ type: "focus" });
   if (ch === "f" && ctx.wide) return done({ type: "full" });
   if (ctx.hscrollable) {
-    // 幅超過の図があるときは、フォーカスに関係なく ← → が横スクロール(保留の切替は h l [ ])
+    // With a too-wide diagram, ← → scroll sideways regardless of focus (switching pending uses h l [ ])
     if (key.name === "left") return done({ type: "hscroll", delta: -1 });
     if (key.name === "right") return done({ type: "hscroll", delta: 1 });
     if (ctx.focus === "background") {
