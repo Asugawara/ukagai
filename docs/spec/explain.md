@@ -85,6 +85,13 @@
 | `table` | GFM の表(ヘッダ行 + 区切り行)が本文のどこかにある(列や行の条件は問わない) |
 | `diff` | ` ```diff ` のコードブロックが本文のどこかにある |
 
+### 3.5 強調の記法(任意。hook は検査しない)
+
+- 判断の決め手になる語句だけを `**太字**` にする(1 文に 1 つまで、説明全体で 3〜5 箇所)。GUI は accent 色で描き、「リスクと戻し方」の中だけ赤で描く。
+- 戻せない結果・他人や外部システムに及ぶ影響は callout にする: `> [!WARNING]`(戻すのにコストがかかる)、`> [!CAUTION]`(戻せない)。1〜2 行。
+- 確かめた事実のうち判断を左右するものは `> [!NOTE]`(補足)、有用な示唆は `> [!TIP]`(ヒント)でもよい。
+- GUI は callout を色付きの箱にする(NOTE = accent、TIP = green、WARNING = yellow、CAUTION = red)。記法が違っても壊れず、素の引用として出る。
+
 ## 4. 検査結果
 
 検査は次の `missing` コードを**この順で**列挙する。`missing` が空のとき `valid: true`。
@@ -163,7 +170,7 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。
 聞くときは、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
 front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。構造や流れは Mermaid の図にする。
-文章で質問せず AskUserQuestion を使い、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
+文章で質問せず AskUserQuestion を使い、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
 ```
 
 サブエージェント内では AskUserQuestion が提供されないため判断は発生しない(Claude Code 2.1.287 で確認)。SubagentStart の additionalContext は届くが、使われる場面はない。

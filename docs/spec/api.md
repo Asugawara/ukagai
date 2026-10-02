@@ -107,7 +107,7 @@ Bearer 必須。`Content-Type: application/json` が要るので `{}` を送る�
 - `answers` の値は文字列のみ。`multiSelect` はラベルを `MULTI_SELECT_SEPARATOR`(仮に `", "`)で結合した 1 文字列。
 - `approve: false` は `reason` が空でない文字列で必須。
 - `set_mode_auto` は `approve: true` のときだけ。
-- `{fallback:true}` は `pending` → `fallback` に遷移する。それ以外は `pending` → `answer_submitted`。
+- `{fallback:true}` は `pending` → `fallback` に遷移する(GUI からは送らない。ボタンは廃止)。それ以外は `pending` → `answer_submitted`。
 
 応答 200: 更新後の `Decision`。
 

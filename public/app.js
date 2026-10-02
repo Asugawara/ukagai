@@ -137,9 +137,23 @@ function renderHeader() {
 // 描画してよい context は branch だけ
 const tildePath = (p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 
+const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
+const repoOf = (d) => WT_RE.exec(d.session.cwd)?.[1] ?? cwdTail(d);
+const worktreeOf = (d) => WT_RE.exec(d.session.cwd)?.[2];
+
+// リポジトリ(紫)・ブランチ(緑)・ワークツリー(橙)。色は種類ごとに固定
+function chips(d, cls = "") {
+  const box = el("span", { class: `chips ${cls}`.trim() });
+  box.append(el("span", { class: "chip repo", text: `◈ ${repoOf(d)}`, title: "リポジトリ" }));
+  if (d.context?.branch) box.append(el("span", { class: "chip branch", text: `⎇ ${d.context.branch}`, title: "ブランチ" }));
+  const wt = worktreeOf(d);
+  if (wt) box.append(el("span", { class: "chip worktree", text: `⧉ ${wt}`, title: "ワークツリー" }));
+  return box;
+}
+
 function metaLine(d) {
   const line = el("div", { class: "meta-line" });
-  if (d.context?.branch) line.append(el("span", { class: "chip branch", text: `⎇ ${d.context.branch}` }));
+  line.append(chips(d));
   line.append(el("span", { class: "cwd", text: tildePath(d.session.cwd), title: d.session.cwd }));
   const rev = reversibilityOf(d);
   if (rev === "irreversible") line.append(el("span", { class: "badge irreversible", text: "元に戻せない" }));
@@ -152,12 +166,23 @@ function metaLine(d) {
 
 // ---- ドロワー ----
 
+let drawerIdx = 0;
+
+function focusDrawerRow() {
+  const rows = $("pending-list").querySelectorAll(".row");
+  drawerIdx = clamp(drawerIdx, rows.length);
+  rows[drawerIdx]?.focus();
+}
+
 function setDrawer(open) {
+  if (open) drawerIdx = Math.max(0, pendingList().findIndex((d) => d.id === shownId));
+  else if (drawerOpen()) document.activeElement?.blur?.();
   $("drawer").classList.toggle("open", open);
   $("drawer").setAttribute("aria-hidden", String(!open));
   $("backdrop").hidden = !open;
   $("pending-btn").setAttribute("aria-expanded", String(open));
   if (!open && document.activeElement === $("pending-btn")) $("pending-btn").blur(); // Enter が保留ボタンに吸われないように
+  if (open) focusDrawerRow();
 }
 
 const drawerOpen = () => $("drawer").classList.contains("open");
@@ -175,10 +200,11 @@ function renderList() {
       class: "row" + (d.id === shownId ? " current" : ""),
       type: "button",
       onclick: () => { show(d.id); setDrawer(false); },
-    }, el("div", { class: "title", text: titleOf(d) }), meta);
+    }, el("div", { class: "title", text: titleOf(d) }), chips(d, "small"), meta);
     list.append(el("li", {}, row));
   }
   if (!list.children.length) list.append(el("li", { class: "muted", text: "保留はありません" }));
+  else if (drawerOpen()) focusDrawerRow();
 }
 
 // ---- 右列: 判断 ----
@@ -216,14 +242,13 @@ async function send(d, body) {
   }
 }
 
-function terminalButton(d, closed) {
-  return el("button", { class: "link", type: "button", disabled: closed, text: "ターミナルで答える", onclick: () => send(d, { fallback: true }) });
-}
-
+const kbd = (t) => el("kbd", { class: "kbd", text: t });
+const keyLine = (...parts) => el("div", { class: "keys" }, ...parts.flatMap(([ks, label]) => [...ks.map(kbd), el("span", { text: label })]));
 const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
 
 function renderRight(d) {
   const root = $("decision");
+  if (!drawerOpen()) document.activeElement?.blur?.(); // フォーカスを body に戻し、キーを document で受ける
   root.replaceChildren();
   ui = null;
   if (!d) return;
@@ -264,6 +289,7 @@ function renderRight(d) {
         // 単一選択は移動 = 選択。初期位置(推奨、無ければ先頭)を選んでおく
         if (!closed && !q.multiSelect && sel.size === 0 && !free.on && items.length) sel.add(items[dr.cursor].value);
       }
+      if (single) box.append(keyLine([["j", "k"], "移動"], [["Enter"], "回答"], ...(q.multiSelect ? [[["Space"], "切替"]] : [])));
       for (const it of items) {
         const input = el("input", {
           type: q.multiSelect ? "checkbox" : "radio",
@@ -279,7 +305,7 @@ function renderRight(d) {
         });
         const lab = el("div", { class: "lab" }, el("span", { text: it.label }), it.badge ? el("span", { class: "rec-badge", text: "推奨" }) : null);
         const card = el("label", { class: "opt" + (it.badge ? " rec" : "") }, input,
-          el("span", { class: "grow" }, lab, ...it.lines.map((l) => el("div", { class: l.muted ? "desc muted" : "desc", text: l.text }))));
+          el("span", { class: "grow" }, lab, ...it.lines.map((l) => el("div", { class: l.muted ? "desc muted" : "desc" }, l.cell ? inlineClone(l.cell) : l.text))));
         if (single) { const idx = cards.length; cards.push({ input, card }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
         box.append(card);
       }
@@ -301,7 +327,7 @@ function renderRight(d) {
         oninput: (ev) => { free.text = ev.target.value; updateSubmit(); },
       });
       const freeCard = el("label", { class: "opt free" }, freeInput,
-        el("span", { class: "grow" }, el("div", { class: "lab", text: "自由記述" }), freeText));
+        el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: "自由記述" }), single ? kbd("i") : null), freeText));
       if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
       box.append(freeCard);
       qsBox.append(box);
@@ -314,7 +340,6 @@ function renderRight(d) {
     });
     const submit = el("button", {
       class: "btn primary", type: "button", id: "submit", disabled: closed || !complete(),
-      title: "キー: Enter",
       onclick: () => {
         const answers = {};
         qs.forEach((q, qi) => {
@@ -328,11 +353,12 @@ function renderRight(d) {
         });
         send(d, { answers });
       },
-      text: "回答する",
-    });
+    }, el("span", { text: "回答する" }), kbd("Enter"));
     function updateSubmit() { submit.disabled = closed || !complete(); }
-    const actions = el("div", { class: "actions" }, submit, terminalButton(d, closed));
-    if (single) actions.append(el("div", { class: "hint", text: "↑↓ 選ぶ · Enter 決定 · Space 複数選択の切替" }));
+    const actions = el("div", { class: "actions" }, submit);
+    if (single) {
+      actions.append(el("div", { class: "hint", text: `j/k 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · i 自由記述 · h/l 保留の切替 · b 一覧` }));
+    }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
     ui = {
@@ -356,9 +382,9 @@ function renderRight(d) {
     el("div", { class: "head" }, el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)),
     el("div", { class: "plan-q", text: "この計画を承認しますか" }));
   root.append(qsBox);
-  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, title: "キー: y", text: "承認", onclick: () => send(d, { approve: true, set_mode_auto: false }) });
-  const auto = el("button", { class: "btn", type: "button", disabled: closed, title: "キー: a", text: "承認して auto", onclick: () => send(d, { approve: true, set_mode_auto: true }) });
-  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, title: "キー: n", text: "却下", onclick: () => startReject(d) });
+  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: false }) }, el("span", { text: "承認" }), kbd("y"));
+  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: "承認して auto" }), kbd("a"));
+  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: "却下" }), kbd("n"));
   const actions = el("div", { class: "actions" });
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
@@ -366,13 +392,13 @@ function renderRight(d) {
       onclick: () => send(d, { approve: false, reason: dr.reason.trim() }),
     });
     const input = el("input", {
-      type: "text", id: "reason", placeholder: "却下の理由(必須)", value: dr.reason,
+      type: "text", id: "reason", placeholder: "却下の理由(Enter で送信、Esc で取りやめ)", value: dr.reason,
       oninput: (ev) => { dr.reason = ev.target.value; confirm.disabled = !dr.reason.trim(); },
       onkeydown: (ev) => { if (ev.key === "Enter" && dr.reason.trim()) confirm.click(); },
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(approve, auto, reject, terminalButton(d, closed), el("div", { class: "hint", text: "←→ ↑↓ 選ぶ · Enter 決定 · y 承認 · a auto · n 却下" }));
+  actions.append(approve, auto, reject, el("div", { class: "hint", text: "j/k 移動 · Enter 決定 · y 承認 · a auto · n 却下 · h/l 保留の切替 · b 一覧" }));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
@@ -455,8 +481,45 @@ function foldLongPre(container) {
   }
 }
 
+// GitHub 形式の alert(blockquote の先頭が [!NOTE] など)を色付きの箱にする。何度呼んでも壊れない
+const CALLOUTS = { NOTE: ["補足", "note"], TIP: ["ヒント", "tip"], WARNING: ["注意", "warning"], CAUTION: ["警告", "caution"] };
+function callouts(container) {
+  for (const bq of container.querySelectorAll("blockquote:not(.callout)")) {
+    const p = bq.firstElementChild;
+    const first = p?.firstChild;
+    if (!p || p.tagName !== "P" || first?.nodeType !== Node.TEXT_NODE) continue;
+    const m = /^\s*\[!(NOTE|TIP|WARNING|CAUTION)\][ \t]*\n?/i.exec(first.textContent ?? "");
+    if (!m) continue;
+    const [label, cls] = CALLOUTS[m[1].toUpperCase()];
+    first.textContent = first.textContent.slice(m[0].length);
+    if (p.firstChild?.nodeName === "BR") p.firstChild.remove();
+    if (!p.textContent.trim() && !p.children.length) p.remove();
+    bq.classList.add("callout", cls);
+    bq.prepend(el("div", { class: "callout-label", text: label }));
+  }
+}
+
+// 表のセルの装飾(strong / em / code)だけ残して複製する。他の要素は中身だけ残す
+function inlineClone(node) {
+  const out = document.createDocumentFragment();
+  for (const c of node.childNodes) {
+    if (c.nodeType === Node.TEXT_NODE) out.append(c.textContent ?? "");
+    else if (c.nodeType === Node.ELEMENT_NODE) {
+      const tag = c.tagName.toLowerCase();
+      if (tag === "strong" || tag === "em" || tag === "code") {
+        const e = document.createElement(tag);
+        e.append(inlineClone(c));
+        out.append(e);
+      } else if (tag === "br") out.append(" ");
+      else out.append(inlineClone(c));
+    }
+  }
+  return out;
+}
+
 // pre の畳み・diff・mermaid をまとめて適用(何度呼んでも壊れない)
 async function enhance(container) {
+  callouts(container);
   for (const code of container.querySelectorAll("pre > code.language-diff")) {
     code.closest("pre").replaceWith(diffBlock(code.textContent ?? ""));
   }
@@ -544,11 +607,13 @@ function parseOptionsTable(table, options, fm) {
   const hi = hn.findIndex((h) => h.includes(normHeading("起きること")));
   const ri = hn.findIndex((h) => h.includes(normHeading("リスク")));
   const cards = [];
-  for (const row of trs.slice(1).map(cells)) {
+  for (const tr of trs.slice(1)) {
+    const row = cells(tr);
+    const tds = [...tr.children];
     const o = options.find((o) => normLabel(o.label) === normLabel(row[0] ?? ""));
     if (!o || cards.some((c) => c.option === o)) continue;
     let lines;
-    if (hi >= 0 && ri >= 0) lines = [{ text: row[hi] ?? "" }, { text: row[ri] ?? "", muted: true }];
+    if (hi >= 0 && ri >= 0) lines = [{ text: row[hi] ?? "", cell: tds[hi] }, { text: row[ri] ?? "", muted: true, cell: tds[ri] }];
     else lines = row.slice(1).map((t, j) => ({ text: t ? `${header[j + 1] ?? ""}: ${t}` : "" })); // 旧形式
     lines = lines.filter((l) => l.text && !/^[-—ー]+$/.test(l.text));
     cards.push({ option: o, label: stripSuffix(row[0]), lines, suffix: SUFFIX_RE.test(row[0]), recommended: false });
@@ -656,16 +721,52 @@ function connect() {
 
 // ---- キーボード ----
 
+let lastG = 0; // gg の 1 回目の時刻
+
+function cycle(step) {
+  const list = pendingList();
+  if (list.length < 2) return;
+  const i = list.findIndex((d) => d.id === shownId);
+  show(list[(i + step + list.length) % list.length].id);
+}
+
+function drawerKey(ev) {
+  const list = pendingList();
+  if (ev.key === "Escape" || ev.key === "b") { ev.preventDefault(); setDrawer(false); }
+  else if (ev.key === "ArrowDown" || ev.key === "ArrowUp" || ev.key === "j" || ev.key === "k") {
+    ev.preventDefault();
+    drawerIdx += ev.key === "ArrowDown" || ev.key === "j" ? 1 : -1;
+    focusDrawerRow();
+  } else if (ev.key === "Enter") {
+    ev.preventDefault();
+    const d = list[clamp(drawerIdx, list.length)];
+    if (d) show(d.id);
+    setDrawer(false);
+  } else if (ev.key === "Tab") ev.preventDefault();
+}
+
+function cancelReject() {
+  const d = decisions.get(shownId);
+  draftOf(d).rejecting = false;
+  renderRight(d);
+}
+
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && drawerOpen()) { setDrawer(false); return; }
-  if (ev.ctrlKey || ev.metaKey || ev.altKey || drawerOpen() || !ui || ui.closed) return;
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.isComposing || ev.keyCode === 229) return;
+  if (drawerOpen()) { drawerKey(ev); return; }
   const t = ev.target;
   const typing = t instanceof HTMLInputElement && t.type === "text";
+  if (ev.key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
+  if (!typing && (ev.key === "h" || ev.key === "l")) { ev.preventDefault(); cycle(ev.key === "l" ? 1 : -1); return; }
+  if (!typing && ev.key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
+  if (!ui || ui.closed) return;
+  const isBtn = t instanceof HTMLButtonElement;
 
   if (ui.kind === "question") {
     const n = ui.cards.length;
     if (typing) {
       if (ev.key === "Enter") { ev.preventDefault(); if (!ui.submit.disabled) ui.submit.click(); }
+      else if (ev.key === "Escape") { ev.preventDefault(); t.blur(); }
       else if (n && (ev.key === "ArrowUp" || ev.key === "ArrowDown")) {
         ev.preventDefault();
         t.blur();
@@ -673,13 +774,26 @@ document.addEventListener("keydown", (ev) => {
       }
       return;
     }
-    if (t instanceof HTMLButtonElement) return; // ボタンの既定動作に任せる
+    if (ev.key === "Enter" && isBtn && t !== ui.submit) return; // そのボタンの既定動作に任せる
+    if (ev.key === " " && isBtn) return;
     if (t instanceof HTMLInputElement) t.blur(); // ネイティブの選択操作と二重にならないように
     const onFree = n > 0 && ui.cursor === n - 1;
-    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    const now = Date.now();
+    const gg = ev.key === "g" && now - lastG < 1000;
+    lastG = ev.key === "g" && !gg ? now : 0;
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp" || ev.key === "j" || ev.key === "k") {
       if (!n) return;
       ev.preventDefault();
-      ui.setCursor(ui.cursor + (ev.key === "ArrowDown" ? 1 : -1), true);
+      ui.setCursor(ui.cursor + (ev.key === "ArrowDown" || ev.key === "j" ? 1 : -1), true);
+    } else if (gg || ev.key === "G") {
+      if (!n) return;
+      ev.preventDefault();
+      ui.setCursor(gg ? 0 : n - 1, true);
+    } else if (ev.key === "i") {
+      if (!ui.freeText) return;
+      ev.preventDefault();
+      ui.setCursor(n - 1, false);
+      ui.freeText.focus();
     } else if (ev.key === " ") {
       if (!ui.multi) return;
       ev.preventDefault();
@@ -695,9 +809,14 @@ document.addEventListener("keydown", (ev) => {
   }
 
   // 計画
-  if (typing || t instanceof HTMLButtonElement) return;
-  if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
-  else if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
+  if (typing) {
+    if (ev.key === "Escape") { ev.preventDefault(); cancelReject(); }
+    return;
+  }
+  if (ev.key === "Enter" && isBtn) return;
+  if (ev.key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
+  else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp" || ev.key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
+  else if (ev.key === "ArrowRight" || ev.key === "ArrowDown" || ev.key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
   else if (ev.key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }
   else if (ev.key === "y") { ev.preventDefault(); ui.approve.click(); }
   else if (ev.key === "a") { ev.preventDefault(); ui.auto.click(); }
