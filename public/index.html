@@ -11,8 +11,9 @@
 <link rel="stylesheet" media="(prefers-color-scheme: dark)" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 </head>
 <body>
-<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden><span data-i18n="pending">Pending</span> <span id="pending-count">0</span> <kbd class="kbd">←</kbd><kbd class="kbd">→</kbd></button>
+<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden><span data-i18n="pending">Pending</span> <span id="pending-count">0</span></button>
 <div id="banner" class="banner" hidden></div>
+<header id="head" class="hd" hidden></header>
 <main id="main" hidden>
   <section id="background" aria-label="Background" data-i18n-aria-label="aria_background"></section>
   <section id="decision" aria-label="Decision" data-i18n-aria-label="aria_decision"></section>
@@ -24,7 +25,7 @@
 <div id="backdrop" class="backdrop" hidden></div>
 <aside id="drawer" class="drawer" aria-label="Pending decisions" data-i18n-aria-label="pending_list" aria-hidden="true">
   <h2 data-i18n="pending_list">Pending decisions</h2>
-  <div class="keys"><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd><span data-i18n="key_move">Move</span> · <kbd class="kbd">Enter</kbd><span data-i18n="key_show">Show</span> · <kbd class="kbd">Esc</kbd><kbd class="kbd">←</kbd><span data-i18n="key_close">Close</span></div>
+  <div id="drawer-keys" class="keys"></div>
   <ul id="pending-list"></ul>
 </aside>
 <script src="/public/vendor/marked.umd.js"></script>
