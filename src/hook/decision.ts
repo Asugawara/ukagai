@@ -11,6 +11,7 @@ import {
 import type { Client } from "./client.js";
 import {
   denyReason,
+  multiDenyReason,
   explainDir,
   findExplanation,
   markUsed,
@@ -49,6 +50,11 @@ function allow(updatedInput: Record<string, unknown>): Out {
 /** 説明なしの印。path / markdown は空、match は固定値(docs/spec/api.md 参照) */
 function noExplanation(none_reason: "plan_mode" | "loop_guard"): Explanation {
   return { path: "", markdown: "", has: NO_HAS, match: "question", attached_via: "none", none_reason };
+}
+
+function questionCount(d: Decision): number {
+  const qs = (d.request as { questions?: unknown[] }).questions;
+  return Array.isArray(qs) ? qs.length : 0;
 }
 
 function firstQuestion(d: Decision): string | undefined {
@@ -102,6 +108,26 @@ export async function handleDecision(
       explanation = noExplanation("plan_mode");
     } else {
       const dir = explainDir(input.scratchpad_dir, opts.dataDir, input.session_id);
+      // 1 判断 = 1 問 = 1 説明。多問は説明の探索より前に deny する(質問文は見ず session + agent で数える)
+      let multiGuarded = false;
+      if (parsed.data.questions.length > 1) {
+        const prior = await client.listDeniedExplain(input.session_id);
+        if (!prior) return null;
+        const t = Date.now();
+        multiGuarded = prior.some(
+          (d) =>
+            d.status === "denied_explain" &&
+            d.kind === "answer_question" &&
+            (d.session.agent_id ?? "") === (input.agent_id ?? "") &&
+            questionCount(d) > 1 &&
+            t - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
+        );
+        if (!multiGuarded) {
+          const reg = await client.createDecision({ ...base, status: "denied_explain" });
+          if (!reg) return null;
+          return deny(multiDenyReason(parsed.data.questions.length));
+        }
+      }
       const found = await findExplanation(dir, q0.question);
       const v = found ? validateExplanation(found.markdown, "answer_question", q0.options.map((o) => o.label)) : null;
       const denied = await client.listDeniedExplain(input.session_id);
@@ -131,7 +157,7 @@ export async function handleDecision(
           attached_via: linked.length > 0 ? "after_deny" : "first_call",
         };
         usedPath = found.path;
-      } else if (linked.length > 0) {
+      } else if (linked.length > 0 || multiGuarded) {
         explanation = noExplanation("loop_guard");
       } else {
         const missing = (v ? v.missing : ["file" as const]).map((c) => MISSING_LABELS[c]);
