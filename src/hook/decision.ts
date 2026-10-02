@@ -103,7 +103,7 @@ export async function handleDecision(
     } else {
       const dir = explainDir(input.scratchpad_dir, opts.dataDir, input.session_id);
       const found = await findExplanation(dir, q0.question);
-      const v = found ? validateExplanation(found.markdown, "answer_question", q0.options.length) : null;
+      const v = found ? validateExplanation(found.markdown, "answer_question", q0.options.map((o) => o.label)) : null;
       const denied = await client.listDeniedExplain(input.session_id);
       if (!denied) return null; // server 不在: 保険は効かせず通常 UI へ
       const now = Date.now();

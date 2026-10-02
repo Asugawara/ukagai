@@ -18,6 +18,3 @@ recommended: decisions.jsonl (Recommended)
 | decisions.jsonl (Recommended) | 中身(判断)が名前から分かり、`events.jsonl` と並べて読める。 | 少し長いだけ。定数 1 か所の変更で戻せる。 |
 | log.jsonl | 名前が短くなる。 | events との区別がつきにくい。定数 1 か所の変更で戻せる。 |
 
-## 推奨
-
-`decisions.jsonl` を推します。名前から中身が分かり、`events.jsonl` と区別できるためです。短さを優先するなら `log.jsonl` が正しくなります。

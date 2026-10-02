@@ -1,6 +1,10 @@
 {
   "valid": true,
   "missing": [],
-  "has": { "mermaid": true, "table": true, "diff": true },
+  "has": {
+    "mermaid": true,
+    "table": true,
+    "diff": true
+  },
   "question": "~/.ukagai/decisions.jsonl を削除して履歴を初期化してよいですか？"
 }

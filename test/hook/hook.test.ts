@@ -13,16 +13,20 @@ const NOW = () => new Date().toISOString();
 const explanationFor = (q: string) => `---
 ukagai: 1
 question: ${q}
+title: A と B のどちらにするか
 reversibility: reversible
 scope: file
+recommended: A
 ---
 ## なぜ今この判断が要るか
 決める必要がある。
-## 選択肢の比較
-| 案 | 利点 | 欠点 | コスト |
-|---|---|---|---|
-| A | a | b | c |
-| B | a | b | c |
+## 選択肢
+| 案 | 選ぶと起きること | リスクと戻し方 |
+|---|---|---|
+| A | a | b |
+| B | a | b |
+## 推奨
+A を推す。
 `;
 
 function t1(scratchpad: string, extra: Record<string, unknown> = {}) {
@@ -180,7 +184,7 @@ test("形式不備 → deny の理由に足りない項目名が入る", async (
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
     const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
-    assert.match(reason, /選択肢の比較の表/);
+    assert.match(reason, /選択肢の表/);
   });
   assert.ok(existsSync(join(sp, "ukagai", "e.md")), "不備のファイルは rename しない");
 });
@@ -362,8 +366,8 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
     assert.equal(out.hookEventName, ev);
     assert.ok(out.additionalContext.includes(`${sp}/ukagai/`));
     assert.doesNotMatch(out.additionalContext, /https?:|\/api\//);
-    assert.equal(out.additionalContext.split("\n").length, 3);
-    assert.ok(out.additionalContext.includes("reversibility は reversible / costly / irreversible、scope は file / repo / machine / external のいずれか"));
+    assert.equal(out.additionalContext.split("\n").length, 4);
+    assert.ok(out.additionalContext.includes("reversibility は reversible / costly / irreversible、scope は file / repo / machine / external"));
   });
 }
 

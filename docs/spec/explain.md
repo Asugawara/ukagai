@@ -2,7 +2,7 @@
 
 エージェントが人に判断を求める前に書く「説明」の形式と、hook(`src/hook/explain.ts`)が行う検査の規則。実装計画は `docs/strategy/03-mvp-implementation-plan.md` の 3 節「説明の経路」。この文書の規則が実装と fixture(`test/explain-fixtures/`)の正になる。
 
-**未確定の印**: `【E4 で確定】` `【E5 で確定】` は、実機検証(E4 / E5)の結果で最後に直す値・文面。それまでは書かれた値を仮置きとして実装する。
+**v2 の方針**: 人が GUI で矢印キーと Enter だけで決められるように、エージェントに判断材料を考え抜かせる。GUI は `AskUserQuestion` の生の質問文・選択肢をそのまま出さず、説明ファイル(`title` / 「推奨」節 / 「選択肢」の表)で判断画面を組む。説明ファイルが判断材料の本体になる。
 
 ## 1. 置き場
 
@@ -24,9 +24,12 @@
 |---|---|---|---|
 | `ukagai` | 必須 | `1` | 形式のバージョン。`1` 以外は不正 |
 | `question` | 必須 | 文字列 | `AskUserQuestion` の `questions[0].question` を**一字一句そのまま**。照合は完全一致(空白・全角半角の正規化はしない)。質問が複数のときも `questions[0]` だけを使う |
-| `title` | 任意 | 文字列 | GUI の見出し。無ければ `question` を使う |
+| `title` | 必須 | 文字列 | 人向けの「決めてほしいこと」1 文(例: `判断ログの保存形式を JSONL と SQLite のどちらにするか`)。GUI の判断見出し。`question` は照合用で GUI には出さない |
 | `reversibility` | 必須 | `reversible` / `costly` / `irreversible` | 決めた後に戻せるか。`reversible` = 簡単に戻せる、`costly` = 戻せるが手間かコストがかかる、`irreversible` = 戻せない |
 | `scope` | 必須 | `file` / `repo` / `machine` / `external` | 影響の範囲。`file` = 数ファイル、`repo` = リポジトリ全体、`machine` = この機械(リポジトリ外のファイル・設定・プロセス)、`external` = 他人・他システム(push、公開、課金、メッセージ送信) |
+| `recommended` | 必須 | 文字列 | 推す選択肢のラベル。ラベル照合(下記)で `questions[0].options[].label` のどれかと一致すること(stdin で選択肢が分かるときだけ照合。分からなければ空でなければよい) |
+
+**ラベル照合**(`normalizeLabel`。hook と GUI で同じ規則): 両辺を NFKC → 末尾の `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）` を除去 → 空白(全種)を削除 → 小文字化、にして完全一致で比べる。
 
 「`scope` が `repo` 以上」= `repo` / `machine` / `external`(順序は `file` < `repo` < `machine` < `external`)。
 
@@ -36,14 +39,15 @@
 
 - 見出しは ATX 形式(`#` 1〜6 個 + 空白 + 文字列)。コードフェンス(```` ``` ````、`~~~`)の内側の行は見出しとして扱わない。
 - 節は、その見出しから、同じか浅いレベルの次の見出しの直前まで(深い見出しは節に含む)。
-- 照合は**正規化した部分一致**: 見出しの文字列と必須の見出し名の両方に同じ正規化をかけ、見出しが必須名を含めば一致。
+- 照合は**正規化した一致**: 見出しの文字列と必須の見出し名の両方に同じ正規化をかける。**完全一致を優先**し、完全一致が無ければ部分一致(見出しが必須名を含めば一致)。「選択肢」が先に出る「推奨する選択肢」に誤って当たらないため。
 - 正規化 = Unicode NFKC(全角半角を統一)→ 空白(全種)を削除 → 「と」と「・」を削除 → 小文字化。
-- 一致する見出しが複数あれば、最初のものを使う。
+- 同じ段階(完全一致どうし、部分一致どうし)で一致する見出しが複数あれば、最初のものを使う。
 
 | コード | 必須の見出し名 | 正規化後 |
 |---|---|---|
 | `why` | なぜ今この判断が要るか | なぜ今この判断が要るか |
-| `compare` | 選択肢の比較 | 選択肢の比較 |
+| `options` | 選択肢 | 選択肢 |
+| `recommend` | 推奨 | 推奨 |
 | `diagram` | 図 | 図 |
 | (計画) | 影響範囲と可逆性 | 影響範囲可逆性 |
 
@@ -53,18 +57,21 @@
 
 | 節 | 条件 |
 |---|---|
-| なぜ今この判断が要るか | 常に必須。節に空でない行が 1 行以上 |
-| 選択肢の比較 | 常に必須。節の中に 3.3 の表 |
+| なぜ今この判断が要るか | 常に必須。節に空でない行が 1 行以上。状況と、**人でなければ決められない理由**(エージェントが知り得ないこと)を書く(内容は検査しない) |
+| 選択肢 | 常に必須。節の中に 3.3 の表。旧見出し「選択肢の比較」も部分一致で通る |
+| 推奨 | 常に必須。節に空でない行が 1 行以上。どれを推すか、理由(2〜3 文)、**別の選択肢が正しくなる条件**(「〜なら B」)を書く(内容は検査しない) |
 | 図 | **`scope` が `repo` 以上、または `reversibility` が `reversible` 以外のとき必須**。節の中に ` ```mermaid ` のコードブロックが 1 つ以上。`scope` か `reversibility` が欠落・不正なときは必須として扱う(安全側)。それ以外は任意 |
-| 関係する差分 | コード変更が絡むときに書く。hook は判定できないので**検査しない**(任意) |
+| 確かめたこと | 任意。file:line、コマンドの結果。推測は「推測」と書く。検査しない |
+| 関係する差分 | コード変更が絡むときに書く。hook は判定できないので**検査しない**(任意)。` ```diff ` で 20 行以内 |
 
 ### 3.3 表の最低条件
 
-「選択肢の比較」の節の中に、GFM の表(ヘッダ行 + 区切り行 `|---|` + データ行)が次を満たすこと。
+「選択肢」の節の中に、GFM の表(ヘッダ行 + 区切り行 `|---|` + データ行)が次を満たすこと。
 
-1. ヘッダの列のうち、正規化後に `利点`、`欠点`、`コスト` をそれぞれ含む列がある(3 列とも必須。他の列は自由。選択肢の名前は先頭列に書く)。
-2. データ行が 2 行以上。stdin から選択肢の数が分かるときは、さらに `questions[0].options` の数以上(= 選択肢ごとに 1 行)。
-3. 各データ行の 3 列(利点・欠点・コスト)のセルが空でない。空白のみ、または `-` `—` `ー` のみは空とみなす。
+1. ヘッダの列のうち、正規化後(3.1 の見出し正規化)に `起きること` を含む列と `リスク` を含む列がある(推奨の列名: 「選ぶと起きること」「リスクと戻し方」。他の列は自由)。**先頭列 = 選択肢のラベル**。旧列(利点・欠点・コスト)の表はここで落ちる。
+2. データ行が `max(2, 選択肢数)` 以上。選択肢数は stdin の `questions[0].options` の数で、分からないときは 2。
+3. 各データ行の上記 2 列のセルが空でない。空白のみ、または `-` `—` `ー` のみは空とみなす。
+4. stdin から選択肢が分かるときは、各ラベルについて、先頭セルが `normalizeLabel` で一致する行がある。
 
 節の中に表が複数あれば、どれか 1 つが満たせばよい。
 
@@ -87,25 +94,28 @@
 | `file` | 説明ファイルが見つからない(この場合は他のコードを評価しない) | 説明ファイル本体 |
 | `front_matter` | front matter が無い、閉じていない、または `ukagai` が `1` でない | front matter(`ukagai: 1`) |
 | `question` | `question` が無い、または空 | `question` |
+| `title` | `title` が無い、または空 | `title`(決めてほしいこと 1 文) |
 | `reversibility` | 無い、または値が集合外 | `reversibility` |
 | `scope` | 無い、または値が集合外 | `scope` |
+| `recommended` | 無い・空、またはラベル照合で `options[].label` のどれにも一致しない(labels が分かるとき) | `recommended`(推す選択肢のラベル) |
 | `why` | 「なぜ今この判断が要るか」の節が無い、または空 | 「なぜ今この判断が要るか」の節 |
-| `compare` | 「選択肢の比較」の節が無い | 「選択肢の比較」の節 |
-| `table` | `compare` があるのに 3.3 の表が無い(`compare` が無いときは評価しない) | 選択肢の比較の表(選択肢ごとに 1 行、利点・欠点・コストの列) |
+| `options` | 「選択肢」の節が無い | 「選択肢」の節 |
+| `table` | `options` があるのに 3.3 の表が無い(`options` が無いときは評価しない) | 選択肢の表(先頭列はラベル、選ぶと起きること・リスクと戻し方の列、選択肢ごとに 1 行) |
+| `recommend` | 「推奨」の節が無い、または空 | 「推奨」の節 |
 | `diagram` | 図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
 
-- front matter が無いときは `front_matter` だけを追加し、`question` `reversibility` `scope` は評価しない(図の必須判定は安全側で「必須」)。
-- 検査の入力は「ファイル全文」と、任意の `optionsCount`(`questions[0].options` の数)。
+- front matter が無いときは `front_matter` だけを追加し、`question` `title` `reversibility` `scope` `recommended` は評価しない(図の必須判定は安全側で「必須」)。
+- 検査の入力は「ファイル全文」と、任意の `labels`(`questions[0].options[].label` の配列。`validateExplanation(markdown, kind, labels?)`)。
 - `question` の欄そのものの形式検査と、stdin の質問文との照合(次節の手順 1)は別物。検査は欄の有無だけを見る。
 
 ## 5. hook の判定手順(PreToolUse × AskUserQuestion)
 
 `permission_mode === "plan"` のときは説明を要求しない(6 節)。それ以外:
 
-1. **探索**: 置き場(1 節)の `.md`(`.used.md` を除く)から、front matter の `question` が `questions[0].question` と**完全一致**するものを探す(複数あれば更新時刻が最新のもの。`match: question`)。無ければ、**10 分以内**【E4 で確定】に書かれた(更新時刻)未使用ファイルがちょうど 1 つならそれを使う(`match: recency`)。0 個または 2 個以上なら「見つからない」(`file`)。
-2. **検査と登録**: 見つかったファイルを 4 節の検査にかける。通れば Decision に登録する。`attached_via` は、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が直近 **2 分以内**【E4 で確定】にあれば `after_deny`、無ければ `first_call`。使ったファイルは `<名前>.used.md` に rename する。
+1. **探索**: 置き場(1 節)の `.md`(`.used.md` を除く)から、front matter の `question` が `questions[0].question` と**完全一致**するものを探す(複数あれば更新時刻が最新のもの。`match: question`)。無ければ、**10 分以内**(E4 で確定)に書かれた(更新時刻)未使用ファイルがちょうど 1 つならそれを使う(`match: recency`)。0 個または 2 個以上なら「見つからない」(`file`)。
+2. **検査と登録**: 見つかったファイルを 4 節の検査にかける。通れば Decision に登録する。`attached_via` は、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が直近 **2 分以内**(E4 で確定)にあれば `after_deny`、無ければ `first_call`。使ったファイルは `<名前>.used.md` に rename する。
 3. **deny**: 見つからない / 検査が落ちたら、`permissionDecision: "deny"` + 7 節の理由文を返し、`denied_explain` として登録する(GUI には出さない)。
-4. **ループ保険**: 手順 3 の時点で、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が **2 分以内**【E4 で確定】に既にあれば、deny せず説明なしで GUI に出す(`attached_via: none`、`none_reason: loop_guard`、GUI に「説明なし」の印)。
+4. **ループ保険**: 手順 3 の時点で、同じ `session_id + agent_id + questions[0].question` の `denied_explain` が **2 分以内**(E4 で確定)に既にあれば、deny せず説明なしで GUI に出す(`attached_via: none`、`none_reason: loop_guard`、GUI に「説明なし」の印)。
 
 ## 6. plan mode
 
@@ -113,13 +123,13 @@
 
 ## 7. deny 理由文のテンプレート
 
-2 種類を用意する。**E4 の結果(再呼び出し率)でどちらかに確定する**【E4 で確定】。確定までは実装側で切り替えられるようにする。
+2 種類を用意する。E4 の結果(往復 2 回で通ったのは命令文 7 本中 6、事実 + 依頼 2/2)により**既定は版 A**。`--deny-template` で版 B に切り替えられる。
 
 プレースホルダ:
 
 - `{path}`: 保存先の絶対パス(`<scratchpad_dir>/ukagai/explain.md`。名前は自由だが例を 1 つ示す)
 - `{question}`: `questions[0].question` の原文
-- `{missing}`: 4 節の「呼び名」を `、` で連結したもの
+- `{missing}`: 4 節の「呼び名」(`recommended` `title` なども含む。呼び名が長いため 600 文字の切り詰めが効きやすい)を `、` で連結したもの
 
 共通の制約: **GUI の URL・ポート・API パスを書かない**(Claude 自身に `curl` で回答させないため)。展開後の全文は **600 文字以内**。超えるときは `{missing}` を「…ほか N 件」に切り詰め、なお超えるときは最終文を削る。`{question}` は原文でなければ照合できないので切り詰めない。
 
@@ -141,12 +151,13 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 
 ## 8. SessionStart / SubagentStart の additionalContext
 
-どちらも sync で返す。3 行。`{scratchpad_dir}/ukagai/` の部分は、置き場の絶対パス(1 節で決まる `<scratchpad_dir>/ukagai/` または `~/.ukagai/explain/<session_id>/`)に置き換える。URL は書かない。文面は【E5 で確定】。
+どちらも sync で返す。4 行以内。`{置き場の絶対パス}` は 1 節で決まる `<scratchpad_dir>/ukagai/` または `~/.ukagai/explain/<session_id>/`。URL は書かない。列挙値を書く(E5 で、書かないと `reversibility` / `scope` が自由文になると分かった)。
 
 ```
-人に判断を求める前(AskUserQuestion の前、計画の提示の前)に、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
-front matter の question: には AskUserQuestion の質問文を一字一句そのまま入れる。reversibility は reversible / costly / irreversible、scope は file / repo / machine / external のいずれかにする。選択肢の比較は表に、構造や流れは Mermaid の図にする。
-文章で質問せず AskUserQuestion を使い、計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
+人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。
+聞くときは、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
+front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。構造や流れは Mermaid の図にする。
+文章で質問せず AskUserQuestion を使い、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
 ```
 
 サブエージェント内では AskUserQuestion が提供されないため判断は発生しない(Claude Code 2.1.287 で確認)。SubagentStart の additionalContext は届くが、使われる場面はない。
@@ -167,7 +178,7 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 
 ## 11. fixture
 
-`test/explain-fixtures/` に 7 つ。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表の行数は `optionsCount` を渡さない前提(データ行 2 以上)で判定する。
+`test/explain-fixtures/` に 10。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表は `labels` を渡さない前提(データ行 2 以上、ラベル照合なし)で判定する。
 
 | ファイル | valid | missing |
 |---|---|---|
@@ -175,6 +186,9 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 | `pass-naming.md` | true | なし |
 | `pass-destructive.md` | true | なし |
 | `fail-no-table.md` | false | `table` |
+| `fail-no-recommended.md` | false | `recommended` |
+| `fail-old-columns.md` | false | `table`(利点・欠点・コストの旧表) |
+| `fail-no-recommend-section.md` | false | `recommend` |
 | `fail-no-question.md` | false | `question` |
 | `fail-no-diagram-when-required.md` | false | `diagram` |
 | `plan-heading-variant.md` | true | なし |
@@ -183,5 +197,5 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 
 - `question` が複数行の質問文は front matter の 1 行スカラーで完全一致できず、recency に頼る。
 - recency は別の質問向けのファイルも拾いうる(10 分以内にちょうど 1 つあれば `match: recency` で添付される)。
-- 「図」の見出し照合は部分一致なので、先に出る「図解」などの見出しに当たり、本来の「図」の節を隠しうる。
+- 見出し照合は完全一致を優先するが、完全一致が無いと部分一致になる。「図」は部分一致なので、先に出る「図解」などの見出しに当たり、本来の「図」の節を隠しうる。
 - ExitPlanMode の `after_deny` には時間窓が無く(同一セッションの denied_explain があれば成立)、server の `first_denied_at`(120 秒窓)とずれうる。

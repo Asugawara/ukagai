@@ -2,7 +2,7 @@
 
 Agents ask. Humans decide. One place for every coding agent's questions, with the context to answer them.
 
-コーディングエージェントが人に求める「判断」(AskUserQuestion / 計画承認)を Claude Code の hook で横取りし、localhost の GUI に集め、エージェント自身が書いた説明(なぜ・比較表・Mermaid 図・差分)と一緒に答えられるようにするツール。MCP は使わない。
+コーディングエージェントが人に求める「判断」(AskUserQuestion / 計画承認)を Claude Code の hook で横取りし、localhost の GUI に集め、エージェント自身が書いた説明(なぜ・推奨・選択肢の表・Mermaid 図・差分)と一緒に答えられるようにするツール。MCP は使わない。
 
 ## 使い方(開発中)
 
@@ -26,7 +26,7 @@ node dist/cli.js doctor             # 登録と server の診断
 | `docs/strategy/02-mvp-plan.md` | 旧 MVP 計画(指標と打ち切り条件は有効。技術決定は 03 に置き換え) |
 | `docs/strategy/03-mvp-implementation-plan.md` | 現行の MVP 実装計画(hook + GUI 方式、分割と担当、日程、リスク) |
 | `docs/spec/api.md` | server の API、状態遷移、認可 |
-| `docs/spec/explain.md` | エージェントが書く説明ファイルの仕様と hook の判定規則 |
+| `docs/spec/explain.md` | エージェントが書く説明ファイル(v2: title / recommended / 推奨 / 選択肢の表)の仕様と hook の判定規則 |
 | `skills/ukagai-explain/SKILL.md` | 説明の書き方を Claude に教える skill(install が配置する) |
 | `docs/verification/01-askuserquestion-injection.md` | PreToolUse hook で AskUserQuestion / ExitPlanMode に回答を注入できることの実機検証 |
 | `docs/verification/02-hook-limits.md` | hook の timeout 上限、answers の変種、deny で説明を書かせる往復などの実機検証 |

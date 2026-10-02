@@ -1,6 +1,8 @@
 {
-  "valid": true,
-  "missing": [],
+  "valid": false,
+  "missing": [
+    "recommended"
+  ],
   "has": {
     "mermaid": false,
     "table": true,
