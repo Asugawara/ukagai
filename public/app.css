@@ -18,7 +18,7 @@ html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
   font: 14px/1.6 system-ui, -apple-system, "Hiragino Sans", sans-serif;
-  height: 100dvh; display: grid; grid-template-rows: minmax(0, 1fr);
+  height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr);
 }
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
@@ -47,7 +47,9 @@ body {
 .cwd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .meta-line .badge { color: var(--fg); }
 .meta-line .badge.irreversible { color: #fff; }
-.banner { position: fixed; left: 0; right: 0; top: 0; z-index: 30; background: var(--red); color: #fff; padding: 8px 16px; }
+.banner { grid-row: 1; background: var(--red); color: #fff; padding: 8px 16px; } /* 通常フロー。表示中は下の行(main / .empty)を押し下げる */
+main, .empty { grid-row: 2; }
+code .nb { white-space: nowrap; } /* `-` を含む語は途中で折らない(語の境目は <wbr>) */
 
 /* main */
 main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); min-height: 0; }
