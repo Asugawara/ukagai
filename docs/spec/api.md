@@ -9,7 +9,7 @@
 | API | 呼び手 | 役割 |
 |---|---|---|
 | `POST /api/decisions` | hook | 判断を登録。同じ `tool_use_id` なら既存を返す |
-| `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | long-poll。回答済み(`answer_submitted` / `fallback`)なら 200 + response、未回答で timeout なら 204、閉じた判断(`answered` など)なら 410 を即返す。各 poll の終了時に `lease_until` を更新 |
+| `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | long-poll。回答済み(`answer_submitted` / `fallback`)なら 200 + response、未回答で timeout なら 204、閉じた判断(`answered` など。待機中にそうなった場合も)なら 410 を即返す。各 poll の終了時に `lease_until` を更新 |
 | `POST /api/decisions/:id/ack` | hook | response を受け取った確認。`answered` と `delivered_at` が付く |
 | `POST /api/decisions/:id/cancel` | hook | hook が SIGTERM / SIGINT / SIGHUP で降りる時の通知。`pending` → `cancelled`、`answer_submitted` → `answer_lost` |
 | `POST /api/decisions/:id/answer` | GUI | 回答の送信 |
@@ -79,7 +79,7 @@
 
 `approve_plan` の応答は `answers` の代わりに `approve` / `reason` / `set_mode_auto` が入る。`via` が `terminal` のときは `{fallback:true}` が送られた場合で、hook は何も出力せず終了する。
 
-- 未回答で `timeout_ms`(既定 25000)が過ぎた: 204(本文なし)。`answered` / `hook_disconnected` などの終端状態に対しても、即時には返さず timeout まで待って 204。
+- 未回答で `timeout_ms`(既定 25000)が過ぎた: 204(本文なし)。`answered` / `hook_disconnected` などの終端状態は、待たずに即 410(`{error, status}`)。
 - `timeout_ms` は 0〜600000 に丸める。数値でなければ既定値。
 - lease の更新: poll の**開始時と終了時**の両方で `lease_until = now + timeout_ms + LEASE_GRACE_MS` にする(開始時にも更新しないと、初回の長い poll 中に初期 lease が切れる)。登録直後の初期 lease は `now + LEASE_GRACE_MS`。`pending` / `answer_submitted` のときだけ更新する。lease だけの更新は `decisions.jsonl` に書かない。
 

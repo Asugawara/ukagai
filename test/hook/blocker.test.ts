@@ -16,6 +16,9 @@ test("ブロッカー語彙: 当たり(対象語と詰まり語が同じ文に�
     "権限がありません",
     "トークンが無く進めません",
     "ログインしなければ続けられません",
+    "gcloud auth login をしてください",
+    "APIキーが必要です",
+    "api_key が無い",
   ]) {
     assert.equal(isBlockerMessage(m), true, m);
   }
@@ -37,6 +40,10 @@ test("ブロッカー語彙: 外れ(成功文・片方だけ・文をまたぐ)"
     "トークンの更新はエラーなく終わりました",
     "認証の設定です。手順が必要です", // 対象語と詰まり語が別の文
     "Everything is ready.\nThe token is valid",
+    "権限エラーになったわけではありません",
+    "権限は必要ありません",
+    "認証は不要です",
+    "The author is credited", // auth は単語として
     "",
     undefined,
   ]) {

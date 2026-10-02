@@ -210,10 +210,10 @@ test("推奨に条件(なら / 場合 / とき / if )が無いと recommend_cond
     assert.equal(validateExplanation(rec(ok)).valid, true, ok);
   }
   // Q2-03: 誤通過は落ち、言い回しの幅は通る
-  for (const ng of ["命名規則に合わせなければならないためです。", "ときどき読み返すので。", "diff を見るので。", "守らなければならず、B は避ける。"]) {
+  for (const ng of ["命名規則に合わせなければならないためです。", "ときどき読み返すので。", "diff を見るので。", "守らなければならず、B は避ける。", "A でなければならない。"]) {
     assert.deepEqual(validateExplanation(rec(ng)).missing, ["recommend_cond"], ng);
   }
-  for (const ok of ["短さを優先するのであれば log.jsonl が正しくなります。", "保存期間が長い場合は SQLite。", "Choose log.jsonl if brevity matters.", "移行する際は B。", "When C, use B.", "Unless C, use A."]) {
+  for (const ok of ["短さを優先するのであれば log.jsonl が正しくなります。", "保存期間が長い場合は SQLite。", "Choose log.jsonl if brevity matters.", "移行する際は B。", "When C, use B.", "Unless C, use A.", "長さが問題でなければ log.jsonl でも構いません。"]) {
     assert.equal(validateExplanation(rec(ok)).valid, true, ok);
   }
   // コードブロックと callout の中の語は数えない

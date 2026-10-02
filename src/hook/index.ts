@@ -43,7 +43,7 @@ export async function run(argv: string[]): Promise<number> {
       write(await sessionContext(input, opts));
     } else if (ev === "Stop") {
       const out = opts.observe ? null : stopDecision(input);
-      await Promise.race([observedEvent(input, client), new Promise<void>((r) => setTimeout(r, STOP_TOTAL_MS).unref())]);
+      await Promise.race([observedEvent(input, client, out !== null), new Promise<void>((r) => setTimeout(r, STOP_TOTAL_MS).unref())]);
       write(out);
     } else {
       await observedEvent(input, client);
