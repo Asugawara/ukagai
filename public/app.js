@@ -1,15 +1,40 @@
-// ukagai GUI。ユーザー由来の文字列は textContent で入れる。innerHTML は marked / mermaid の出力だけ。
-const MULTI_SELECT_SEPARATOR = ", "; // src/contract.ts と同じ値
+// ukagai GUI. Strings that come from outside are inserted with textContent; innerHTML is only for marked / mermaid output.
+// Display strings go through t() (i18n.js); the language is read from <html data-lang>.
+import { t, applyStatic } from "./i18n.js";
+
+const MULTI_SELECT_SEPARATOR = ", "; // same value as src/contract.ts
 const FOLD_LINES = 9;
+
+// Section headings, English first and Japanese alias second. Same content as SECTION in src/hook/explain.ts.
+const SECTION = {
+  why: ["Why this decision is needed now", "なぜ今この判断が要るか"],
+  options: ["Options", "選択肢"],
+  recommendation: ["Recommendation", "推奨"],
+  diagram: ["Diagram", "図"],
+  checked: ["What I checked", "確かめたこと"],
+  diff: ["Related diff", "関係する差分"],
+  blockerWhy: ["Why I stopped", "なぜ止まったか"],
+  blockerTodo: ["What you need to do", "人にしてほしいこと"],
+  impact: ["Scope and reversibility", "影響範囲と可逆性"],
+};
+// Fixed option labels of a blocker (a "(Recommended)" suffix is allowed on the first).
+const BLOCKER_LABELS = {
+  done: ["Done. Continue", "対応した。続けて"],
+  skip: ["Skip this step and continue", "この手順は飛ばして続けて"],
+  stop: ["Stop here", "ここで中断"],
+};
+// Table column detection (header cell text). The first column is always the option label.
+const COLUMN_HAPPENS = /happens|outcome|起きること/i;
+const COLUMN_RISK = /risk|リスク/i;
 
 const decisions = new Map();
 const drafts = new Map(); // id -> { sel: Map<qIndex, Set<label>>, free: Map<qIndex, {on, text}>, rejecting, reason }
 let shownId = null;
-let ui = null; // 表示中の判断の操作(キーボード用)
+let ui = null; // controls of the shown decision (for the keyboard)
 
 const $ = (id) => document.getElementById(id);
 
-// どの版の app.js を見ているかを画面に出す(index.html が付ける ?v=<版>)
+// Show which build of app.js is running (index.html appends ?v=<version>)
 const BUILD = (() => { try { return new URL(import.meta.url).searchParams.get("v") ?? "?"; } catch { return "?"; } })();
 const buildTag = () => el("span", { class: "build", text: `build ${BUILD}` });
 
@@ -34,21 +59,21 @@ function showBanner(msg) {
   b.hidden = false;
 }
 
-// server に繋がらない間(SSE の error)。赤バナーと空状態の文言で知らせ、復帰したら 2 秒だけ「再接続しました」
+// While the server is unreachable (SSE error): a red banner and the empty-state text say so; on recovery, a 2-second "Reconnected" toast
 let connDown = false;
 function renderEmptyText() {
-  $("empty-title").textContent = connDown ? "接続できません" : "判断待ちはありません";
-  $("empty-sub").textContent = connDown ? `${location.origin} に再接続しています` : "エージェントが質問すると、ここに表示されます";
+  $("empty-title").textContent = connDown ? t("empty_title_down") : t("empty_title");
+  $("empty-sub").textContent = connDown ? t("empty_sub_down", { origin: location.origin }) : t("empty_sub");
 }
 function setConnDown(down) {
   if (down === connDown) return;
   connDown = down;
-  if (down) showBanner(`接続できません(${location.origin})。再接続中…`);
-  else { $("banner").hidden = true; toast("再接続しました", { kind: "ok" }); }
+  if (down) showBanner(t("cannot_connect", { origin: location.origin }));
+  else { $("banner").hidden = true; toast(t("reconnected"), { kind: "ok" }); }
   renderEmptyText();
 }
 
-// server 再起動で cookie が失効したら GET / を取り直して cookie を更新する(同時に呼ばれても 1 回)
+// When the cookie expires after a server restart, refetch GET / to renew it (once, even if called concurrently)
 let refreshing = null;
 function refreshAuth() {
   refreshing ??= fetch("/", { credentials: "same-origin", cache: "no-store" })
@@ -66,7 +91,7 @@ async function api(path, init) {
   let res = await go();
   if (res.status === 401 && (await refreshAuth())) res = await go();
   if (res.status === 401) {
-    showBanner("ページを再読み込みしてください");
+    showBanner(t("reload_page"));
     throw new Error("unauthorized");
   }
   if (!res.ok) {
@@ -78,7 +103,7 @@ async function api(path, init) {
 
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
-// ---- サニタイズ(marked の出力用) ----
+// ---- Sanitizing (for marked output) ----
 
 function sanitize(html) {
   return html
@@ -90,19 +115,19 @@ function sanitize(html) {
     .replace(/\s(href|src|xlink:href|action|formaction)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi, "");
 }
 
-// 実体化した後の最終防衛: 画像は data: 以外すべて外す(実体参照で regex をすり抜けたものも)
+// Last line of defense after the HTML is materialized: drop every image except data: (including ones that slipped past the regex via entities)
 function dropExternalImages(container) {
   for (const img of container.querySelectorAll("img")) {
     const src = (img.getAttribute("src") ?? "").trim();
-    if (!/^data:/i.test(src)) img.remove(); // data: 以外(外部・相対・同一オリジン)はすべて外す
+    if (!/^data:/i.test(src)) img.remove(); // everything but data: (external, relative, same-origin) goes
   }
 }
 
-// ---- 表示補助 ----
+// ---- Display helpers ----
 
-// 見出し用の平文(Markdown の記号を除く)
-const plainMd = (t) => t.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
-const NONE_REASONS = { loop_guard: "書き直しの指示に従わなかったため", plan_mode: "plan mode のため", not_required: "説明を要求していないため" };
+// Plain text for headings (Markdown marks removed)
+const plainMd = (s) => s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+const NONE_REASON_KEYS = { loop_guard: "none_loop_guard", plan_mode: "none_plan_mode", not_required: "none_not_required" };
 
 const hasExplanation = (d) => !!d.explanation && d.explanation.attached_via !== "none";
 
@@ -111,19 +136,19 @@ function cwdTail(d) {
 }
 
 function titleOf(d) {
-  const t = rawTitleOf(d);
-  return d.kind === "approve_plan" ? plainMd(t) || "計画の承認" : t;
+  const title = rawTitleOf(d);
+  return d.kind === "approve_plan" ? plainMd(title) || t("plan_approval") : title;
 }
 
 function rawTitleOf(d) {
-  let t = d.explanation?.title;
-  if (!t && hasExplanation(d) && d.kind === "answer_question") t = parseFrontMatter(d.explanation.markdown).fm.title;
-  if (t) return t;
-  if (d.kind === "approve_plan") return /^#[ \t]+(.+?)[ \t]*$/m.exec(d.request.plan ?? "")?.[1] ?? "計画の承認";
-  return d.session.title || d.request.questions[0]?.question || "質問";
+  let title = d.explanation?.title;
+  if (!title && hasExplanation(d) && d.kind === "answer_question") title = parseFrontMatter(d.explanation.markdown).fm.title;
+  if (title) return title;
+  if (d.kind === "approve_plan") return /^#[ \t]+(.+?)[ \t]*$/m.exec(d.request.plan ?? "")?.[1] ?? t("plan_approval");
+  return d.session.title || d.request.questions[0]?.question || t("question");
 }
 
-// 人にしかできない作業(認証・権限など)で止まった判断。explanation.type か front matter の type
+// A decision stopped on work only a human can do (auth, permissions...). explanation.type or the front matter type
 function isBlocker(d) {
   const ex = d.explanation;
   if (!ex) return false;
@@ -149,9 +174,9 @@ function scopeOf(d) {
 
 function elapsed(iso) {
   const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
-  if (sec < 60) return `${sec}秒`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}分`;
-  return `${Math.floor(sec / 3600)}時間`;
+  if (sec < 60) return t("elapsed_s", { n: sec });
+  if (sec < 3600) return t("elapsed_m", { n: Math.floor(sec / 60) });
+  return t("elapsed_h", { n: Math.floor(sec / 3600) });
 }
 
 function diffBlock(text) {
@@ -166,18 +191,18 @@ function diffBlock(text) {
 const pendingList = () =>
   [...decisions.values()].filter((d) => d.status === "pending").sort((a, b) => a.created_at.localeCompare(b.created_at));
 
-const kindLabel = (d) => (d.kind === "approve_plan" ? "📋 計画" : "❓ 質問");
+const kindLabel = (d) => (d.kind === "approve_plan" ? t("kind_plan") : t("kind_question"));
 
-// ---- トースト ----
-// 右列の送信ボタンの真上(.actions の上端に重ねる)に縦に積む。最大 3 枚。判断が無いときは右下
+// ---- Toasts ----
+// Stacked vertically right above the submit button in the right column (on top of the .actions edge), at most 3. Bottom right when nothing is shown
 const toastBox = el("div", { class: "toasts", role: "status" });
 document.body.append(toastBox);
 const TOAST_MAX = 3;
 function toast(msg, { kind = "", ms = 2000 } = {}) {
-  const t = el("div", { class: `toast ${kind}`.trim(), text: msg });
-  toastBox.append(t);
+  const box = el("div", { class: `toast ${kind}`.trim(), text: msg });
+  toastBox.append(box);
   while (toastBox.children.length > TOAST_MAX) toastBox.firstElementChild.remove();
-  setTimeout(() => t.remove(), ms);
+  setTimeout(() => box.remove(), ms);
 }
 function placeToasts() {
   const a = document.querySelector("#decision .actions");
@@ -185,27 +210,22 @@ function placeToasts() {
   toastBox.classList.toggle("floating", toastBox.parentElement === document.body);
 }
 
-const clip = (t, n = 40) => (t.length > n ? t.slice(0, n) + "…" : t);
-const LOST_TEXT = {
-  answer_lost: (t) => `${t} は届きませんでした(ターミナルに落ちました)`,
-  hook_disconnected: (t) => `${t} は届きませんでした(hook が切断されました)`,
-  cancelled: (t) => `${t} は届きませんでした(キャンセルされました)`,
-  fallback: (t) => `${t} は届きませんでした(ターミナルで答える扱いになりました)`,
-};
-// 表示中でない判断の状態が変わったとき
+const clip = (s, n = 40) => (s.length > n ? s.slice(0, n) + "…" : s);
+const LOST_KEYS = { answer_lost: "lost_answer_lost", hook_disconnected: "lost_hook_disconnected", cancelled: "lost_cancelled", fallback: "lost_fallback" };
+// When the status of a decision that is not shown changes
 function notifyBackground(prev, d) {
   if (!prev || prev.status === d.status) return;
-  const t = clip(titleOf(d));
-  if (d.status === "cancelled" && prev.status === "pending") toast(`${t} は取り消されました`, { kind: "lost", ms: 4000 });
-  else if (LOST_TEXT[d.status]) toast(LOST_TEXT[d.status](t), { kind: "lost", ms: 4000 });
-  else if (d.status === "answered") toast(`${t} 届きました`, { kind: "soft" });
+  const title = clip(titleOf(d));
+  if (d.status === "cancelled" && prev.status === "pending") toast(t("cancelled_title", { title }), { kind: "lost", ms: 4000 });
+  else if (LOST_KEYS[d.status]) toast(t(LOST_KEYS[d.status], { title }), { kind: "lost", ms: 4000 });
+  else if (d.status === "answered") toast(t("delivered_title", { title }), { kind: "soft" });
 }
 
-// ---- 保留ボタン / タイトル ----
+// ---- Pending button / title ----
 
-// 保留ボタン: 1100px 以上は右上固定、未満は右列の見出しの右端(インライン)
+// Pending button: fixed top right at 1100px and up, inline at the right end of the right column heading below that
 const narrowQuery = matchMedia("(max-width: 1099px)");
-// #decision の作り直しで破棄されないよう、参照を保持し、作り直す前に body へ退避する
+// Keep a reference and park it in body before #decision is rebuilt so it is not destroyed
 const pendingBtn = $("pending-btn");
 const pendingCount = $("pending-count");
 function stashPending() { if (pendingBtn.parentElement !== document.body) document.body.prepend(pendingBtn); }
@@ -219,27 +239,27 @@ const titleRow = (title) => el("div", { class: "title-row" }, title);
 function renderHeader() {
   const n = pendingList().length;
   pendingCount.textContent = String(n);
-  pendingBtn.hidden = n < 2; // 1 件なら表示中のものだけなので出さない
+  pendingBtn.hidden = n < 2; // with one decision only the shown one exists, so hide it
   document.body.classList.toggle("has-pending-btn", n >= 2);
   const blocked = pendingList().some(isBlocker);
-  document.title = n > 0 ? `(${n}) ukagai${blocked ? " · 作業待ち" : ""}` : "ukagai";
+  document.title = n > 0 ? `(${n}) ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
 }
 
-// 右列の title の直下: ブランチ・作業ディレクトリ(フルパス)・可逆性・scope・経過時間
-// 描画してよい context は branch だけ
+// Right under the right column title: branch, working directory (full path), reversibility, scope, elapsed time
+// branch is the only context field that may be rendered
 const tildePath = (p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
 
 const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
 const repoOf = (d) => WT_RE.exec(d.session.cwd)?.[1] ?? cwdTail(d);
 const worktreeOf = (d) => WT_RE.exec(d.session.cwd)?.[2];
 
-// リポジトリ(紫)・ブランチ(緑)・ワークツリー(橙)。色は種類ごとに固定
+// Repository (purple), branch (green), worktree (orange). The color is fixed per kind
 function chips(d, cls = "") {
   const box = el("span", { class: `chips ${cls}`.trim() });
-  box.append(el("span", { class: "chip repo", text: `◈ ${repoOf(d)}`, title: "リポジトリ" }));
-  if (d.context?.branch) box.append(el("span", { class: "chip branch", text: `⎇ ${d.context.branch}`, title: "ブランチ" }));
+  box.append(el("span", { class: "chip repo", text: `◈ ${repoOf(d)}`, title: t("chip_repo") }));
+  if (d.context?.branch) box.append(el("span", { class: "chip branch", text: `⎇ ${d.context.branch}`, title: t("chip_branch") }));
   const wt = worktreeOf(d);
-  if (wt) box.append(el("span", { class: "chip worktree", text: `⧉ ${wt}`, title: "ワークツリー" }));
+  if (wt) box.append(el("span", { class: "chip worktree", text: `⧉ ${wt}`, title: t("chip_worktree") }));
   return box;
 }
 
@@ -248,15 +268,15 @@ function metaLine(d) {
   line.append(chips(d));
   line.append(el("span", { class: "cwd", text: tildePath(d.session.cwd), title: d.session.cwd }));
   const rev = reversibilityOf(d);
-  if (rev === "irreversible") line.append(el("span", { class: "badge irreversible", text: "元に戻せない" }));
-  else if (rev === "costly") line.append(el("span", { class: "badge costly", text: "戻すのにコストがかかる" }));
+  if (rev === "irreversible") line.append(el("span", { class: "badge irreversible", text: t("irreversible") }));
+  else if (rev === "costly") line.append(el("span", { class: "badge costly", text: t("costly") }));
   const scope = scopeOf(d);
   if (scope) line.append(el("span", { class: "badge", text: scope }));
   line.append(el("span", { class: "badge age", "data-created": d.created_at, text: elapsed(d.created_at) }));
   return line;
 }
 
-// ---- ドロワー ----
+// ---- Drawer ----
 
 let drawerIdx = 0;
 
@@ -273,7 +293,7 @@ function setDrawer(open) {
   $("drawer").setAttribute("aria-hidden", String(!open));
   $("backdrop").hidden = !open;
   pendingBtn.setAttribute("aria-expanded", String(open));
-  if (!open && document.activeElement === pendingBtn) pendingBtn.blur(); // Enter が保留ボタンに吸われないように
+  if (!open && document.activeElement === pendingBtn) pendingBtn.blur(); // keep Enter from being swallowed by the pending button
   if (open) focusDrawerRow();
 }
 
@@ -286,9 +306,9 @@ function renderList() {
     const meta = el("div", { class: "meta" },
       el("span", { text: kindLabel(d) }),
       el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) }));
-    if (isBlocker(d)) meta.append(el("span", { class: "badge blocker", text: "作業" }));
-    if (d.kind === "answer_question" && !hasExplanation(d)) meta.append(el("span", { class: "badge none", text: "説明なし" }));
-    if (d.id === shownId) meta.append(el("span", { class: "badge", text: "表示中" }));
+    if (isBlocker(d)) meta.append(el("span", { class: "badge blocker", text: t("badge_action") }));
+    if (d.kind === "answer_question" && !hasExplanation(d)) meta.append(el("span", { class: "badge none", text: t("badge_no_explanation") }));
+    if (d.id === shownId) meta.append(el("span", { class: "badge", text: t("badge_shown") }));
     const row = el("button", {
       class: "row" + (d.id === shownId ? " current" : ""),
       type: "button",
@@ -296,11 +316,11 @@ function renderList() {
     }, el("div", { class: "title", text: titleOf(d) }), chips(d, "small"), meta);
     list.append(el("li", {}, row));
   }
-  if (!list.children.length) list.append(el("li", { class: "muted", text: "保留はありません" }));
+  if (!list.children.length) list.append(el("li", { class: "muted", text: t("no_pending") }));
   else if (drawerOpen()) focusDrawerRow();
 }
 
-// ---- 右列: 判断 ----
+// ---- Right column: decision ----
 
 function draftOf(d) {
   let dr = drafts.get(d.id);
@@ -308,14 +328,15 @@ function draftOf(d) {
   return dr;
 }
 
-const STATUS_TEXT = {
-  answer_submitted: "エージェントに届けています…",
-  answered: "届きました",
-  answer_lost: "ターミナルに落ちました(hook が切断)",
-  hook_disconnected: "hook が切断されました",
-  fallback: "ターミナルで答えます",
-  cancelled: "キャンセルされました",
+const STATUS_KEYS = {
+  answer_submitted: "status_submitting",
+  answered: "status_answered",
+  answer_lost: "status_answer_lost",
+  hook_disconnected: "status_hook_disconnected",
+  fallback: "status_fallback",
+  cancelled: "status_cancelled",
 };
+const statusText = (status, fallbackKey) => t(STATUS_KEYS[status] ?? fallbackKey);
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
@@ -323,19 +344,19 @@ async function send(d, body) {
     const updated = await post(`/api/decisions/${d.id}/answer`, body);
     decisions.set(updated.id, updated);
     if (shownId === d.id) {
-      toast(STATUS_TEXT[updated.status] ?? "送信しました");
+      toast(statusText(updated.status, "sent"));
       advance();
     } else {
       renderHeader();
       renderList();
     }
   } catch (e) {
-    if (e.message !== "unauthorized") showBanner(`送信に失敗しました: ${e.message}`);
+    if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
     if (shownId === d.id) renderRight(decisions.get(d.id));
   }
 }
 
-// 説明の表と対応が取れない生の選択肢: (Recommended) 等の接尾辞は外して推奨バッジにする。回答値は元の label
+// A raw option that has no row in the explanation table: strip the (Recommended) suffix and show a recommended badge. The answer value stays the original label
 const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label) });
 
 const kbd = (t) => el("kbd", { class: "kbd", text: t });
@@ -345,19 +366,19 @@ const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
 async function copyCode(pre) {
   try {
     await navigator.clipboard.writeText((pre.textContent ?? "").replace(/\n$/, ""));
-    toast("コピーしました");
+    toast(t("copied"));
   } catch {
-    toast("コピーできませんでした");
+    toast(t("copy_failed"));
   }
 }
 
-// 長い推奨・カード本文の折りたたみ(CSS で 6 行 / 3 行)。折りたたみで溢れる要素にだけ「全文 .」のチップを付ける。
-// 展開状態は判断ごとの draft に持ち、`.` かチップのクリックで全体を切り替える
+// Folding of long recommendations and card bodies (6 / 3 lines in CSS). Only elements that overflow get a "Show all ." chip.
+// The expanded state lives in the per-decision draft; `.` or a chip click toggles everything
 function toggleExpand(dr) {
   dr.expanded = !dr.expanded;
   const root = $("decision");
   root.classList.toggle("expanded", dr.expanded);
-  for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = dr.expanded ? "折りたたむ " : "全文 ";
+  for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = `${dr.expanded ? t("collapse") : t("show_all")} `;
 }
 function markClamps(root, dr) {
   root.classList.remove("expanded");
@@ -366,34 +387,35 @@ function markClamps(root, dr) {
     const host = c.parentElement;
     host.classList.add("has-more");
     if (host.querySelector(".more-chip")) continue;
-    host.append(el("button", { class: "more-chip", type: "button", tabindex: "-1", onclick: () => toggleExpand(dr) }, el("span", { text: "全文 " }), kbd(".")));
+    host.append(el("button", { class: "more-chip", type: "button", tabindex: "-1", onclick: () => toggleExpand(dr) }, el("span", { text: `${t("show_all")} ` }), kbd(".")));
   }
-  if (dr.expanded) { root.classList.add("expanded"); for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = "折りたたむ "; }
+  if (dr.expanded) { root.classList.add("expanded"); for (const chip of root.querySelectorAll(".more-chip")) chip.firstChild.textContent = `${t("collapse")} `; }
 }
 
 function renderRight(d) {
-  document.body.append(toastBox); // replaceChildren で消えないように退避
+  document.body.append(toastBox); // park it so replaceChildren does not remove it
   renderRightBody(d);
   placeToasts();
   placePending();
   clampMeta();
 }
 
-// 計画本文の「影響範囲と可逆性」の節(照合名)を右列に出す。無ければ null
+// Show the "Scope and reversibility" section (matched by name, either language) of the plan body in the right column. null when absent.
+// The caption is the heading as written in the file
 function impactBox(d) {
   const tmp = el("div", { class: "md" });
   tmp.innerHTML = sanitize(window.marked.parse(d.request.plan ?? "", { async: false }));
   dropExternalImages(tmp);
-  const sec = findSection(sectionsOf(tmp), "影響範囲と可逆性");
+  const sec = findSection(sectionsOf(tmp), SECTION.impact);
   const nodes = sec?.nodes.slice(1) ?? [];
   if (!nodes.some((n) => (n.textContent ?? "").trim())) return null;
   const body = el("div", { class: "clampable impact-body md" }, ...nodes);
   callouts(body);
   softHyphens(body);
-  return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: "影響範囲と可逆性" }), body);
+  return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: headingText(sec) }), body);
 }
 
-// meta-line は折り返して見せる。3 行目以降は隠して末尾を … にする
+// The meta-line wraps. Rows from the third on are hidden and the end becomes …
 function clampMeta() {
   for (const line of document.querySelectorAll("#decision .meta-line")) {
     line.querySelector(".meta-more")?.remove();
@@ -421,19 +443,19 @@ function renderRightBody(d) {
   const root = $("decision");
   stashPending();
   root.classList.remove("expanded");
-  if (!drawerOpen()) document.activeElement?.blur?.(); // フォーカスを body に戻し、キーを document で受ける
+  if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
   if (!d) return;
   const dr = draftOf(d);
   const closed = d.status !== "pending";
-  if (STATUS_TEXT[d.status]) root.append(el("div", { class: "status", text: STATUS_TEXT[d.status] }));
+  if (STATUS_KEYS[d.status]) root.append(el("div", { class: "status", text: statusText(d.status) }));
 
   if (d.kind === "answer_question") {
     const qs = d.request.questions;
     const single = qs.length === 1;
     const v2 = single ? modelFor(d).v2 : null;
-    const cards = []; // 質問が 1 つのときの { input, card }(矢印キー用)
+    const cards = []; // { input, card } when there is one question (for the arrow keys)
     let freeTextEl = null;
     const qsBox = el("div", { class: "qs" });
     qs.forEach((q, qi) => {
@@ -443,22 +465,27 @@ function renderRightBody(d) {
       let items;
       if (v2) {
         box.append(el("div", { class: "head" },
-          isBlocker(d) ? el("div", { class: "blocker-band", text: "人の作業待ち" }) : null,
+          isBlocker(d) ? el("div", { class: "blocker-band", text: t("blocker_band") }) : null,
           titleRow(el("div", { class: "v2-title", text: titleOf(d) })), metaLine(d)));
-        if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: "人にしてほしいこと" }), v2.todoBox));
+        if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
         if (v2.recBox) {
-          // callout(CAUTION / WARNING など)は畳みの対象外。推奨の枠の中、畳んだ本文の直下に出す
+          // Callouts (CAUTION / WARNING ...) are exempt from folding. Show them inside the recommendation frame, right under the folded body
           const callouts = [...v2.recBox.querySelectorAll(".callout")].filter((c) => !c.parentElement.closest(".callout"));
           for (const c of callouts) c.remove();
-          box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)), callouts.length ? el("div", { class: "md rec-callouts" }, ...callouts) : null));
+          box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: v2.recCap }), el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)), callouts.length ? el("div", { class: "md rec-callouts" }, ...callouts) : null));
         }
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
           ...v2.extras.map(rawItem),
         ];
+        // A blocker without a recommended row starts on the fixed "Done. Continue" option
+        if (isBlocker(d) && !items.some((i) => i.pref)) {
+          const done = items.find((i) => BLOCKER_LABELS.done.some((n) => sameLabel(i.value, n)));
+          if (done) done.pref = true;
+        }
       } else {
         const title = titleOf(d);
-        // title と質問文が同じなら 1 つだけ。違う(session.title)ときは title の下に質問文を出す
+        // Show title once when it equals the question. When they differ (session.title), show the question under the title
         box.append(el("div", { class: "head" },
           title === q.question ? el("div", { class: "header", text: q.header }) : null,
           titleRow(el("div", { class: "question", text: title })), metaLine(d)));
@@ -467,10 +494,10 @@ function renderRightBody(d) {
       }
       if (single) {
         if (dr.cursor == null) dr.cursor = Math.max(0, items.findIndex((i) => i.pref));
-        // 単一選択は移動 = 選択。初期位置(推奨、無ければ先頭)を選んでおく
+        // For single select, moving = selecting. Pre-select the initial position (the recommended one, else the first)
         if (!closed && !q.multiSelect && sel.size === 0 && !free.on && items.length) sel.add(items[dr.cursor].value);
       }
-      if (single) box.append(keyLine([["↑", "↓"], "移動"], [["Enter"], "回答"], ...(v2?.todoBox?.querySelector("pre") ? [[["c"], "コマンドをコピー"]] : []), ...(q.multiSelect ? [[["Space"], "切替"]] : [])));
+      if (single) box.append(keyLine([["↑", "↓"], t("hint_move")], [["Enter"], t("hint_answer")], ...(v2?.todoBox?.querySelector("pre") ? [[["c"], t("key_copy_command")]] : []), ...(q.multiSelect ? [[["Space"], t("hint_toggle")]] : [])));
       for (const it of items) {
         const input = el("input", {
           type: q.multiSelect ? "checkbox" : "radio",
@@ -484,7 +511,7 @@ function renderRightBody(d) {
             updateSubmit();
           },
         });
-        const lab = el("div", { class: "lab" }, el("span", { text: it.label }), it.badge ? el("span", { class: "rec-badge", text: "推奨" }) : null);
+        const lab = el("div", { class: "lab" }, el("span", { text: it.label }), it.badge ? el("span", { class: "rec-badge", text: t("recommended") }) : null);
         const card = el("label", { class: "opt" + (it.badge ? " rec" : "") }, input,
           el("span", { class: "grow" }, lab, ...it.lines.map((l) => el("div", { class: (l.muted ? "desc muted" : "desc") + " clampable" }, l.cell ? inlineClone(l.cell) : l.text))));
         if (single) { const idx = cards.length; cards.push({ input, card }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
@@ -503,12 +530,12 @@ function renderRightBody(d) {
         },
       });
       const freeText = el("input", {
-        type: "text", class: "free-text", placeholder: "自由記述", value: free.text, disabled: closed,
+        type: "text", class: "free-text", placeholder: t("free_text"), value: free.text, disabled: closed,
         onfocus: () => { if (!free.on) freeInput.click(); },
         oninput: (ev) => { free.text = ev.target.value; updateSubmit(); },
       });
       const freeCard = el("label", { class: "opt free" }, freeInput,
-        el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: "自由記述" }), single ? kbd("Enter") : null), freeText));
+        el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("free_text") }), single ? kbd("Enter") : null), freeText));
       if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
       box.append(freeCard);
       qsBox.append(box);
@@ -525,7 +552,7 @@ function renderRightBody(d) {
         const answers = {};
         qs.forEach((q, qi) => {
           const sel = dr.sel.get(qi);
-          // 回答は元の option.label(表の見た目ではなく)で返す
+          // Answer with the original option.label (not the table's rendering)
           const picked = q.options.map((o) => o.label).filter((l) => sel.has(l));
           const f = dr.free.get(qi);
           if (f.on && !q.multiSelect) picked.length = 0;
@@ -534,11 +561,11 @@ function renderRightBody(d) {
         });
         send(d, { answers });
       },
-    }, el("span", { text: "回答する" }), kbd("Enter"));
+    }, el("span", { text: t("answer") }), kbd("Enter"));
     function updateSubmit() { submit.disabled = closed || !complete(); }
     const actions = el("div", { class: "actions" }, submit);
     if (single) {
-      actions.append(el("div", { class: "hint" }, `↑↓ 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · ${v2?.todoBox?.querySelector("pre") ? "c コピー · " : ""}←→ 次の保留 · Esc 戻る`, " ", buildTag()));
+      actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}Enter ${t("hint_answer")} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}←→ ${t("hint_next")} · Esc ${t("hint_back")}`, " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
@@ -564,27 +591,27 @@ function renderRightBody(d) {
   // approve_plan
   const qsBox = el("div", { class: "qs" },
     el("div", { class: "head" }, titleRow(el("div", { class: "v2-title", text: titleOf(d) })), metaLine(d)),
-    el("div", { class: "plan-q", text: "この計画を承認しますか" }));
+    el("div", { class: "plan-q", text: t("plan_question") }));
   const impact = impactBox(d);
   if (impact) qsBox.append(impact);
   root.append(qsBox);
-  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: false }) }, el("span", { text: "承認" }), kbd("y"));
-  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: "承認して auto" }), kbd("a"));
-  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: "却下" }), kbd("n"));
+  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: false }) }, el("span", { text: t("approve") }), kbd("y"));
+  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: t("approve_auto") }), kbd("a"));
+  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }), kbd("n"));
   const actions = el("div", { class: "actions" });
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
-      class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: "却下を送る",
+      class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
       onclick: () => send(d, { approve: false, reason: dr.reason.trim() }),
     });
     const input = el("input", {
-      type: "text", id: "reason", placeholder: "却下の理由(Enter で送信、Esc で取りやめ)", value: dr.reason,
+      type: "text", id: "reason", placeholder: t("reject_placeholder"), value: dr.reason,
       oninput: (ev) => { dr.reason = ev.target.value; confirm.disabled = !dr.reason.trim(); },
       onkeydown: (ev) => { if (ev.key === "Enter" && dr.reason.trim()) confirm.click(); },
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(approve, auto, reject, el("div", { class: "hint" }, "↑↓ 選ぶ · Enter 決定 · ←→ 次の保留", " ", buildTag()));
+  actions.append(approve, auto, reject, el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · ←→ ${t("hint_next")}`, " ", buildTag()));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
@@ -610,6 +637,7 @@ function startReject(d) {
 }
 
 // ---- Markdown / Mermaid / diff ----
+// (headings and labels below are matched in both English and Japanese)
 
 function parseFrontMatter(md) {
   const m = md.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -643,7 +671,7 @@ async function renderMermaid(codeEl) {
   const id = `mmd-${++mermaidSeq}`;
   try {
     const m = getMermaid();
-    if (!m) throw new Error("mermaid が読み込まれていません");
+    if (!m) throw new Error(t("mermaid_missing"));
     const { svg } = await m.render(id, source);
     const box = el("div", { class: "mermaid-ok" });
     box.innerHTML = svg;
@@ -656,12 +684,12 @@ async function renderMermaid(codeEl) {
     document.getElementById(id)?.remove();
     document.getElementById("d" + id)?.remove();
     const msg = String(e?.message ?? e).split("\n")[0];
-    pre.before(el("div", { class: "mermaid-err", text: `Mermaid の描画に失敗しました: ${msg}` }));
+    pre.before(el("div", { class: "mermaid-err", text: t("mermaid_failed", { message: msg }) }));
     pre.textContent = source;
   }
 }
 
-// 図の自然幅が列幅の 1.5 倍を超えるとき、「全幅で見る f」のチップを図の上に出す
+// When a diagram's natural width exceeds 1.5x the column width, show a "Full width f" chip above it
 const WIDE_RATIO = 1.5;
 function refreshWide() {
   const full = document.body.classList.contains("fullwide");
@@ -670,7 +698,7 @@ function refreshWide() {
     const wide = full || (natural > 0 && natural > box.clientWidth * WIDE_RATIO && box.clientWidth > 0);
     box.classList.toggle("wide", wide);
     const chip = box.querySelector(".wide-chip");
-    if (wide && !chip) box.prepend(el("button", { class: "wide-chip", type: "button", tabindex: "-1", onclick: () => setFullwide(!document.body.classList.contains("fullwide")) }, el("span", { text: "全幅で見る " }), kbd("f")));
+    if (wide && !chip) box.prepend(el("button", { class: "wide-chip", type: "button", tabindex: "-1", onclick: () => setFullwide(!document.body.classList.contains("fullwide")) }, el("span", { text: `${t("full_width")} ` }), kbd("f")));
     else if (!wide && chip) chip.remove();
     const svg = box.querySelector("svg");
     if (svg) {
@@ -678,11 +706,11 @@ function refreshWide() {
       else { svg.style.removeProperty("width"); svg.style.removeProperty("max-width"); svg.style.removeProperty("max-height"); }
     }
     const c2 = box.querySelector(".wide-chip");
-    if (c2) c2.firstChild.textContent = full ? "戻る " : "全幅で見る ";
+    if (c2) c2.firstChild.textContent = `${full ? t("back") : t("full_width")} `;
   }
 }
 
-// 全幅表示(判断列を隠して背景だけを広く)。Enter は無効にして誤送信を防ぐ
+// Full-width view (hide the decision column and widen the background). Enter is disabled to prevent accidental submits
 const hasWide = () => !!document.querySelector("#background .mermaid-ok.wide");
 function setFullwide(on) {
   if (on && !hasWide()) return;
@@ -691,20 +719,20 @@ function setFullwide(on) {
   refreshWide();
 }
 
-// 9 行を超える pre は <details> に畳む
+// Fold a pre longer than 9 lines into <details>
 function foldLongPre(container) {
   for (const pre of container.querySelectorAll("pre")) {
     if (pre.parentElement?.tagName === "DETAILS" && pre.parentElement.classList.contains("fold")) continue;
     const lines = (pre.textContent ?? "").replace(/\n$/, "").split("\n").length;
     if (lines <= FOLD_LINES) continue;
-    const det = el("details", { class: "fold" }, el("summary", { text: `コードを表示(${lines} 行)` }));
+    const det = el("details", { class: "fold" }, el("summary", { text: t("show_code", { n: lines }) }));
     pre.replaceWith(det);
     det.append(pre);
   }
 }
 
-// GitHub 形式の alert(blockquote の先頭が [!NOTE] など)を色付きの箱にする。何度呼んでも壊れない
-const CALLOUTS = { NOTE: ["補足", "note"], TIP: ["ヒント", "tip"], WARNING: ["注意", "warning"], CAUTION: ["警告", "caution"] };
+// Turn GitHub-style alerts (a blockquote starting with [!NOTE] etc.) into colored boxes. Safe to call repeatedly
+const CALLOUTS = { NOTE: ["callout_note", "note"], TIP: ["callout_tip", "tip"], WARNING: ["callout_warning", "warning"], CAUTION: ["callout_caution", "caution"] };
 function callouts(container) {
   for (const bq of container.querySelectorAll("blockquote:not(.callout)")) {
     const p = bq.firstElementChild;
@@ -712,16 +740,16 @@ function callouts(container) {
     if (!p || p.tagName !== "P" || first?.nodeType !== Node.TEXT_NODE) continue;
     const m = /^\s*\[!(NOTE|TIP|WARNING|CAUTION)\][ \t]*\n?/i.exec(first.textContent ?? "");
     if (!m) continue;
-    const [label, cls] = CALLOUTS[m[1].toUpperCase()];
+    const [labelKey, cls] = CALLOUTS[m[1].toUpperCase()];
     first.textContent = first.textContent.slice(m[0].length);
     if (p.firstChild?.nodeName === "BR") p.firstChild.remove();
     if (!p.textContent.trim() && !p.children.length) p.remove();
     bq.classList.add("callout", cls);
-    bq.prepend(el("div", { class: "callout-label", text: label }));
+    bq.prepend(el("div", { class: "callout-label", text: t(labelKey) }));
   }
 }
 
-// 表のセルの装飾(strong / em / code)だけ残して複製する。他の要素は中身だけ残す
+// Clone a table cell keeping only the decoration (strong / em / code). Other elements keep just their contents
 function inlineClone(node) {
   const out = document.createDocumentFragment();
   for (const c of node.childNodes) {
@@ -740,8 +768,8 @@ function inlineClone(node) {
   return out;
 }
 
-// インラインコードの `-` を含む語(`--port` など)は途中で折らない。語を nowrap の span に包み、語の間に <wbr> を置く
-// (長いパス・コマンドは overflow-wrap:anywhere で列幅に折り返す)。pre の中(コピー対象)は触らない。textContent は変えない
+// Words containing `-` in inline code (`--port` etc.) are not broken in the middle. Wrap each in a nowrap span and put <wbr> between words
+// (long paths and commands wrap at the column width via overflow-wrap:anywhere). Code inside pre (the copy target) is left alone. textContent is unchanged
 function hyphenText(node) {
   const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
   const targets = [];
@@ -758,7 +786,7 @@ function hyphenText(node) {
     n.replaceWith(frag);
   }
 }
-// 選択コピーに制御文字(U+2060)が混ざらないようにする(過去の描画の名残・貼り付け先の保護)
+// Keep the control character U+2060 out of copied selections (a remnant of earlier rendering; protects the paste target)
 document.addEventListener("copy", (e) => {
   const sel = getSelection();
   if (!sel || sel.isCollapsed || !e.clipboardData) return;
@@ -771,7 +799,7 @@ function softHyphens(root) {
   for (const code of root.querySelectorAll("code")) if (!code.closest("pre")) hyphenText(code);
 }
 
-// pre の畳み・diff・mermaid をまとめて適用(何度呼んでも壊れない)
+// Apply pre folding, diff and mermaid together (safe to call repeatedly)
 async function enhance(container) {
   callouts(container);
   softHyphens(container);
@@ -788,17 +816,19 @@ async function renderMarkdown(container, md) {
   await enhance(container);
 }
 
-// ---- 説明ファイル v2 から判断画面を組む ----
+// ---- Build the decision screen from the v2 explanation file ----
 
 const SUFFIX_RE = /\s*[(（]\s*(recommended|推奨)\s*[)）]\s*$/i;
 const stripSuffix = (s) => s.replace(SUFFIX_RE, "");
 const normLabel = (s) => stripSuffix(s.normalize("NFKC")).replace(/\s/g, "").toLowerCase();
-// ラベルに HTML が含まれていても表のセル(textContent)と比べられるよう、ラベル側も一度テキストにする(DOMParser は何も実行・読み込みしない)
+// Convert the label to text first so a label containing HTML can be compared with a table cell (textContent). DOMParser runs and loads nothing
 const labelText = (s) => new DOMParser().parseFromString(s, "text/html").body.textContent ?? s;
 const sameLabel = (a, b) => normLabel(a) === normLabel(b) || normLabel(labelText(a)) === normLabel(b);
 const normHeading = (s) => s.normalize("NFKC").replace(/\s/g, "").replace(/[と・]/g, "").toLowerCase();
+// A section's heading text as written in the file (shown as is in the right column)
+const headingText = (sec) => (sec.head.textContent ?? "").trim();
 
-// h1〜h3 で節に切る。節は同じか浅い次の見出しの直前まで
+// Split into sections at h1-h3. A section runs up to just before the next heading of the same or shallower level
 function sectionsOf(container) {
   const kids = [...container.children];
   const level = (n) => { const m = /^H([1-3])$/.exec(n.tagName); return m ? Number(m[1]) : 0; };
@@ -813,10 +843,10 @@ function sectionsOf(container) {
   return secs;
 }
 
-// 完全一致を優先し、無ければ部分一致
-function findSection(secs, name) {
-  const n = normHeading(name);
-  return secs.find((s) => s.norm === n) ?? secs.find((s) => s.norm.includes(n));
+// names: English first, Japanese alias second. Exact match against all names first, then partial match against all names
+function findSection(secs, names) {
+  const ns = names.map(normHeading);
+  return secs.find((s) => ns.includes(s.norm)) ?? secs.find((s) => ns.some((n) => s.norm.includes(n)));
 }
 
 const models = new Map(); // id -> { left, v2 }
@@ -837,27 +867,29 @@ function buildModel(d) {
   const qs = d.request.questions;
   if (qs.length === 1) {
     const secs = sectionsOf(left);
-    const optSec = findSection(secs, "選択肢");
-    let recSec = findSection(secs, "推奨");
+    const optSec = findSection(secs, SECTION.options);
+    let recSec = findSection(secs, SECTION.recommendation);
     if (recSec === optSec) recSec = undefined;
     const table = optSec?.nodes.find((n) => n.tagName === "TABLE") ?? optSec?.nodes.map((n) => n.querySelector?.("table")).find(Boolean);
     const v2 = table ? parseOptionsTable(table, qs[0].options, fm) : null;
     if (v2) {
-      if (v2.cards.length) for (const n of optSec.nodes) n.remove(); // 1 つも対応が取れなければ、表は左に残す
-      const todoSec = (fm.type === "blocker" || d.explanation.type === "blocker") ? findSection(secs, "人にしてほしいこと") : undefined;
+      if (v2.cards.length) for (const n of optSec.nodes) n.remove(); // if no row matched, leave the table in the left column
+      const todoSec = (fm.type === "blocker" || d.explanation.type === "blocker") ? findSection(secs, SECTION.blockerTodo) : undefined;
       if (todoSec && todoSec !== optSec) {
         const todoBox = el("div", { class: "md" });
+        v2.todoCap = headingText(todoSec);
         for (const n of todoSec.nodes.slice(1)) todoBox.append(n);
         todoSec.head.remove();
         for (const pre of todoBox.querySelectorAll("pre")) {
           const wrap = el("div", { class: "codewrap" });
           pre.replaceWith(wrap);
-          wrap.append(pre, el("button", { class: "copy-btn", type: "button", tabindex: "-1", text: "コピー", onclick: () => copyCode(pre) }));
+          wrap.append(pre, el("button", { class: "copy-btn", type: "button", tabindex: "-1", text: t("copy"), onclick: () => copyCode(pre) }));
         }
         if (todoBox.children.length) { v2.todoBox = todoBox; enhance(todoBox).catch(() => {}); }
       }
       if (recSec) {
         const recBox = el("div", { class: "md" });
+        v2.recCap = headingText(recSec);
         for (const n of recSec.nodes.slice(1)) recBox.append(n);
         recSec.head.remove();
         if (recBox.children.length) { v2.recBox = recBox; enhance(recBox).catch(() => {}); }
@@ -869,15 +901,14 @@ function buildModel(d) {
   return m;
 }
 
-// 表(先頭列 = ラベル)を options に対応付ける。対応が取れる行が無ければ null
+// Map a table (first column = label) onto options. null when no row matches
 function parseOptionsTable(table, options, fm) {
   const trs = [...table.querySelectorAll("tr")];
   if (trs.length < 2) return null;
   const cells = (tr) => [...tr.children].map((c) => (c.textContent ?? "").trim());
   const header = cells(trs[0]);
-  const hn = header.map(normHeading);
-  const hi = hn.findIndex((h) => h.includes(normHeading("起きること")));
-  const ri = hn.findIndex((h) => h.includes(normHeading("リスク")));
+  const hi = header.findIndex((h) => COLUMN_HAPPENS.test(h));
+  const ri = header.findIndex((h) => COLUMN_RISK.test(h));
   const cards = [];
   for (const tr of trs.slice(1)) {
     const row = cells(tr);
@@ -886,11 +917,11 @@ function parseOptionsTable(table, options, fm) {
     if (!o || cards.some((c) => c.option === o)) continue;
     let lines;
     if (hi >= 0 && ri >= 0) lines = [{ text: row[hi] ?? "", cell: tds[hi] }, { text: row[ri] ?? "", muted: true, cell: tds[ri] }];
-    else lines = row.slice(1).map((t, j) => ({ text: t ? `${header[j + 1] ?? ""}: ${t}` : "" })); // 旧形式
+    else lines = row.slice(1).map((s, j) => ({ text: s ? `${header[j + 1] ?? ""}: ${s}` : "" })); // old format
     lines = lines.filter((l) => l.text && !/^[-—ー]+$/.test(l.text));
     cards.push({ option: o, label: stripSuffix(row[0]), lines, suffix: SUFFIX_RE.test(row[0]), recommended: false });
   }
-  // 行が 1 つも照合できなくても v2 は捨てない(全 option が生のカードになる)
+  // Keep v2 even when no row matches (every option becomes a raw card)
   const want = fm.recommended ? fm.recommended : null;
   const byFm = want ? cards.filter((c) => sameLabel(c.option.label, want)) : [];
   for (const c of byFm.length ? byFm : cards.filter((c) => c.suffix)) c.recommended = true;
@@ -898,7 +929,7 @@ function parseOptionsTable(table, options, fm) {
   return { cards, extras };
 }
 
-// ---- 左列: 背景 ----
+// ---- Left column: background ----
 
 function renderLeft(d) {
   const root = $("background");
@@ -911,7 +942,7 @@ function renderLeft(d) {
     const plan = el("div", { class: "md" });
     root.append(plan);
     const jobs = [renderMarkdown(plan, d.request.plan ?? "")];
-    // hook は explanation.markdown に計画本文を入れるので、本文と違うときだけ続ける
+    // The hook puts the plan body into explanation.markdown, so continue only when it differs from the plan
     if (hasExplanation(d) && ex.markdown.trim() !== (d.request.plan ?? "").trim()) {
       const md = el("div", { class: "md" });
       root.append(el("hr"), md);
@@ -924,11 +955,11 @@ function renderLeft(d) {
     return;
   }
   const code = ex?.none_reason ?? "";
-  const reason = NONE_REASONS[code] ?? code;
-  root.append(el("div", { class: "bg-note", text: `エージェントは説明を書きませんでした${reason ? `(理由: ${reason})` : ""}` }));
+  const reason = NONE_REASON_KEYS[code] ? t(NONE_REASON_KEYS[code]) : code;
+  root.append(el("div", { class: "bg-note", text: reason ? t("no_explanation_reason", { reason }) : t("no_explanation") }));
 }
 
-// ---- 表示の切り替え ----
+// ---- Switching the view ----
 
 function renderAll() {
   document.body.classList.remove("fullwide");
@@ -959,7 +990,7 @@ function upsert(d) {
   if (d.id !== shownId) notifyBackground(prev, d);
   if (d.id === shownId) {
     if (d.status !== "pending") {
-      toast(STATUS_TEXT[d.status] ?? "更新されました");
+      toast(statusText(d.status, "updated"));
       advance();
     } else if (!prev || prev.status !== d.status) {
       renderAll();
@@ -982,13 +1013,13 @@ async function loadAll() {
     if (decisions.has(d.id) && decisions.get(d.id).status !== d.status) upsert(d);
     else decisions.set(d.id, d);
   }
-  // SSE の取りこぼし・server 再起動で、手元では pending のまま変わった / 消えたものを取り直す
+  // Refetch decisions that are still pending locally but changed or vanished (missed SSE events, server restart)
   for (const d of [...decisions.values()]) {
     if (d.status === "pending" && !seen.has(d.id)) {
       try { upsert(await api(`/api/decisions/${d.id}`)); }
       catch (e) {
         if (e.message === "unauthorized") throw e;
-        decisions.delete(d.id); // 取れない(404 等)= 消えた
+        decisions.delete(d.id); // cannot fetch (404 etc.) = gone
         models.delete(d.id);
         drafts.delete(d.id);
       }
@@ -999,7 +1030,7 @@ async function loadAll() {
   else { renderHeader(); renderList(); }
 }
 
-// SSE。切れたら cookie を取り直して 2 秒後(以後 2 倍、上限 5 秒)に再接続し、open で保留を同期する
+// SSE. When it drops, renew the cookie and reconnect after 2 s (then doubling, capped at 5 s); sync pending decisions on open
 let es = null;
 let retryMs = 2000;
 let retryTimer = null;
@@ -1024,9 +1055,9 @@ function connect() {
   });
 }
 
-// ---- キーボード ----
+// ---- Keyboard ----
 
-let lastG = 0; // gg の 1 回目の時刻
+let lastG = 0; // time of the first g of gg
 
 function cycle(step) {
   const list = pendingList();
@@ -1035,8 +1066,8 @@ function cycle(step) {
   show(list[(i + step + list.length) % list.length].id);
 }
 
-// IME(日本語入力)が有効だと keydown の key が "Process"、keyCode が 229 になり文字が取れない。
-// テキスト欄の外では物理キー(code)から割り当てキーを決める
+// With an IME enabled, keydown has key "Process" and keyCode 229, so the character is lost.
+// Outside text fields, decide the bound key from the physical key (code)
 const CODE_KEYS = {
   KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
@@ -1074,12 +1105,12 @@ document.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const t = ev.target;
   const typing = t instanceof HTMLInputElement && t.type === "text";
-  // テキスト欄で IME 変換中のキーは入力に回す。欄の外では IME が有効でも物理キーで判定する(logicalKey)
+  // Keys during IME composition in a text field go to the input. Outside fields, judge by the physical key even with an IME on (logicalKey)
   if (typing && (ev.isComposing || ev.keyCode === 229)) return;
   if (document.body.classList.contains("fullwide")) {
     const k = logicalKey(ev);
     if (k === "Escape" || k === "f" || k === "Tab") { ev.preventDefault(); setFullwide(false); }
-    else if (k === "Enter") ev.preventDefault(); // 全幅中は送信しない
+    else if (k === "Enter") ev.preventDefault(); // no submit while full width
     return;
   }
   if (drawerOpen()) { drawerKey(ev); return; }
@@ -1107,9 +1138,9 @@ document.addEventListener("keydown", (ev) => {
       }
       return;
     }
-    if (key === "Enter" && isBtn && t !== ui.submit) return; // そのボタンの既定動作に任せる
+    if (key === "Enter" && isBtn && t !== ui.submit) return; // leave it to the button's default action
     if (key === " " && isBtn) return;
-    if (t instanceof HTMLInputElement) t.blur(); // ネイティブの選択操作と二重にならないように
+    if (t instanceof HTMLInputElement) t.blur(); // avoid doubling with the native selection
     const onFree = n > 0 && ui.cursor === n - 1;
     const now = Date.now();
     const gg = key === "g" && now - lastG < 1000;
@@ -1146,7 +1177,7 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
 
-  // 計画
+  // Plan
   if (typing) {
     if (key === "Escape") { ev.preventDefault(); cancelReject(); }
     return;
@@ -1170,6 +1201,19 @@ setInterval(() => {
 }, 10000);
 
 $("empty").append(el("div", { class: "build empty-build", text: `build ${BUILD}` }));
+
+// Apply the display language: static text in index.html, then everything rendered from decisions.
+// The language is read from <html data-lang>; changing it later (tests do) re-renders in place.
+function applyLang() {
+  applyStatic();
+  renderEmptyText();
+  if (connDown) showBanner(t("cannot_connect", { origin: location.origin }));
+  models.clear(); // cached models hold localized DOM (copy button, callout labels, fold summaries)
+  renderAll();
+}
+applyStatic();
+renderEmptyText();
+new MutationObserver(applyLang).observe(document.documentElement, { attributes: true, attributeFilter: ["data-lang"] });
 
 loadAll().catch(() => {});
 connect();
