@@ -293,7 +293,7 @@ function renderRight(d) {
         // 単一選択は移動 = 選択。初期位置(推奨、無ければ先頭)を選んでおく
         if (!closed && !q.multiSelect && sel.size === 0 && !free.on && items.length) sel.add(items[dr.cursor].value);
       }
-      if (single) box.append(keyLine([["j", "k"], "移動"], [["Enter"], "回答"], ...(q.multiSelect ? [[["Space"], "切替"]] : [])));
+      if (single) box.append(keyLine([["↑", "↓"], "移動"], [["Enter"], "回答"], ...(q.multiSelect ? [[["Space"], "切替"]] : [])));
       for (const it of items) {
         const input = el("input", {
           type: q.multiSelect ? "checkbox" : "radio",
@@ -331,7 +331,7 @@ function renderRight(d) {
         oninput: (ev) => { free.text = ev.target.value; updateSubmit(); },
       });
       const freeCard = el("label", { class: "opt free" }, freeInput,
-        el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: "自由記述" }), single ? kbd("i") : null), freeText));
+        el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: "自由記述" }), single ? kbd("Enter") : null), freeText));
       if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
       box.append(freeCard);
       qsBox.append(box);
@@ -361,7 +361,7 @@ function renderRight(d) {
     function updateSubmit() { submit.disabled = closed || !complete(); }
     const actions = el("div", { class: "actions" }, submit);
     if (single) {
-      actions.append(el("div", { class: "hint" }, `j/k 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · i 自由記述 · h/l 保留の切替 · b 一覧`, " ", buildTag()));
+      actions.append(el("div", { class: "hint" }, `↑↓ 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · ←→ 次の保留 · Esc 戻る`, " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
@@ -402,7 +402,7 @@ function renderRight(d) {
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(approve, auto, reject, el("div", { class: "hint" }, "j/k 移動 · Enter 決定 · y 承認 · a auto · n 却下 · h/l 保留の切替 · b 一覧", " ", buildTag()));
+  actions.append(approve, auto, reject, el("div", { class: "hint" }, "↑↓ 選ぶ · Enter 決定 · ←→ 次の保留", " ", buildTag()));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
@@ -750,7 +750,7 @@ function logicalKey(ev) {
 function drawerKey(ev) {
   const key = logicalKey(ev);
   const list = pendingList();
-  if (key === "Escape" || key === "b") { ev.preventDefault(); setDrawer(false); }
+  if (key === "Escape" || key === "b" || key === "ArrowLeft") { ev.preventDefault(); setDrawer(false); }
   else if (key === "ArrowDown" || key === "ArrowUp" || key === "j" || key === "k") {
     ev.preventDefault();
     drawerIdx += key === "ArrowDown" || key === "j" ? 1 : -1;
@@ -778,7 +778,11 @@ document.addEventListener("keydown", (ev) => {
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
   if (key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
-  if (!typing && (key === "h" || key === "l")) { ev.preventDefault(); cycle(key === "l" ? 1 : -1); return; }
+  if (!typing && (key === "h" || key === "l" || key === "ArrowLeft" || key === "ArrowRight")) {
+    ev.preventDefault();
+    cycle(key === "l" || key === "ArrowRight" ? 1 : -1);
+    return;
+  }
   if (!typing && key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
   if (!ui || ui.closed) return;
   const isBtn = t instanceof HTMLButtonElement;
@@ -806,10 +810,10 @@ document.addEventListener("keydown", (ev) => {
       if (!n) return;
       ev.preventDefault();
       ui.setCursor(ui.cursor + (key === "ArrowDown" || key === "j" ? 1 : -1), true);
-    } else if (gg || key === "G") {
+    } else if (gg || key === "G" || key === "Home" || key === "End") {
       if (!n) return;
       ev.preventDefault();
-      ui.setCursor(gg ? 0 : n - 1, true);
+      ui.setCursor(gg || key === "Home" ? 0 : n - 1, true);
     } else if (key === "i") {
       if (!ui.freeText) return;
       ev.preventDefault();
@@ -819,8 +823,6 @@ document.addEventListener("keydown", (ev) => {
       if (!ui.multi) return;
       ev.preventDefault();
       ui.cards[ui.cursor].input.click();
-    } else if (key === "ArrowRight") {
-      if (onFree) { ev.preventDefault(); ui.freeText.focus(); }
     } else if (key === "Enter") {
       ev.preventDefault();
       if (onFree && ui.freeText.value.trim() === "") ui.freeText.focus();
@@ -836,8 +838,8 @@ document.addEventListener("keydown", (ev) => {
   }
   if (key === "Enter" && isBtn) return;
   if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
-  else if (key === "ArrowLeft" || key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
-  else if (key === "ArrowRight" || key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
+  else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
+  else if (key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
   else if (key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }
   else if (key === "y") { ev.preventDefault(); ui.approve.click(); }
   else if (key === "a") { ev.preventDefault(); ui.auto.click(); }

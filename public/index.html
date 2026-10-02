@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/public/app.css">
 </head>
 <body>
-<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden>保留 <span id="pending-count">0</span> <kbd class="kbd">b</kbd><span class="sw"><kbd class="kbd">h</kbd><kbd class="kbd">l</kbd></span></button>
+<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden>保留 <span id="pending-count">0</span> <kbd class="kbd">←</kbd><kbd class="kbd">→</kbd></button>
 <div id="banner" class="banner" hidden></div>
 <main id="main" hidden>
   <section id="background" aria-label="背景"></section>
@@ -20,7 +20,7 @@
 <div id="backdrop" class="backdrop" hidden></div>
 <aside id="drawer" class="drawer" aria-label="保留一覧" aria-hidden="true">
   <h2>保留一覧</h2>
-  <div class="keys"><kbd class="kbd">j</kbd><kbd class="kbd">k</kbd><span>移動</span> · <kbd class="kbd">Enter</kbd><span>表示</span> · <kbd class="kbd">Esc</kbd><span>閉じる</span></div>
+  <div class="keys"><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd><span>移動</span> · <kbd class="kbd">Enter</kbd><span>表示</span> · <kbd class="kbd">Esc</kbd><kbd class="kbd">←</kbd><span>閉じる</span></div>
   <ul id="pending-list"></ul>
 </aside>
 <div id="toast" class="toast" role="status" hidden></div>

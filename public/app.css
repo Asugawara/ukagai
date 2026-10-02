@@ -31,7 +31,7 @@ body {
 .badge.reversible { color: var(--fg); }
 .badge.none { color: var(--yellow); border-color: var(--yellow); }
 .head { margin-bottom: 10px; }
-.has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } /* 保留ボタン(保留 N + b h l)の幅ぶん */
+.has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } /* 保留ボタン(保留 N + ← →)の幅ぶん */
 .meta-line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 13px; max-height: 3.4em; overflow: hidden; }
 .chips { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; }
 .chip { font-size: 13px; font-weight: 700; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); border-radius: 4px; padding: 0 6px; line-height: 20px; overflow-wrap: anywhere; }
@@ -93,8 +93,6 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 .keys .kbd + span { margin: 0 6px 0 2px; }
 .lab .kbd { margin-left: 8px; }
 .pending-btn .kbd { margin-left: 4px; }
-.pending-btn .sw { margin-left: 6px; }
-.pending-btn .sw .kbd { margin-left: 2px; font-size: 11px; }
 button.btn { position: relative; }
 button.btn .kbd { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: var(--panel); }
 button.btn.primary .kbd { color: var(--fg); }

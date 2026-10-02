@@ -314,3 +314,76 @@ gui("GET / の ?v= と画面の build <v> が一致する(判断あり・空状�
   await reopen();
   assert.equal(ev(`document.body.innerText.includes("build ${v}")`), true);
 });
+
+gui("矢印: ← / → で保留が切り替わる(質問)、Home / End で先頭 / 末尾", async () => {
+  const a = await seedQuestion({ title: "1 件目の判断" });
+  const b = await seedQuestion({ title: "2 件目の判断" });
+  await reopen();
+  const title = () => ev<string>(`document.querySelector("#decision .v2-title").textContent`);
+  assert.equal(title(), a.title);
+  press("ArrowRight");
+  assert.equal(title(), b.title);
+  press("ArrowLeft");
+  assert.equal(title(), a.title);
+  press("End");
+  assert.deepEqual(view(), { cursor: 3, checked: 3 });
+  press("Home");
+  assert.deepEqual(view(), { cursor: 0, checked: 0 });
+});
+
+gui("矢印: ← / → で保留が切り替わる(計画)。ボタン移動は ↑ / ↓", async () => {
+  const q = await seedQuestion({ title: "質問の判断" });
+  const p = await seedPlan();
+  assert.ok(q.id && p.id);
+  await reopen();
+  const isPlan = () => ev<boolean>(`!!document.querySelector("#decision #submit") === false`);
+  assert.equal(isPlan(), false);
+  press("ArrowRight");
+  assert.equal(isPlan(), true);
+  const cur = () => ev<number>(`[...document.querySelectorAll("#decision button.btn")].findIndex(b => b.classList.contains("cursor"))`);
+  assert.equal(cur(), 0);
+  press("ArrowDown");
+  assert.equal(cur(), 1);
+  press("ArrowUp");
+  assert.equal(cur(), 0);
+  press("ArrowLeft");
+  assert.equal(isPlan(), false);
+});
+
+gui("矢印: 自由記述の欄内で → を押しても欄から出ない", async () => {
+  await seedQuestion();
+  await seedQuestion();
+  await reopen();
+  press("End", "Enter"); // 自由記述カード、空なので欄へ
+  const onFree = () => ev<boolean>(`document.activeElement.classList.contains("free-text")`);
+  assert.equal(onFree(), true);
+  const t = () => ev<string>(`document.querySelector("#decision .v2-title").textContent`);
+  const before = t();
+  press("ArrowRight", "ArrowLeft");
+  assert.equal(onFree(), true);
+  assert.equal(t(), before);
+});
+
+gui("矢印: ドロワーで ← が閉じる", async () => {
+  await seedQuestion();
+  await seedQuestion();
+  await reopen();
+  const drawer = () => ev<boolean>(`document.getElementById("drawer").classList.contains("open")`);
+  press("b");
+  assert.equal(drawer(), true);
+  press("ArrowLeft");
+  assert.equal(drawer(), false);
+});
+
+gui("矢印: ヒント行は ↑↓ で j/k を書かない。保留ボタンのチップは ← →", async () => {
+  await seedQuestion();
+  await seedQuestion();
+  await reopen();
+  const hint = ev<string>(`document.querySelector("#decision .hint").textContent`);
+  assert.ok(hint.includes("↑↓"), hint);
+  assert.ok(!hint.includes("j/k"), hint);
+  const keys = ev<string>(`document.querySelector("#decision .keys").textContent`);
+  assert.ok(keys.includes("↑") && keys.includes("↓"), keys);
+  const chips = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#pending-btn .kbd")].map(k => k.textContent))`);
+  assert.deepEqual(chips, ["←", "→"]);
+});
