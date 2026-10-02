@@ -74,3 +74,29 @@ export function withExplanation(markdown: string, over: Record<string, unknown> 
     },
   } as Partial<Decision>;
 }
+
+import { readFileSync } from "node:fs";
+
+export const BLOCKER_MD = readFileSync(new URL("../explain-fixtures/pass-blocker.md", import.meta.url), "utf8");
+
+/** blocker(人の作業待ち)の判断。説明は pass-blocker.md */
+export function blockerDecision(over: Partial<Decision> & Record<string, unknown> = {}): Decision {
+  return decision({
+    request: {
+      questions: [
+        {
+          question: "gcloud の認証が切れています。対応できましたか？",
+          header: "作業待ち",
+          multiSelect: false,
+          options: [
+            { label: "対応した。続けて (Recommended)", description: "再試行する" },
+            { label: "この手順は飛ばして続けて", description: "飛ばす" },
+            { label: "ここで中断", description: "止める" },
+          ],
+        },
+      ],
+    },
+    ...withExplanation(BLOCKER_MD, { type: "blocker" }),
+    ...over,
+  } as never);
+}

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App } from "../../src/tui/app.js";
 import type { Key } from "../../src/tui/keys.js";
-import { V2_MD, decision, withExplanation } from "./helpers.js";
+import { V2_MD, blockerDecision, decision, withExplanation } from "./helpers.js";
 
 const ch = (c: string): Key => ({ name: "char", ch: c });
 const enter: Key = { name: "enter" };
@@ -105,4 +105,19 @@ test("質問が 2 つ以上の判断は答えられない", () => {
   app.upsert(d, t);
   assert.deepEqual(press(app, enter), []);
   assert.match(app.model()!.unsupported ?? "", /GUI/);
+});
+
+test("blocker: Enter だけで「対応した。続けて (Recommended)」を送る。c は先頭のコードブロックをコピー", () => {
+  const app = new App();
+  app.upsert(blockerDecision(), t);
+  assert.deepEqual(press(app, ch("c")), [{ type: "copy", text: "gcloud auth login\ngcloud auth application-default login" }]);
+  assert.deepEqual(press(app, enter), [
+    { type: "answer", id: "d1", body: { answers: { "gcloud の認証が切れています。対応できましたか？": "対応した。続けて (Recommended)" } } },
+  ]);
+});
+
+test("blocker でない判断では c は何もしない", () => {
+  const app = new App();
+  app.upsert(decision(withExplanation(V2_MD)), t);
+  assert.deepEqual(press(app, ch("c")), []);
 });

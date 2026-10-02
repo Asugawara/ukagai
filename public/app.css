@@ -1,6 +1,6 @@
 :root {
   --bg: #fafafa; --fg: #1d1d1f; --muted: #6b6b70; --line: #d8d8dc; --panel: #fff;
-  --repo: #a855f7; --branch: #16a34a; --worktree: #ea580c;
+  --repo: #a855f7; --branch: #16a34a; --worktree: #ea580c; --blocker: #f97316;
   --accent: #2563eb; --accent-bg: #2563eb14; --red: #dc2626; --yellow: #ca8a04; --yellow-bg: #fde68a; --green: #16a34a;
   --add: #dcfce7; --del: #fee2e2; --hunk: #e0e7ff; --code: #f1f1f4;
   color-scheme: light dark;
@@ -8,7 +8,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #17171a; --fg: #e8e8ec; --muted: #9a9aa2; --line: #34343a; --panel: #1f1f24;
-    --repo: #c084fc; --branch: #4ade80; --worktree: #fb923c;
+    --repo: #c084fc; --branch: #4ade80; --worktree: #fb923c; --blocker: #fb923c;
     --accent: #6ea0ff; --accent-bg: #6ea0ff1f; --red: #f87171; --yellow: #facc15; --yellow-bg: #854d0e; --green: #4ade80;
     --add: #14352180; --del: #45151580; --hunk: #25306080; --code: #26262c;
   }
@@ -31,7 +31,7 @@ body {
 .badge.reversible { color: var(--fg); }
 .badge.none { color: var(--yellow); border-color: var(--yellow); }
 .head { margin-bottom: 10px; }
-.has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } /* 保留ボタン(保留 N + ← →)の幅ぶん */
+.has-pending-btn .blocker-band, .has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } /* 保留ボタン(保留 N + ← →)の幅ぶん */
 .meta-line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 6px; font-size: 13px; max-height: 3.4em; overflow: hidden; }
 .chips { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; }
 .chip { font-size: 13px; font-weight: 700; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); border-radius: 4px; padding: 0 6px; line-height: 20px; overflow-wrap: anywhere; }
@@ -170,3 +170,11 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 
 .build { font-size: 11px; color: var(--muted); opacity: 0.7; }
 .empty-build { position: fixed; right: 12px; bottom: 8px; }
+
+/* ブロッカー(人の作業待ち) */
+.blocker-band { background: var(--blocker); color: #1d1d1f; font-weight: 700; font-size: 13px; padding: 2px 12px; border-radius: 4px; margin-bottom: 8px; }
+.badge.blocker { border-color: var(--blocker); color: var(--blocker); font-weight: 600; }
+.todo { border: 2px solid var(--blocker); background: color-mix(in srgb, var(--blocker) 8%, transparent); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.todo-cap { font-size: 12px; font-weight: 700; color: var(--blocker); }
+.codewrap { position: relative; }
+.copy-btn { position: absolute; top: 12px; right: 6px; font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }

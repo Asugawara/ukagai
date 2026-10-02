@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildModel } from "../../src/tui/model.js";
-import { V2_MD, decision, withExplanation } from "./helpers.js";
+import { V2_MD, blockerDecision, decision, withExplanation } from "./helpers.js";
 
 test("v2: title / chips / 推奨 / カード / 背景節", () => {
   const m = buildModel(decision(withExplanation(V2_MD)));
@@ -71,4 +71,30 @@ test("worktree 以外の cwd は末尾だけを repo に", () => {
   const m = buildModel(decision({ session: { session_id: "s", cwd: "/Users/a/dev/ukagai", transcript_path: "/x" }, context: {} } as never));
   assert.deepEqual(m.chips.map((c) => c.text), ["◈ ukagai"]);
   assert.equal(m.cwd, "~/dev/ukagai");
+});
+
+test("blocker: todo は背景から外れ、コードブロックを取り出す。初期カーソルは「対応した。続けて」", () => {
+  const m = buildModel(blockerDecision());
+  assert.equal(m.blocker, true);
+  assert.match(m.todo ?? "", /ターミナルで次を実行/);
+  assert.deepEqual(m.todoCode, ["gcloud auth login\ngcloud auth application-default login"]);
+  assert.match(m.background ?? "", /なぜ止まったか/);
+  assert.doesNotMatch(m.background ?? "", /人にしてほしいこと/);
+  assert.equal(m.recommendation, null);
+  const q = m.question!;
+  assert.deepEqual(q.cards.map((c) => c.label), ["対応した。続けて", "この手順は飛ばして続けて", "ここで中断"]);
+  assert.equal(q.initialCursor, 0);
+});
+
+test("blocker: front matter の type だけでも blocker(explanation.type が無いとき)", () => {
+  const base = blockerDecision();
+  const m = buildModel({ ...base, explanation: { ...base.explanation!, type: undefined } });
+  assert.equal(m.blocker, true);
+});
+
+test("decision は blocker ではない", () => {
+  const m = buildModel(decision(withExplanation(V2_MD)));
+  assert.equal(m.blocker, false);
+  assert.equal(m.todo, null);
+  assert.deepEqual(m.todoCode, []);
 });

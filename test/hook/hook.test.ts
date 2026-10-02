@@ -428,7 +428,7 @@ test("Stop: stop_hook_active: true / 語彙不一致 / plan mode / --observe は
 });
 
 test("Stop: server 不在でも block を返す(event の失敗は握りつぶす)", async () => {
-  const r = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", dataDirWithToken()], JSON.stringify(stop("権限がありません")));
+  const r = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", dataDirWithToken()], JSON.stringify(stop("権限がなく進められません")));
   assert.equal(JSON.parse(r.stdout).decision, "block");
   assert.ok(r.ms < 2500);
 });

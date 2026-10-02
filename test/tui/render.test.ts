@@ -4,7 +4,7 @@ import { App } from "../../src/tui/app.js";
 import { buildModel } from "../../src/tui/model.js";
 import { render, renderFrame, type View } from "../../src/tui/render.js";
 import { stripAnsi, width } from "../../src/tui/width.js";
-import { V2_MD, decision, withExplanation } from "./helpers.js";
+import { V2_MD, blockerDecision, decision, withExplanation } from "./helpers.js";
 
 const NOW = Date.parse("2026-10-02T00:00:30.000Z");
 function viewOf(d = decision(withExplanation(V2_MD))): View {
@@ -85,4 +85,44 @@ test("model だけからも描ける(buildModel の結果を view に載せる)"
   const m = buildModel(decision(withExplanation(V2_MD)));
   const v: View = { ...viewOf(), model: m };
   assert.ok(stripAnsi(render(v, { cols: 140, rows: 40 })).includes(m.title));
+});
+
+test("blocker: 上段に「人の作業待ち」、見出し直下に「人にしてほしいこと」とコード、その下に 3 択、c コピーのヒント", () => {
+  const out = stripAnsi(render(viewOf(blockerDecision()), { cols: 140, rows: 40 }));
+  const lines = out.split("\n");
+  assert.equal(lines[0]!.trim(), "人の作業待ち");
+  for (const s of ["人にしてほしいこと", "gcloud auth login", "▸ ● 対応した。続けて", "○ この手順は飛ばして続けて", "○ ここで中断", "c コピー", "なぜ止まったか"]) {
+    assert.ok(out.includes(s), `含まれない: ${s}`);
+  }
+  // 右列では「人にしてほしいこと」が 3 択より上
+  const right = (s: string) => lines.findIndex((l) => l.split(" │ ").slice(1).join(" │ ").includes(s));
+  assert.ok(right("人にしてほしいこと") >= 0 && right("人にしてほしいこと") < right("対応した。続けて"));
+  // 左列には無い
+  assert.ok(!lines.some((l) => l.split(" │ ")[0]!.includes("人にしてほしいこと")));
+  assert.ok(!out.includes("┌─ 推奨"), "推奨が無ければボックスを出さない");
+  assert.ok(render(viewOf(blockerDecision()), { cols: 140, rows: 40 }).includes("\x1b[43;30m 人の作業待ち"));
+});
+
+test("blocker: pbcopy が無いとヒントは「コピー非対応」", () => {
+  const app = new App();
+  app.copySupported = false;
+  app.upsert(blockerDecision(), NOW);
+  const out = stripAnsi(render(app.view(NOW), { cols: 140, rows: 40 }));
+  assert.ok(out.includes("コピー非対応"));
+  assert.ok(!out.includes("c コピー"));
+});
+
+test("blocker: 一覧の行に「作業」印", () => {
+  const app = new App();
+  app.upsert(blockerDecision(), NOW);
+  app.upsert(decision({ id: "d2", created_at: "2026-10-02T00:00:10.000Z", ...withExplanation(V2_MD) }), NOW);
+  app.handle({ name: "char", ch: "b" }, 1);
+  const lines = stripAnsi(render(app.view(NOW), { cols: 100, rows: 20 })).split("\n");
+  assert.ok(lines.some((l) => l.includes("作業") && l.includes("gcloud")), lines.join("\n"));
+  assert.equal(lines.filter((l) => l.includes(" 作業 ")).length, 1);
+});
+
+test("blocker でない判断は帯も「c コピー」も出さない", () => {
+  const out = stripAnsi(render(viewOf(), { cols: 140, rows: 40 }));
+  assert.ok(!out.includes("人の作業待ち") && !out.includes("c コピー"));
 });

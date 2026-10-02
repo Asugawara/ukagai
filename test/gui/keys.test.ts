@@ -105,6 +105,31 @@ async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }
   return { id: d.id, title };
 }
 
+/** blocker(人の作業待ち)を投入する。説明は test/explain-fixtures/pass-blocker.md */
+async function seedBlocker(): Promise<{ id: string; title: string }> {
+  const n = ++seq;
+  const markdown = readFileSync(new URL("../explain-fixtures/pass-blocker.md", import.meta.url), "utf8");
+  const fm = (k: string) => new RegExp(`^${k}: (.+)$`, "m").exec(markdown)![1]!;
+  const question = fm("question");
+  const title = fm("title");
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_gui_${process.pid}_${n}`,
+    kind: "answer_question",
+    session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { questions: [{ question, header: "作業待ち", multiSelect: false, options: [
+      { label: "対応した。続けて (Recommended)", description: "再試行する" },
+      { label: "この手順は飛ばして続けて", description: "飛ばす" },
+      { label: "ここで中断", description: "止める" },
+    ] }] },
+    explanation: {
+      path: "", type: "blocker", title, question, reversibility: "reversible", scope: "machine", markdown,
+      has: { mermaid: false, table: true, diff: false }, match: "question", attached_via: "first_call",
+    },
+  });
+  assert.ok(d.id, `decision を作れない: ${JSON.stringify(d)}`);
+  return { id: d.id, title };
+}
+
 async function seedPlan(): Promise<{ id: string }> {
   const n = ++seq;
   const d = await api("/api/decisions", {
@@ -386,4 +411,24 @@ gui("矢印: ヒント行は ↑↓ で j/k を書かない。保留ボタンの
   assert.ok(keys.includes("↑") && keys.includes("↓"), keys);
   const chips = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#pending-btn .kbd")].map(k => k.textContent))`);
   assert.deepEqual(chips, ["←", "→"]);
+});
+
+gui("blocker: 橙の帯と「人にしてほしいこと」が右列にあり、Enter だけで「対応した。続けて」が送られる", async () => {
+  const { id, title } = await seedBlocker();
+  await reopen();
+  const right = (sel: string) => ev<boolean>(`!!document.querySelector("#decision ${sel}")`);
+  assert.equal(right(".blocker-band"), true);
+  assert.equal(ev<string>(`document.querySelector("#decision .blocker-band").textContent`), "人の作業待ち");
+  assert.equal(ev<string>(`document.querySelector("#decision .v2-title").textContent`), title);
+  assert.equal(ev<string>(`document.querySelector("#decision .todo-cap").textContent`), "人にしてほしいこと");
+  assert.equal(ev<boolean>(`document.querySelector("#decision .todo").textContent.includes("gcloud auth login")`), true);
+  assert.equal(right(".todo .copy-btn"), true);
+  assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes("人にしてほしいこと")`), false); // 左列には無い
+  assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes("なぜ止まったか")`), true);
+  assert.equal(right(".rec-cap"), false); // 推奨の節が無いのでボックスも出さない
+  assert.equal(ev<string>(`document.title`), "(1) ukagai · 作業待ち");
+  assert.equal(view().cursor, 0);
+  press("Enter");
+  const d = await waitStatus(id, "answer_submitted");
+  assert.equal(Object.values(d.response.answers)[0], "対応した。続けて (Recommended)");
 });

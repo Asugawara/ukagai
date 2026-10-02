@@ -1,6 +1,6 @@
 import { MULTI_SELECT_SEPARATOR, type Decision } from "../contract.js";
 import { interpret, type Action, type Key, type Mode } from "./keys.js";
-import { buildModel, hasExplanation, titleOf, chipsOf, type ScreenModel } from "./model.js";
+import { buildModel, hasExplanation, isBlocker, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 
@@ -8,6 +8,7 @@ import { parseFrontMatterFields } from "./util.js";
 
 export type Effect =
   | { type: "answer"; id: string; body: Record<string, unknown> }
+  | { type: "copy"; text: string }
   | { type: "quit" };
 
 interface Draft {
@@ -33,6 +34,8 @@ export class App {
   shownId: string | null = null;
   mode: Mode = "normal";
   scroll = 0;
+  /** クリップボードに送れるか(pbcopy の有無。index.ts が決める) */
+  copySupported = true;
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason"; text: string } | null = null;
@@ -123,6 +126,7 @@ export class App {
         ? {
             index: this.listIndex,
             items: pending.map((d): ListItem => ({
+              blocker: isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}),
               title: titleOf(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}),
               chips: chipsOf(d),
               kindLabel: d.kind === "approve_plan" ? "計画" : "質問",
@@ -142,6 +146,7 @@ export class App {
       pending: pending.length,
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
       list,
+      copy: this.copySupported,
       scroll: this.scroll,
       now,
     };
@@ -193,6 +198,10 @@ export class App {
       case "bottom": this.moveCursor(m, dr, this.slots(m) - 1); return [];
       case "toggle": return this.toggle(m, dr);
       case "free": return this.startFree(m, dr);
+      case "copy": {
+        const text = m.todoCode[0];
+        return text ? [{ type: "copy", text }] : [];
+      }
       case "submit": return this.submit(m, dr, now);
       case "approve": return this.send(m, { approve: true, set_mode_auto: false }, now);
       case "approve-auto": return this.send(m, { approve: true, set_mode_auto: true }, now);
