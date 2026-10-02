@@ -13,7 +13,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
-    "dev:serve": "tsx src/cli.ts serve"
+    "dev:serve": "tsx src/cli.ts serve",
+    "vendor": "cp node_modules/mermaid/dist/mermaid.min.js node_modules/marked/lib/marked.umd.js public/vendor/"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",
