@@ -23,6 +23,8 @@ export async function run(argv: string[]): Promise<number> {
   process.stdout.on("error", () => {});
   const startedAt = Date.now();
   try {
+    // Kill switch: a global hook can be silenced for a test session
+    if (process.env["UKAGAI_DISABLE"] === "1") return 0;
     const opts = parseArgs(argv);
     const raw: unknown = JSON.parse(await readStdin());
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return 0;

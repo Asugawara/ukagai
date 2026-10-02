@@ -43,7 +43,7 @@ When asking several questions in order, read the answers to the earlier ones and
 ## When to write
 
 - **Right before** calling AskUserQuestion: a design fork, a hard-to-undo operation, naming.
-- ExitPlanMode needs no separate file. Put a "Scope and reversibility" section in the plan body. Do not put steps nobody asked for (deletion, cleanup, unrelated changes) in the plan. If they are needed, give the reason and make them a separate option.
+- ExitPlanMode needs no separate file. Put a "Scope and reversibility" section in the plan body, and make its first 2 lines `Reversibility: reversible | costly | irreversible` and `Scope: file | repo | machine | external` (English values; bullets are fine). The GUI uses them for the reversibility chip and the confirm-twice / undo grace; without them the plan is approved with a single press. Do not put steps nobody asked for (deletion, cleanup, unrelated changes) in the plan. If they are needed, give the reason and make them a separate option.
 - AskUserQuestion in plan mode needs none.
 
 ## Where to write
@@ -85,6 +85,7 @@ scope: file | repo | machine | external
 
 - Each cell of the options table is 1–2 sentences. The reader decides with arrow keys and Enter only, so write **sentences that let one card carry the decision**.
 - Japanese headings and column names are accepted as aliases: 「なぜ今この判断が要るか」「あなたにしか分からないこと」「選択肢」「推奨」「前提」「反論」「影響を受けるもの」「用語」「図」「確かめたこと」「関係する差分」「影響範囲と可逆性」, and columns 「選ぶと起きること」「リスクと戻し方」. Prefer the English names.
+- **Use only these section names for H2.** A heading the format does not define is not shown prominently on the decision screen (it is easy to miss), so put the content in a defined section.
 
 ### Length limits
 
@@ -95,7 +96,7 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - Why this decision is needed now (for a blocker, "Why I stopped"): aim for 2–3 sentences. The limit is 600 characters (`why_long`).
 - Recommendation needs the condition under which another option is right ("if …, B"). The text of the section must contain one of: if / when / unless / otherwise / in case, or the Japanese なら / 場合 / とき / であれば / 際は / 際に. Without it the hook denies (`recommend_cond`). "ならない", "なければならない" and "ときどき" do not count.
 - Put details, evidence and logs in the "What I checked" section as bullets. Do not write what the decision does not need.
-- **Risk cells say how to undo.** Each cell of "Risks and how to undo" must contain a word such as undo / revert / roll back / restore / reinstall / delete the … / remove the …, or say it cannot be undone (irreversible / cannot be undone; Japanese 戻 / 消せ / やり直 / 再実行 / 戻せない / 元に戻らない). Without it the hook denies (`undo`).
+- **Risk cells say how to undo.** Each cell of "Risks and how to undo" must contain a whole word such as undo / revert / roll back / restore / reinstall / recreate / re-run / `git checkout` / delete the … / remove the …, or say it cannot be undone (cannot be restored / irreversible / permanent / unrecoverable; Japanese 戻せ / 戻す / 元に戻 / 消せ / やり直 / 再実行 / 再作成 / 復元 / 戻せない / 元に戻らない). Without it the hook denies (`undo`). The GUI / TUI paint the cannot-be-undone phrases red and the how-to-undo words green.
 - **Evidence by footnote.** Cite what you checked from the body with `[^1]` and define it in "What I checked" (`[^1]: \`grep -rn jsonl src\` finds nothing`). The GUI shows the evidence on hover. A definition without a reference is fine; a reference without a definition is denied (`footnote`).
 - **Order of the codes** the hook reports: … `cell_long`, `undo`, … `diagram`, `checked`, `footnote`.
 
@@ -119,10 +120,11 @@ The GUI reads the file in layers. Write each piece so it works at its layer.
 | 10 seconds | rest of the Recommendation, Assumptions, Counterargument, option cards | One premise per line; the strongest counterargument in 1–2 sentences; two-sentence cells |
 | 60 seconds | Why, What I checked (footnotes), diagram, diff, Terms, comparison table | Evidence, definitions, details |
 
-- **Terms**: define each word the human may not know, in one line.
+- **Terms**: only words a new reader would not know; do not define common terms (TTY, JSON). One line each.
 - **What only you know**: 1–3 bullets, phrased as the thing to decide ("Whether the GUI will ever send messages to the server"). Never list things you could have checked yourself.
-- **Assumptions**: one premise per line, checkable ("Only server-to-browser pushes are needed").
-- **Counterargument**: argue against yourself honestly; do not write a strawman.
+- **Assumptions**: one premise per line, checkable ("Only server-to-browser pushes are needed"). An Assumption is something you did not verify and that would change the pick. Generic truths are not assumptions.
+- **Counterargument**: argue against yourself honestly; do not write a strawman. The Counterargument attacks the recommendation; do not restate its condition. If its text is contained in the Recommendation the hook denies (`against_weak`).
+- **Honesty about evidence**: if you checked nothing, say so in Why, not as a footnote. Do not state facts you did not verify as facts; mark guesses.
 - **Affected**: concrete names, not "the code" or "some files".
 
 ## When the answer is "None of these"

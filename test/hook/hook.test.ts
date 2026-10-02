@@ -285,6 +285,39 @@ test("T5: ExitPlanMode approve matches t5-stdout.json (a defective plan is denie
   });
 });
 
+test("plan: Reversibility / Scope lines in the section are attached to the explanation; without them nothing is", async () => {
+  const h: Handler = (req, res) =>
+    req.path.includes("/wait") ? json(res, 200, { response: { via: "gui", approve: true, decided_at: NOW() } }) : false;
+  const create = async (plan: string) =>
+    withServer(h, async (f, d) => {
+      await runHook(args(f, d), JSON.stringify(planWith(plan)));
+      return f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions")?.body.explanation;
+    });
+  const withMeta = await create("# Plan\n\n## Scope and reversibility\n- Reversibility: costly\n- Scope: repo\nA revert undoes it.\n");
+  assert.equal(withMeta.reversibility, "costly");
+  assert.equal(withMeta.scope, "repo");
+  const without = await create(GOOD_PLAN);
+  assert.ok(!("reversibility" in without) && !("scope" in without));
+});
+
+test("UKAGAI_DISABLE=1: no output, no server calls, exit 0", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(answerHandler({ [Q]: "B" }), async (f, d) => {
+    const prev = process.env["UKAGAI_DISABLE"];
+    process.env["UKAGAI_DISABLE"] = "1";
+    try {
+      const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+      assert.equal(r.code, 0);
+      assert.equal(r.stdout, "");
+      assert.equal(f.calls.length, 0);
+    } finally {
+      if (prev === undefined) delete process.env["UKAGAI_DISABLE"];
+      else process.env["UKAGAI_DISABLE"] = prev;
+    }
+  });
+});
+
 test("T5 real fixture (no scope section): denied the first time; the second (with denied_explain) is registered as loop_guard and matches t5-stdout.json", async () => {
   const input = fx("t5-stdin.json");
   await withServer(() => false, async (f, d) => {

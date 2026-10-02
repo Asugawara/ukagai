@@ -17,6 +17,7 @@ import {
   markUsed,
   MISSING_LABELS,
   parseFrontMatter,
+  parsePlanImpact,
   validateExplanation,
   validatePlan,
   type Validation,
@@ -187,6 +188,7 @@ export async function handleDecision(
     if (v.valid) {
       explanation = {
         path: "",
+        ...parsePlanImpact(plan),
         markdown: plan,
         has: v.has,
         match: "question",
