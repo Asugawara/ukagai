@@ -730,19 +730,33 @@ function cycle(step) {
   show(list[(i + step + list.length) % list.length].id);
 }
 
+// IME(日本語入力)が有効だと keydown の key が "Process"、keyCode が 229 になり文字が取れない。
+// テキスト欄の外では物理キー(code)から割り当てキーを決める
+const CODE_KEYS = {
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyY: "y", KeyA: "a", KeyN: "n",
+  Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
+};
+function logicalKey(ev) {
+  if (ev.key !== "Process" && ev.keyCode !== 229 && !ev.isComposing) return ev.key;
+  const k = CODE_KEYS[ev.code];
+  if (k === undefined) return ev.key;
+  return k === "g" && ev.shiftKey ? "G" : k;
+}
+
 function drawerKey(ev) {
+  const key = logicalKey(ev);
   const list = pendingList();
-  if (ev.key === "Escape" || ev.key === "b") { ev.preventDefault(); setDrawer(false); }
-  else if (ev.key === "ArrowDown" || ev.key === "ArrowUp" || ev.key === "j" || ev.key === "k") {
+  if (key === "Escape" || key === "b") { ev.preventDefault(); setDrawer(false); }
+  else if (key === "ArrowDown" || key === "ArrowUp" || key === "j" || key === "k") {
     ev.preventDefault();
-    drawerIdx += ev.key === "ArrowDown" || ev.key === "j" ? 1 : -1;
+    drawerIdx += key === "ArrowDown" || key === "j" ? 1 : -1;
     focusDrawerRow();
-  } else if (ev.key === "Enter") {
+  } else if (key === "Enter") {
     ev.preventDefault();
     const d = list[clamp(drawerIdx, list.length)];
     if (d) show(d.id);
     setDrawer(false);
-  } else if (ev.key === "Tab") ev.preventDefault();
+  } else if (key === "Tab") ev.preventDefault();
 }
 
 function cancelReject() {
@@ -752,55 +766,58 @@ function cancelReject() {
 }
 
 document.addEventListener("keydown", (ev) => {
-  if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.isComposing || ev.keyCode === 229) return;
-  if (drawerOpen()) { drawerKey(ev); return; }
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const t = ev.target;
   const typing = t instanceof HTMLInputElement && t.type === "text";
-  if (ev.key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
-  if (!typing && (ev.key === "h" || ev.key === "l")) { ev.preventDefault(); cycle(ev.key === "l" ? 1 : -1); return; }
-  if (!typing && ev.key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
+  // テキスト欄で IME 変換中のキーは入力に回す。欄の外では IME が有効でも物理キーで判定する(logicalKey)
+  if (typing && (ev.isComposing || ev.keyCode === 229)) return;
+  if (drawerOpen()) { drawerKey(ev); return; }
+  const key = logicalKey(ev);
+  if (key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
+  if (!typing && (key === "h" || key === "l")) { ev.preventDefault(); cycle(key === "l" ? 1 : -1); return; }
+  if (!typing && key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
   if (!ui || ui.closed) return;
   const isBtn = t instanceof HTMLButtonElement;
 
   if (ui.kind === "question") {
     const n = ui.cards.length;
     if (typing) {
-      if (ev.key === "Enter") { ev.preventDefault(); if (!ui.submit.disabled) ui.submit.click(); }
-      else if (ev.key === "Escape") { ev.preventDefault(); t.blur(); }
-      else if (n && (ev.key === "ArrowUp" || ev.key === "ArrowDown")) {
+      if (key === "Enter") { ev.preventDefault(); if (!ui.submit.disabled) ui.submit.click(); }
+      else if (key === "Escape") { ev.preventDefault(); t.blur(); }
+      else if (n && (key === "ArrowUp" || key === "ArrowDown")) {
         ev.preventDefault();
         t.blur();
-        ui.setCursor(ui.cursor + (ev.key === "ArrowDown" ? 1 : -1), true);
+        ui.setCursor(ui.cursor + (key === "ArrowDown" ? 1 : -1), true);
       }
       return;
     }
-    if (ev.key === "Enter" && isBtn && t !== ui.submit) return; // そのボタンの既定動作に任せる
-    if (ev.key === " " && isBtn) return;
+    if (key === "Enter" && isBtn && t !== ui.submit) return; // そのボタンの既定動作に任せる
+    if (key === " " && isBtn) return;
     if (t instanceof HTMLInputElement) t.blur(); // ネイティブの選択操作と二重にならないように
     const onFree = n > 0 && ui.cursor === n - 1;
     const now = Date.now();
-    const gg = ev.key === "g" && now - lastG < 1000;
-    lastG = ev.key === "g" && !gg ? now : 0;
-    if (ev.key === "ArrowDown" || ev.key === "ArrowUp" || ev.key === "j" || ev.key === "k") {
+    const gg = key === "g" && now - lastG < 1000;
+    lastG = key === "g" && !gg ? now : 0;
+    if (key === "ArrowDown" || key === "ArrowUp" || key === "j" || key === "k") {
       if (!n) return;
       ev.preventDefault();
-      ui.setCursor(ui.cursor + (ev.key === "ArrowDown" || ev.key === "j" ? 1 : -1), true);
-    } else if (gg || ev.key === "G") {
+      ui.setCursor(ui.cursor + (key === "ArrowDown" || key === "j" ? 1 : -1), true);
+    } else if (gg || key === "G") {
       if (!n) return;
       ev.preventDefault();
       ui.setCursor(gg ? 0 : n - 1, true);
-    } else if (ev.key === "i") {
+    } else if (key === "i") {
       if (!ui.freeText) return;
       ev.preventDefault();
       ui.setCursor(n - 1, false);
       ui.freeText.focus();
-    } else if (ev.key === " ") {
+    } else if (key === " ") {
       if (!ui.multi) return;
       ev.preventDefault();
       ui.cards[ui.cursor].input.click();
-    } else if (ev.key === "ArrowRight") {
+    } else if (key === "ArrowRight") {
       if (onFree) { ev.preventDefault(); ui.freeText.focus(); }
-    } else if (ev.key === "Enter") {
+    } else if (key === "Enter") {
       ev.preventDefault();
       if (onFree && ui.freeText.value.trim() === "") ui.freeText.focus();
       else if (!ui.submit.disabled) ui.submit.click();
@@ -810,17 +827,17 @@ document.addEventListener("keydown", (ev) => {
 
   // 計画
   if (typing) {
-    if (ev.key === "Escape") { ev.preventDefault(); cancelReject(); }
+    if (key === "Escape") { ev.preventDefault(); cancelReject(); }
     return;
   }
-  if (ev.key === "Enter" && isBtn) return;
-  if (ev.key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
-  else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp" || ev.key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
-  else if (ev.key === "ArrowRight" || ev.key === "ArrowDown" || ev.key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
-  else if (ev.key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }
-  else if (ev.key === "y") { ev.preventDefault(); ui.approve.click(); }
-  else if (ev.key === "a") { ev.preventDefault(); ui.auto.click(); }
-  else if (ev.key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
+  if (key === "Enter" && isBtn) return;
+  if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
+  else if (key === "ArrowLeft" || key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
+  else if (key === "ArrowRight" || key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
+  else if (key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }
+  else if (key === "y") { ev.preventDefault(); ui.approve.click(); }
+  else if (key === "a") { ev.preventDefault(); ui.auto.click(); }
+  else if (key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });
 
 $("pending-btn").addEventListener("click", () => setDrawer(!drawerOpen()));
