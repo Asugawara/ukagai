@@ -25,7 +25,7 @@ export function contextText(dir: string): string {
   return [
     "人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。",
     `聞くときは、人が読む説明を Markdown で ${dir}/ に書くこと。書式は skill ukagai-explain に従う。`,
-    "front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。推奨は 5 文・400 文字以内、表のセルは 160 文字以内。図は、戻しにくい(reversible 以外)か scope が machine / external で、選択肢の違いが構造や流れに出るときだけ Mermaid で描く。",
+    "front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。推奨は 1 文目に推す選択肢と理由、最後の 1 文に「〜なら B」(5 文・400 文字以内)、表のセルは 160 文字以内。図は、戻しにくい(reversible 以外)か scope が machine / external で、選択肢の違いが構造や流れに出るときだけ Mermaid で描く。",
     "文章で質問せず、AskUserQuestion は最初から 1 問ずつ順に出し(まとめて出さない。先の回答と矛盾する説明は書かない)、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。",
     "認証・権限など人の作業で止まるときは、文章で終えず blocker 形式の説明を書いて AskUserQuestion(対応した / 飛ばして続ける / 中断)で聞く。人が対応したら同じ作業を再試行する。",
   ].join("\n");
@@ -67,14 +67,15 @@ async function post(raw: Record<string, unknown>, extra: Record<string, unknown>
 }
 
 /** Stop(escaped_question 付き)などの観測 event。対象外なら何もしない */
-export async function observedEvent(raw: Record<string, unknown>, client: Client): Promise<void> {
+export async function observedEvent(raw: Record<string, unknown>, client: Client, blocked = false): Promise<void> {
   const name = raw["hook_event_name"];
   if (typeof name !== "string" || !OBSERVED.has(name)) return;
   const extra: Record<string, unknown> = {};
   if (name === "Stop") {
     const msg = raw["last_assistant_message"];
     if (isEscapedQuestion(typeof msg === "string" ? msg : undefined)) extra["escaped_question"] = true;
-    if (isBlockerMessage(typeof msg === "string" ? msg : undefined)) extra["blocker_detected"] = true;
+    // 検知して促した回数: 実際に decision: block を返した Stop だけ(stop_hook_active / plan / --observe は除く)
+    if (blocked) extra["blocker_detected"] = true;
   }
   await post(
     raw,

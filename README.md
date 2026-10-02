@@ -14,7 +14,7 @@ node dist/cli.js serve              # 127.0.0.1:4818
 node dist/cli.js install --dry-run  # ~/.claude/settings.json への登録内容を確認
 node dist/cli.js install            # 登録(バックアップを取る)。uninstall で元に戻す
 node dist/cli.js doctor             # 登録と server の診断
-node dist/cli.js tui                # ターミナルで同じ判断画面。移動: j/k・↑↓、gg/G(先頭/末尾)、Space(複数選択)、Enter(送信)、i(自由記述)、c(blocker のコマンドをコピー)、y/a/n(計画の承認 / auto / 却下)、h/l・[ ](保留の切替)、b(一覧)、q・Ctrl-C(終了)。背景: PgUp/PgDn・Ctrl-U/D・ホイール、Tab(背景/判断の列を切替)、幅超過の図は Tab 不要で ←→・横ホイール・Home/End、f(全幅)。.(長い推奨・計画の「影響範囲と可逆性」を全文/折りたたみ。計画カードは判断列のボタンの上に出す)。server が止まるとフッターに赤で「接続できません … 再接続中…」を出し、2→4→5 秒で再接続して保留を同期(復帰時は緑で「再接続しました」)
+node dist/cli.js tui                # ターミナルで同じ判断画面。移動: j/k・↑↓、gg/G(先頭/末尾)、Space(複数選択)、Enter(送信)、i(自由記述)、c(blocker のコマンドをコピー)、y/a/n(計画の承認 / auto / 却下)、h/l・[ ](保留の切替)、b(一覧)、q・Ctrl-C(終了)。背景: PgUp/PgDn・Ctrl-U/D・ホイール、Tab(背景/判断の列を切替)、幅超過の図は Tab 不要で ←→・横ホイール(Home/End は背景列にフォーカスがあるとき)、f(全幅)。.(長い推奨・計画の「影響範囲と可逆性」を全文/折りたたみ。計画カードは判断列のボタンの上に出す)。server が止まるとフッターに赤で「接続できません … 再接続中…」を出し、2→4→5 秒で再接続して保留を同期(復帰時は緑で「再接続しました」)
 node dist/cli.js tui --server http://127.0.0.1:4832 --data-dir /tmp/ukagai-x   # 別の server に接続
 ```
 

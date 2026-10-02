@@ -44,7 +44,8 @@ const HELP: Record<Subcommand, string> = {
 キー: j/k 移動  gg/G 先頭/末尾  Space 複数選択  Enter 送信  i 自由記述
       h/l・[ ] 保留の切替  b 一覧  y/a/n 計画の承認/auto/却下  q 終了
       PgUp/PgDn・ホイール 背景のスクロール  Tab 背景/判断の列の切替
-      ←→・横ホイール・Home/End 幅超過の図の横スクロール  f 背景を全幅で表示
+      ←→・横ホイール 幅超過の図の横スクロール(Home/End は背景列にフォーカスがあるとき)  f 背景を全幅で表示
+      c blocker のコマンドをコピー  Ctrl-C 終了  Ctrl-U/D 背景の半ページ
       . 長い推奨・計画の影響範囲の全文/折りたたみ
 `,
   serve: `使い方: ukagai serve [options]
@@ -55,7 +56,7 @@ GUI と API の server を起動する。
   --port <n>              待ち受けポート(既定: 4818)
   --host <host>           127.0.0.1 のみ(他は受け付けない)
   --data-dir <dir>        データの置き場(既定: ~/.ukagai)
-  --lease-grace-ms <ms>   lease の猶予
+  --lease-grace-ms <ms>   lease の猶予(既定: 10000)
   -h, --help              この使い方を表示する
 `,
   hook: `使い方: ukagai hook [options]   (stdin に hook の JSON)
@@ -63,8 +64,9 @@ GUI と API の server を起動する。
 Claude Code の hook から呼ばれる。失敗しても何も出力せず exit 0。
 
 オプション:
-  --budget <sec>        hook の持ち時間
+  --budget <sec>        hook の持ち時間(既定: 590)
   --observe             観測のみ
+  --no-autostart        SessionStart で server を自動起動しない
   --server <url>        server の URL
   --data-dir <dir>      token の置き場
   --deny-template <A|B> deny 理由文の文体(既定 A)
@@ -77,12 +79,13 @@ Claude Code の settings に hook を登録し、skill を配置する。
 
 オプション:
   --observe          観測のみの hook にする
+  --no-autostart     SessionStart で server を自動起動しない hook にする
   --timeout <sec>    PreToolUse の timeout(15 以上、既定: 3600)
   --dry-run          差分だけ表示し、何も書かない
 ${SERVER_OPTIONS}${SETTINGS_OPTIONS}`,
   uninstall: `使い方: ukagai uninstall [options]
 
-install が登録した hook と skill だけを外す。
+install が登録した hook と skill だけを外す。settings の特定に使う引数以外は無視する。
 
 オプション:
   --dry-run          差分だけ表示し、何も書かない
@@ -91,7 +94,7 @@ install が登録した hook と skill だけを外す。
 ${SETTINGS_OPTIONS}`,
   doctor: `使い方: ukagai doctor [options]
 
-登録と接続の状態を診断する。
+登録と接続の状態を診断する。settings の特定に使う引数以外は無視する。
 
 オプション:
   --server <url>     診断する server の URL(既定: http://127.0.0.1:4818)

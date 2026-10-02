@@ -421,9 +421,12 @@ test("Stop: stop_hook_active: true / 語彙不一致 / plan mode / --observe は
     const run = async (input: Record<string, unknown>, ...more: string[]) =>
       (await runHook(args(f, d, ...more), JSON.stringify(input))).stdout;
     assert.equal(await run({ ...stop(msg), stop_hook_active: true }), "");
+    // Q3-05: block しなかった Stop には blocker_detected を付けない
+    assert.equal(f.calls.filter((c) => c.path === "/api/events").at(-1)?.body.blocker_detected, undefined);
     assert.equal(await run(stop("実装が終わりました。")), "");
     assert.equal(await run({ ...stop(msg), permission_mode: "plan" }), "");
     assert.equal(await run(stop(msg), "--observe"), "");
+    assert.equal(f.calls.filter((c) => c.path === "/api/events").at(-1)?.body.blocker_detected, undefined);
     assert.equal(await run({ ...stop(msg), last_assistant_message: undefined }), "");
   });
 });

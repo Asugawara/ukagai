@@ -267,9 +267,9 @@ function tableCellsLong(t: Table): boolean {
 
 /**
  * 「推奨」に別の選択肢が正しくなる条件があるか(語の有無だけ見る)。
- * `ならない` / `ならず`(なければならない 等)と `ときどき` は除く。`if` / `when` / `unless` は単語として
+ * `ならない` / `ならず`(なければならない 等)と `ときどき` は除く。「でなければ」「なければ」は当たり(`なければなら…` だけ除く)。`if` / `when` / `unless` は単語として
  */
-export const RECOMMEND_COND = /なら(?!ない|ず)|場合|とき(?!どき)|であれば|際[はに]|\bif\b|\bwhen\b|\bunless\b/i;
+export const RECOMMEND_COND = /なら(?!ない|ず)|なければ(?!なら)|場合|とき(?!どき)|であれば|際[はに]|\bif\b|\bwhen\b|\bunless\b/i;
 
 /** 条件の判定に使う本文: コードブロック・callout(`>` 始まりの行)を除く */
 function condText(text: string): string {

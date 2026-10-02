@@ -60,7 +60,7 @@
 |---|---|
 | なぜ今この判断が要るか | 常に必須。節に空でない行が 1 行以上。状況と、**人でなければ決められない理由**(エージェントが知り得ないこと)を書く(内容は検査しない) |
 | 選択肢 | 常に必須。節の中に 3.3 の表。旧見出し「選択肢の比較」も部分一致で通る |
-| 推奨 | 常に必須。節に空でない行が 1 行以上。どれを推すか、理由(3 文以内)、**別の選択肢が正しくなる条件**(「〜なら B」)を書く(内容は検査しない) |
+| 推奨 | 常に必須。節に空でない行が 1 行以上。どれを推すか、理由(目安 3 文、上限 5 文・400 文字)、**別の選択肢が正しくなる条件**(「〜なら B」)を書く(内容は検査しない) |
 | 図 | **`reversibility` が `reversible` 以外、または `scope` が `machine` / `external` のとき必須**(`repo` + `reversible` は任意)。節の中に ` ```mermaid ` のコードブロックが 1 つ以上。`scope` か `reversibility` が欠落・不正なときは必須として扱う(安全側)。必須でも、選択肢の違いが図に出ないなら描かず表の行を詳しくする(skill の指針。検査しない) |
 | 確かめたこと | 任意。file:line、コマンドの結果。推測は「推測」と書く。検査しない |
 | 関係する差分 | コード変更が絡むときに書く。hook は判定できないので**検査しない**(任意)。` ```diff ` で 20 行以内 |
@@ -140,7 +140,7 @@ GUI の右列で選択肢カードが画面外に押し出されないよう、�
 | `todo` | `type: blocker` なのに、「人にしてほしいこと」の節が無い・空、または節の中にコードブロックが無い | 「人にしてほしいこと」の節(コマンドのコードブロック付き) |
 | `recommend` | (blocker では評価しない)「推奨」の節が無い、または空 | 「推奨」の節 |
 | `recommend_long` | (blocker では評価しない)「推奨」の節が 3.6 の上限を超える(`recommend` が落ちたときは評価しない) | 「推奨」の節が長い(5 文・400 文字以内) |
-| `recommend_cond` | (blocker では評価しない)「推奨」の節の本文(コードブロックと callout の行を除く)に、`なら`(`ならない` / `ならず` は除く)/ `場合` / `とき`(`ときどき` は除く)/ `であれば` / `際は` / `際に` / `\bif\b` / `\bwhen\b` / `\bunless\b`(英字は大小無視)のいずれも無い(`recommend` が落ちたときは評価しない。`recommend_long` の直後) | 「推奨」に別の選択肢が正しくなる条件(「〜なら B」「〜の場合は B」「〜のときは B」「〜であれば B」のいずれかで書く) |
+| `recommend_cond` | (blocker では評価しない)「推奨」の節の本文(コードブロックと callout の行を除く)に、`なら`(`ならない` / `ならず` は除く)/ `なければ`(`なければなら…` は除く。「でなければ」を含む)/ `場合` / `とき`(`ときどき` は除く)/ `であれば` / `際は` / `際に` / `\bif\b` / `\bwhen\b` / `\bunless\b`(英字は大小無視)のいずれも無い(`recommend` が落ちたときは評価しない。`recommend_long` の直後) | 「推奨」に別の選択肢が正しくなる条件(「〜なら B」「〜の場合は B」「〜のときは B」「〜であれば B」のいずれかで書く) |
 | `multi` | (検査ではなく 5 節の手順 0 で使う)`questions` が 2 つ以上 | 質問は 1 回に 1 問 |
 | `diagram` | (blocker では評価しない)図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
 
@@ -201,7 +201,7 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 ```
 人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。
 聞くときは、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
-front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。推奨は 3 文以内、表のセルは 2 文以内。図は、戻しにくい(reversible 以外)か scope が machine / external で、選択肢の違いが構造や流れに出るときだけ Mermaid で描く。
+front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。推奨は 1 文目に推す選択肢と理由、最後の 1 文に「〜なら B」(目安 3 文、上限 5 文・400 文字)、表のセルは目安 2 文(上限 160 文字)。図は、戻しにくい(reversible 以外)か scope が machine / external で、選択肢の違いが構造や流れに出るときだけ Mermaid で描く。
 文章で質問せず、AskUserQuestion は最初から 1 問ずつ順に出し(まとめて出さない)、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
 認証・権限など人の作業で止まるときは、文章で終えず blocker 形式の説明を書いて AskUserQuestion(対応した / 飛ばして続ける / 中断)で聞く。人が対応したら同じ作業を再試行する。
 ```
@@ -248,6 +248,9 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 | `fail-blocker-no-todo.md` | false | `todo` |
 | `fail-bad-type.md` | false | `type`(`type: foo`) |
 | `fail-no-recommend-cond.md` | false | `recommend_cond` |
+| `fail-cell-long.md` | false | `cell_long` |
+| `fail-recommend-long.md` | false | `recommend_long` |
+| `fail-why-long.md` | false | `why_long` |
 
 ## 12. Stop hook の保険(文章で止まった blocker)
 
@@ -258,12 +261,12 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 - `stop_hook_active` が false で `last_assistant_message` がブロッカー語彙に一致したら、stdout に `{"decision":"block","reason":"<理由文>"}` を返す。理由文(600 文字以内、URL なし。`src/hook/blocker.ts` の `BLOCKER_REASON`):
   `人の作業(認証・権限など)が要るなら、文章で終えずに ukagai の blocker 形式で聞いてください: skill ukagai-explain の「人の作業で止まったとき」に従って説明ファイル(type: blocker、「なぜ止まったか」「人にしてほしいこと」「選択肢」)を書き、AskUserQuestion を選択肢「対応した。続けて (Recommended)」「この手順は飛ばして続けて」「ここで中断」で出してください。人の作業が要らないなら、そのまま終えて構いません。`
 - ブロッカー語彙(`src/hook/blocker.ts`、大小無視): 文を「。」「.」改行で区切り、**同じ文に「対象語」と「詰まり語」の両方**が含まれるときだけ一致にする。
-  - 対象語(`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵`
+  - 対象語(`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵|login|sign[ -]?in|api[ _-]?key|APIキー|API キー|\bauth\b`
   - 詰まり語(`BLOCKER_STUCK`): `ない|無い|なく|なければ|無く|無ければ|ありません|切れ|失敗|必要|してください|お願い|できません|進められません|進めません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked`
-  - 否定の否定(`BLOCKER_SAFE`): 「問題ありません」「問題なく」「支障ない」「エラーなく」などは照合前に文から除く(「認証は問題ありません」を当たりにしない)
-  - 一致する例: 「gcloud の認証がないため進められません」「Permission denied (403)」「トークンが期限切れです。再ログインしてください」。一致しない例: 「認証は有効です」「権限の実装を終えました」「どちらにしますか？」(片方だけ)。
+  - 否定の否定(`BLOCKER_SAFE`): 「問題ありません」「問題なく」「支障ない」「エラーなく」に加え、「わけではありません / わけではない」「必要(は|も)?(ありません|ない|無い|なく)」「問題(は|も)?なかった」「要りません」「不要」も照合前に文から除く(「認証は問題ありません」「権限は必要ありません」を当たりにしない)
+  - 一致する例: 「gcloud の認証がないため進められません」「gcloud auth login をしてください」「APIキーが必要です」「Permission denied (403)」「トークンが期限切れです。再ログインしてください」。一致しない例: 「権限エラーになったわけではありません」「認証は不要です」「認証は有効です」「権限の実装を終えました」「どちらにしますか？」(片方だけ)。
   - `escaped_question`(末尾が ？)の判定とは独立。
-- 観測 event(`POST /api/events`)は今までどおり送り、語彙に一致したら `blocker_detected: true` を足す(`stop_hook_active` に関係なく)。POST は 1000 ms で打ち切り、hook 全体は 1.9 秒以内に返す。失敗しても何も出力しない(フェイルオープン)。
+- 観測 event(`POST /api/events`)は今までどおり送り、**実際に `decision: block` を返した Stop だけ** `blocker_detected: true` を足す(`stop_hook_active` / plan mode / `--observe` で block しなかった Stop には付けない)。POST は 1000 ms で打ち切り、hook 全体は 1.9 秒以内に返す。失敗しても何も出力しない(フェイルオープン)。
 
 ## 既知の制約
 
