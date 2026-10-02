@@ -1,0 +1,6 @@
+{
+  "valid": false,
+  "missing": ["diagram"],
+  "has": { "mermaid": false, "table": true, "diff": false },
+  "question": "検証用の hook ログは ~/.ukagai/log に置いてよいですか？"
+}

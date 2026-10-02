@@ -1,0 +1,6 @@
+{
+  "valid": false,
+  "missing": ["table"],
+  "has": { "mermaid": false, "table": false, "diff": false },
+  "question": "テストの実行は node:test と vitest のどちらにしますか？"
+}
