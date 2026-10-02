@@ -2,7 +2,9 @@
 
 export type Key =
   | { name: "char"; ch: string }
-  | { name: "up" | "down" | "left" | "right" | "enter" | "esc" | "backspace" | "tab" | "ctrl-c" | "ctrl-d" | "ctrl-u" | "pgup" | "pgdn" }
+  | { name: "up" | "down" | "left" | "right" | "enter" | "esc" | "backspace" | "tab" | "ctrl-c" | "ctrl-d" | "ctrl-u" | "pgup" | "pgdn" | "home" | "end" }
+  /** 横ホイール(SGR の button 66 = 左、67 = 右) */
+  | { name: "hwheel"; dir: "left" | "right" }
   /** マウスホイール(SGR 報告)。x / y は 1 始まりの端末座標 */
   | { name: "wheel"; dir: "up" | "down"; x: number; y: number };
 
@@ -20,6 +22,14 @@ const CSI: Record<string, Key["name"]> = {
   "OD": "left",
   "[5~": "pgup",
   "[6~": "pgdn",
+  "[H": "home",
+  "[F": "end",
+  "[1~": "home",
+  "[4~": "end",
+  "[7~": "home",
+  "[8~": "end",
+  "OH": "home",
+  "OF": "end",
 };
 
 /**
@@ -51,13 +61,15 @@ export class KeyParser {
         const mouse = /^\[<(\d+);(\d+);(\d+)([Mm])/.exec(rest);
         if (mouse) {
           const b = Number(mouse[1]);
-          if (mouse[4] === "M" && b & 64 && (b & 3) < 2) {
+          if (mouse[4] === "M" && b & 64 && (b & 3) >= 2) {
+            keys.push({ name: "hwheel", dir: b & 1 ? "right" : "left" });
+          } else if (mouse[4] === "M" && b & 64) {
             keys.push({ name: "wheel", dir: b & 1 ? "down" : "up", x: Number(mouse[2]), y: Number(mouse[3]) });
           }
           i += 1 + mouse[0].length;
           continue;
         }
-        const m = /^(\[[0-9;]*[~A-Za-z]|O[A-D])/.exec(rest);
+        const m = /^(\[[0-9;]*[~A-Za-z]|O[A-DHF])/.exec(rest);
         if (m) {
           const name = CSI[m[1]!];
           if (name) keys.push({ name } as Key);
@@ -123,6 +135,7 @@ export type Action =
   | { type: "focus" }
   /** 幅超過の図を 1 歩(8 桁)横へ */
   | { type: "hscroll"; delta: 1 | -1 }
+  | { type: "hscroll-edge"; to: "start" | "end" }
   /** 背景の全幅表示の入り切り */
   | { type: "full" }
   | { type: "input-char"; ch: string }
@@ -187,6 +200,8 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     if (key.name === "tab" || key.name === "esc" || ch === "f") return done({ type: "full" });
     if (ctx.hscrollable && goLeft) return done({ type: "hscroll", delta: -1 });
     if (ctx.hscrollable && goRight) return done({ type: "hscroll", delta: 1 });
+    if (ctx.hscrollable && key.name === "home") return done({ type: "hscroll-edge", to: "start" });
+    if (ctx.hscrollable && key.name === "end") return done({ type: "hscroll-edge", to: "end" });
     if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
     if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1, unit: "half" });
     if (down) return done({ type: "scroll", delta: 1, unit: "line" });
@@ -201,11 +216,12 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (key.name === "tab") return done({ type: "focus" });
   if (ch === "f" && ctx.wide) return done({ type: "full" });
   if (ctx.hscrollable) {
-    // 左右配置は背景にフォーカスがあるとき(← → h l)、上下配置は ← → だけ。それ以外は今までどおり
-    const arrow = key.name === "left" || key.name === "right";
-    if (ctx.wide ? ctx.focus === "background" : arrow) {
-      if (goLeft) return done({ type: "hscroll", delta: -1 });
-      if (goRight) return done({ type: "hscroll", delta: 1 });
+    // 幅超過の図があるときは、フォーカスに関係なく ← → が横スクロール(保留の切替は h l [ ])
+    if (key.name === "left") return done({ type: "hscroll", delta: -1 });
+    if (key.name === "right") return done({ type: "hscroll", delta: 1 });
+    if (ctx.focus === "background") {
+      if (key.name === "home") return done({ type: "hscroll-edge", to: "start" });
+      if (key.name === "end") return done({ type: "hscroll-edge", to: "end" });
     }
   }
   if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
@@ -218,6 +234,8 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
       return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "scroll-edge", to: "top" }) : done(null, ctx.now);
     }
   }
+  if (ch === "[") return done({ type: "prev" });
+  if (ch === "]") return done({ type: "next" });
   if (ch === "h" || key.name === "left") return ctx.kind === "plan" && key.name === "left" ? done({ type: "move", delta: -1 }) : done({ type: "prev" });
   if (ch === "l" || key.name === "right") return ctx.kind === "plan" && key.name === "right" ? done({ type: "move", delta: 1 }) : done({ type: "next" });
   if (ch === "b") return done({ type: "list" });

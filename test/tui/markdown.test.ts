@@ -58,7 +58,7 @@ test("mermaid: 幅が足りなくても描く(列幅で切り詰め、注記が�
   const r = renderMarkdownRich("```mermaid\nflowchart LR\n  A[調査] --> B[判断] --> C[実装]\n```\n", 20);
   const lines = r.lines.map(stripAnsi);
   const top = lines.findIndex((l) => l.includes("┌"));
-  assert.match(lines.slice(0, top).join("").replace(/ /g, ""), /^\(図:幅\d+桁。←→で横スクロール·fで全幅\)$/);
+  assert.match(lines.slice(0, top).join("").replace(/ /g, ""), /^\(図:幅\d+桁。←→\/横ホイールでスクロール·fで全幅\)$/);
   assert.ok(r.lines[0]!.includes("\x1b[2m"));
   assert.ok(lines.some((l) => l.includes("┌")));
   assert.ok(!lines.some((l) => l.includes("描画に失敗")));
@@ -68,7 +68,7 @@ test("mermaid: 幅が足りなくても描く(列幅で切り詰め、注記が�
   assert.ok(r.wide.slice(0, top).every((x) => x === null), "注記行は動かさない");
   // 全幅に切り替えられないときは注記から「f で全幅」を外す
   const nf = renderMarkdownRich("```mermaid\nflowchart LR\n  A[調査] --> B[判断]\n```\n", 12, { fullHint: false }).lines.map(stripAnsi);
-  assert.match(nf.slice(0, nf.findIndex((l) => l.includes("┌"))).join("").replace(/ /g, ""), /^\(図:幅\d+桁。←→で横スクロール\)$/);
+  assert.match(nf.slice(0, nf.findIndex((l) => l.includes("┌"))).join("").replace(/ /g, ""), /^\(図:幅\d+桁。←→\/横ホイールでスクロール\)$/);
 });
 
 test("mermaid: 描けない定義は失敗の退避文と定義", () => {

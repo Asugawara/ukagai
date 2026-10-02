@@ -237,7 +237,7 @@ test("入力中・一覧中のホイールは無視。次の判断に移ると�
 
 const chain = (n: number) => Array.from({ length: n }, (_, i) => `N${i}[調査${i}]`).join(" --> ");
 const FIG = (n: number) => `${V2_MD.split("## 図")[0]}## 図\n\n\`\`\`mermaid\nflowchart LR\n  ${chain(n)}\n\`\`\`\n`;
-const WIDE_FIG = FIG(7); // 幅 ≈ 86: 列幅(66)を超え、端末幅 140 には収まる
+const WIDE_FIG = FIG(9); // 幅 ≈ 110: 背景の列幅(140 桁で 89)を超え、端末幅 140 には収まる
 const HUGE_FIG = FIG(14); // 端末幅 140 にも収まらない
 const body = (f: { lines: string[] }) => f.lines.map(stripAnsi);
 const row = (f: { lines: string[] }, mark: string) => body(f).find((l) => l.includes(mark))!;
@@ -258,21 +258,18 @@ test("幅超過の図: 切り詰めて描き、注記と hMax が出る。退避
   const { frame } = figApp(WIDE_FIG);
   const f = frame();
   const text = body(f).join("\n");
-  assert.match(text, /\(図: 幅 \d+ 桁。←→ で横スクロール · f で全幅\)/);
+  assert.match(text, /\(図: 幅 \d+ 桁。←→ \/ 横ホイールでスクロール · f で全幅\)/);
   assert.ok(!text.includes("端末を広げるか"));
   assert.ok(text.includes("┌"));
   assert.ok(f.hMax > 0);
 });
 
-test("横スクロール: 背景フォーカスの → / l で 8 桁ずつ、超過行だけずれる。端で止まり、◀▶ が出る", () => {
+test("横スクロール: Tab 無しで → が 8 桁ずつ、超過行だけずれる。h / l は保留の切替。端で止まり、◀▶ が出る", () => {
   const { app, frame } = figApp(WIDE_FIG);
   const before = frame();
   const textRow = body(before).find((l) => l.includes("なぜ今この判断が要るか"))!;
   const figRow = row(before, "調査0");
-  // 判断にフォーカスがあるうちは → は保留の切替(1 件なので何も起きない)で、横には動かない
-  press(app, { name: "right" });
-  assert.equal(app.hscroll, 0);
-  press(app, { name: "tab" });
+  // 判断にフォーカスがあっても → は図の横スクロール
   press(app, { name: "right" });
   assert.equal(app.hscroll, 8);
   const after = frame();
@@ -280,13 +277,14 @@ test("横スクロール: 背景フォーカスの → / l で 8 桁ずつ、超
   assert.equal(body(after).find((l) => l.includes("なぜ今この判断が要るか")), textRow, "折り返し済みの文は動かない");
   assert.match(body(after).at(-2)!, /◀▶ 8\/\d+/);
   assert.ok(!body(before).join("\n").includes("◀▶"));
-  press(app, ch("l"));
+  press(app, { name: "right" });
   assert.equal(app.hscroll, 16);
   press(app, { name: "left" });
   assert.equal(app.hscroll, 8);
-  press(app, ch("h"));
+  press(app, { name: "left" });
   assert.equal(app.hscroll, 0);
-  press(app, { name: "right" });
+  press(app, ch("l"), ch("h"), ch("]"), ch("["));
+  assert.equal(app.hscroll, 0, "h l [ ] は横スクロールではない");
   for (let i = 0; i < 30; i++) press(app, { name: "right" });
   const end = frame();
   assert.equal(app.hscroll, end.hMax, "右端で止まる");
@@ -371,8 +369,58 @@ test("上下配置: ← → は Tab 無しで横スクロール、h l は保留�
   assert.equal(app.hscroll, 0, "切り替えると横位置は戻る");
   press(app, ch("f"));
   assert.ok(!app.full);
-  press(app, { name: "right" }, { name: "right" });
+  for (let i = 0; i < 20; i++) press(app, { name: "right" });
   const f2 = draw();
-  assert.equal(app.hscroll, f2.hMax, "端で止まる(16 ではなく hMax)");
+  assert.equal(app.hscroll, f2.hMax, "端で止まる");
   assert.match(body(f2).at(-2)!, new RegExp(`◀▶ ${f2.hMax}/\\d+`));
+});
+
+test("→ は図があれば横スクロールで保留は切り替わらない。無ければ保留が切り替わる。h/l/[/] は常に切替", () => {
+  const two = (md: string) => {
+    const app = new App();
+    app.upsert(decision({ id: "a", tool_use_id: "a", created_at: "2026-10-02T00:00:00Z", ...withExplanation(md) } as never), t);
+    app.upsert(decision({ id: "b", tool_use_id: "b", created_at: "2026-10-02T00:00:01Z", ...withExplanation(md) } as never), t);
+    app.syncFrame(renderFrame(app.view(t), SIZE), t);
+    return app;
+  };
+  const w = two(WIDE_FIG);
+  press(w, { name: "right" }, { name: "right" });
+  assert.equal(w.shownId, "a");
+  assert.equal(w.hscroll, 16);
+  press(w, ch("l"));
+  assert.equal(w.shownId, "b");
+  press(w, ch("["));
+  assert.equal(w.shownId, "a");
+  press(w, ch("]"));
+  assert.equal(w.shownId, "b");
+  const p = two(V2_MD);
+  press(p, { name: "right" });
+  assert.equal(p.shownId, "b", "図が無ければ → は保留の切替");
+});
+
+test("横ホイール(66 / 67)で横スクロール。Home / End は背景フォーカスのときだけ先頭 / 末尾", () => {
+  const { app, frame } = figApp(WIDE_FIG);
+  press(app, { name: "hwheel", dir: "right" }, { name: "hwheel", dir: "right" });
+  assert.equal(app.hscroll, 16);
+  press(app, { name: "hwheel", dir: "left" });
+  assert.equal(app.hscroll, 8);
+  press(app, { name: "end" });
+  assert.equal(app.hscroll, 8, "判断フォーカスでは Home / End は無視");
+  press(app, { name: "tab" }, { name: "end" });
+  const f = frame();
+  assert.equal(app.hscroll, f.hMax);
+  press(app, { name: "home" });
+  assert.equal(app.hscroll, 0);
+});
+
+test("列幅: 判断は clamp(round(cols*0.34), 44, 58)、背景は残り(区切り 1 桁)", () => {
+  const split = (cols: number) => {
+    const { frame } = figApp(V2_MD, { cols, rows: 30 });
+    return frame().split;
+  };
+  // split = 背景幅 + 区切り 3 桁(" │ ")。判断幅 = cols - split
+  assert.equal(120 - split(120), 44);
+  assert.equal(147 - split(147), 50);
+  assert.equal(200 - split(200), 58);
+  assert.equal(split(147) - 3, 94 + 0, "147 桁: 判断 50 / 背景 94 + 区切り 3 桁");
 });
