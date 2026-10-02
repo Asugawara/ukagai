@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { start, type ServeHandle } from "../../src/serve/index.js";
-import { runHook } from "../hook/helpers.js";
+import { runHook, spawnHook } from "../hook/helpers.js";
 
 const tmpRoots: string[] = [];
 const handles: ServeHandle[] = [];
@@ -122,4 +122,56 @@ test("(c) 2 分以内の denied_explain があり説明ファイルが無いと 
   const out = await hook;
   assert.equal(out.code, 0);
   assert.equal(out.stdout, "");
+});
+
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+  test(`(cancel) wait 中の hook に ${sig} → 無出力 exit 0、decision は cancelled`, async () => {
+    const env = await setup();
+    const hook = spawnHook(env.hookArgs, stdin(env, tmp(), "AskUserQuestion", askInput, "plan", `tu-cancel-${sig}`));
+    const d = await waitForPending(env);
+    // 登録直後は signal handler 設置前の可能性があるので、wait に入るのを待つ
+    await new Promise((r) => setTimeout(r, 300));
+    hook.signal(sig);
+    const out = await hook.result;
+    assert.equal(out.code, 0);
+    assert.equal(out.stdout, "");
+    const cur = (await (await call(env, `/api/decisions/${d.id}`)).json()) as any;
+    assert.equal(cur.status, "cancelled");
+  });
+}
+
+test("(cancel) POST /cancel: answer_submitted は answer_lost、終端は 409、token 無しは 401", async () => {
+  const env = await setup();
+  const hook = runHook(env.hookArgs, stdin(env, tmp(), "AskUserQuestion", askInput, "plan", "tu-cancel-api"));
+  const d = await waitForPending(env);
+  const noAuth = await fetch(`${env.url}/api/decisions/${d.id}/cancel`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(noAuth.status, 401);
+  const c1 = await call(env, `/api/decisions/${d.id}/cancel`, {});
+  assert.equal(c1.status, 200);
+  assert.equal(((await c1.json()) as any).status, "cancelled");
+  const c2 = await call(env, `/api/decisions/${d.id}/cancel`, {});
+  assert.equal(c2.status, 409);
+  await hook; // wait が 410 で終わり hook も降りる
+
+  // hook 無しで登録 → 回答 → cancel は answer_lost
+  const created = await call(env, "/api/decisions", {
+    tool_use_id: "tu-cancel-api2",
+    kind: "answer_question",
+    session: {
+      session_id: "sess-int",
+      cwd: "/nonexistent-ukagai-cwd",
+      transcript_path: join(env.home, ".claude", "projects", "p", "sess-int.jsonl"),
+      permission_mode: "plan",
+    },
+    request: askInput,
+  });
+  const d2 = (await created.json()) as any;
+  await call(env, `/api/decisions/${d2.id}/answer`, { answers: { [QUESTION]: "A" } });
+  const c3 = await call(env, `/api/decisions/${d2.id}/cancel`, {});
+  assert.equal(c3.status, 200);
+  assert.equal(((await c3.json()) as any).status, "answer_lost");
 });

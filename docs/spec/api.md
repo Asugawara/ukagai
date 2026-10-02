@@ -11,6 +11,7 @@
 | `POST /api/decisions` | hook | 判断を登録。同じ `tool_use_id` なら既存を返す |
 | `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | long-poll。回答済みなら 200 + response、未回答で timeout なら 204。各 poll の終了時に `lease_until` を更新 |
 | `POST /api/decisions/:id/ack` | hook | response を受け取った確認。`answered` と `delivered_at` が付く |
+| `POST /api/decisions/:id/cancel` | hook | hook が SIGTERM / SIGINT / SIGHUP で降りる時の通知。`pending` → `cancelled`、`answer_submitted` → `answer_lost` |
 | `POST /api/decisions/:id/answer` | GUI | 回答の送信 |
 | `GET /api/decisions?status=pending` | GUI | 一覧 |
 | `GET /api/decisions/:id` | GUI | 詳細 |
@@ -87,6 +88,10 @@ hook は 200 を受けて stdout に書く前に ack を打つ(ack が通って�
 ### POST /api/decisions/:id/ack
 
 要求の本文は不要だが、`Content-Type: application/json` は必須なので `{}` を送る。応答 200 で `Decision`(`status: "answered"`、`response.delivered_at` 付き)。
+
+### POST /api/decisions/:id/cancel
+
+Bearer 必須。`Content-Type: application/json` が要るので `{}` を送る。`pending` なら `cancelled`、`answer_submitted` なら `answer_lost` にして 200 + `Decision`(SSE `decision.updated`)。終端の状態なら 409。Esc / ctrl+c で Claude Code が hook に送る SIGTERM(E1-3)を受け、hook が 300 ms の timeout で 1 回だけ打つ。lease 切れまで GUI に残るのを避ける。登録前・出力後のシグナルでは打たない。
 
 ### POST /api/decisions/:id/answer
 
@@ -195,6 +200,8 @@ GUI が「セッション一覧パネルを開いた」ことを (c) の補助�
 
 SSE。イベント名は `decision.created` / `decision.updated`(データは `Decision`)、`session.updated`(データは `SessionSummary`)。
 
+サブエージェント内では AskUserQuestion が提供されないため判断は発生しない(Claude Code 2.1.287 で確認)。
+
 ## 状態遷移
 
 ```mermaid
@@ -203,10 +210,11 @@ stateDiagram-v2
     [*] --> denied_explain: 説明なしの deny を登録
     pending --> answer_submitted: GUI が回答
     pending --> fallback: GUI が「ターミナルで答える」
+    pending --> cancelled: hook が cancel(シグナル)
     pending --> hook_disconnected: lease 切れ
     pending --> cancelled: lease 切れ後に UserPromptSubmit / Stop
     answer_submitted --> answered: hook が ack
-    answer_submitted --> answer_lost: lease 切れ(ack 無し)
+    answer_submitted --> answer_lost: lease 切れ(ack 無し)または hook が cancel(シグナル)
     hook_disconnected --> cancelled: 同セッションの UserPromptSubmit / Stop
     answered --> [*]
     fallback --> [*]
@@ -215,7 +223,7 @@ stateDiagram-v2
     denied_explain --> [*]
 ```
 
-許可される遷移は上の 7 本だけ(`canTransition`)。`denied_explain` は終端で、再呼び出し時に `session_id + agent_id + questions[0].question` で引いて `attached_via: after_deny` と `first_denied_at` を付けるのに使う。
+許可される遷移は上の通り(`cancel` は既存の遷移を使う)(`canTransition`)。`denied_explain` は終端で、再呼び出し時に `session_id + agent_id + questions[0].question` で引いて `attached_via: after_deny` と `first_denied_at` を付けるのに使う。
 
 `lease_until` は最後の poll 終了 + `POLL_TIMEOUT_MS`(25 秒)+ `LEASE_GRACE_MS`(10 秒)。
 
