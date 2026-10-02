@@ -6,8 +6,8 @@ import { App, type Effect } from "./app.js";
 import { ESC_TIMEOUT_MS, KeyParser } from "./keys.js";
 import { renderFrame } from "./render.js";
 
-const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l";
-const LEAVE_SCREEN = "\x1b[?25h\x1b[?1049l";
+const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h";
+const LEAVE_SCREEN = "\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l";
 const RECONNECT_MS = 2000;
 const REFETCH_MS = 5000;
 
@@ -59,7 +59,7 @@ export async function run(argv: string[]): Promise<number> {
     const cols = out.columns || 80;
     const rows = out.rows || 24;
     const frame = renderFrame(app.view(Date.now()), { cols, rows });
-    app.clampScroll(frame.scrollMax);
+    app.syncFrame(frame);
     let buf = "";
     // 行末で消去すると最終桁まで書いた行の末尾 1 文字が消えるので、先に消してから書く
     for (let r = 0; r < rows; r++) buf += `\x1b[${r + 1};1H\x1b[0m\x1b[2K${frame.lines[r] ?? ""}\x1b[0m`;

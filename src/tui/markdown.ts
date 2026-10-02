@@ -1,4 +1,5 @@
 import { findTables, scanFences, toLines } from "../hook/explain.js";
+import { renderMermaid } from "./mermaid.js";
 import { padEnd, wrap, width } from "./width.js";
 
 // Markdown の端末描画。行は表示幅 w 以内に折り返し済みで返す。
@@ -121,8 +122,15 @@ export function renderMarkdown(markdown: string, w: number): string[] {
       const body = lines.slice(block.start + 1, closed ? block.end : block.end + 1);
       gap();
       if (block.lang === "mermaid") {
-        out.push(`${DIM}(図: Mermaid は GUI で表示。以下は定義)${RESET}`);
-        for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
+        const fig = renderMermaid(body.join("\n"));
+        if (fig.ok && fig.width <= w) {
+          out.push(...fig.lines);
+        } else {
+          out.push(
+            `${DIM}${fig.ok ? `(図は幅 ${fig.width} 列が必要。端末を広げるか GUI で表示)` : "(図: 描画に失敗。以下は定義)"}${RESET}`,
+          );
+          for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
+        }
       } else if (block.lang === "diff") {
         for (const l of body) out.push(...wrap(`  ${diffLine(l)}`, w));
       } else {
