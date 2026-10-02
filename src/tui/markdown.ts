@@ -1,6 +1,6 @@
 import { findTables, scanFences, toLines } from "../hook/explain.js";
 import { renderMermaid } from "./mermaid.js";
-import { padEnd, wrap, width } from "./width.js";
+import { padEnd, sliceCols, wrap, width } from "./width.js";
 
 // Markdown の端末描画。行は表示幅 w 以内に折り返し済みで返す。
 
@@ -105,11 +105,27 @@ function renderTable(header: string[], rows: string[][], w: number): string[] {
   return out;
 }
 
+export interface Rendered {
+  lines: string[];
+  /** 幅超過の図の行は、切り詰める前の全体(行ごと。それ以外は null)。横スクロールの対象 */
+  wide: (string | null)[];
+}
+
+export interface MarkdownOpts {
+  /** 図の注記に「f で全幅」を添える(全幅表示に切り替えられるとき) */
+  fullHint?: boolean;
+}
+
 /** Markdown → 端末の行(表示幅 w 以内に折り返し済み) */
-export function renderMarkdown(markdown: string, w: number): string[] {
+export function renderMarkdown(markdown: string, w: number, opts: MarkdownOpts = {}): string[] {
+  return renderMarkdownRich(markdown, w, opts).lines;
+}
+
+export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOpts = {}): Rendered {
   const lines = toLines(markdown);
   const { inFence, blocks } = scanFences(lines);
   const out: string[] = [];
+  const wideRows = new Map<number, string>();
   const gap = () => {
     if (out.length && out.at(-1) !== "") out.push("");
   };
@@ -123,12 +139,16 @@ export function renderMarkdown(markdown: string, w: number): string[] {
       gap();
       if (block.lang === "mermaid") {
         const fig = renderMermaid(body.join("\n"));
-        if (fig.ok && fig.width <= w) {
-          out.push(...fig.lines);
+        if (fig.ok) {
+          if (fig.width > w) {
+            out.push(...wrap(`${DIM}(図: 幅 ${fig.width} 桁。←→ で横スクロール${opts.fullHint === false ? "" : " · f で全幅"})${RESET}`, w));
+            for (const l of fig.lines) {
+              if (width(l) > w) wideRows.set(out.length, l);
+              out.push(sliceCols(l, 0, w));
+            }
+          } else out.push(...fig.lines);
         } else {
-          out.push(
-            `${DIM}${fig.ok ? `(図は幅 ${fig.width} 列が必要。端末を広げるか GUI で表示)` : "(図: 描画に失敗。以下は定義)"}${RESET}`,
-          );
+          out.push(`${DIM}(図: 描画に失敗。以下は定義)${RESET}`);
           for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
         }
       } else if (block.lang === "diff") {
@@ -218,5 +238,5 @@ export function renderMarkdown(markdown: string, w: number): string[] {
     out.push(...wrap(inline(joinSoft(para)), w));
   }
   while (out.at(-1) === "") out.pop();
-  return out;
+  return { lines: out, wide: out.map((_, k) => wideRows.get(k) ?? null) };
 }

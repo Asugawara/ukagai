@@ -1,6 +1,6 @@
-import { BOLD, CYAN, DIM, GREEN, MAGENTA, RESET, STRONG_RISK, YELLOW, inline, renderMarkdown } from "./markdown.js";
+import { BOLD, CYAN, DIM, GREEN, MAGENTA, RESET, STRONG_RISK, YELLOW, inline, renderMarkdown, renderMarkdownRich, type Rendered } from "./markdown.js";
 import { elapsed, type Card, type Chip, type ScreenModel } from "./model.js";
-import { padEnd, truncate, width, wrap } from "./width.js";
+import { padEnd, sliceCols, truncate, width, wrap } from "./width.js";
 
 // ScreenModel + 操作状態 → 画面(文字列)。I/O なし。
 
@@ -36,6 +36,12 @@ export interface View {
   rscroll: number | null;
   /** 反転表示する列(左右配置のとき) */
   focus: "background" | "decision";
+  /** 幅超過の図の横位置(桁) */
+  hscroll: number;
+  /** 背景を全幅で表示(判断の列を隠す) */
+  full: boolean;
+  /** 「図が列幅を超えています」の案内を出す */
+  fullHint: boolean;
   now: number;
 }
 
@@ -60,6 +66,12 @@ export interface Frame {
   off: number;
   /** 本文の窓の行数(半画面スクロールの目安) */
   bodyRows: number;
+  /** 図の横スクロールの最大量(0 ならずらせる図が無い) */
+  hMax: number;
+  /** 背景を全幅表示中 */
+  full: boolean;
+  /** 列幅を超える図があり、端末の全幅なら収まる */
+  figOver: boolean;
 }
 
 export const WIDE_COLS = 120;
@@ -181,10 +193,21 @@ function rightColumn(v: View, m: ScreenModel, w: number): Column {
 
 // ---- 左: 背景 ----
 
-function leftColumn(m: ScreenModel, w: number): string[] {
-  if (m.backgroundNote) return wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
-  if (m.background) return renderMarkdown(m.background, w);
-  return [];
+function leftColumn(m: ScreenModel, w: number, fullHint = true): Rendered {
+  if (m.backgroundNote) {
+    const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
+    return { lines, wide: lines.map(() => null) };
+  }
+  if (m.background) return renderMarkdownRich(m.background, w, { fullHint });
+  return { lines: [], wide: [] };
+}
+
+/** 幅超過の図の行だけ hoff 桁ずらす。ずらせる最大量と、図の最大幅も返す */
+function shifted(r: Rendered, w: number, hoff: number): { lines: string[]; hMax: number; figW: number } {
+  const figW = Math.max(0, ...r.wide.map((l) => (l ? width(l) : 0)));
+  const hMax = Math.max(0, figW - w);
+  const off = Math.min(hoff, hMax);
+  return { lines: r.lines.map((l, i) => (r.wide[i] ? sliceCols(r.wide[i]!, off, w) : l)), hMax, figW };
 }
 
 // ---- 画面 ----
@@ -195,13 +218,15 @@ function window(lines: string[], rows: number, offset: number): string[] {
   return out;
 }
 
-function footer(v: View, cols: number, overflow: boolean): string {
+function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; hint?: boolean } = {}): string {
   let left: string;
   if (v.list) left = `${DIM}j/k 移動  Enter 表示  Esc 戻る${RESET}`;
+  else if (o.full) left = `保留 ${v.pending}  ${DIM}f / Esc で戻る  ←→ 横スクロール  j/k PgUp/PgDn 縦  q 終了${RESET}`;
   else {
     left = `保留 ${v.pending}  ${DIM}h/l 切替  b 一覧  q 終了${overflow ? "  PgUp/PgDn 背景をスクロール · Tab 列の切替" : ""}${RESET}`;
   }
   if (v.toast) left += `  ${BOLD}${GREEN}${v.toast}${RESET}`;
+  if (o.hint) left += `  ${BOLD}${YELLOW}図が列幅を超えています: f で全幅表示${RESET}`;
   return truncate(left, cols);
 }
 
@@ -228,24 +253,27 @@ function scrollbar(size: number, total: number, off: number, max: number): strin
 }
 
 /** 最下行の `▲▼ 1-20/58` */
-function position(off: number, max: number, size: number, total: number): string {
-  return `${DIM}${off > 0 ? "▲" : " "}${off < max ? "▼" : " "} ${off + 1}-${Math.min(total, off + size)}/${total}${RESET}`;
+function position(off: number, max: number, size: number, total: number, h?: { off: number; figW: number }): string {
+  const hs = h && h.off > 0 ? ` ◀▶ ${h.off}/${h.figW}` : "";
+  return `${DIM}${off > 0 ? "▲" : " "}${off < max ? "▼" : " "} ${off + 1}-${Math.min(total, off + size)}/${total}${hs}${RESET}`;
 }
 
 /** 溢れる列に、窓・スクロールバー・位置表示をかぶせる。w は列の幅(バー込み) */
-function scrolled(all: string[], size: number, off: number, w: number, tail: string[]): string[] {
+function scrolled(all: string[], size: number, off: number, w: number, tail: string[], h?: { off: number; figW: number }): string[] {
   const max = all.length - size;
   const bar = scrollbar(size, all.length, off, max);
   const body = window(all, size, off).map((l, i) => `${padEnd(truncate(l, w - 1), w - 1)}${bar[i]}`);
-  return [...body, truncate(position(off, max, size, all.length), w), ...tail];
+  return [...body, truncate(position(off, max, size, all.length, h), w), ...tail];
 }
 
 export function renderFrame(v: View, size: Size): Frame {
   const { cols, rows } = size;
   const m = v.model;
   const fin = (body: string[], head: string[], meta: Partial<Frame> = {}, overflow = false): Frame => {
-    const lines = [...head, ...body, footer(v, cols, overflow)].map((l) => truncate(l, cols));
-    return { text: lines.join("\n"), lines, scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), ...meta };
+    const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false };
+    const f = { ...base, ...meta };
+    const lines = [...head, ...body, footer(v, cols, overflow, { full: f.full, hint: v.fullHint && f.figOver && !f.full })].map((l) => truncate(l, cols));
+    return { text: lines.join("\n"), lines, ...f };
   };
 
   if (v.list) return fin(listBody(v, cols, rows - 1), []);
@@ -263,24 +291,40 @@ export function renderFrame(v: View, size: Size): Frame {
 
   if (cols >= WIDE_COLS) {
     const SEP = " │ ";
-    const leftW = Math.floor((cols - SEP.length) / 2);
+    const full = v.full;
+    const leftW = full ? cols : Math.floor((cols - SEP.length) / 2);
     const rightW = cols - SEP.length - leftW;
     // 見出し行(フォーカスのある列を反転)を 1 行取り、残りが列の窓
     const winRows = Math.max(1, bodyRows - 1);
     const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ${label} ${RESET}` : `${DIM} ${label}${RESET}`, w);
 
-    // 左: 溢れるときは右端にバー、最下行に位置。収まるときはそのまま
-    let leftAll = leftColumn(m, leftW);
-    const leftOver = leftAll.length > winRows;
+    // 左: 溢れる(縦に長い、または横にずらせる図がある)ときは右端にバー、最下行に位置。収まるときはそのまま
+    let leftR = leftColumn(m, leftW);
+    const hasWide = leftR.wide.some(Boolean);
+    const leftOver = leftR.lines.length > winRows || hasWide;
     let scrollMax = 0;
     let left: string[];
+    let hMax = 0;
+    let figW = 0;
+    let textW = leftW;
     if (leftOver) {
-      leftAll = leftColumn(m, leftW - 1);
+      textW = leftW - 1;
+      leftR = leftColumn(m, textW);
+      const sh = shifted(leftR, textW, v.hscroll);
+      hMax = sh.hMax;
+      figW = sh.figW;
       const size = winRows - 1;
-      scrollMax = Math.max(0, leftAll.length - size);
+      scrollMax = Math.max(0, sh.lines.length - size);
       const off = Math.min(v.scroll, scrollMax);
-      left = scrolled(leftAll, size, off, leftW, []);
-    } else left = window(leftAll, winRows, 0);
+      left = scrolled(sh.lines, size, off, leftW, [], { off: Math.min(v.hscroll, hMax), figW });
+    } else left = window(leftR.lines, winRows, 0);
+    const figOver = !full && hMax > 0 && figW <= cols - 1;
+    const meta = { scrollMax, wide: true, bodyRows: winRows, hMax, full, figOver };
+
+    if (full) {
+      const body = [heading("背景(全幅)", cols, true), ...left.map((l) => truncate(l, cols))];
+      return fin(body, head, { ...meta, split: cols }, leftOver);
+    }
 
     // 右: 溢れるときはカーソルのカードが見える位置まで送る(手でスクロールしたらその位置)。ヒントは最下段に固定
     let right = rightColumn(v, m, rightW);
@@ -302,20 +346,23 @@ export function renderFrame(v: View, size: Size): Frame {
       `${heading("背景", leftW, v.focus === "background")}${DIM}${SEP}${RESET}${heading("判断", rightW, v.focus === "decision")}`,
       ...left.map((l, i) => `${padEnd(truncate(l, leftW), leftW)}${DIM}${SEP}${RESET}${truncate(rcol[i] ?? "", rightW)}`),
     ];
-    return fin(body, head, { scrollMax, wide: true, split: leftW + SEP.length, rightMax, rightOff, bodyRows: winRows }, leftOver || rightOver);
+    return fin(body, head, { ...meta, split: leftW + SEP.length, rightMax, rightOff }, leftOver || rightOver);
   }
 
   // 狭い: 上下。判断を先に置き(いつも届くように)、背景を下に続ける
   const right = rightColumn(v, m, cols - 1);
-  const leftAll = leftColumn(m, cols - 1);
+  const leftR = leftColumn(m, cols - 1, false);
+  const sh = shifted(leftR, cols - 1, v.hscroll);
+  const leftAll = sh.lines;
   const all = [...right.lines, "", `${DIM}${right.hint}${RESET}`, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];
-  if (all.length <= bodyRows) return fin(window(all, bodyRows, 0), head, { bodyRows });
+  const hOff = Math.min(v.hscroll, sh.hMax);
+  if (all.length <= bodyRows && sh.hMax === 0) return fin(window(all, bodyRows, 0), head, { bodyRows });
   const win = bodyRows - 1;
   const scrollMax = Math.max(0, all.length - win);
   let off = Math.min(v.scroll, scrollMax);
   if (off === 0) off = Math.max(0, Math.min(right.focus[0], right.focus[1] - win));
   off = Math.min(off, scrollMax);
-  return fin(scrolled(all, win, off, cols, []), head, { scrollMax, off, bodyRows: win }, true);
+  return fin(scrolled(all, win, off, cols, [], { off: hOff, figW: sh.figW }), head, { scrollMax, off, bodyRows: win, hMax: sh.hMax }, true);
 }
 
 export function render(v: View, size: Size): string {

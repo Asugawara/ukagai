@@ -232,3 +232,147 @@ test("入力中・一覧中のホイールは無視。次の判断に移ると�
   press(app, wheel("down", 10));
   assert.equal(app.scroll, 3);
 });
+
+// ---- 幅超過の図(横スクロール・全幅) ----
+
+const chain = (n: number) => Array.from({ length: n }, (_, i) => `N${i}[調査${i}]`).join(" --> ");
+const FIG = (n: number) => `${V2_MD.split("## 図")[0]}## 図\n\n\`\`\`mermaid\nflowchart LR\n  ${chain(n)}\n\`\`\`\n`;
+const WIDE_FIG = FIG(7); // 幅 ≈ 86: 列幅(66)を超え、端末幅 140 には収まる
+const HUGE_FIG = FIG(14); // 端末幅 140 にも収まらない
+const body = (f: { lines: string[] }) => f.lines.map(stripAnsi);
+const row = (f: { lines: string[] }, mark: string) => body(f).find((l) => l.includes(mark))!;
+
+function figApp(md: string, size = SIZE): { app: App; frame: () => ReturnType<typeof renderFrame> } {
+  const app = new App();
+  app.upsert(decision(withExplanation(md)), t);
+  const frame = () => {
+    const f = renderFrame(app.view(t), size);
+    app.syncFrame(f, t);
+    return f;
+  };
+  frame();
+  return { app, frame };
+}
+
+test("幅超過の図: 切り詰めて描き、注記と hMax が出る。退避文は出さない", () => {
+  const { frame } = figApp(WIDE_FIG);
+  const f = frame();
+  const text = body(f).join("\n");
+  assert.match(text, /\(図: 幅 \d+ 桁。←→ で横スクロール · f で全幅\)/);
+  assert.ok(!text.includes("端末を広げるか"));
+  assert.ok(text.includes("┌"));
+  assert.ok(f.hMax > 0);
+});
+
+test("横スクロール: 背景フォーカスの → / l で 8 桁ずつ、超過行だけずれる。端で止まり、◀▶ が出る", () => {
+  const { app, frame } = figApp(WIDE_FIG);
+  const before = frame();
+  const textRow = body(before).find((l) => l.includes("なぜ今この判断が要るか"))!;
+  const figRow = row(before, "調査0");
+  // 判断にフォーカスがあるうちは → は保留の切替(1 件なので何も起きない)で、横には動かない
+  press(app, { name: "right" });
+  assert.equal(app.hscroll, 0);
+  press(app, { name: "tab" });
+  press(app, { name: "right" });
+  assert.equal(app.hscroll, 8);
+  const after = frame();
+  assert.notEqual(row(after, "調査1"), figRow);
+  assert.equal(body(after).find((l) => l.includes("なぜ今この判断が要るか")), textRow, "折り返し済みの文は動かない");
+  assert.match(body(after).at(-2)!, /◀▶ 8\/\d+/);
+  assert.ok(!body(before).join("\n").includes("◀▶"));
+  press(app, ch("l"));
+  assert.equal(app.hscroll, 16);
+  press(app, { name: "left" });
+  assert.equal(app.hscroll, 8);
+  press(app, ch("h"));
+  assert.equal(app.hscroll, 0);
+  press(app, { name: "right" });
+  for (let i = 0; i < 30; i++) press(app, { name: "right" });
+  const end = frame();
+  assert.equal(app.hscroll, end.hMax, "右端で止まる");
+  assert.ok(end.hMax > 0);
+  for (let i = 0; i < 30; i++) press(app, { name: "left" });
+  assert.equal(app.hscroll, 0, "左端で止まる");
+});
+
+test("f で全幅 → 判断の列が消えて広がる → Esc / f / Tab で戻る", () => {
+  const { app, frame } = figApp(WIDE_FIG);
+  const normal = frame();
+  assert.ok(body(normal).some((l) => l.includes("判断")) && body(normal).some((l) => l.includes("│ ")));
+  press(app, ch("f"));
+  const full = frame();
+  assert.ok(full.full && app.full);
+  assert.ok(!body(full).join("\n").includes("通知は SSE"), "判断の列は隠れる");
+  assert.ok(full.hMax === 0, "全幅なら図が収まる");
+  assert.ok(body(full).join("\n").includes("調査6"), "右端のノードまで見える");
+  assert.ok(!body(full).join("\n").includes("◀▶"));
+  assert.match(body(full).at(-1)!, /f \/ Esc で戻る/);
+  assert.deepEqual(press(app, enter), [], "全幅では判断は送れない");
+  press(app, { name: "esc" });
+  assert.ok(!app.full);
+  assert.ok(body(frame()).at(-1)!.includes("h/l 切替"));
+  press(app, ch("f"), ch("f"));
+  assert.ok(!app.full);
+  press(app, ch("f"), { name: "tab" });
+  assert.ok(!app.full);
+});
+
+test("全幅でも収まらない図は横スクロールできる", () => {
+  const { app, frame } = figApp(HUGE_FIG);
+  press(app, ch("f"));
+  const f = frame();
+  assert.ok(f.hMax > 0);
+  press(app, { name: "right" }, ch("l"));
+  assert.equal(app.hscroll, 16);
+  assert.match(body(frame()).at(-2)!, /◀▶ 16\/\d+/);
+});
+
+test("案内: 列幅を超えて全幅に収まるときだけ 1 回出る。収まらないときは出ない", () => {
+  const { app, frame } = figApp(WIDE_FIG);
+  // figApp の最初の描画で案内が始まっている
+  assert.ok(body(frame()).at(-1)!.includes("図が列幅を超えています: f で全幅表示"));
+  press(app, ch("f"));
+  assert.ok(!body(frame()).at(-1)!.includes("図が列幅"), "全幅表示中は出さない");
+  press(app, { name: "esc" });
+  // 同じ判断では二度と出さない(時間が過ぎたあと)
+  t += 10000;
+  assert.ok(!body(frame()).at(-1)!.includes("図が列幅"));
+  assert.ok(!body(frame()).at(-1)!.includes("図が列幅"));
+
+  const huge = figApp(HUGE_FIG);
+  assert.ok(!body(huge.frame()).at(-1)!.includes("図が列幅"), "全幅にも収まらない図では案内しない");
+  const plain = figApp(V2_MD);
+  assert.ok(!body(plain.frame()).at(-1)!.includes("図が列幅"));
+});
+
+test("上下配置: ← → は Tab 無しで横スクロール、h l は保留の切替のまま、f は効かない", () => {
+  const narrow = { cols: 80, rows: 24 };
+  const app = new App();
+  const mk = (id: string, at: string) => decision({ id, tool_use_id: id, created_at: at, ...withExplanation(WIDE_FIG) } as never);
+  app.upsert(mk("a", "2026-10-02T00:00:00Z"), t);
+  app.upsert(mk("b", "2026-10-02T00:00:01Z"), t);
+  const draw = () => {
+    const f = renderFrame(app.view(t), narrow);
+    app.syncFrame(f, t);
+    return f;
+  };
+  const f0 = draw();
+  assert.ok(!f0.wide && f0.hMax > 0);
+  press(app, { name: "pgdn" }, { name: "pgdn" }, { name: "pgdn" });
+  const f1 = draw();
+  assert.ok(body(f1).join("\n").includes("(図: 幅"));
+  assert.ok(!body(f1).join("\n").includes("f で全幅"), "上下配置の注記に f は出さない");
+  app.scroll = 0;
+  press(app, { name: "right" });
+  assert.equal(app.hscroll, 8);
+  assert.equal(app.shownId, "a");
+  press(app, ch("l"));
+  assert.equal(app.shownId, "b", "l は保留の切替");
+  assert.equal(app.hscroll, 0, "切り替えると横位置は戻る");
+  press(app, ch("f"));
+  assert.ok(!app.full);
+  press(app, { name: "right" }, { name: "right" });
+  const f2 = draw();
+  assert.equal(app.hscroll, f2.hMax, "端で止まる(16 ではなく hMax)");
+  assert.match(body(f2).at(-2)!, new RegExp(`◀▶ ${f2.hMax}/\\d+`));
+});

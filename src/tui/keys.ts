@@ -121,6 +121,10 @@ export type Action =
   | { type: "scroll"; delta: 1 | -1; unit: "half" | "line" }
   | { type: "scroll-edge"; to: "top" | "bottom" }
   | { type: "focus" }
+  /** 幅超過の図を 1 歩(8 桁)横へ */
+  | { type: "hscroll"; delta: 1 | -1 }
+  /** 背景の全幅表示の入り切り */
+  | { type: "full" }
   | { type: "input-char"; ch: string }
   | { type: "input-backspace" }
   | { type: "input-confirm" }
@@ -133,6 +137,12 @@ export interface KeyContext {
   mode: Mode;
   kind: Kind;
   focus?: Focus;
+  /** 左右配置か(上下配置では背景側のキーは ← → だけ) */
+  wide?: boolean;
+  /** 背景の全幅表示中 */
+  full?: boolean;
+  /** 横にずらせる図があるか */
+  hscrollable?: boolean;
   /** gg の 1 つ目の g の時刻(無ければ 0) */
   lastG: number;
   now: number;
@@ -169,7 +179,35 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
 
   const ch = key.name === "char" ? key.ch : null;
   if (ch === "q") return done({ type: "quit" });
+  const goLeft = key.name === "left" || ch === "h";
+  const goRight = key.name === "right" || ch === "l";
+
+  if (ctx.full) {
+    // 判断が見えていないので、決定につながるキーは効かせない
+    if (key.name === "tab" || key.name === "esc" || ch === "f") return done({ type: "full" });
+    if (ctx.hscrollable && goLeft) return done({ type: "hscroll", delta: -1 });
+    if (ctx.hscrollable && goRight) return done({ type: "hscroll", delta: 1 });
+    if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
+    if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1, unit: "half" });
+    if (down) return done({ type: "scroll", delta: 1, unit: "line" });
+    if (up) return done({ type: "scroll", delta: -1, unit: "line" });
+    if (ch === "G") return done({ type: "scroll-edge", to: "bottom" });
+    if (ch === "g") {
+      return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "scroll-edge", to: "top" }) : done(null, ctx.now);
+    }
+    return done(null);
+  }
+
   if (key.name === "tab") return done({ type: "focus" });
+  if (ch === "f" && ctx.wide) return done({ type: "full" });
+  if (ctx.hscrollable) {
+    // 左右配置は背景にフォーカスがあるとき(← → h l)、上下配置は ← → だけ。それ以外は今までどおり
+    const arrow = key.name === "left" || key.name === "right";
+    if (ctx.wide ? ctx.focus === "background" : arrow) {
+      if (goLeft) return done({ type: "hscroll", delta: -1 });
+      if (goRight) return done({ type: "hscroll", delta: 1 });
+    }
+  }
   if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
   if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1, unit: "half" });
   if (ctx.focus === "background") {

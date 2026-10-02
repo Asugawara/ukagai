@@ -137,3 +137,34 @@ export function wrap(s: string, max: number): string[] {
   flush(cur);
   return lines;
 }
+
+/** 表示桁 [from, from+max) を切り出す(ANSI は保つ)。全角の途中で切れる桁は空白にする */
+export function sliceCols(s: string, from: number, max: number): string {
+  let w = 0;
+  let out = "";
+  let started = false;
+  let active = false;
+  for (const t of tokens(s)) {
+    if (t.kind === "ansi") {
+      out += t.text;
+      active = t.text !== "\x1b[0m";
+      continue;
+    }
+    const end = w + t.w;
+    w = end;
+    if (end <= from) continue;
+    if (!started && w - t.w < from) {
+      // 左端で全角が割れた
+      out += " ".repeat(end - from);
+      started = true;
+      continue;
+    }
+    started = true;
+    if (end - from > max) {
+      if (end - t.w - from < max) out += " ".repeat(max - (end - t.w - from));
+      break;
+    }
+    out += t.text;
+  }
+  return active ? out + "\x1b[0m" : out;
+}
