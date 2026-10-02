@@ -76,13 +76,11 @@ function sanitize(html) {
     .replace(/\s(href|src|xlink:href|action|formaction)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi, "");
 }
 
-// 実体化した後の最終防衛: 外部オリジンの画像は data: 以外すべて外す(実体参照で regex をすり抜けたものも)
+// 実体化した後の最終防衛: 画像は data: 以外すべて外す(実体参照で regex をすり抜けたものも)
 function dropExternalImages(container) {
   for (const img of container.querySelectorAll("img")) {
     const src = (img.getAttribute("src") ?? "").trim();
-    let external = false;
-    try { const u = new URL(src, location.href); external = u.protocol !== "data:" && u.origin !== location.origin; } catch { external = true; }
-    if (external) img.remove();
+    if (!/^data:/i.test(src)) img.remove(); // data: 以外(外部・相対・同一オリジン)はすべて外す
   }
 }
 
@@ -184,7 +182,8 @@ const LOST_TEXT = {
 function notifyBackground(prev, d) {
   if (!prev || prev.status === d.status) return;
   const t = clip(titleOf(d));
-  if (LOST_TEXT[d.status]) toast(LOST_TEXT[d.status](t), { kind: "lost", ms: 4000 });
+  if (d.status === "cancelled" && prev.status === "pending") toast(`${t} は取り消されました`, { kind: "lost", ms: 4000 });
+  else if (LOST_TEXT[d.status]) toast(LOST_TEXT[d.status](t), { kind: "lost", ms: 4000 });
   else if (d.status === "answered") toast(`${t} 届きました`, { kind: "soft" });
 }
 
@@ -192,18 +191,21 @@ function notifyBackground(prev, d) {
 
 // 保留ボタン: 1100px 以上は右上固定、未満は右列の見出しの右端(インライン)
 const narrowQuery = matchMedia("(max-width: 1099px)");
+// #decision の作り直しで破棄されないよう、参照を保持し、作り直す前に body へ退避する
+const pendingBtn = $("pending-btn");
+const pendingCount = $("pending-count");
+function stashPending() { if (pendingBtn.parentElement !== document.body) document.body.prepend(pendingBtn); }
 function placePending() {
-  const btn = $("pending-btn");
   const slot = narrowQuery.matches ? document.querySelector("#decision .title-row") : null;
-  if (slot) { if (btn.parentElement !== slot) slot.append(btn); } else if (btn.parentElement !== document.body) document.body.prepend(btn);
+  if (slot) { if (pendingBtn.parentElement !== slot) slot.append(pendingBtn); } else stashPending();
 }
 narrowQuery.addEventListener("change", placePending);
 const titleRow = (title) => el("div", { class: "title-row" }, title);
 
 function renderHeader() {
   const n = pendingList().length;
-  $("pending-count").textContent = String(n);
-  $("pending-btn").hidden = n < 2; // 1 件なら表示中のものだけなので出さない
+  pendingCount.textContent = String(n);
+  pendingBtn.hidden = n < 2; // 1 件なら表示中のものだけなので出さない
   document.body.classList.toggle("has-pending-btn", n >= 2);
   const blocked = pendingList().some(isBlocker);
   document.title = n > 0 ? `(${n}) ukagai${blocked ? " · 作業待ち" : ""}` : "ukagai";
@@ -256,8 +258,8 @@ function setDrawer(open) {
   $("drawer").classList.toggle("open", open);
   $("drawer").setAttribute("aria-hidden", String(!open));
   $("backdrop").hidden = !open;
-  $("pending-btn").setAttribute("aria-expanded", String(open));
-  if (!open && document.activeElement === $("pending-btn")) $("pending-btn").blur(); // Enter が保留ボタンに吸われないように
+  pendingBtn.setAttribute("aria-expanded", String(open));
+  if (!open && document.activeElement === pendingBtn) pendingBtn.blur(); // Enter が保留ボタンに吸われないように
   if (open) focusDrawerRow();
 }
 
@@ -402,6 +404,7 @@ window.addEventListener("resize", () => { clampMeta(); refreshWide(); });
 
 function renderRightBody(d) {
   const root = $("decision");
+  stashPending();
   root.classList.remove("expanded");
   if (!drawerOpen()) document.activeElement?.blur?.(); // フォーカスを body に戻し、キーを document で受ける
   root.replaceChildren();
@@ -1104,7 +1107,7 @@ document.addEventListener("keydown", (ev) => {
   else if (key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });
 
-$("pending-btn").addEventListener("click", () => setDrawer(!drawerOpen()));
+pendingBtn.addEventListener("click", () => setDrawer(!drawerOpen()));
 $("backdrop").addEventListener("click", () => setDrawer(false));
 
 setInterval(() => {
