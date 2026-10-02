@@ -6,6 +6,8 @@ import { padEnd, truncate, width, wrap } from "./width.js";
 
 export interface ListItem {
   title: string;
+  /** 人の作業待ち */
+  blocker: boolean;
   chips: Chip[];
   kindLabel: string;
   createdAt: string;
@@ -24,6 +26,8 @@ export interface View {
   reason: string;
   pending: number;
   toast: string | null;
+  /** クリップボードに送れるか */
+  copy: boolean;
   /** 一覧を開いているとき */
   list: { items: ListItem[]; index: number } | null;
   /** 背景の先頭行 */
@@ -49,6 +53,7 @@ const CHIP_COLOR: Record<Chip["kind"], string> = { repo: MAGENTA, branch: GREEN,
 const BADGE_IRREVERSIBLE = "\x1b[41;97m";
 const BADGE_COSTLY = "\x1b[43;30m";
 const BADGE_REC = "\x1b[42;30m";
+const BADGE_BLOCKER = "\x1b[43;30m";
 
 const chip = (c: Chip): string => `${CHIP_COLOR[c.kind]}${c.text}${RESET}`;
 export const chipsText = (chips: Chip[]): string => chips.map(chip).join(" ");
@@ -133,6 +138,7 @@ function rightColumn(v: View, m: ScreenModel, w: number): Column {
       lines.push("");
     }
   }
+  if (m.todo) lines.push(`${BOLD}${YELLOW}人にしてほしいこと${RESET}`, ...renderMarkdown(m.todo, w), "");
   if (m.recommendation) lines.push(...recBox(m.recommendation, w), "");
 
   q.cards.forEach((c, i) => {
@@ -154,7 +160,7 @@ function rightColumn(v: View, m: ScreenModel, w: number): Column {
 
   const hint = typing
     ? "Enter 確定 · Esc 取りやめ"
-    : `j/k 移動 · ${q.multi ? "Space 切替 · " : ""}Enter 回答 · i 自由記述`;
+    : `j/k 移動 · ${q.multi ? "Space 切替 · " : ""}Enter 回答${m.todoCode.length ? ` · ${v.copy ? "c コピー" : "コピー非対応"}` : ""} · i 自由記述`;
   return { lines, focus, hint };
 }
 
@@ -190,7 +196,8 @@ function listBody(v: View, cols: number, rows: number): string[] {
     const meta = [it.kindLabel, elapsed(it.createdAt, v.now), it.noExplanation ? "説明なし" : "", it.current ? "表示中" : ""]
       .filter(Boolean)
       .join(" · ");
-    out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${on ? BOLD : ""}${it.title}${RESET}`, cols));
+    const mark = it.blocker ? `${BADGE_BLOCKER} 作業 ${RESET} ` : "";
+    out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${mark}${on ? BOLD : ""}${it.title}${RESET}`, cols));
     out.push(truncate(`    ${chipsText(it.chips)}  ${DIM}${meta}${RESET}`, cols));
   });
   return window(out, rows, 0);
@@ -214,7 +221,7 @@ export function renderFrame(v: View, size: Size): Frame {
     return fin(body, []);
   }
 
-  const head = [metaLine(m, v.now, cols), ...wrap(`${BOLD}${m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
+  const head = [...(m.blocker ? [`${BADGE_BLOCKER} 人の作業待ち ${RESET}`] : []), metaLine(m, v.now, cols), ...wrap(`${BOLD}${m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
   const bodyRows = Math.max(1, rows - head.length - 1);
 
   if (cols >= WIDE_COLS) {

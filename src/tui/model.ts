@@ -53,6 +53,12 @@ export interface ScreenModel {
   backgroundNote?: string;
   /** 「推奨」節の本文(Markdown) */
   recommendation: string | null;
+  /** 人の作業待ち(explanation.type === "blocker") */
+  blocker: boolean;
+  /** blocker の「人にしてほしいこと」節の本文(Markdown)。右列の最上部に出す */
+  todo: string | null;
+  /** todo の中のコードブロックの中身(`c` で先頭をコピー) */
+  todoCode: string[];
   /** 単一の質問のとき */
   question?: {
     text: string;
@@ -86,6 +92,21 @@ const questionsOf = (d: Decision) => {
   const r = AskUserQuestionInput.safeParse(d.request);
   return r.success ? r.data.questions : [];
 };
+
+export function isBlocker(d: Decision, fm: Record<string, string> = {}): boolean {
+  const ex = d.explanation;
+  if (!ex) return false;
+  if (ex.type) return ex.type === "blocker";
+  return d.kind === "answer_question" && hasExplanation(d) && fm["type"] === "blocker";
+}
+
+/** Markdown の fenced code block の中身を順に取り出す */
+export function codeBlocks(md: string): string[] {
+  const out: string[] = [];
+  const re = /^(```|~~~)[^\n]*\n([\s\S]*?)^\1[ \t]*$/gm;
+  for (let m = re.exec(md); m; m = re.exec(md)) out.push((m[2] ?? "").replace(/\n$/, ""));
+  return out;
+}
 
 export function hasExplanation(d: Decision): boolean {
   return !!d.explanation && d.explanation.attached_via !== "none";
@@ -196,6 +217,9 @@ export function buildModel(d: Decision): ScreenModel {
     ...(metaOf(d, fm, "scope") ? { scope: metaOf(d, fm, "scope") as string } : {}),
     createdAt: d.created_at,
     hasExplanation: explained,
+    blocker: isBlocker(d, fm),
+    todo: null as string | null,
+    todoCode: [] as string[],
   };
 
   if (d.kind === "approve_plan") {
@@ -261,6 +285,17 @@ export function buildModel(d: Decision): ScreenModel {
   }
 
   const drop: [number, number][] = [[optSec!.start, optSec!.end]];
+  let todo: string | null = null;
+  if (base.blocker) {
+    const todoSec = findSection(headings, body.length, "人にしてほしいこと");
+    if (todoSec && todoSec.start !== optSec!.start) {
+      const text = body.slice(todoSec.start + 1, todoSec.end).join("\n").trim();
+      if (text) {
+        todo = text;
+        drop.push([todoSec.start, todoSec.end]);
+      }
+    }
+  }
   let recommendation: string | null = null;
   if (recSec) {
     const text = body.slice(recSec.start + 1, recSec.end).join("\n").trim();
@@ -276,6 +311,8 @@ export function buildModel(d: Decision): ScreenModel {
     kind: "question",
     background: kept.join("\n").trim(),
     recommendation,
+    todo,
+    todoCode: todo ? codeBlocks(todo) : [],
     question: {
       ...plainQuestion,
       cards,

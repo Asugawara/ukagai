@@ -79,6 +79,14 @@ function titleOf(d) {
   return d.session.title || d.request.questions[0]?.question || "質問";
 }
 
+// 人にしかできない作業(認証・権限など)で止まった判断。explanation.type か front matter の type
+function isBlocker(d) {
+  const ex = d.explanation;
+  if (!ex) return false;
+  if (ex.type) return ex.type === "blocker";
+  return d.kind === "answer_question" && hasExplanation(d) && parseFrontMatter(ex.markdown).fm.type === "blocker";
+}
+
 function reversibilityOf(d) {
   const ex = d.explanation;
   if (!ex) return undefined;
@@ -134,7 +142,8 @@ function renderHeader() {
   $("pending-count").textContent = String(n);
   $("pending-btn").hidden = n < 2; // 1 件なら表示中のものだけなので出さない
   document.body.classList.toggle("has-pending-btn", n >= 2);
-  document.title = n > 0 ? `(${n}) ukagai` : "ukagai";
+  const blocked = pendingList().some(isBlocker);
+  document.title = n > 0 ? `(${n}) ukagai${blocked ? " · 作業待ち" : ""}` : "ukagai";
 }
 
 // 右列の title の直下: ブランチ・作業ディレクトリ(フルパス)・可逆性・scope・経過時間
@@ -198,6 +207,7 @@ function renderList() {
     const meta = el("div", { class: "meta" },
       el("span", { text: kindLabel(d) }),
       el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) }));
+    if (isBlocker(d)) meta.append(el("span", { class: "badge blocker", text: "作業" }));
     if (d.kind === "answer_question" && !hasExplanation(d)) meta.append(el("span", { class: "badge none", text: "説明なし" }));
     if (d.id === shownId) meta.append(el("span", { class: "badge", text: "表示中" }));
     const row = el("button", {
@@ -250,6 +260,15 @@ const kbd = (t) => el("kbd", { class: "kbd", text: t });
 const keyLine = (...parts) => el("div", { class: "keys" }, ...parts.flatMap(([ks, label]) => [...ks.map(kbd), el("span", { text: label })]));
 const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
 
+async function copyCode(pre) {
+  try {
+    await navigator.clipboard.writeText((pre.textContent ?? "").replace(/\n$/, ""));
+    toast("コピーしました");
+  } catch {
+    toast("コピーできませんでした");
+  }
+}
+
 function renderRight(d) {
   const root = $("decision");
   if (!drawerOpen()) document.activeElement?.blur?.(); // フォーカスを body に戻し、キーを document で受ける
@@ -273,7 +292,10 @@ function renderRight(d) {
       const box = el("div", { class: "q" });
       let items;
       if (v2) {
-        box.append(el("div", { class: "head" }, el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)));
+        box.append(el("div", { class: "head" },
+          isBlocker(d) ? el("div", { class: "blocker-band", text: "人の作業待ち" }) : null,
+          el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)));
+        if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: "人にしてほしいこと" }), v2.todoBox));
         if (v2.recBox) box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), v2.recBox));
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
@@ -293,7 +315,7 @@ function renderRight(d) {
         // 単一選択は移動 = 選択。初期位置(推奨、無ければ先頭)を選んでおく
         if (!closed && !q.multiSelect && sel.size === 0 && !free.on && items.length) sel.add(items[dr.cursor].value);
       }
-      if (single) box.append(keyLine([["↑", "↓"], "移動"], [["Enter"], "回答"], ...(q.multiSelect ? [[["Space"], "切替"]] : [])));
+      if (single) box.append(keyLine([["↑", "↓"], "移動"], [["Enter"], "回答"], ...(v2?.todoBox?.querySelector("pre") ? [[["c"], "コマンドをコピー"]] : []), ...(q.multiSelect ? [[["Space"], "切替"]] : [])));
       for (const it of items) {
         const input = el("input", {
           type: q.multiSelect ? "checkbox" : "radio",
@@ -361,12 +383,13 @@ function renderRight(d) {
     function updateSubmit() { submit.disabled = closed || !complete(); }
     const actions = el("div", { class: "actions" }, submit);
     if (single) {
-      actions.append(el("div", { class: "hint" }, `↑↓ 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · ←→ 次の保留 · Esc 戻る`, " ", buildTag()));
+      actions.append(el("div", { class: "hint" }, `↑↓ 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · ${v2?.todoBox?.querySelector("pre") ? "c コピー · " : ""}←→ 次の保留 · Esc 戻る`, " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
     ui = {
       kind: "question", cards, multi, submit, closed, freeText: freeTextEl,
+      copy: v2?.todoBox?.querySelector("pre") ? () => copyCode(v2.todoBox.querySelector("pre")) : null,
       setCursor(i, select) {
         if (!cards.length) return;
         i = clamp(i, cards.length);
@@ -588,6 +611,18 @@ function buildModel(d) {
     const v2 = table ? parseOptionsTable(table, qs[0].options, fm) : null;
     if (v2) {
       for (const n of optSec.nodes) n.remove();
+      const todoSec = (fm.type === "blocker" || d.explanation.type === "blocker") ? findSection(secs, "人にしてほしいこと") : undefined;
+      if (todoSec && todoSec !== optSec) {
+        const todoBox = el("div", { class: "md" });
+        for (const n of todoSec.nodes.slice(1)) todoBox.append(n);
+        todoSec.head.remove();
+        for (const pre of todoBox.querySelectorAll("pre")) {
+          const wrap = el("div", { class: "codewrap" });
+          pre.replaceWith(wrap);
+          wrap.append(pre, el("button", { class: "copy-btn", type: "button", tabindex: "-1", text: "コピー", onclick: () => copyCode(pre) }));
+        }
+        if (todoBox.children.length) { v2.todoBox = todoBox; enhance(todoBox).catch(() => {}); }
+      }
       if (recSec) {
         const recBox = el("div", { class: "md" });
         for (const n of recSec.nodes.slice(1)) recBox.append(n);
@@ -737,7 +772,7 @@ function cycle(step) {
 // IME(日本語入力)が有効だと keydown の key が "Process"、keyCode が 229 になり文字が取れない。
 // テキスト欄の外では物理キー(code)から割り当てキーを決める
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyY: "y", KeyA: "a", KeyN: "n",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -814,6 +849,10 @@ document.addEventListener("keydown", (ev) => {
       if (!n) return;
       ev.preventDefault();
       ui.setCursor(gg || key === "Home" ? 0 : n - 1, true);
+    } else if (key === "c") {
+      if (!ui.copy) return;
+      ev.preventDefault();
+      ui.copy();
     } else if (key === "i") {
       if (!ui.freeText) return;
       ev.preventDefault();

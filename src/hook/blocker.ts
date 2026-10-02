@@ -1,9 +1,15 @@
-/** Stop hook の保険(docs/spec/explain.md 12 節): 文章で「人の作業待ち」と言って止まったかを語彙で見る */
-export const BLOCKER_VOCABULARY =
-  /認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|not logged in|login required|auth(entication)? (required|failed)|進められません|進めません|できませんでした.*(してください|お願いします)|cannot proceed|blocked by/i;
+/**
+ * Stop hook の保険(docs/spec/explain.md 12 節): 文章で「人の作業待ち」と言って止まったかを語彙で見る。
+ * 「対象語」と「詰まり語」の両方が同じ文(「。」「.」改行区切り)に入っているときだけ一致にする
+ */
+export const BLOCKER_TARGET =
+  /認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|api key|鍵/i;
+export const BLOCKER_STUCK =
+  /ない|無い|切れ|失敗|必要|してください|お願い|できません|進められません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked/i;
 
 export function isBlockerMessage(text: string | undefined): boolean {
-  return !!text && BLOCKER_VOCABULARY.test(text);
+  if (!text) return false;
+  return text.split(/[。.\n]/).some((s) => BLOCKER_TARGET.test(s) && BLOCKER_STUCK.test(s));
 }
 
 /** Stop で続行させるときの理由文(600 文字以内、URL なし) */

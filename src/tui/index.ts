@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ApiError, TuiApi } from "./api.js";
@@ -38,6 +39,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   const api = new TuiApi(opts.server, opts.dataDir);
   const app = new App();
+  app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());
   } catch (e) {
@@ -104,7 +106,20 @@ export async function run(argv: string[]): Promise<number> {
     const runEffects = (effects: Effect[]) => {
       for (const e of effects) {
         if (e.type === "quit") quit(0);
-        else {
+        else if (e.type === "copy") {
+          if (!app.copySupported) continue;
+          const p = spawn("pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] });
+          p.on("error", () => {
+            app.note("コピーできませんでした", Date.now());
+            schedule();
+          });
+          p.on("close", (code) => {
+            app.note(code === 0 ? "コピーしました" : "コピーできませんでした", Date.now());
+            schedule();
+          });
+          p.stdin.on("error", () => {});
+          p.stdin.end(e.text);
+        } else {
           void api.answer(e.id, e.body).then(
             (d) => {
               app.answered(d, Date.now());

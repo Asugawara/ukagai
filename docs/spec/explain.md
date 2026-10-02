@@ -238,7 +238,11 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 - 次のとき何も返さない: `stop_hook_active === true`(Claude Code は Stop hook で続行させた後の Stop に付ける。**続行は 1 回限り**でループしない)、`permission_mode === "plan"`、`--observe`、`last_assistant_message` が無い、ブロッカー語彙に一致しない。
 - `stop_hook_active` が false で `last_assistant_message` がブロッカー語彙に一致したら、stdout に `{"decision":"block","reason":"<理由文>"}` を返す。理由文(600 文字以内、URL なし。`src/hook/blocker.ts` の `BLOCKER_REASON`):
   `人の作業(認証・権限など)が要るなら、文章で終えずに ukagai の blocker 形式で聞いてください: skill ukagai-explain の「人の作業で止まったとき」に従って説明ファイル(type: blocker、「なぜ止まったか」「人にしてほしいこと」「選択肢」)を書き、AskUserQuestion を選択肢「対応した。続けて (Recommended)」「この手順は飛ばして続けて」「ここで中断」で出してください。人の作業が要らないなら、そのまま終えて構いません。`
-- ブロッカー語彙(`BLOCKER_VOCABULARY`、大小無視): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|not logged in|login required|auth(entication)? (required|failed)|進められません|進めません|できませんでした.*(してください|お願いします)|cannot proceed|blocked by`。`escaped_question`(末尾が ？)の判定とは独立。
+- ブロッカー語彙(`src/hook/blocker.ts`、大小無視): 文を「。」「.」改行で区切り、**同じ文に「対象語」と「詰まり語」の両方**が含まれるときだけ一致にする。
+  - 対象語(`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|api key|鍵`
+  - 詰まり語(`BLOCKER_STUCK`): `ない|無い|切れ|失敗|必要|してください|お願い|できません|進められません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked`
+  - 一致する例: 「gcloud の認証がないため進められません」「Permission denied (403)」「トークンが期限切れです。再ログインしてください」。一致しない例: 「認証は有効です」「権限の実装を終えました」「どちらにしますか？」(片方だけ)。
+  - `escaped_question`(末尾が ？)の判定とは独立。
 - 観測 event(`POST /api/events`)は今までどおり送り、語彙に一致したら `blocker_detected: true` を足す(`stop_hook_active` に関係なく)。POST は 1000 ms で打ち切り、hook 全体は 1.9 秒以内に返す。失敗しても何も出力しない(フェイルオープン)。
 
 ## 既知の制約
