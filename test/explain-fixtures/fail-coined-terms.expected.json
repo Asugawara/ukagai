@@ -1,0 +1,12 @@
+{
+  "valid": false,
+  "missing": [
+    "coined_term"
+  ],
+  "has": {
+    "mermaid": true,
+    "diff": false,
+    "table": true
+  },
+  "question": "Create the GitHub repository as private first, or public from the start?"
+}

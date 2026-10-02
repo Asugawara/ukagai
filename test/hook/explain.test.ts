@@ -26,14 +26,17 @@ import {
   UNDO_BAD_WORDS,
   UNDO_WORDS,
   parsePlanImpact,
+  findCoinedTerms,
+  extractCoined,
+  coinedTermLabel,
 } from "../../src/hook/explain.js";
 import { tmpDir, writeFile } from "./helpers.js";
 
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 25 fixtures", () => {
-  assert.equal(mdFiles.length, 25);
+test("there are 27 fixtures", () => {
+  assert.equal(mdFiles.length, 27);
 });
 
 for (const f of mdFiles) {
@@ -577,4 +580,59 @@ test("parsePlanImpact: reads Reversibility / Scope in several shapes, ignores un
   assert.deepEqual(parsePlanImpact(plan("可逆性: reversible\n影響範囲: file")), { reversibility: "reversible", scope: "file" });
   assert.deepEqual(parsePlanImpact(plan("Reversibility: maybe\nOne file.")), {});
   assert.deepEqual(parsePlanImpact("# Plan\nReversibility: costly\n"), {});
+});
+
+test("coined_term: the five tokens of the real example are found; codes in the title count", () => {
+  const body = "W-T2 is done except FT4. The next gate G-T2 needs the TM28 restore drill, both blocked by P-GH.";
+  assert.deepEqual(extractCoined(body), ["W-T2", "FT4", "G-T2", "TM28", "P-GH"]);
+  const md = GOOD.replace("Reason\n", body + "\n");
+  assert.deepEqual(validateExplanation(md).missing, ["coined_term"]);
+  assert.deepEqual(findCoinedTerms(md), ["W-T2", "FT4", "G-T2", "TM28", "P-GH"]);
+  const titled = GOOD.replace(/title: .*\n/, "title: P-GH: create the repository first\n");
+  assert.deepEqual(findCoinedTerms(titled), ["P-GH"]);
+  assert.deepEqual(validateExplanation(titled).missing, ["coined_term"]);
+});
+
+test("coined_term: allowlisted abbreviations, versions, issue numbers, HTTP statuses and A1 are not hits", () => {
+  const text = "CI and API on S3 with UTF-8 over HTTP-2 and SHA-256, v0.2.0-DT1, release v1, #12, error 404, cell A1, M3, EC2, P95.";
+  assert.deepEqual(extractCoined(text), []);
+  assert.deepEqual(extractCoined("step by step, the day one plan, a Gate way, Phase CI"), []);
+});
+
+test("coined_term: option labels, the question and the recommended label are exempt", () => {
+  const md = GOOD.replace("| A | a |", "| Use FT4 | a |").replace("recommended: A", "recommended: Use FT4");
+  assert.deepEqual(findCoinedTerms(md), []);
+  assert.deepEqual(findCoinedTerms(GOOD.replace("question: \"Q?\"", "question: \"Drop W-T2?\"")), []);
+  assert.deepEqual(findCoinedTerms(GOOD.replace("Reason\n", "Reason about FT4.\n"), ["FT4"]), []);
+  assert.deepEqual(findCoinedTerms(GOOD.replace("Reason\n", "Reason about FT4.\n")), ["FT4"]);
+});
+
+test("coined_term: Terms with a real definition clears a token; a short or pointer-only one does not", () => {
+  const withTerms = (def: string) => GOOD.replace("Reason\n", "Reason about FT4.\n") + `## Terms\n- **FT4** — ${def}\n`;
+  assert.deepEqual(findCoinedTerms(withTerms("the final check of the release workflow file")), []);
+  assert.deepEqual(findCoinedTerms(withTerms("a check")), ["FT4"]);
+  assert.deepEqual(findCoinedTerms(withTerms("the plan item")), ["FT4"]);
+  assert.deepEqual(findCoinedTerms(withTerms("plan の行")), ["FT4"]);
+  assert.deepEqual(findCoinedTerms(withTerms("see plan, ok")), ["FT4"]);
+  assert.equal(validateExplanation(withTerms("the final check of the release workflow file")).valid, true);
+});
+
+test("coined_term: code fences are ignored, inline code is not", () => {
+  assert.deepEqual(findCoinedTerms(GOOD.replace("Reason\n", "Reason\n```\nrun FT4\n```\n")), []);
+  assert.deepEqual(findCoinedTerms(GOOD.replace("Reason\n", "Reason `FT4` here\n")), ["FT4"]);
+});
+
+test("coined_term: Japanese phase words are hits", () => {
+  assert.deepEqual(extractCoined("フェーズ 2 の後に第 3 段階へ進む"), ["フェーズ 2", "第 3"]);
+  assert.deepEqual(extractCoined("Phase 2 and Gate B and Step 3a"), ["Phase 2", "Gate B", "Step 3a"]);
+  assert.deepEqual(extractCoined("段階 CI の説明"), []);
+});
+
+test("coined_term: also evaluated for a blocker; order is cell_long, coined_term, undo", () => {
+  const blocked = GOOD.replace("Reason\n", "Reason FT4\n").replace("A | a | Revert it", "A | a | Nothing");
+  assert.deepEqual(validateExplanation(blocked).missing, ["coined_term", "undo"]);
+  const long = blocked.replace("| A | a |", `| A | ${"a".repeat(161)} |`);
+  assert.deepEqual(validateExplanation(long).missing, ["cell_long", "coined_term", "undo"]);
+  assert.match(coinedTermLabel(["FT4", "P-GH"]), /^internal identifiers the reader cannot know \(FT4, P-GH; plan codes/);
+  assert.match(coinedTermLabel(Array.from({ length: 10 }, (_, i) => `AB${i}`)), /AB7 and 2 more;/);
 });

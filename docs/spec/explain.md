@@ -108,7 +108,7 @@ Inside the "Options" section there must be a GFM table (header row + separator r
 If a section has several tables, one of them satisfying the conditions is enough.
 
 5. **Extra columns.** The table may have 3 or more columns: the label, the `COLUMN_HAPPENS` column, the `COLUMN_RISK` column and any others (cost, effort, …). Columns may be in any order after the label. `Table.extraColumns` lists the indexes of the columns that are neither the label (0), `COLUMN_HAPPENS` nor `COLUMN_RISK` (empty for the usual 3 columns). Extra columns are not checked (the hook does not look at their cells).
-6. **Undo (`undo`).** Every data row's `COLUMN_RISK` cell matches `UNDO_BAD_WORDS` (phrases saying it cannot be undone) **or** `UNDO_WORDS` (phrases saying how to undo). Both are exported from `src/hook/explain.ts`, and the GUI / TUI use the same lists for colors (bad words red first, then the remaining undo words green; "cannot be restored" is red only). English entries match on word boundaries, Japanese entries as substrings, all case-insensitive. `UNDO_BAD_WORDS` = `/\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i`. `UNDO_WORDS` = `/\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i`. For a blocker, the rows of the 3 fixed labels are exempt (they need no undo sentence); any other row is checked. Evaluated only for tables satisfying 1–4, and only when `cell_long` is evaluated, right after it.
+6. **Undo (`undo`).** Every data row's `COLUMN_RISK` cell matches `UNDO_BAD_WORDS` (phrases saying it cannot be undone) **or** `UNDO_WORDS` (phrases saying how to undo). Both are exported from `src/hook/explain.ts`, and the GUI / TUI use the same lists for colors (bad words red first, then the remaining undo words green; "cannot be restored" is red only). English entries match on word boundaries, Japanese entries as substrings, all case-insensitive. `UNDO_BAD_WORDS` = `/\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i`. `UNDO_WORDS` = `/\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i`. For a blocker, the rows of the 3 fixed labels are exempt (they need no undo sentence); any other row is checked. Evaluated only for tables satisfying 1–4, after `cell_long` and `coined_term`.
 
 ### 3.4 `has` (facts for the record)
 
@@ -141,6 +141,25 @@ So that option cards are not pushed off screen in the right column of the GUI, l
 - `cell_long` looks only at tables that satisfy 3.3. For a blocker `recommend_long` / `recommend_cond` are not evaluated (there is no Recommendation section).
 - Put details, evidence and logs in the "What I checked" section (required unless reversible + file; the content is not checked).
 
+### 3.8 Coined terms (`coined_term`)
+
+The reader did not write the agent's plan, so identifiers the agent made up (plan item codes, phase / gate / worker names) mean nothing to them. The hook denies any such token that Terms does not define. Evaluated for decisions and blockers (not plans), right after `cell_long` (even when the table is absent) and before `undo`.
+
+**Text scanned.** The front matter `title` plus the body outside code fences (inline code is included). URLs are ignored. Text is NFKC-normalized first.
+
+**Detection** (exported from `src/hook/explain.ts`):
+
+- `COINED_TOKEN` = `/\b[A-Z]{1,4}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g` (case-sensitive): `W-T2`, `FT4`, `G-T2`, `TM28`, `P-GH`, `DT1`, `Q5-01`. A match is skipped when it is one letter + one digit (`A1`, `M3`, `W1`), when it is in the allowlist, or when it is the tail of a version (`v0.2.0-DT1`).
+- `COINED_PHASE_EN`: a process word (Phase, Step, Stage, Sprint, Milestone, Gate, Track, Wave, Tier, Day, Week, Round, Batch, Lane; any case) + optional space + an id of 1-3 digits with an optional letter (`Phase 2`, `Step 3a`) or 1-3 capitals / digits starting with a capital (`Gate B`). The id must not continue into letters / digits or `-X` (so "step by step" and "gate G-T2" are not hits; `G-T2` is the hit).
+- `COINED_PHASE_JA`: (フェーズ|ステップ|段階|工程|ゲート|トラック|ラウンド|第) + optional space + 1-3 digits / capitals (`フェーズ 2`, `第 3`). A capital-only id in the allowlist (`段階 CI`) is skipped.
+- `COINED_ALLOW` (whole token, uppercase): CI CD CLI API GUI TUI SSE URL URI HTTP HTTPS JSON YAML TOML HTML CSS JS TS PR OSS DB UI UX OK NG ID CPU GPU RAM GB MB KB TB MS TTY ANSI SQL SSH TLS SSL DNS IP TCP UDP GCP AWS GCS S3 IAM VM OS PID ENV NPM PNPM CDN SVG PNG JPG PDF CSV UTF IDE LSP MCP LLM AI QA ADR README TODO FAQ EOF CRUD REST RPC GRPC JWT SDK ETA TBD WIP NFKC SGR ESC CJK IME UTC ISO RFC HEAD, plus SHA RSA AES HMAC GPT IPV MD5 MP3 MP4 EC2 K8S P50 P90 P95 P99. A token whose leading letters (3 or more) are in the list is also allowed (`UTF-8`, `HTTP-2`, `SHA-256`). `#12` and `v1` / `v0.2.0` never match the patterns; HTTP statuses are digits only.
+
+**Exempt tokens.** Tokens found in the front matter `question`, in `recommended`, in the AskUserQuestion option labels, or in the first column of the Options tables (labels are what the human picks; the hook cannot change the question).
+
+**Defined by Terms.** A token is defined when a Terms item (3.7 `parseTerms`) whose term contains it has a definition of at least 12 characters (NFKC code points) after removing pointer phrases (`plan の行` / `the plan item` / `see plan` / `計画の項目`, case-insensitive) and leading punctuation. A short definition or a pointer alone counts as undefined.
+
+**Deny text.** `coined_term` is listed as "internal identifiers the reader cannot know (<tokens, at most 8, then "and N more">; plan codes, phase / gate / worker names). Say what each is in plain words, or define it under Terms".
+
 ### 3.7 Parsers (exported; the GUI keeps its own copy, the TUI imports these)
 
 All take the whole Markdown (front matter included; it is skipped). Lines inside code fences are ignored. Headings are matched by the rules of 3.1.
@@ -156,7 +175,7 @@ All take the whole Markdown (front matter included; it is skipped). Lines inside
 
 ## 4. Check result
 
-The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter` … `recommended`, `why`, `why_long`, `options`, `table`, `cell_long`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `diagram`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
+The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter` … `recommended`, `why`, `why_long`, `options`, `table`, `cell_long`, `coined_term`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `diagram`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
 
 | Code | Condition (added when it is not satisfied) | Name in the deny reason |
 |---|---|---|
@@ -173,7 +192,8 @@ The check lists the following `missing` codes **in this order** (the table is by
 | `options` | The "Options" section is absent | the "Options" section |
 | `table` | `options` exists but there is no table of 3.3 (not evaluated when `options` is absent) | the options table (first column is the label; columns for what happens if chosen and for risks and how to undo; one row per option) |
 | `cell_long` | A cell of a table satisfying 3.3 exceeds the limit of 3.6 (not evaluated when `table` failed) | a cell in the options table is too long (at most 160 characters per cell) |
-| `undo` | A risk cell of a table satisfying 3.3 matches none of `UNDO_WORDS` (3.3 item 6; blocker: the 3 fixed rows are exempt; not evaluated when `table` failed; right after `cell_long`) | each risk cell must say how to undo (or that it cannot be undone) |
+| `coined_term` | An identifier-like token (3.8) in the title or body is neither exempt nor defined under Terms (decisions and blockers; right after `cell_long`, evaluated even when `table` failed) | internal identifiers the reader cannot know (plan codes, phase / gate / worker names). Say what each is in plain words, or define it under Terms (the deny text lists the tokens) |
+| `undo` | A risk cell of a table satisfying 3.3 matches none of `UNDO_WORDS` (3.3 item 6; blocker: the 3 fixed rows are exempt; not evaluated when `table` failed; right after `coined_term`) | each risk cell must say how to undo (or that it cannot be undone) |
 | `todo` | `type: blocker` but the "What you need to do" section is absent or empty, or has no code block | the "What you need to do" section (with a code block of commands) |
 | `recommend` | (not evaluated for a blocker) The "Recommendation" section is absent or empty | the "Recommendation" section |
 | `recommend_long` | (not evaluated for a blocker) The "Recommendation" section exceeds the limit of 3.6 (not evaluated when `recommend` failed) | the "Recommendation" section is too long (at most 5 sentences and 400 characters) |
@@ -305,7 +325,7 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 
 ## 11. Fixtures
 
-`test/explain-fixtures/` has 25. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
+`test/explain-fixtures/` has 27. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
 
 `pass-*` and the other `fail-*` fixtures satisfy `checked` and `undo` (their text was extended), so each `fail-*` reports only its own code. The fixtures are written in English. The `question:` line keeps the original question text, because `expected.json` records it. Three Japanese variants (`*-ja.md`, with the same `expected.json` contents) exercise the Japanese aliases.
 
@@ -330,6 +350,8 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 | `fail-no-recommend-cond.md` | false | `recommend_cond` |
 | `fail-against-weak.md` | false | `against_weak` (`pass-rich.md` whose Counterargument repeats a sentence of the Recommendation) |
 | `fail-cell-long.md` | false | `cell_long` |
+| `fail-coined-terms.md` | false | `coined_term` (plan codes W-T2 / FT4 / G-T2 / TM28 / P-GH, undefined) |
+| `pass-coined-defined.md` | true | none (the same codes defined under Terms in plain words) |
 | `fail-recommend-long.md` | false | `recommend_long` |
 | `fail-why-long.md` | false | `why_long` |
 | `pass-rich.md` | true | none (every section, a 4-column table, footnotes `[^1]` `[^2]` with definitions in "What I checked") |

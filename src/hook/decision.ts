@@ -16,6 +16,8 @@ import {
   findExplanation,
   markUsed,
   MISSING_LABELS,
+  coinedTermLabel,
+  findCoinedTerms,
   parseFrontMatter,
   parsePlanImpact,
   validateExplanation,
@@ -166,7 +168,9 @@ export async function handleDecision(
         const reason = denyReason(opts.denyTemplate, {
           path: join(dir, "explain.md"),
           question: q0.question,
-          missing: codes.map((c) => MISSING_LABELS[c]),
+          missing: codes.map((c) =>
+            c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, q0.options.map((o) => o.label))) : MISSING_LABELS[c],
+          ),
           codes,
           blocker: found ? parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields["type"] === "blocker" : false,
         });
