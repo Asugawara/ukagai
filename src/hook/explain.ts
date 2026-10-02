@@ -57,7 +57,7 @@ const SCOPE = ["file", "repo", "machine", "external"];
 
 // ---- 小道具 ----
 
-function toLines(markdown: string): string[] {
+export function toLines(markdown: string): string[] {
   return markdown.replace(/\r\n?/g, "\n").split("\n");
 }
 
@@ -108,13 +108,13 @@ export function parseFrontMatter(lines: string[]): FrontMatter {
   return { present: true, fields, bodyStart: close + 1 };
 }
 
-interface FenceBlock {
+export interface FenceBlock {
   lang: string;
   start: number;
   end: number;
 }
 
-function scanFences(lines: string[]): { inFence: boolean[]; blocks: FenceBlock[] } {
+export function scanFences(lines: string[]): { inFence: boolean[]; blocks: FenceBlock[] } {
   const inFence = new Array<boolean>(lines.length).fill(false);
   const blocks: FenceBlock[] = [];
   let open: { ch: string; len: number; lang: string; start: number } | null = null;
@@ -139,13 +139,13 @@ function scanFences(lines: string[]): { inFence: boolean[]; blocks: FenceBlock[]
   return { inFence, blocks };
 }
 
-interface Section {
+export interface Section {
   title: string;
   start: number;
   end: number;
 }
 
-function scanHeadings(lines: string[], inFence: boolean[]): { level: number; title: string; line: number }[] {
+export function scanHeadings(lines: string[], inFence: boolean[]): { level: number; title: string; line: number }[] {
   const out: { level: number; title: string; line: number }[] = [];
   lines.forEach((line, i) => {
     if (inFence[i]) return;
@@ -155,7 +155,7 @@ function scanHeadings(lines: string[], inFence: boolean[]): { level: number; tit
   return out;
 }
 
-function findSection(
+export function findSection(
   headings: { level: number; title: string; line: number }[],
   total: number,
   name: string,
@@ -170,7 +170,7 @@ function findSection(
   return { title: h.title, start: h.line, end: next ? next.line : total };
 }
 
-interface Table {
+export interface Table {
   header: string[];
   rows: string[][];
 }
@@ -184,7 +184,7 @@ function splitRow(line: string): string[] {
 
 const SEPARATOR = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
-function findTables(lines: string[], inFence: boolean[], from: number, to: number): Table[] {
+export function findTables(lines: string[], inFence: boolean[], from: number, to: number): Table[] {
   const tables: Table[] = [];
   for (let i = from; i < to - 1; i++) {
     if (inFence[i] || inFence[i + 1]) continue;
