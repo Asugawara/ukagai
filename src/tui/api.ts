@@ -4,7 +4,14 @@ import { Decision } from "../contract.js";
 
 // server への薄い fetch。認可は <data-dir>/token の Bearer(hook の Client と同じ)。
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
 
 export interface StreamEvent {
   event: string;
@@ -12,7 +19,7 @@ export interface StreamEvent {
 }
 
 export class TuiApi {
-  private token: string | null | undefined;
+  private token: string | null = null;
 
   constructor(
     readonly server: string,
@@ -20,7 +27,7 @@ export class TuiApi {
   ) {}
 
   private async getToken(): Promise<string | null> {
-    if (this.token !== undefined) return this.token;
+    if (this.token) return this.token;
     try {
       const t = (await readFile(join(this.dataDir, "token"), "utf8")).trim();
       this.token = t === "" ? null : t;
@@ -31,23 +38,28 @@ export class TuiApi {
   }
 
   private async fetch(path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<Response> {
-    const token = await this.getToken();
-    if (!token) throw new ApiError(`token が読めません(${join(this.dataDir, "token")})`);
     const method = init.method ?? "GET";
-    return fetch(this.server + path, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
-      },
-      body: method === "POST" ? JSON.stringify(init.body ?? {}) : undefined,
-      ...(init.signal ? { signal: init.signal } : {}),
-    });
+    // server を再起動すると token が作り直される。401 なら token を読み直して 1 度だけやり直す
+    for (let retried = false; ; retried = true) {
+      const token = await this.getToken();
+      if (!token) throw new ApiError(`token が読めません(${join(this.dataDir, "token")})`);
+      const res = await fetch(this.server + path, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+        },
+        body: method === "POST" ? JSON.stringify(init.body ?? {}) : undefined,
+        ...(init.signal ? { signal: init.signal } : {}),
+      });
+      if (res.status !== 401 || retried) return res;
+      this.token = null;
+    }
   }
 
   async listPending(): Promise<Decision[]> {
     const res = await this.fetch("/api/decisions?status=pending", { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new ApiError(`HTTP ${res.status}`);
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
     const j: unknown = await res.json();
     const list = Array.isArray(j) ? j : (j as { decisions?: unknown }).decisions;
     if (!Array.isArray(list)) throw new ApiError("unexpected response");
@@ -59,7 +71,7 @@ export class TuiApi {
 
   async get(id: string): Promise<Decision> {
     const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new ApiError(`HTTP ${res.status}`);
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
     return Decision.parse(await res.json());
   }
 
@@ -71,15 +83,16 @@ export class TuiApi {
     });
     if (!res.ok) {
       const j = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new ApiError(j.error ?? `HTTP ${res.status}`);
+      throw new ApiError(j.error ?? `HTTP ${res.status}`, res.status);
     }
     return Decision.parse(await res.json());
   }
 
-  /** SSE を購読する。切れたら(正常終了も含め)返る。例外は接続失敗 */
-  async stream(onEvent: (e: StreamEvent) => void, signal: AbortSignal): Promise<void> {
+  /** SSE を購読する。つながったら onOpen。切れたら(正常終了も含め)返る。例外は接続失敗 */
+  async stream(onEvent: (e: StreamEvent) => void, signal: AbortSignal, onOpen?: () => void): Promise<void> {
     const res = await this.fetch("/api/stream", { signal });
-    if (!res.ok || !res.body) throw new ApiError(`HTTP ${res.status}`);
+    if (!res.ok || !res.body) throw new ApiError(`HTTP ${res.status}`, res.status);
+    onOpen?.();
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";

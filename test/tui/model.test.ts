@@ -51,7 +51,7 @@ test("説明なし: 生の質問と選択肢、理由の一文", () => {
   );
   assert.equal(m.hasExplanation, false);
   assert.equal(m.title, "通知は SSE と WebSocket のどちらにしますか？");
-  assert.match(m.backgroundNote ?? "", /説明を書きませんでした\(理由: plan_mode\)/);
+  assert.match(m.backgroundNote ?? "", /説明を書きませんでした\(理由: plan mode のため\)/);
   assert.equal(m.question!.cards[0]!.lines[0]!.text, "一方向");
 });
 

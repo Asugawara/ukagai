@@ -1,4 +1,4 @@
-import { BOLD, CYAN, DIM, GREEN, MAGENTA, RESET, STRONG_RISK, YELLOW, inline, renderMarkdown, renderMarkdownRich, type Rendered } from "./markdown.js";
+import { BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, STRONG_RISK, YELLOW, inline, renderMarkdown, renderMarkdownRich, type Rendered } from "./markdown.js";
 import { elapsed, type Card, type Chip, type ScreenModel } from "./model.js";
 import { padEnd, sliceCols, truncate, width, wrap } from "./width.js";
 
@@ -26,6 +26,8 @@ export interface View {
   reason: string;
   pending: number;
   toast: string | null;
+  /** server との接続。切れている間は左端に赤で出し、戻ったら短く知らせる */
+  conn: { state: "down"; server: string } | { state: "restored" } | null;
   /** クリップボードに送れるか */
   copy: boolean;
   /** 長い推奨ボックスを全文で表示(`.`) */
@@ -239,6 +241,8 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   else {
     left = `保留 ${v.pending}  ${DIM}h/l 切替${hscrollable ? "  ←→ 図を横スクロール" : ""}  b 一覧  q 終了${overflow ? "  PgUp/PgDn 背景をスクロール · Tab 列の切替" : ""}${RESET}`;
   }
+  if (v.conn?.state === "down") left = `${BOLD}${RED}接続できません(${v.conn.server}) 再接続中…${RESET}  ${left}`;
+  else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}再接続しました${RESET}  ${left}`;
   if (v.toast) left += `  ${BOLD}${GREEN}${v.toast}${RESET}`;
   if (o.hint) left += `  ${BOLD}${YELLOW}図が列幅を超えています: f で全幅表示${RESET}`;
   return truncate(left, cols);
@@ -275,9 +279,11 @@ function position(off: number, max: number, size: number, total: number, h?: { o
 /** 溢れる列に、窓・スクロールバー・位置表示をかぶせる。w は列の幅(バー込み) */
 function scrolled(all: string[], size: number, off: number, w: number, tail: string[], h?: { off: number; figW: number }): string[] {
   const max = all.length - size;
-  const bar = scrollbar(size, all.length, off, max);
+  // 縦に収まるなら、バーも ▲▼ の位置も出さない(横にずれているときの ◀▶ だけ残す)
+  const bar = max > 0 ? scrollbar(size, all.length, off, max) : new Array<string>(size).fill(" ");
   const body = window(all, size, off).map((l, i) => `${padEnd(truncate(l, w - 1), w - 1)}${bar[i]}`);
-  return [...body, truncate(position(off, max, size, all.length, h), w), ...tail];
+  const pos = max > 0 ? position(off, max, size, all.length, h) : h && h.off > 0 ? `${DIM}◀▶ ${h.off}/${h.figW}${RESET}` : "";
+  return [...body, truncate(pos, w), ...tail];
 }
 
 export function renderFrame(v: View, size: Size): Frame {
@@ -310,7 +316,8 @@ export function renderFrame(v: View, size: Size): Frame {
     const leftW = full ? cols : cols - SEP.length - rightW;
     // 見出し行(フォーカスのある列を反転)を 1 行取り、残りが列の窓
     const winRows = Math.max(1, bodyRows - 1);
-    const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ${label} ${RESET}` : `${DIM} ${label}${RESET}`, w);
+    // フォーカス中は反転 + 左に ▶(モノクロでも分かる)。もう一方は dim
+    const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ▶ ${label} ${RESET}` : `${DIM}   ${label}${RESET}`, w);
 
     // 左: 溢れる(縦に長い、または横にずらせる図がある)ときは右端にバー、最下行に位置。収まるときはそのまま
     let leftR = leftColumn(m, leftW);

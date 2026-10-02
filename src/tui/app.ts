@@ -67,6 +67,10 @@ export class App {
   private toast: { text: string; until: number } | null = null;
   private sending = new Set<string>();
   private sent = new Set<string>();
+  /** 接続先(フッターの「接続できません」に出す。index.ts が決める) */
+  server = "";
+  private down = false;
+  private restoredUntil = 0;
 
   // ---- データ ----
 
@@ -103,12 +107,35 @@ export class App {
     }
   }
 
+  /** SSE の接続状態。切れたら「接続できません」、つながり直したら 2 秒「再接続しました」 */
+  setConnected(ok: boolean, now: number): void {
+    if (!ok) this.down = true;
+    else if (this.down) {
+      this.down = false;
+      this.restoredUntil = now + TOAST_MS;
+    }
+  }
+
+  /** server に無くなった判断を手元から除く */
+  drop(id: string, now: number): void {
+    this.decisions.delete(id);
+    this.models.delete(id);
+    this.drafts.delete(id);
+    this.recFull.delete(id);
+    this.hinted.delete(id);
+    this.sending.delete(id);
+    this.sent.delete(id);
+    if (id === this.shownId) this.advance(now);
+  }
+
   private showToast(text: string, now: number): void {
     this.toast = { text, until: now + TOAST_MS };
   }
 
   private show(id: string | null): void {
     this.shownId = id;
+    // 判断をまたいでフォーカスを引き継がない(背景に残ると j / Enter が背景のスクロールになり、誤答のもと)
+    this.focus = "decision";
     this.scroll = 0;
     this.rscroll = null;
     this.hscroll = 0;
@@ -172,6 +199,7 @@ export class App {
       reason: dr?.reason ?? "",
       pending: pending.length,
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
+      conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
       list,
       copy: this.copySupported,
       recFull: this.shownId !== null && this.recFull.has(this.shownId),
