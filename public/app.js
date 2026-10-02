@@ -740,13 +740,33 @@ function inlineClone(node) {
   return out;
 }
 
-// インラインコードの `-` の直後に WORD JOINER(U+2060、幅ゼロ)を置く。`--port` のような短い語が `-` で割れない
-// (U+2011 は代替フォントで間延びするので使わない)
-// (長いパス・コマンドは overflow-wrap:anywhere で列幅に折り返す)。pre の中(コピー対象)は触らない
+// インラインコードの `-` を含む語(`--port` など)は途中で折らない。語を nowrap の span に包み、語の間に <wbr> を置く
+// (長いパス・コマンドは overflow-wrap:anywhere で列幅に折り返す)。pre の中(コピー対象)は触らない。textContent は変えない
 function hyphenText(node) {
   const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
-  for (let n = w.nextNode(); n; n = w.nextNode()) if (n.textContent.includes("-")) n.textContent = n.textContent.replaceAll("-", "-\u2060");
+  const targets = [];
+  for (let n = w.nextNode(); n; n = w.nextNode()) if (n.textContent.includes("-") && !n.parentElement.closest(".nb")) targets.push(n);
+  for (const n of targets) {
+    const parts = n.textContent.split(/(?<=[^-])(?=-)/);
+    if (parts.length < 2 && !parts[0].includes("-")) continue;
+    const frag = document.createDocumentFragment();
+    parts.forEach((t, i) => {
+      if (i > 0) frag.append(document.createElement("wbr"));
+      if (t.includes("-")) frag.append(el("span", { class: "nb" }, t));
+      else frag.append(t);
+    });
+    n.replaceWith(frag);
+  }
 }
+// 選択コピーに制御文字(U+2060)が混ざらないようにする(過去の描画の名残・貼り付け先の保護)
+document.addEventListener("copy", (e) => {
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !e.clipboardData) return;
+  const text = sel.toString();
+  if (!text.includes("\u2060")) return;
+  e.clipboardData.setData("text/plain", text.replaceAll("\u2060", ""));
+  e.preventDefault();
+});
 function softHyphens(root) {
   for (const code of root.querySelectorAll("code")) if (!code.closest("pre")) hyphenText(code);
 }

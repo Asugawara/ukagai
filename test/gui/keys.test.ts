@@ -551,7 +551,7 @@ gui("長いインラインコードは列幅で折り返し、--port は割れ�
   assert.ok(r.over <= 1, `コードが列幅を超える: ${JSON.stringify(r)}`);
   assert.ok(r.sw <= r.cw, `scrollWidth <= clientWidth: ${JSON.stringify(r)}`);
   assert.equal(r.lines, 1, JSON.stringify(r)); // --port は 1 行
-  assert.equal(r.port.replaceAll("\u2060", ""), "--port");
+  assert.equal(r.port, "--port");
 });
 
 gui("表示中でない判断の cancel で赤いトースト(最大 3 枚、送信ボタンの上)", async () => {
@@ -673,11 +673,50 @@ gui("fallback になった(回答済み扱いでない)裏の判断は「届き�
   assert.ok(text.includes("届きませんでした"), text);
 });
 
-gui("インラインコードは列幅で折り返す(nowrap でない)、`-` の後ろに U+2060、コードブロックは従来どおり", async () => {
+gui("インラインコードは列幅で折り返す(nowrap でない)、`-` を含む語は nowrap の span + wbr、U+2060 は使わない、コードブロックは従来どおり", async () => {
   await seedQuestion({ markdown: v2md("コードの質問です？", "コードの判断", ROWS, "`some-very-long-inline-code-identifier`\n\n```\nblock\n```\n\n") });
   await reopen();
   const cs = ev<{ ws: string; wrap: string }>(`JSON.stringify((() => { const s = getComputedStyle(document.querySelector("#background :not(pre) > code")); return { ws: s.whiteSpace, wrap: s.overflowWrap }; })())`);
   assert.deepEqual(cs, { ws: "normal", wrap: "anywhere" });
-  assert.equal(ev<string>(`document.querySelector("#background :not(pre) > code").textContent`), "some-\u2060very-\u2060long-\u2060inline-\u2060code-\u2060identifier");
+  assert.equal(ev<string>(`document.querySelector("#background :not(pre) > code").textContent`), "some-very-long-inline-code-identifier");
+  assert.equal(ev<number>(`document.querySelectorAll("#background :not(pre) > code wbr").length`), 5);
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background :not(pre) > code .nb")).whiteSpace`), "nowrap");
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background pre code")).whiteSpace`), "pre");
+});
+
+gui("インラインコードを選択してコピーしても U+2060 が混ざらない", async () => {
+  await seedQuestion({ markdown: v2md("コードの質問です？", "コードの判断", ROWS, "起動は `--port` を使います。", "") });
+  await reopen();
+  const r = ev<{ sel: string; data: string }>(`JSON.stringify((() => {
+    const code = [...document.querySelectorAll("#background code")].find(c => c.textContent.includes("port"));
+    const range = document.createRange(); range.selectNodeContents(code);
+    const s = getSelection(); s.removeAllRanges(); s.addRange(range);
+    const dt = new DataTransfer();
+    document.dispatchEvent(new ClipboardEvent("copy", { clipboardData: dt, bubbles: true, cancelable: true }));
+    return { sel: s.toString(), data: dt.getData("text/plain") };
+  })())`);
+  assert.ok(!r.sel.includes("\u2060"), JSON.stringify(r));
+  assert.ok(!r.data.includes("\u2060"), JSON.stringify(r));
+});
+
+gui("接続断のバナーは判断画面の最上部を隠さず、縦スクロールも出ない(1440x900 / 1000x700)", async () => {
+  for (const [w, h] of [["1440", "900"], ["1000", "700"]]) {
+    await seedQuestion({ title: "バナーの下の判断" });
+    ab("set", "viewport", w, h);
+    await reopen();
+    const old = serve!;
+    old.kill();
+    await new Promise((r) => (old.exitCode !== null ? r(null) : old.once("exit", r)));
+    await waitFor("接続できないバナー", `!document.getElementById("banner").hidden`, 5000);
+    const r = ev<{ bannerBottom: number; titleTop: number; bgTop: number; sh: number; ih: number }>(`JSON.stringify({
+      bannerBottom: document.getElementById("banner").getBoundingClientRect().bottom,
+      titleTop: document.querySelector("#decision .v2-title").getBoundingClientRect().top,
+      bgTop: document.getElementById("background").getBoundingClientRect().top,
+      sh: document.documentElement.scrollHeight, ih: innerHeight })`);
+    assert.ok(r.titleTop >= r.bannerBottom, `${w}x${h}: ${JSON.stringify(r)}`);
+    assert.ok(r.bgTop >= r.bannerBottom, `${w}x${h}: ${JSON.stringify(r)}`);
+    assert.ok(r.sh <= r.ih, `${w}x${h}: ${JSON.stringify(r)}`);
+    await startServe();
+    await waitFor("バナーが消える", `document.getElementById("banner").hidden`, 12000);
+  }
 });
