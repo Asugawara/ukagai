@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   denyReason,
+  MISSING_LABELS,
   multiDenyReason,
   findExplanation,
   markUsed,
@@ -151,6 +152,57 @@ test("denyReason: 保存先・question 原文・足りない項目を含み 600 
   const long = denyReason("A", { path: "/p/ukagai/explain.md", question: "Q", missing: many });
   assert.ok(long.length <= 600);
   assert.match(long, /…ほか \d+ 件/);
+});
+
+test("denyReason: ファイル無し / front_matter 欠けは最小テンプレート(ukagai: 1・実際の質問文・節見出し・保存先)を含み 1200 文字以内", () => {
+  for (const t of ["A", "B"] as const) {
+    for (const codes of [["file"], ["front_matter", "question"]] as const) {
+      const r = denyReason(t, {
+        path: "/tmp/x/ukagai/explain.md",
+        question: "どちらにしますか？",
+        missing: codes.map((c) => MISSING_LABELS[c]),
+        codes: [...codes],
+      });
+      assert.match(r, /^まず skill ukagai-explain を読/);
+      assert.match(r, /ukagai: 1/);
+      assert.match(r, /question: どちらにしますか？/);
+      assert.match(r, /## 選択肢/);
+      assert.match(r, /\/tmp\/x\/ukagai\/explain\.md/);
+      assert.match(r, /skill ukagai-explain/);
+      assert.ok(r.length <= 1200);
+      assert.doesNotMatch(r, /https?:|localhost|127\.0\.0\.1|\/api\//);
+    }
+  }
+});
+
+test("denyReason: table だけ欠けのときはテンプレートを含めず 600 文字以内", () => {
+  const r = denyReason("A", {
+    path: "/tmp/x/ukagai/explain.md",
+    question: "Q",
+    missing: [MISSING_LABELS.table],
+    codes: ["table"],
+  });
+  assert.doesNotMatch(r, /ukagai: 1\n/);
+  assert.doesNotMatch(r, /```/);
+  assert.match(r, /書式の全体は skill ukagai-explain/);
+  assert.ok(r.length <= 600);
+});
+
+test("denyReason: blocker の欠けは固定 3 ラベルの表の見出し付きテンプレートを出す", () => {
+  const r = denyReason("A", {
+    path: "/tmp/x/ukagai/explain.md",
+    question: "認証できましたか？",
+    missing: [MISSING_LABELS.table],
+    codes: ["table"],
+    blocker: true,
+  });
+  assert.match(r, /type: blocker/);
+  assert.match(r, /question: 認証できましたか？/);
+  assert.match(r, /\| 対応した。続けて \|/);
+  assert.match(r, /\| この手順は飛ばして続けて \|/);
+  assert.match(r, /\| ここで中断 \|/);
+  assert.match(r, /\| 選択肢 \| 選ぶと起きること \| リスクと戻し方 \|/);
+  assert.ok(r.length <= 1200);
 });
 
 test("multiDenyReason: 問数を含み 600 文字以内、URL なし", () => {
