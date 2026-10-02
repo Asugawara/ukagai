@@ -7,25 +7,29 @@
 <link rel="stylesheet" href="/public/app.css">
 </head>
 <body>
-<header>
-  <h1>ukagai</h1>
-  <div id="metrics" class="metrics" aria-label="メトリクス"></div>
+<header id="top">
+  <span class="logo">ukagai</span>
+  <span id="kind-icon" class="kind-icon" aria-hidden="true"></span>
+  <h1 id="title"></h1>
+  <div id="badges" class="badges"></div>
+  <button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false">保留 <span id="pending-count">0</span></button>
 </header>
 <div id="banner" class="banner" hidden></div>
-<main>
-  <nav id="pending" aria-label="保留一覧">
-    <h2>保留 <span id="pending-count"></span></h2>
-    <ul id="pending-list"></ul>
-  </nav>
-  <section id="detail" aria-label="判断">
-    <div id="card"><p class="muted">判断を選んでください。</p></div>
-    <div id="explanation"></div>
-    <details id="context-panel"><summary>補助文脈</summary><div id="context-body"></div></details>
-  </section>
-  <aside id="sessions-wrap">
-    <details id="sessions-panel"><summary>セッション一覧</summary><ul id="sessions-list"></ul></details>
-  </aside>
+<main id="main" hidden>
+  <section id="background" aria-label="背景"></section>
+  <section id="decision" aria-label="判断"></section>
 </main>
+<div id="empty" class="empty">
+  <div class="empty-title">判断待ちはありません</div>
+  <div class="empty-sub">エージェントが質問すると、ここに表示されます</div>
+</div>
+<div id="backdrop" class="backdrop" hidden></div>
+<aside id="drawer" class="drawer" aria-label="保留一覧" aria-hidden="true">
+  <h2>保留一覧</h2>
+  <ul id="pending-list"></ul>
+  <div id="metrics" class="metrics" aria-label="メトリクス"></div>
+</aside>
+<div id="toast" class="toast" role="status" hidden></div>
 <script src="/public/vendor/marked.umd.js"></script>
 <script src="/public/vendor/mermaid.min.js"></script>
 <script type="module" src="/public/app.js"></script>
