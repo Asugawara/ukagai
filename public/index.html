@@ -1,4 +1,33 @@
 <!doctype html>
+<html lang="ja">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ukagai</title>
-<p>ukagai</p>
+<link rel="stylesheet" href="/public/app.css">
+</head>
+<body>
+<header>
+  <h1>ukagai</h1>
+  <div id="metrics" class="metrics" aria-label="メトリクス"></div>
+</header>
+<div id="banner" class="banner" hidden></div>
+<main>
+  <nav id="pending" aria-label="保留一覧">
+    <h2>保留 <span id="pending-count"></span></h2>
+    <ul id="pending-list"></ul>
+  </nav>
+  <section id="detail" aria-label="判断">
+    <div id="card"><p class="muted">判断を選んでください。</p></div>
+    <div id="explanation"></div>
+    <details id="context-panel"><summary>補助文脈</summary><div id="context-body"></div></details>
+  </section>
+  <aside id="sessions-wrap">
+    <details id="sessions-panel"><summary>セッション一覧</summary><ul id="sessions-list"></ul></details>
+  </aside>
+</main>
+<script src="/public/vendor/marked.umd.js"></script>
+<script src="/public/vendor/mermaid.min.js"></script>
+<script type="module" src="/public/app.js"></script>
+</body>
+</html>
