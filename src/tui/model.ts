@@ -5,8 +5,12 @@ import {
   SECTION,
   findSection,
   findTables,
+  extraColumns,
   normalizeLabel,
+  parseBullets,
+  parseFootnotes,
   parseFrontMatter,
+  parseTerms,
   scanFences,
   scanHeadings,
   toLines,
@@ -28,7 +32,13 @@ export interface CardLine {
   md: boolean;
   /** The "Risks and how to undo" row (dim, strong text in red) */
   risk?: boolean;
+  /** Heading of an extra table column (shown dim before the text) */
+  name?: string;
 }
+
+/** Words saying how to undo (green) and words saying it cannot be undone (red). Irreversible wins on overlap */
+export const UNDO_RE = /undo|revert|roll ?back|restore|reinstall|delete the|remove the|戻|消せ|やり直|再実行/giu;
+export const IRREVERSIBLE_RE = /cannot be undone|can't be undone|irreversible|permanent(?:ly)?|戻せない|元に戻らない/giu;
 
 export interface Card {
   /** The value placed in the answer: the original option.label */
@@ -37,6 +47,8 @@ export interface Card {
   lines: CardLine[];
   /** Show the "Recommended" badge */
   recommended: boolean;
+  /** The risk cell says it cannot be undone (choosing it needs Enter twice) */
+  heavy?: boolean;
 }
 
 export type Reversibility = "reversible" | "costly" | "irreversible";
@@ -57,6 +69,18 @@ export interface ScreenModel {
   backgroundNote?: string;
   /** Body of the recommendation section (Markdown) */
   recommendation: string | null;
+  /** First sentence of the recommendation (the one-line conclusion); null when there is none */
+  headline: string | null;
+  /** The recommendation without its first sentence (what the box shows) */
+  recRest: string | null;
+  /** "What only you know" bullets */
+  unknowns: string[];
+  assumptions: string[];
+  against: string | null;
+  affects: string[];
+  terms: { term: string; definition: string }[];
+  /** Ids of the footnotes referenced from the text and defined in the file */
+  footnotes: string[];
   /** Body of the "Scope and reversibility" section of the plan (Markdown), shown in the right column of the plan card */
   impact?: string | null;
   /** Waiting for the human (explanation.type === "blocker") */
@@ -158,6 +182,8 @@ export function elapsed(iso: string, now: number = Date.now(), lang: Lang = "en"
   return t(lang, "elapsed_h", { n: Math.floor(sec / 3600) });
 }
 
+const hasMatch = (re: RegExp, s: string): boolean => new RegExp(re.source, re.flags.replace("g", "")).test(s);
+
 const isDash = (s: string): boolean => /^[-—ー]*$/u.test(s.trim());
 
 /** Match a table (first column = label) to the options. Null if no row matches */
@@ -180,6 +206,7 @@ function cardsFromTable(
       lines = [
         { text: row[hi] ?? "", md: true },
         { text: row[ri] ?? "", md: true, risk: true },
+        ...extraColumns(t).map((c) => ({ text: row[c] ?? "", md: true, name: t.header[c] ?? "" })),
       ];
     } else {
       lines = row.slice(1).map((c, j) => ({ text: c ? `${t.header[j + 1] ?? ""}: ${c}` : "", md: true }));
@@ -190,6 +217,7 @@ function cardsFromTable(
       label: stripSuffix(row[0] ?? ""),
       lines,
       recommended: false,
+      heavy: ri >= 0 && hasMatch(IRREVERSIBLE_RE, row[ri] ?? ""),
       suffix: SUFFIX_RE.test(row[0] ?? ""),
       key,
     });
@@ -222,6 +250,15 @@ export function impactOf(plan: string): string | null {
   return body.slice(sec.start + 1, sec.end).join("\n").trim() || null;
 }
 
+/** Split off the first sentence (`。` `!` `?`, or a `.` followed by whitespace / the end) */
+export function splitHeadline(text: string): { headline: string; rest: string } {
+  const flat = text.replace(/\s*\n\s*/g, " ").trim();
+  const m = /^(.+?(?:[。！？!?]+|\.(?=\s|$)))\s*(.*)$/su.exec(flat);
+  return m ? { headline: m[1]!.trim(), rest: m[2]!.trim() } : { headline: flat, rest: "" };
+}
+
+const NO_RICH = { headline: null, recRest: null, unknowns: [], assumptions: [], against: null, affects: [], terms: [], footnotes: [] };
+
 export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
   const explained = hasExplanation(d);
   const md = explained ? (d.explanation?.markdown ?? "") : "";
@@ -251,7 +288,7 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
       const lines = toLines(md);
       background += "\n\n---\n\n" + lines.slice(parseFrontMatter(lines).bodyStart).join("\n");
     }
-    return { ...base, kind: "plan", background, recommendation: null, impact: impactOf(plan) };
+    return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan) };
   }
 
   const qs = questionsOf(d);
@@ -259,6 +296,7 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
   if (!q || qs.length > 1) {
     return {
       ...base,
+      ...NO_RICH,
       kind: "question",
       background: null,
       recommendation: null,
@@ -278,6 +316,7 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
     const reason = NONE_REASON[code] ? t(lang, NONE_REASON[code]) : code;
     return {
       ...base,
+      ...NO_RICH,
       kind: "question",
       background: null,
       backgroundNote: reason ? t(lang, "no_explanation_note_reason", { reason }) : t(lang, "no_explanation_note"),
@@ -299,6 +338,7 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
     const cards = rawCards;
     return {
       ...base,
+      ...NO_RICH,
       kind: "question",
       background: body.join("\n"),
       recommendation: null,
@@ -307,6 +347,17 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
   }
 
   const drop: [number, number][] = [[optSec!.start, optSec!.end]];
+  const secBody = (names: readonly string[], dropIt: boolean): string => {
+    const sec = findSection(headings, body.length, names);
+    if (!sec || sec.start === optSec!.start || (recSec && sec.start === recSec.start)) return "";
+    if (dropIt) drop.push([sec.start, sec.end]);
+    return body.slice(sec.start + 1, sec.end).join("\n").trim();
+  };
+  const unknowns = parseBullets(secBody(SECTION.unknowns, true));
+  const assumptions = parseBullets(secBody(SECTION.assumptions, true));
+  const against = secBody(SECTION.against, true).replace(/\s*\n\s*/g, " ") || null;
+  const affects = parseBullets(secBody(SECTION.affects, true));
+  const terms = parseTerms(secBody(SECTION.terms, false));
   let todo: string | null = null;
   if (base.blocker) {
     const todoSec = findSection(headings, body.length, SECTION.blockerTodo);
@@ -328,11 +379,21 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
   }
   const kept = body.filter((_, i) => !drop.some(([s, e]) => i >= s && i < e));
   const cards = [...parsed.cards, ...parsed.extras];
+  const split = recommendation ? splitHeadline(recommendation) : null;
+  const fns = parseFootnotes(body.join("\n"));
   return {
     ...base,
     kind: "question",
     background: kept.join("\n").trim(),
     recommendation,
+    headline: split?.headline ?? null,
+    recRest: split?.rest || null,
+    unknowns,
+    assumptions,
+    against,
+    affects,
+    terms,
+    footnotes: fns.defs.map((x) => x.id),
     todo,
     todoCode: todo ? codeBlocks(todo) : [],
     question: {

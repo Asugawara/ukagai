@@ -109,7 +109,7 @@ export class KeyParser {
 
 // ---- Actions ----
 
-export type Mode = "normal" | "input" | "list";
+export type Mode = "normal" | "input" | "list" | "none";
 export type Kind = "question" | "plan";
 /** The column that arrows and j/k act on. background = the left explanation, decision = the right-hand decision */
 export type Focus = "background" | "decision";
@@ -130,6 +130,14 @@ export type Action =
   | { type: "approve" }
   | { type: "approve-auto" }
   | { type: "reject" }
+  /** Jump the background to the next footnote definition (`e`) */
+  | { type: "footnote" }
+  /** "None of these…": open the reason picker, move in it, send, add a note, close */
+  | { type: "none" }
+  | { type: "none-move"; delta: 1 | -1 }
+  | { type: "none-confirm" }
+  | { type: "none-note" }
+  | { type: "none-cancel" }
   /** Scroll the background half a screen (half) or one row (line) */
   | { type: "scroll"; delta: 1 | -1; unit: "half" | "line" }
   | { type: "scroll-edge"; to: "top" | "bottom" }
@@ -182,6 +190,16 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   const down = key.name === "down" || (key.name === "char" && key.ch === "j");
   const up = key.name === "up" || (key.name === "char" && key.ch === "k");
 
+  if (ctx.mode === "none") {
+    if (down) return done({ type: "none-move", delta: 1 });
+    if (up) return done({ type: "none-move", delta: -1 });
+    if (key.name === "enter") return done({ type: "none-confirm" });
+    if (key.name === "esc") return done({ type: "none-cancel" });
+    if (key.name === "char" && key.ch === "i") return done({ type: "none-note" });
+    if (key.name === "char" && key.ch === "q") return done({ type: "quit" });
+    return done(null);
+  }
+
   if (ctx.mode === "list") {
     if (down) return done({ type: "list-move", delta: 1 });
     if (up) return done({ type: "list-move", delta: -1 });
@@ -199,6 +217,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ctx.full) {
     // The decision is not visible, so keys that lead to a decision are disabled
     if (key.name === "tab" || key.name === "esc" || ch === "f") return done({ type: "full" });
+    if (ch === "e") return done({ type: "footnote" });
     if (ctx.hscrollable && goLeft) return done({ type: "hscroll", delta: -1 });
     if (ctx.hscrollable && goRight) return done({ type: "hscroll", delta: 1 });
     if (ctx.hscrollable && key.name === "home") return done({ type: "hscroll-edge", to: "start" });
@@ -215,6 +234,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   }
 
   if (key.name === "tab") return done({ type: "focus" });
+  if (ch === "e") return done({ type: "footnote" });
   if (ch === "f" && ctx.wide) return done({ type: "full" });
   if (ctx.hscrollable) {
     // With a too-wide diagram, ← → scroll sideways regardless of focus (switching pending uses h l [ ])
@@ -252,6 +272,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     return done(null);
   }
 
+  if (ch === "n") return done({ type: "none" });
   if (ch === "g") {
     return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "top" }) : done(null, ctx.now);
   }

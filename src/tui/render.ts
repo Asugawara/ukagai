@@ -1,5 +1,7 @@
-import { BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, STRONG_RISK, YELLOW, inline, renderMarkdown, renderMarkdownRich, type Rendered } from "./markdown.js";
-import { elapsed, type Card, type Chip, type ScreenModel } from "./model.js";
+import { BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, STRONG_RISK, YELLOW, inline, literalMarks, renderMarkdown, renderMarkdownRich, type Mark, type Rendered } from "./markdown.js";
+import { IRREVERSIBLE_RE, UNDO_RE, elapsed, type Card, type Chip, type ScreenModel } from "./model.js";
+import { SECTION, normalizeHeading } from "../hook/explain.js";
+import { NONE_TYPES } from "./none.js";
 import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 import { padEnd, sliceCols, truncate, width, wrap } from "./width.js";
@@ -26,7 +28,11 @@ export interface View {
   selected: ReadonlySet<string>;
   free: { on: boolean; text: string };
   /** Text being typed (free text / rejection reason); null when not typing */
-  input: { kind: "free" | "reason"; text: string } | null;
+  input: { kind: "free" | "reason" | "note"; text: string } | null;
+  /** The "None of these" reason picker (index into NONE_TYPES, optional note); null when closed */
+  none: { index: number; text: string } | null;
+  /** A prompt that needs attention in the footer ("Press Enter again…", "Sent in 3… Undo (u)") */
+  notice: string | null;
   reason: string;
   pending: number;
   toast: string | null;
@@ -80,6 +86,8 @@ export interface Frame {
   full: boolean;
   /** A diagram exceeds the column width but fits the full terminal width */
   figOver: boolean;
+  /** Scroll positions (in the background scroll coordinates) of the footnote definitions */
+  footRows: number[];
 }
 
 export const WIDE_COLS = 120;
@@ -93,13 +101,35 @@ const BADGE_COSTLY = "\x1b[43;30m";
 const BADGE_REC = "\x1b[42;30m";
 const BADGE_BLOCKER = "\x1b[43;30m";
 
+/** Option colors (index 0..3); the same order everywhere on the screen */
+export const OPT_COLORS = [CYAN, MAGENTA, YELLOW, "\x1b[94m"];
+const FG_OFF = "\x1b[39m";
+
+const termMarks = (m: ScreenModel): Mark[] => literalMarks(m.terms.map((x) => x.term), "\x1b[4m", "\x1b[24m");
+/** Option labels colored in running text (labels shorter than 3 characters would match too much) */
+const labelMarks = (m: ScreenModel): Mark[] =>
+  (m.question?.cards ?? []).flatMap((c, i) => literalMarks(c.label.length >= 3 ? [c.label] : [], OPT_COLORS[i % 4]!, FG_OFF));
+const riskMarks = (): Mark[] => [
+  { re: IRREVERSIBLE_RE, open: "\x1b[4;31m", close: "\x1b[24;39m" },
+  { re: UNDO_RE, open: "\x1b[4;32m", close: "\x1b[24;39m" },
+];
+const TERMS_HEADINGS = SECTION.terms.map(normalizeHeading);
+
 const chip = (c: Chip): string => `${CHIP_COLOR[c.kind]}${c.text}${RESET}`;
 export const chipsText = (chips: Chip[]): string => chips.map(chip).join(" ");
+
+/** Affected names on one line: at most 6, the rest as +N */
+function affectsText(m: ScreenModel): string {
+  const shown = m.affects.slice(0, 6);
+  const rest = m.affects.length - shown.length;
+  return `⌁ ${shown.join(" · ")}${rest > 0 ? ` +${rest}` : ""}`;
+}
 
 function metaLine(m: ScreenModel, now: number, cols: number, lang: Lang): string {
   const parts = [chipsText(m.chips), `${DIM}${m.cwd}${RESET}`];
   if (m.reversibility === "irreversible") parts.push(`${BADGE_IRREVERSIBLE} ${t(lang, "irreversible")} ${RESET}`);
   else if (m.reversibility === "costly") parts.push(`${BADGE_COSTLY} ${t(lang, "costly")} ${RESET}`);
+  else if (m.reversibility === "reversible") parts.push(`${GREEN}${t(lang, "reversible")}${RESET}`);
   if (m.scope) parts.push(`${DIM}${m.scope}${RESET}`);
   parts.push(`${DIM}${elapsed(m.createdAt, now, lang)}${RESET}`);
   const line = parts.join("  ");
@@ -116,15 +146,21 @@ interface Column {
   hint: string;
 }
 
-function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; selected: boolean; multi: boolean }): string[] {
+function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; selected: boolean; multi: boolean; index: number; marks: Mark[] }): string[] {
   const mark = o.multi ? (o.selected ? "[x]" : "[ ]") : o.selected ? "●" : "○";
   const lead = `${o.cursor ? `${BOLD}▸${RESET}` : " "} ${o.selected ? CYAN : ""}${mark}${RESET} `;
-  const label = o.cursor ? `${BOLD}${card.label}${RESET}` : card.label;
+  const label = `${o.cursor ? BOLD : ""}${OPT_COLORS[o.index % 4]}${card.label}${RESET}`;
   const head = `${label}${card.recommended ? `  ${BADGE_REC} ${t(lang, "recommended_badge")} ${RESET}` : ""}`;
   const pad = " ".repeat(width(lead));
   const out = wrap(head, Math.max(8, w - width(lead))).map((l, k) => (k === 0 ? lead : pad) + l);
   for (const l of card.lines) {
-    const body = l.risk ? `${DIM}${inline(l.text, { strong: STRONG_RISK, base: DIM })}${RESET}` : l.md ? inline(l.text) : l.text;
+    const body = l.risk
+      ? `${DIM}${inline(l.text, { strong: STRONG_RISK, base: DIM, marks: [...riskMarks(), ...o.marks] })}${RESET}`
+      : l.name
+        ? `${DIM}${l.name}:${RESET} ${inline(l.text, { marks: o.marks })}`
+        : l.md
+          ? inline(l.text, { marks: o.marks })
+          : l.text;
     for (const x of wrap(body, Math.max(8, w - width(lead)))) out.push(pad + x);
   }
   return out;
@@ -133,10 +169,10 @@ function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; sele
 /** How many body rows to keep when the recommendation box exceeds half the column height */
 const REC_CUT_ROWS = 8;
 
-function recBox(text: string, w: number, o: { rows: number; full: boolean; lang: Lang; title?: string; always?: boolean }): string[] {
+function recBox(text: string, w: number, o: { rows: number; full: boolean; lang: Lang; title?: string; always?: boolean; marks?: Mark[] }): string[] {
   const inner = Math.max(10, w - 4);
   const title = o.title ?? t(o.lang, "recommendation");
-  let body = renderMarkdown(text, inner, { lang: o.lang });
+  let body = renderMarkdown(text, inner, { lang: o.lang, ...(o.marks ? { marks: o.marks } : {}) });
   if (body.length > REC_CUT_ROWS && (o.always || body.length + 2 > o.rows / 2)) {
     body = o.full
       ? [...body, `${DIM}${t(o.lang, "rec_collapse")}${RESET}`]
@@ -187,17 +223,48 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
       lines.push("");
     }
   }
-  if (m.todo) lines.push(`${BOLD}${YELLOW}${t(lang, "todo_title")}${RESET}`, ...renderMarkdown(m.todo, w, { lang }), "");
-  if (m.recommendation) lines.push(...recBox(m.recommendation, w, { rows, full: v.recFull, lang }), "");
+  const tm = termMarks(m);
+  const textMarks = [...labelMarks(m), ...tm];
+  if (m.todo) lines.push(`${BOLD}${YELLOW}${t(lang, "todo_title")}${RESET}`, ...renderMarkdown(m.todo, w, { lang, marks: tm }), "");
+  // 1 second: the conclusion, what it touches, what only the human can decide
+  if (m.headline) lines.push(...wrap(`${BOLD}${inline(m.headline, { base: BOLD, marks: textMarks })}${RESET}`, w), "");
+  if (m.affects.length) lines.push(...wrap(`${DIM}${t(lang, "affects_title")}${RESET} ${affectsText(m).slice(2)}`, w));
+  if (m.unknowns.length) lines.push(...wrap(`${BOLD}${YELLOW}${t(lang, "you_decide")}${RESET} ${inline(m.unknowns.join(" · "), { marks: tm })}`, w));
+  if (m.affects.length || m.unknowns.length) lines.push("");
+  // 10 seconds: the rest of the recommendation, its assumptions, the strongest objection
+  if (m.recRest) lines.push(...recBox(m.recRest, w, { rows, full: v.recFull, lang, marks: textMarks }), "");
+  else if (m.recommendation && !m.headline) lines.push(...recBox(m.recommendation, w, { rows, full: v.recFull, lang, marks: textMarks }), "");
+  if (m.assumptions.length) {
+    lines.push(`${BOLD}${t(lang, "assumptions_title")}${RESET}`);
+    for (const a of m.assumptions) wrap(inline(a, { marks: textMarks }), Math.max(8, w - 2)).forEach((l, k) => lines.push((k === 0 ? `${GREEN}☐${RESET} ` : "  ") + l));
+    lines.push(`${DIM}${t(lang, "assumptions_note")}${RESET}`, "");
+  }
+  if (m.against) {
+    lines.push(`${BOLD}${DIM}${t(lang, "against_title")}${RESET}`);
+    for (const l of wrap(inline(m.against, { marks: textMarks }), Math.max(8, w - 2))) lines.push(`${DIM}▏${RESET} ${l}`);
+    lines.push("");
+  }
 
+  const cardMarks = tm;
   q.cards.forEach((c, i) => {
     const start = lines.length;
     const on = v.cursor === i;
-    lines.push(...cardLines(c, w, lang, { cursor: on, selected: v.selected.has(c.value), multi: q.multi }));
+    lines.push(...cardLines(c, w, lang, { cursor: on, selected: v.selected.has(c.value), multi: q.multi, index: i, marks: cardMarks }));
     if (on) focus = [start, lines.length];
     lines.push("");
   });
-  const fi = q.cards.length;
+  const ni = q.cards.length;
+  const nstart = lines.length;
+  const non = v.cursor === ni;
+  lines.push(`${non ? `${BOLD}▸${RESET}` : " "} ${v.none ? CYAN : ""}${q.multi ? "[ ]" : "○"}${RESET} ${non ? BOLD : ""}${t(lang, "none_of_these")}${RESET}  ${CYAN}n${RESET}`);
+  if (v.none) {
+    NONE_TYPES.forEach((nt, k) => lines.push(`    ${k === v.none!.index ? `${BOLD}▸${RESET} ${BOLD}` : "  "}${t(lang, nt.label)}${RESET}`));
+    const note = v.input?.kind === "note" ? `${v.input.text}▏` : v.none.text;
+    if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
+  }
+  if (non || v.none) focus = [nstart, lines.length];
+  lines.push("");
+  const fi = q.cards.length + 1;
   const fstart = lines.length;
   const fon = v.cursor === fi;
   const typing = v.input?.kind === "free";
@@ -207,13 +274,17 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   if (ftext) for (const x of wrap(ftext, Math.max(8, w - width(lead)))) lines.push(" ".repeat(width(lead)) + x);
   if (fon) focus = [fstart, lines.length];
 
-  const hint = typing
+  const hint = v.none
+    ? t(lang, v.input?.kind === "note" ? "hint_input" : "hint_none_pick")
+    : typing
     ? t(lang, "hint_input")
     : [
         t(lang, "hint_move"),
         ...(q.multi ? [t(lang, "hint_toggle")] : []),
         t(lang, "hint_answer") + (m.todoCode.length ? ` · ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
         t(lang, "hint_free"),
+        t(lang, "hint_none"),
+        ...(m.footnotes.length ? [t(lang, "hint_evidence")] : []),
       ].join(" · ");
   return { lines, focus, hint };
 }
@@ -223,10 +294,10 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
 function leftColumn(m: ScreenModel, w: number, lang: Lang, fullHint = true): Rendered {
   if (m.backgroundNote) {
     const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
-    return { lines, wide: lines.map(() => null) };
+    return { lines, wide: lines.map(() => null), footnotes: [] };
   }
-  if (m.background) return renderMarkdownRich(m.background, w, { fullHint, lang });
-  return { lines: [], wide: [] };
+  if (m.background) return renderMarkdownRich(m.background, w, { fullHint, lang, marks: termMarks(m), termsHeadings: TERMS_HEADINGS });
+  return { lines: [], wide: [], footnotes: [] };
 }
 
 /** Shift only the rows of too-wide diagrams by hoff columns. Also returns the maximum shift and the widest diagram */
@@ -249,6 +320,7 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   const hscrollable = o.hscrollable ?? false;
   const lang = v.lang;
   let left: string;
+  if (v.notice) return truncate(`${BOLD}${YELLOW}${v.notice}${RESET}`, cols);
   if (v.list) left = `${DIM}${t(lang, "footer_list")}${RESET}`;
   else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_full")}${RESET}`;
   else {
@@ -303,7 +375,7 @@ export function renderFrame(v: View, size: Size): Frame {
   const { cols, rows } = size;
   const m = v.model;
   const fin = (body: string[], head: string[], meta: Partial<Frame> = {}, overflow = false): Frame => {
-    const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false };
+    const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false, footRows: [] as number[] };
     const f = { ...base, ...meta };
     const lines = [...head, ...body, footer(v, cols, overflow, { full: f.full, hint: v.fullHint && f.figOver && !f.full, hscrollable: f.hMax > 0 })].map((l) => truncate(l, cols));
     return { text: lines.join("\n"), lines, ...f };
@@ -353,7 +425,7 @@ export function renderFrame(v: View, size: Size): Frame {
       left = scrolled(sh.lines, size, off, leftW, [], { off: Math.min(v.hscroll, hMax), figW });
     } else left = window(leftR.lines, winRows, 0);
     const figOver = !full && hMax > 0 && figW <= cols - 1;
-    const meta = { scrollMax, wide: true, bodyRows: winRows, hMax, full, figOver };
+    const meta = { scrollMax, wide: true, bodyRows: winRows, hMax, full, figOver, footRows: leftR.footnotes.map((x) => x.row) };
 
     if (full) {
       const body = [heading(t(v.lang, "bg_full_title"), cols, true), ...left.map((l) => truncate(l, cols))];
@@ -362,19 +434,22 @@ export function renderFrame(v: View, size: Size): Frame {
 
     // Right: when it overflows, scroll so the card under the cursor is visible (or to the manually scrolled position). The hint stays on the bottom row
     let right = rightColumn(v, m, rightW, winRows);
-    const rightOver = right.lines.length + 2 > winRows;
+    // The hint may take two rows when it does not fit on one
+    const hintRows = (r: Column, w: number): string[] => wrap(`${DIM}${r.hint}${RESET}`, w).slice(0, 2);
+    const rightOver = right.lines.length + 1 + hintRows(right, rightW).length > winRows;
     let rcol: string[];
     let rightMax = 0;
     let rightOff = 0;
     if (rightOver) {
       right = rightColumn(v, m, rightW - 1, winRows);
-      const size = Math.max(1, winRows - 2);
+      const hr = hintRows(right, rightW - 1);
+      const size = Math.max(1, winRows - 1 - hr.length);
       rightMax = Math.max(0, right.lines.length - size);
       const [fs, fe] = right.focus;
       const follow = Math.max(0, Math.min(fs, fe - size));
       rightOff = Math.min(rightMax, v.rscroll ?? follow);
-      rcol = scrolled(right.lines, size, rightOff, rightW, [`${DIM}${right.hint}${RESET}`]);
-    } else rcol = window([...right.lines, "", `${DIM}${right.hint}${RESET}`], winRows, 0);
+      rcol = scrolled(right.lines, size, rightOff, rightW, hr);
+    } else rcol = window([...right.lines, "", ...hintRows(right, rightW)], winRows, 0);
 
     const body = [
       `${heading(t(v.lang, "bg_title"), leftW, v.focus === "background")}${DIM}${SEP}${RESET}${heading(t(v.lang, "decision_title"), rightW, v.focus === "decision")}`,
@@ -390,13 +465,14 @@ export function renderFrame(v: View, size: Size): Frame {
   const leftAll = sh.lines;
   const all = [...right.lines, "", `${DIM}${right.hint}${RESET}`, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];
   const hOff = Math.min(v.hscroll, sh.hMax);
-  if (all.length <= bodyRows && sh.hMax === 0) return fin(window(all, bodyRows, 0), head, { bodyRows });
+  const footRows = leftR.footnotes.map((x) => x.row + right.lines.length + 4);
+  if (all.length <= bodyRows && sh.hMax === 0) return fin(window(all, bodyRows, 0), head, { bodyRows, footRows });
   const win = bodyRows - 1;
   const scrollMax = Math.max(0, all.length - win);
   let off = Math.min(v.scroll, scrollMax);
   if (off === 0) off = Math.max(0, Math.min(right.focus[0], right.focus[1] - win));
   off = Math.min(off, scrollMax);
-  return fin(scrolled(all, win, off, cols, [], { off: hOff, figW: sh.figW }), head, { scrollMax, off, bodyRows: win, hMax: sh.hMax }, true);
+  return fin(scrolled(all, win, off, cols, [], { off: hOff, figW: sh.figW }), head, { scrollMax, off, bodyRows: win, hMax: sh.hMax, footRows }, true);
 }
 
 export function render(v: View, size: Size): string {
