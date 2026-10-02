@@ -10,6 +10,10 @@ export const POLL_TIMEOUT_MS = 25000;
 export const LEASE_GRACE_MS = 10000;
 export const DENY_LINK_WINDOW_MS = 120000;
 export const RECENCY_WINDOW_MS = 600000;
+/** 「承認して auto」の記録が失効するまで */
+export const MODE_SWITCH_TTL_MS = 120000;
+/** lease 切れからこの時間内に UserPromptSubmit / Stop が来たら cancelled */
+export const CANCEL_WINDOW_MS = 10000;
 
 // ---- hook の stdin(知らないキーは通す) ----
 
@@ -140,6 +144,7 @@ export const DecisionContext = z.object({
   git_diff: z.string().optional(),
   last_assistant_text: z.string().optional(),
   recent_tools: z.array(z.object({ name: z.string(), summary: z.string() })).optional(),
+  ai_title: z.string().optional(),
 });
 export type DecisionContext = z.infer<typeof DecisionContext>;
 
@@ -270,6 +275,17 @@ export const Metrics = z.object({
   }),
 });
 export type Metrics = z.infer<typeof Metrics>;
+
+/** GET /api/sessions/:id/pending-mode-switch */
+export const PendingModeSwitch = z.union([
+  z.object({ pending: z.literal(false) }),
+  z.object({ pending: z.literal(true), set_at: z.string(), expires_at: z.string() }),
+]);
+export type PendingModeSwitch = z.infer<typeof PendingModeSwitch>;
+
+/** POST /api/sessions/:id/pending-mode-switch/consume。未消費の記録があれば true */
+export const ConsumeModeSwitchResponse = z.object({ consumed: z.boolean() });
+export type ConsumeModeSwitchResponse = z.infer<typeof ConsumeModeSwitchResponse>;
 
 // ---- 状態遷移 ----
 
