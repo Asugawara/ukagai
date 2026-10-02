@@ -11,7 +11,11 @@ export interface Target {
   noSkill: boolean;
   server: string;
   dataDir: string;
+  /** hook の args に足す(既定値と違うときだけ) */
+  hookArgs: string[];
 }
+
+const DEFAULT_SERVER = "http://127.0.0.1:4818";
 
 export function parseTarget(argv: string[]): Target {
   let settings: string | undefined;
@@ -21,9 +25,10 @@ export function parseTarget(argv: string[]): Target {
     observe: false,
     dryRun: false,
     noSkill: false,
-    server: "http://127.0.0.1:4818",
+    server: DEFAULT_SERVER,
     dataDir: join(homedir(), ".ukagai"),
   };
+  const defaultDataDir = t.dataDir;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const val = (): string => {
@@ -45,8 +50,12 @@ export function parseTarget(argv: string[]): Target {
     else throw new Error(`不明な引数: ${a}`);
   }
   const base = project ? join(process.cwd(), ".claude") : join(homedir(), ".claude");
+  const hookArgs: string[] = [];
+  if (t.dataDir !== defaultDataDir) hookArgs.push("--data-dir", t.dataDir);
+  if (t.server !== DEFAULT_SERVER) hookArgs.push("--server", t.server);
   return {
     ...t,
+    hookArgs,
     settingsFile: settings ?? join(base, "settings.json"),
     skillDir: join(base, "skills", "ukagai-explain"),
   };

@@ -15,7 +15,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   try {
     const before = await readSettings(t.settingsFile);
-    const entries = buildHookEntries({ node: process.execPath, cli: CLI_PATH, timeout: t.timeout, observe: t.observe });
+    const entries = buildHookEntries({ node: process.execPath, cli: CLI_PATH, timeout: t.timeout, observe: t.observe, hookArgs: t.hookArgs });
     const after = mergeHooks(before, entries);
     const skillDest = join(t.skillDir, "SKILL.md");
 

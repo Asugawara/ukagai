@@ -51,6 +51,38 @@ test("空の settings に install: 全 event、exec form、statusMessage、--bud
   assert.ok(await exists(SKILL(e)));
 });
 
+test("--data-dir / --server 指定で全 hook の args に入り、未指定では入らない", async () => {
+  const e = await setup();
+  const dd = join(e.dir, "data");
+  await ukagai(e, ["install", "--settings", e.settings, "--data-dir", dd, "--server", "http://127.0.0.1:9999/"]);
+  const s = await readJson(e.settings);
+  const hooks = Object.values<any[]>(s.hooks).flatMap((g) => g.flatMap((x) => x.hooks));
+  assert.equal(hooks.length, EVENTS.length);
+  for (const h of hooks) {
+    assert.equal(h.args[h.args.indexOf("--data-dir") + 1], dd);
+    assert.equal(h.args[h.args.indexOf("--server") + 1], "http://127.0.0.1:9999");
+  }
+  const e2 = await setup();
+  await ukagai(e2, ["install", "--settings", e2.settings]);
+  const s2 = await readJson(e2.settings);
+  for (const g of Object.values<any[]>(s2.hooks)) {
+    for (const h of g.flatMap((x) => x.hooks)) {
+      assert.ok(!h.args.includes("--data-dir") && !h.args.includes("--server"));
+    }
+  }
+});
+
+test("5 サブコマンドの --help は exit 0 で使い方を出す", async () => {
+  const e = await setup();
+  for (const c of ["serve", "hook", "install", "uninstall", "doctor"]) {
+    for (const f of ["--help", "-h"]) {
+      const r = await ukagai(e, [c, f]);
+      assert.equal(r.code, 0, `${c} ${f}: ${r.err}`);
+      assert.match(r.out, new RegExp(`使い方: ukagai ${c}`));
+    }
+  }
+});
+
 test("2 回目の install は .bak を残す", async () => {
   const e = await setup();
   await writeFile(e.settings, JSON.stringify(OTHER));

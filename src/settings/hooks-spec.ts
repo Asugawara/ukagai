@@ -24,6 +24,8 @@ export interface BuildOptions {
   cli: string;
   timeout: number;
   observe: boolean;
+  /** 全 hook に渡す共通の引数(--data-dir / --server) */
+  hookArgs?: string[];
 }
 
 export const HOOK_EVENTS = [
@@ -56,7 +58,7 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
   ): HookCommand => ({
     type: "command",
     command: opts.node,
-    args: [opts.cli, "hook", ...extra, MANAGED_FLAG, MANAGED_VALUE],
+    args: [opts.cli, "hook", ...extra, ...(opts.hookArgs ?? []), MANAGED_FLAG, MANAGED_VALUE],
     timeout,
     ...more,
   });
