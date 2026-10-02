@@ -35,10 +35,10 @@ test("colors: chips are magenta/green/yellow, reversibility is a background colo
   assert.ok(raw.includes("\x1b[35m◈ ukagai"));
   assert.ok(raw.includes("\x1b[32m⎇ feat/tui"));
   assert.ok(raw.includes("\x1b[33m⧉ feat-tui"));
-  assert.ok(raw.includes("\x1b[43;30m Costly to undo"));
+  assert.ok(raw.includes("\x1b[43;30m ◐ Costly to undo"));
   assert.ok(raw.includes("\x1b[42;30m Recommended "));
   const irr = viewOf(decision(withExplanation(V2_MD.replace("costly", "irreversible"))));
-  assert.ok(render(irr, { cols: 140, rows: 40 }).includes("\x1b[41;97m Irreversible"));
+  assert.ok(render(irr, { cols: 140, rows: 40 }).includes("\x1b[41;97m ■ Irreversible"));
 });
 
 test("narrow (80 columns): stacked layout, the decision comes first", () => {

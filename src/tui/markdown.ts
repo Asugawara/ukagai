@@ -1,4 +1,4 @@
-import { COLUMN_RISK, findTables, scanFences, toLines } from "../hook/explain.js";
+import { COLUMN_RISK, findTables, normalizeHeading, scanFences, toLines } from "../hook/explain.js";
 import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
 import { renderMermaid } from "./mermaid.js";
@@ -18,7 +18,50 @@ export const CYAN = "\x1b[36m";
 export const STRONG = "\x1b[1;36m";
 export const STRONG_RISK = "\x1b[1;31m";
 
+/** A highlight applied to plain text (not inside code spans): every match of `re` is wrapped in open / close */
+export interface Mark {
+  re: RegExp;
+  open: string;
+  close: string;
+}
+
+/** Marks for literal strings (longest first; whole-word for words, plain for CJK). Empty strings are skipped */
+export function literalMarks(words: string[], open: string, close: string): Mark[] {
+  const list = [...new Set(words.map((w) => w.trim()).filter((w) => w.length >= 2))].sort((a, b) => b.length - a.length);
+  return list.map((w) => {
+    const esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const wordy = /^[\w]/.test(w) && /[\w]$/.test(w);
+    return { re: new RegExp(wordy ? `(?<![\\w])${esc}(?![\\w])` : esc, "giu"), open, close };
+  });
+}
+
+/** Apply marks to a plain text segment. Overlaps resolve to the earliest, then the longest match */
+function applyMarks(text: string, marks: Mark[]): string {
+  if (!marks.length || !text) return text;
+  const hits: { s: number; e: number; m: Mark }[] = [];
+  for (const m of marks) {
+    for (const x of text.matchAll(new RegExp(m.re.source, m.re.flags.includes("g") ? m.re.flags : m.re.flags + "g"))) {
+      if (x[0] === "") continue;
+      hits.push({ s: x.index!, e: x.index! + x[0].length, m });
+    }
+  }
+  hits.sort((a, b) => a.s - b.s || b.e - b.s - (a.e - a.s));
+  let out = "";
+  let at = 0;
+  for (let k = 0; k < hits.length; k++) {
+    const h = hits[k]!;
+    if (h.s < at) continue;
+    // Marks on exactly the same span nest (e.g. an option label that is also a term: colored and underlined)
+    const same = hits.slice(k).filter((x) => x.s === h.s && x.e === h.e);
+    out += text.slice(at, h.s) + same.map((x) => x.m.open).join("") + text.slice(h.s, h.e) + [...same].reverse().map((x) => x.m.close).join("");
+    at = h.e;
+  }
+  return out + text.slice(at);
+}
+
 export interface InlineOpts {
+  /** Highlights for terms, option labels and risk words */
+  marks?: Mark[];
   /** Color of `**strong**` (default: bold cyan; red in the risk column) */
   strong?: string;
   /** Decoration outside the span, re-applied after the span closes */
@@ -30,9 +73,16 @@ export function inline(text: string, opts: InlineOpts = {}): string {
   const strong = opts.strong ?? STRONG;
   const base = opts.base ?? "";
   const close = RESET + base;
-  return text
-    .replace(/<br\s*\/?>/gi, " ")
-    .replace(/\\([|*`_])/g, "$1")
+  const plain = text.replace(/<br\s*\/?>/gi, " ").replace(/\\([|*`_])/g, "$1");
+  // Marks go only on text outside code spans (and are applied before `**` so they do not split the markers)
+  const marked = opts.marks?.length
+    ? plain
+        .split(/(`[^`]+`)/)
+        .map((seg, i) => (i % 2 ? seg : applyMarks(seg, opts.marks!)))
+        .join("")
+    : plain;
+  return marked
+    .replace(/\[\^([^\]\s]+)\](?!:)/g, (_, id: string) => `${DIM}[${id}]${close}`)
     .replace(/`([^`]+)`/g, (_, c: string) => `${DIM}${c}${close}`)
     .replace(/\*\*([^*]+)\*\*/g, (_, c: string) => `${strong}${c}${close}`)
     .replace(/(?<![*\w])\*([^*\s][^*]*)\*(?![*\w])/g, (_, c: string) => `\x1b[3m${c}${close}`)
@@ -62,6 +112,7 @@ function joinSoft(lines: string[]): string {
 }
 
 function diffLine(l: string): string {
+  if (/^(diff |index |\+\+\+ |--- )/.test(l)) return `${BOLD}${l}${RESET}`;
   if (l.startsWith("@@")) return `${BLUE}${l}${RESET}`;
   if (l.startsWith("+")) return `${GREEN}${l}${RESET}`;
   if (l.startsWith("-")) return `${RED}${l}${RESET}`;
@@ -69,11 +120,11 @@ function diffLine(l: string): string {
 }
 
 /** Render a table as aligned text without borders. When it does not fit, shrink the widest columns first and wrap cells */
-function renderTable(header: string[], rows: string[][], w: number): string[] {
+function renderTable(header: string[], rows: string[][], w: number, marks: Mark[]): string[] {
   const cols = header.length;
   const GAP = 2;
   const isRisk = header.map((h) => COLUMN_RISK.test(h.normalize("NFKC")));
-  const cell = (r: string[], c: number, strong?: string) => inline(r[c] ?? "", strong ? { strong } : {});
+  const cell = (r: string[], c: number, strong?: string) => inline(r[c] ?? "", { marks, ...(strong ? { strong } : {}) });
   const natural = Array.from({ length: cols }, (_, c) =>
     Math.max(width(header[c] ?? ""), ...rows.map((r) => width(cell(r, c)))),
   );
@@ -109,6 +160,8 @@ function renderTable(header: string[], rows: string[][], w: number): string[] {
 
 export interface Rendered {
   lines: string[];
+  /** Rows (in `lines`) of the footnote definitions, in order */
+  footnotes: { id: string; row: number }[];
   /** For too-wide diagram rows, the full row before truncation (null for other rows); these are what scrolls sideways */
   wide: (string | null)[];
 }
@@ -118,6 +171,10 @@ export interface MarkdownOpts {
   fullHint?: boolean;
   /** Display language for UI-owned strings (callout labels, diagram notes) */
   lang?: Lang;
+  /** Highlights for terms (not applied under the Terms heading) */
+  marks?: Mark[];
+  /** Normalized Terms headings (marks are skipped inside that section) */
+  termsHeadings?: string[];
 }
 
 /** Markdown to terminal lines (already wrapped to display width w) */
@@ -131,6 +188,9 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
   const { inFence, blocks } = scanFences(lines);
   const out: string[] = [];
   const wideRows = new Map<number, string>();
+  const footnotes: { id: string; row: number }[] = [];
+  let marks = opts.marks ?? [];
+  const inl = (x: string, o: InlineOpts = {}) => inline(x, { marks, ...o });
   const gap = () => {
     if (out.length && out.at(-1) !== "") out.push("");
   };
@@ -173,6 +233,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
     const h = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (h) {
       gap();
+      marks = opts.termsHeadings?.includes(normalizeHeading(h[2]!)) ? [] : (opts.marks ?? []);
       out.push(...wrap(`${BOLD}${inline(h[2]!, { base: BOLD })}${RESET}`, w));
       i++;
       continue;
@@ -182,7 +243,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       while (end < lines.length && !inFence[end] && lines[end]!.includes("|") && lines[end]!.trim() !== "") end++;
       const t = findTables(lines, inFence, i, end)[0]!;
       gap();
-      out.push(...renderTable(t.header, t.rows, w));
+      out.push(...renderTable(t.header, t.rows, w, marks));
       out.push("");
       i = end;
       continue;
@@ -208,7 +269,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       paras.forEach((p, k) => {
         if (!p.length) return;
         if (k > 0) out.push(bar.trimEnd());
-        for (const l of wrap(inline(joinSoft(p)), w - 2)) out.push(bar + l);
+        for (const l of wrap(inl(joinSoft(p)), w - 2)) out.push(bar + l);
       });
       out.push("");
       continue;
@@ -225,7 +286,18 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       }
       const lead = " ".repeat(indent) + mark + " ";
       const pad = " ".repeat(width(lead));
-      wrap(inline(joinSoft(item)), Math.max(8, w - width(lead))).forEach((l, k) => out.push((k === 0 ? lead : pad) + l));
+      wrap(inl(joinSoft(item)), Math.max(8, w - width(lead))).forEach((l, k) => out.push((k === 0 ? lead : pad) + l));
+      continue;
+    }
+    const fn = /^ {0,3}\[\^([^\]\s]+)\]:\s*(.*)$/.exec(line);
+    if (fn) {
+      const item: string[] = [fn[2]!];
+      i++;
+      while (i < lines.length && /^\s{2,}\S/.test(lines[i]!) && !inFence[i]) item.push(lines[i++]!);
+      const lead = `${DIM}[${fn[1]}]${RESET} `;
+      const pad = " ".repeat(width(lead));
+      footnotes.push({ id: fn[1]!, row: out.length });
+      wrap(inl(joinSoft(item)), Math.max(8, w - width(lead))).forEach((l, k) => out.push((k === 0 ? lead : pad) + l));
       continue;
     }
     // Paragraph
@@ -235,13 +307,14 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       lines[i]!.trim() !== "" &&
       !blocks.some((b) => b.start === i) &&
       !/^ {0,3}(#{1,6}\s|>)/.test(lines[i]!) &&
+      !/^ {0,3}\[\^[^\]\s]+\]:/.test(lines[i]!) &&
       !(para.length && /^(\s*)([-*+]|\d+[.)])\s+/.test(lines[i]!))
     ) {
       para.push(lines[i]!);
       i++;
     }
-    out.push(...wrap(inline(joinSoft(para)), w));
+    out.push(...wrap(inl(joinSoft(para)), w));
   }
   while (out.at(-1) === "") out.pop();
-  return { lines: out, wide: out.map((_, k) => wideRows.get(k) ?? null) };
+  return { lines: out, footnotes, wide: out.map((_, k) => wideRows.get(k) ?? null) };
 }

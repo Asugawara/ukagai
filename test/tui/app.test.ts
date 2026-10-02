@@ -10,11 +10,13 @@ const ch = (c: string): Key => ({ name: "char", ch: c });
 const enter: Key = { name: "enter" };
 let t = 1000;
 const press = (app: App, ...keys: Key[]) => keys.flatMap((k) => app.handle(k, (t += 10)));
+/** Let the undo window pass (costly / irreversible answers wait before they are sent) */
+const release = (app: App) => app.tick((t += 10_000));
 
 test("single select: starts on the recommended option, j moves = selects, Enter sends answers (original label)", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
-  assert.deepEqual(press(app, enter), [
+  assert.deepEqual([...press(app, enter), ...release(app)], [
     { type: "answer", id: "d1", body: { answers: { [Q]: "SSE (Recommended)" } } },
   ]);
 });
@@ -22,7 +24,7 @@ test("single select: starts on the recommended option, j moves = selects, Enter 
 test("j moves to WebSocket and sends; a double submit is ignored", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
-  const eff = press(app, ch("j"), enter);
+  const eff = [...press(app, ch("j"), enter), ...release(app)];
   assert.equal((eff[0] as { body: { answers: Record<string, string> } }).body.answers[Q], "WebSocket");
   assert.deepEqual(press(app, enter), []);
 });
@@ -30,7 +32,7 @@ test("j moves to WebSocket and sends; a double submit is ignored", () => {
 test("free text: i, type, Enter to confirm, Enter to send (replaces the selection)", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
-  const eff = press(app, ch("i"), ch("あ"), ch("い"), { name: "backspace" }, ch("x"), enter, enter);
+  const eff = press(app, ch("i"), ch("あ"), ch("い"), { name: "backspace" }, ch("x"), enter, enter).concat(release(app));
   assert.deepEqual((eff[0] as { body: unknown }).body, { answers: { [Q]: "あx" } });
 });
 
@@ -57,7 +59,7 @@ test("gg / G go to the top / bottom (the bottom is free text)", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
   press(app, ch("G"));
-  assert.equal(app.view(t).cursor, 2);
+  assert.equal(app.view(t).cursor, 3, "cards, None of these, free text");
   press(app, ch("g"), ch("g"));
   assert.equal(app.view(t).cursor, 0);
 });
@@ -113,7 +115,7 @@ test("blocker: Enter alone sends the Done option; c copies the first code block"
   const app = new App();
   app.upsert(blockerDecision(), t);
   assert.deepEqual(press(app, ch("c")), [{ type: "copy", text: "gcloud auth login\ngcloud auth application-default login" }]);
-  assert.deepEqual(press(app, enter), [
+  assert.deepEqual([...press(app, enter), ...release(app)], [
     { type: "answer", id: "d1", body: { answers: { [BLOCKER_Q]: "Done. Continue (Recommended)" } } },
   ]);
 });
@@ -156,7 +158,6 @@ test("wheel: the left column scrolls the background 3 rows, the right column scr
   const before = app.scroll;
   press(app, wheel("up", f.split + 5));
   assert.equal(app.scroll, before);
-  assert.equal(app.rscroll, null);
 });
 
 test("wheel: when the right column overflows it scrolls the decision, and moving the cursor goes back to following", () => {

@@ -5,6 +5,7 @@ import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
+import { NONE_TYPES, noneAnswer } from "./none.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -21,6 +22,10 @@ interface Draft {
 }
 
 export const TOAST_MS = 2000;
+/** How long the first Enter of a two-step confirmation stays valid */
+export const CONFIRM_MS = 3000;
+/** Time to undo after sending, by reversibility (reversible + file is sent at once) */
+export const GRACE_MS = { reversible: 2000, costly: 3000, irreversible: 5000 } as const;
 /** Rows per wheel notch */
 export const WHEEL_LINES = 3;
 /** Columns per ← → horizontal scroll */
@@ -53,8 +58,8 @@ export class App {
   /** Show the background at full width (hides the decision column) */
   full = false;
   /** Dimensions of the last drawn screen (used for scroll amounts and ranges) */
-  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax"> = {
-    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0,
+  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax" | "footRows"> = {
+    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0, footRows: [],
   };
   /** The "f for full width" hint is shown once per decision: which decisions have had it, and until when */
   private hinted = new Set<string>();
@@ -63,7 +68,15 @@ export class App {
   copySupported = true;
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
-  private input: { kind: "free" | "reason"; text: string } | null = null;
+  private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
+  /** The "None of these" picker (index into NONE_TYPES, optional note) */
+  private none: { index: number; text: string } | null = null;
+  /** First Enter of a two-step confirmation; `prior` is the one in force when the current key arrived */
+  private confirm: { id: string; kind: string; until: number } | null = null;
+  private prior: { id: string; kind: string; until: number } | null = null;
+  /** An answer waiting out its undo window (nothing has been POSTed yet) */
+  private grace: { id: string; body: Record<string, unknown>; until: number } | null = null;
+  private footIdx = -1;
   private listIndex = 0;
   private lastG = 0;
   /** Decisions showing a long recommendation in full */
@@ -99,6 +112,7 @@ export class App {
 
   upsert(d: Decision, now: number): void {
     this.decisions.set(d.id, d);
+    if (d.status !== "pending" && this.grace?.id === d.id) this.grace = null;
     if (d.status !== "pending" && this.sent.has(d.id)) {
       const key = STATUS_KEY[d.status];
       if (key) this.showToast(t(this.lang, key), now);
@@ -129,6 +143,7 @@ export class App {
     this.hinted.delete(id);
     this.sending.delete(id);
     this.sent.delete(id);
+    if (this.grace?.id === id) this.grace = null;
     if (id === this.shownId) this.advance(now);
   }
 
@@ -146,7 +161,10 @@ export class App {
     this.full = false;
     this.hintUntil = 0;
     this.input = null;
-    if (this.mode === "input") this.mode = "normal";
+    this.none = null;
+    this.confirm = null;
+    this.footIdx = -1;
+    if (this.mode === "input" || this.mode === "none") this.mode = "normal";
   }
 
   private advance(_now: number): void {
@@ -200,6 +218,8 @@ export class App {
       selected: dr?.sel ?? new Set(),
       free: dr?.free ?? { on: false, text: "" },
       input: this.input,
+      none: this.none,
+      notice: this.notice(now),
       reason: dr?.reason ?? "",
       pending: pending.length,
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
@@ -216,6 +236,26 @@ export class App {
       fullHint: this.hintUntil > now,
       now,
     };
+  }
+
+  /** The prompt shown in the footer: the undo countdown, or "Press Enter again" */
+  private notice(now: number): string | null {
+    if (this.grace) return t(this.lang, "sending_in", { n: Math.max(1, Math.ceil((this.grace.until - now) / 1000)) });
+    if (this.confirm && this.confirm.until >= now) return t(this.lang, "confirm_again");
+    return null;
+  }
+
+  /** Whether an answer is waiting out its undo window (the caller repaints for the countdown) */
+  graceActive(): boolean {
+    return this.grace !== null;
+  }
+
+  /** Release an answer whose undo window has passed (call regularly) */
+  tick(now: number): Effect[] {
+    const g = this.grace;
+    if (!g || now < g.until) return [];
+    this.grace = null;
+    return this.emit(g.id, g.body);
   }
 
   /** Take the drawn screen dimensions and clamp the scroll positions. Returns true when a hint just started (redraw) */
@@ -260,6 +300,19 @@ export class App {
 
   handle(key: Key, now: number): Effect[] {
     const m = this.model();
+    if (key.name !== "hwheel" && key.name !== "wheel") {
+      this.prior = this.confirm;
+      this.confirm = null;
+      if (this.grace) {
+        // During the undo window only u / Esc (undo) and Ctrl-C do anything
+        if (key.name === "ctrl-c") return [{ type: "quit" }];
+        if (key.name === "esc" || (key.name === "char" && key.ch === "u")) {
+          this.grace = null;
+          this.showToast(t(this.lang, "send_canceled"), now);
+        }
+        return [];
+      }
+    }
     if (key.name === "hwheel") {
       if (this.mode === "normal") this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
       return [];
@@ -305,12 +358,30 @@ export class App {
       case "focus": this.focus = this.focus === "decision" ? "background" : "decision"; return [];
       case "input-char": if (this.input) this.input.text += a.ch; return [];
       case "input-backspace": if (this.input) this.input.text = Array.from(this.input.text).slice(0, -1).join(""); return [];
-      case "input-cancel": this.input = null; this.mode = "normal"; return [];
+      case "input-cancel": this.mode = this.input?.kind === "note" && this.none ? "none" : "normal"; this.input = null; return [];
+      case "footnote": {
+        const rows = this.frame.footRows;
+        if (!rows.length) return [];
+        this.footIdx = (this.footIdx + 1) % rows.length;
+        this.setScroll(rows[this.footIdx]!);
+        return [];
+      }
     }
     if (!m) return [];
     const dr = this.draft(m);
     switch (a.type) {
-      case "input-confirm": return this.confirmInput(m, dr);
+      case "input-confirm": return this.confirmInput(m, dr, now);
+      case "none": return this.openNone(m, dr);
+      case "none-move": if (this.none) this.none.index = clamp(this.none.index + a.delta, NONE_TYPES.length); return [];
+      case "none-cancel": this.none = null; this.mode = "normal"; return [];
+      case "none-note": if (this.none) { this.input = { kind: "note", text: this.none.text }; this.mode = "input"; } return [];
+      case "none-confirm": {
+        const n = this.none;
+        if (!n) return [];
+        this.none = null;
+        this.mode = "normal";
+        return this.send(m, { answers: { [questionText(this.decisions.get(m.id)!)]: noneAnswer(n.index, n.text) } }, now);
+      }
       case "move": this.moveCursor(m, dr, dr.cursor + a.delta); return [];
       case "top": this.moveCursor(m, dr, 0); return [];
       case "bottom": this.moveCursor(m, dr, this.slots(m) - 1); return [];
@@ -326,8 +397,8 @@ export class App {
         return [];
       }
       case "submit": return this.submit(m, dr, now);
-      case "approve": return this.send(m, { approve: true, set_mode_auto: false }, now);
-      case "approve-auto": return this.send(m, { approve: true, set_mode_auto: true }, now);
+      case "approve": dr.cursor = 0; return this.approve(m, false, now);
+      case "approve-auto": dr.cursor = 1; return this.approve(m, true, now);
       case "reject": dr.cursor = 2; this.startReason(dr); return [];
       default: return [];
     }
@@ -340,10 +411,38 @@ export class App {
     this.show(list[(i + step + list.length) % list.length]!.id);
   }
 
-  /** Number of positions the cursor can rest on: cards + free text for a question, 3 buttons for a plan */
+  /** Number of positions the cursor can rest on: cards + "None of these" + free text for a question, 3 buttons for a plan */
   private slots(m: ScreenModel): number {
     if (m.kind === "plan") return 3;
-    return m.question ? m.question.cards.length + 1 : 0;
+    return m.question ? m.question.cards.length + 2 : 0;
+  }
+
+  /** Approve a plan (Enter twice when the decision is irreversible) */
+  private approve(m: ScreenModel, auto: boolean, now: number): Effect[] {
+    if (!this.guard(m, auto ? "approve-auto" : "approve", m.reversibility === "irreversible", now)) return [];
+    return this.send(m, { approve: true, set_mode_auto: auto }, now);
+  }
+
+  /** The first press of a heavy action only arms it; the same action on the very next key (within 3s) goes through */
+  private guard(m: ScreenModel, kind: string, heavy: boolean, now: number): boolean {
+    if (!heavy) return true;
+    const c = this.prior;
+    if (c && c.id === m.id && c.kind === kind && c.until >= now) return true;
+    this.confirm = { id: m.id, kind, until: now + CONFIRM_MS };
+    return false;
+  }
+
+  private openNone(m: ScreenModel, dr: Draft): Effect[] {
+    const q = m.question;
+    if (!q) return [];
+    dr.cursor = q.cards.length;
+    if (!q.multi) {
+      dr.sel.clear();
+      dr.free.on = false;
+    }
+    this.none = this.none ?? { index: 0, text: "" };
+    this.mode = "none";
+    return [];
   }
 
   private moveCursor(m: ScreenModel, dr: Draft, to: number): void {
@@ -360,14 +459,15 @@ export class App {
       dr.free.on = false;
     } else {
       dr.sel.clear();
-      dr.free.on = true;
+      dr.free.on = dr.cursor > q.cards.length;
     }
   }
 
   private toggle(m: ScreenModel, dr: Draft): Effect[] {
     const q = m.question;
     if (!q?.multi) return [];
-    if (dr.cursor >= q.cards.length) {
+    if (dr.cursor === q.cards.length) return this.openNone(m, dr);
+    if (dr.cursor > q.cards.length) {
       dr.free.on = !dr.free.on;
       if (dr.free.on && !dr.free.text.trim()) this.startFree(m, dr);
       return [];
@@ -381,7 +481,7 @@ export class App {
   private startFree(m: ScreenModel, dr: Draft): Effect[] {
     const q = m.question;
     if (!q) return [];
-    dr.cursor = q.cards.length;
+    dr.cursor = q.cards.length + 1;
     if (!q.multi) dr.sel.clear();
     dr.free.on = true;
     this.input = { kind: "free", text: dr.free.text };
@@ -394,16 +494,22 @@ export class App {
     this.mode = "input";
   }
 
-  private confirmInput(m: ScreenModel, dr: Draft): Effect[] {
+  private confirmInput(m: ScreenModel, dr: Draft, now: number): Effect[] {
     const inp = this.input;
     if (!inp) return [];
+    if (inp.kind === "note") {
+      if (this.none) this.none.text = inp.text;
+      this.input = null;
+      this.mode = "none";
+      return [];
+    }
     if (inp.kind === "reason") {
       dr.reason = inp.text;
       const reason = inp.text.trim();
       if (!reason) return [];
       this.input = null;
       this.mode = "normal";
-      return this.send(m, { approve: false, reason }, 0);
+      return this.send(m, { approve: false, reason }, now);
     }
     dr.free.text = inp.text;
     if (!inp.text.trim()) dr.free.on = false;
@@ -422,26 +528,44 @@ export class App {
 
   private submit(m: ScreenModel, dr: Draft, now: number): Effect[] {
     if (m.kind === "plan") {
-      if (dr.cursor === 0) return this.send(m, { approve: true, set_mode_auto: false }, now);
-      if (dr.cursor === 1) return this.send(m, { approve: true, set_mode_auto: true }, now);
+      if (dr.cursor === 0) return this.approve(m, false, now);
+      if (dr.cursor === 1) return this.approve(m, true, now);
       this.startReason(dr);
       return [];
     }
     const q = m.question;
     if (!q) return [];
-    if (dr.cursor === q.cards.length && !dr.free.text.trim()) return this.startFree(m, dr);
+    if (dr.cursor === q.cards.length) return this.openNone(m, dr);
+    if (dr.cursor === q.cards.length + 1 && !dr.free.text.trim()) return this.startFree(m, dr);
     if (!this.complete(m, dr)) return [];
     // The answer uses the original option.label
     const picked = q.cards.map((c) => c.value).filter((v) => dr.sel.has(v));
     if (dr.free.on && !q.multi) picked.length = 0;
     if (dr.free.on && dr.free.text.trim()) picked.push(dr.free.text.trim());
+    const heavy = m.reversibility === "irreversible" || q.cards.some((c) => c.heavy && dr.sel.has(c.value) && !(dr.free.on && !q.multi));
+    if (!this.guard(m, "answer", heavy, now)) return [];
     return this.send(m, { answers: { [questionText(this.decisions.get(m.id)!)]: picked.join(MULTI_SELECT_SEPARATOR) } }, now);
   }
 
-  private send(m: ScreenModel, body: Record<string, unknown>, _now: number): Effect[] {
-    if (this.sending.has(m.id)) return [];
-    this.sending.add(m.id);
-    return [{ type: "answer", id: m.id, body }];
+  /** How long an answer waits for an undo: none for reversible + file, else by reversibility. Unknown reversibility sends at once */
+  private graceMs(m: ScreenModel): number {
+    if (!m.reversibility) return 0;
+    if (m.reversibility === "reversible" && m.scope === "file") return 0;
+    return GRACE_MS[m.reversibility] ?? 0;
+  }
+
+  private send(m: ScreenModel, body: Record<string, unknown>, now: number): Effect[] {
+    if (this.sending.has(m.id) || this.grace) return [];
+    const ms = this.graceMs(m);
+    if (ms === 0) return this.emit(m.id, body);
+    this.grace = { id: m.id, body, until: now + ms };
+    return [];
+  }
+
+  private emit(id: string, body: Record<string, unknown>): Effect[] {
+    if (this.sending.has(id)) return [];
+    this.sending.add(id);
+    return [{ type: "answer", id, body }];
   }
 
   // ---- Submission results ----
