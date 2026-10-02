@@ -20,6 +20,7 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/sessions/:id/pending-mode-switch` | hook | Read the unconsumed "approve and switch to auto" record |
 | `POST /api/sessions/:id/pending-mode-switch/consume` | hook | Delete the record above |
 | `GET /api/metrics` | GUI | Aggregates for (a')(b)(d) |
+| `GET /api/decisions/:id/history` | GUI / TUI (cookie or Bearer) | The human instructions of the decision's session (first + last 20), read from the transcript on request |
 | `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja" }`, the display language from `<data-dir>/config.json`, read once when the server starts (missing/malformed → `"en"`) |
 | `GET /api/stream` | GUI | SSE. `decision.created` / `decision.updated` / `session.updated` |
 | `GET /healthz` | hook | Connectivity check |
@@ -63,6 +64,26 @@ Response: **201 for a new decision, 200 if the same `tool_use_id` already exists
 - `first_denied_at` is set by the server. When the request's `explanation.attached_via` is `after_deny`, it is set to the `created_at` of the most recent `denied_explain` with the same `session_id + agent_id + questions[0].question` within the last 120 seconds. `attached_via` itself is stored as the hook decided it.
 - At registration the server collects context (git, transcript). If the transcript cannot be read, it re-reads once after 500 ms, so **this POST takes up to 1.5 seconds** (an absolute upper bound on the server side). The hook must set the POST timeout longer than 1.5 seconds (the check of whether it can connect may be shorter).
 - 400 if `transcript_path` or `explanation.path` is not allowed. A missing `cwd` still gives 201, and `context` is just empty.
+
+### GET /api/decisions/:id/history
+
+Returns what the human typed in the session, so a viewer can see what the session is about. Allowed with cookie or Bearer (same as `GET /api/decisions/:id`). 404 `{error}` if the decision does not exist. It is not part of the decision list or SSE; clients fetch it on demand.
+
+```json
+{
+  "session_id": "…",
+  "ai_title": "…",
+  "total": 77,
+  "first": { "at": "2026-10-02T03:04:36.144Z", "text": "…" },
+  "recent": [ { "at": "…", "text": "…" } ]
+}
+```
+
+- `ai_title` is the last `ai-title` record of the transcript (omitted if none). `total` counts human instructions. `first` is the first one, cut to 4000 characters. `recent` is the last 20 in chronological order (not newest first), each cut to 500 characters; it may overlap `first`. A cut text ends with `…`. `at` is the record's `timestamp` (`""` if it has none).
+- Source: only `session.transcript_path`, even for a subagent decision (the human's instructions live in the parent transcript). If the path is not allowed (`isAllowedTranscriptPath`), missing or unreadable, the response is 200 `{ session_id, total: 0, first: null, recent: [] }`.
+- Limits: the file is streamed line by line from the start and at most 64 MB are read; if the file is larger, the result covers the part that was read (a line cut at the limit is ignored). Broken lines are skipped.
+- Cache: in memory for 5 seconds, keyed by `transcript_path + mtimeMs + session_id`.
+- What counts as a human instruction: a `type: "user"` record whose `message.content` is a string, or an array with `text` blocks (`tool_result`-only records are excluded). Excluded: `isSidechain: true`, `isMeta: true`, slash-command / local-command records (`<command-name>`, `<command-message>`, `<command-args>`, `<local-command-stdout>`, `<local-command-stderr>`, `<local-command-caveat>`), and `[Request interrupted by user…]`. `<system-reminder>…</system-reminder>` blocks are removed, `<pasted_content …>` tags are removed (the content stays), and a record that is empty afterwards is excluded. Text is otherwise kept as is (newlines and spaces included).
 
 ### GET /api/decisions/:id/wait
 
@@ -250,7 +271,7 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 | Authorization | Endpoints |
 |---|---|
 | Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `GET /api/sessions/:id/pending-mode-switch`, `POST .../consume` |
-| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
+| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
 | none | `GET /healthz`, `GET /`, `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
 - **Content-Type**: **every POST** (including ack / consume, which have no body) requires `application/json` (otherwise 415). If there is no body, send `{}`. The order of checks is Host (400) → authorization (401) → Content-Type (415) → body (400).
