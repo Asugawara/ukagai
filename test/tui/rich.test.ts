@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extraColumns, parseBullets, parseFootnotes, parseTerms } from "../../src/hook/explain.js";
+import { SECTION, parseBullets, parseFootnotes, parseTerms } from "../../src/hook/explain.js";
 import { App } from "../../src/tui/app.js";
 import { MESSAGES } from "../../src/tui/i18n.js";
 import type { Key } from "../../src/tui/keys.js";
@@ -106,7 +106,7 @@ const release = (app: App) => app.tick((now += 10_000));
 // ---- parsing (explain.ts additions) ----
 
 test("parseTerms accepts bold + dash, bold + colon, and plain colon forms", () => {
-  const body = "- **a** — one\n- **b**: two\n- c: three\n- not a term";
+  const body = "## Terms\n- **a** — one\n- **b**: two\n- c: three\n- not a term";
   assert.deepEqual(parseTerms(body), [
     { term: "a", definition: "one" },
     { term: "b", definition: "two" },
@@ -114,13 +114,12 @@ test("parseTerms accepts bold + dash, bold + colon, and plain colon forms", () =
   ]);
 });
 
-test("parseBullets, parseFootnotes, extraColumns", () => {
-  assert.deepEqual(parseBullets("- a\n  more\n* b\n1. c\n\nplain"), ["a more", "b", "c"]);
+test("parseBullets, parseFootnotes", () => {
+  assert.deepEqual(parseBullets("## Assumptions\n- a\n  more\n* b\n1. c\n\nplain", SECTION.assumptions), ["a more", "b", "c"]);
   assert.deepEqual(parseFootnotes("x[^1] y[^2] z[^1]\n\n[^1]: one\n[^3]: unused\n```\n[^9]\n```"), {
     defs: [{ id: "1", text: "one" }, { id: "3", text: "unused" }],
     refs: ["1", "2"],
   });
-  assert.deepEqual(extraColumns({ header: ["Option", "What happens", "Risk", "Effort", "Cost"], rows: [] }), [3, 4]);
 });
 
 // ---- model ----

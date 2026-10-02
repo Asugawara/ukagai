@@ -5,7 +5,6 @@ import {
   SECTION,
   findSection,
   findTables,
-  extraColumns,
   normalizeLabel,
   parseBullets,
   parseFootnotes,
@@ -206,7 +205,7 @@ function cardsFromTable(
       lines = [
         { text: row[hi] ?? "", md: true },
         { text: row[ri] ?? "", md: true, risk: true },
-        ...extraColumns(t).map((c) => ({ text: row[c] ?? "", md: true, name: t.header[c] ?? "" })),
+        ...t.extraColumns.map((c) => ({ text: row[c] ?? "", md: true, name: t.header[c] ?? "" })),
       ];
     } else {
       lines = row.slice(1).map((c, j) => ({ text: c ? `${t.header[j + 1] ?? ""}: ${c}` : "", md: true }));
@@ -353,11 +352,13 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
     if (dropIt) drop.push([sec.start, sec.end]);
     return body.slice(sec.start + 1, sec.end).join("\n").trim();
   };
-  const unknowns = parseBullets(secBody(SECTION.unknowns, true));
-  const assumptions = parseBullets(secBody(SECTION.assumptions, true));
+  // The hook parsers read the whole Markdown; secBody is still called so the sections are dropped from the background.
+  const full = body.join("\n");
+  const unknowns = secBody(SECTION.unknowns, true) ? parseBullets(full, SECTION.unknowns) : [];
+  const assumptions = secBody(SECTION.assumptions, true) ? parseBullets(full, SECTION.assumptions) : [];
   const against = secBody(SECTION.against, true).replace(/\s*\n\s*/g, " ") || null;
-  const affects = parseBullets(secBody(SECTION.affects, true));
-  const terms = parseTerms(secBody(SECTION.terms, false));
+  const affects = secBody(SECTION.affects, true) ? parseBullets(full, SECTION.affects) : [];
+  const terms = secBody(SECTION.terms, false) ? parseTerms(full) : [];
   let todo: string | null = null;
   if (base.blocker) {
     const todoSec = findSection(headings, body.length, SECTION.blockerTodo);
