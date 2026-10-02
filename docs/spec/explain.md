@@ -141,10 +141,10 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 
 ## 8. SessionStart / SubagentStart の additionalContext
 
-どちらも sync で返す。3 行。`{scratchpad_dir}` は stdin の値で埋める。無いときは `~/.ukagai/explain/<session_id>` の絶対パスに置き換える。URL は書かない。文面は【E5 で確定】。
+どちらも sync で返す。3 行。`{scratchpad_dir}/ukagai/` の部分は、置き場の絶対パス(1 節で決まる `<scratchpad_dir>/ukagai/` または `~/.ukagai/explain/<session_id>/`)に置き換える。URL は書かない。文面は【E5 で確定】。
 
 ```
-人に判断を求める前(AskUserQuestion の前、計画の提示の前)に、人が読む説明を Markdown で {scratchpad_dir}/ukagai/ に書くこと。書式は skill ukagai-explain に従う。
+人に判断を求める前(AskUserQuestion の前、計画の提示の前)に、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
 front matter の question: には AskUserQuestion の質問文を一字一句そのまま入れる。選択肢の比較は表に、構造や流れは Mermaid の図にする。
 文章で質問せず AskUserQuestion を使い、計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
 ```
@@ -176,3 +176,10 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 | `fail-no-question.md` | false | `question` |
 | `fail-no-diagram-when-required.md` | false | `diagram` |
 | `plan-heading-variant.md` | true | なし |
+
+## 既知の制約
+
+- `question` が複数行の質問文は front matter の 1 行スカラーで完全一致できず、recency に頼る。
+- recency は別の質問向けのファイルも拾いうる(10 分以内にちょうど 1 つあれば `match: recency` で添付される)。
+- 「図」の見出し照合は部分一致なので、先に出る「図解」などの見出しに当たり、本来の「図」の節を隠しうる。
+- ExitPlanMode の `after_deny` には時間窓が無く(同一セッションの denied_explain があれば成立)、server の `first_denied_at`(120 秒窓)とずれうる。

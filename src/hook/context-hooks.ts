@@ -6,6 +6,10 @@ import type { HookOptions } from "./options.js";
 type Out = Record<string, unknown>;
 
 const OBSERVED = new Set(["UserPromptSubmit", "Stop", "SubagentStop", "PostToolUse", "SessionEnd", "Notification"]);
+/** 非同期 hook の観測 event の打ち切り。コールドな Node の最初の fetch を見込む */
+const ASYNC_EVENT_TIMEOUT_MS = 1500;
+/** SessionEnd は sync(budget 1.5 秒)なので短く */
+const SESSION_END_TIMEOUT_MS = 500;
 const ESCAPE_WORDS = ["どちら", "よろしいですか", "教えてください"];
 
 export function isEscapedQuestion(text: string | undefined): boolean {
@@ -62,7 +66,7 @@ export async function observedEvent(raw: Record<string, unknown>, client: Client
     const msg = raw["last_assistant_message"];
     if (isEscapedQuestion(typeof msg === "string" ? msg : undefined)) extra["escaped_question"] = true;
   }
-  await post(raw, extra, client, name === "SessionEnd" ? 500 : 100);
+  await post(raw, extra, client, name === "SessionEnd" ? SESSION_END_TIMEOUT_MS : ASYNC_EVENT_TIMEOUT_MS);
 }
 
 /** --observe: PreToolUse は start、PostToolUse は end */
