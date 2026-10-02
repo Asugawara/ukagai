@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/user/dev/ukagai/verification/hook.mjs",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
