@@ -1,0 +1,456 @@
+import { after, test } from "node:test";
+import assert from "node:assert/strict";
+import { request as httpRequest } from "node:http";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { start, type ServeHandle } from "../../src/serve/index.js";
+
+const tmpRoots: string[] = [];
+const handles: ServeHandle[] = [];
+
+after(async () => {
+  for (const h of handles) await h.close();
+  for (const d of tmpRoots) rmSync(d, { recursive: true, force: true });
+});
+
+function tmp(): string {
+  const d = mkdtempSync(join(tmpdir(), "ukagai-test-"));
+  tmpRoots.push(d);
+  return d;
+}
+
+type Env = { h: ServeHandle; home: string; dataDir: string; url: string };
+
+async function setup(opts: { leaseGraceMs?: number; dataDir?: string; home?: string } = {}): Promise<Env> {
+  const home = opts.home ?? tmp();
+  const dataDir = opts.dataDir ?? tmp();
+  const h = await start({ port: 0, dataDir, home, leaseGraceMs: opts.leaseGraceMs });
+  handles.push(h);
+  return { h, home, dataDir, url: `http://127.0.0.1:${h.port}` };
+}
+
+function api(env: Env, path: string, init: { method?: string; body?: unknown; auth?: boolean; contentType?: string | null } = {}) {
+  const headers: Record<string, string> = {};
+  if (init.auth !== false) headers.authorization = `Bearer ${env.h.token}`;
+  if (init.contentType !== null) headers["content-type"] = init.contentType ?? "application/json";
+  return fetch(env.url + path, {
+    method: init.method ?? (init.body === undefined ? "GET" : "POST"),
+    headers,
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  });
+}
+
+function decisionBody(env: Env, toolUseId: string, extra: Record<string, unknown> = {}) {
+  return {
+    tool_use_id: toolUseId,
+    kind: "answer_question",
+    session: {
+      session_id: "sess-1",
+      cwd: "/nonexistent-ukagai-cwd",
+      transcript_path: join(env.home, ".claude", "projects", "p", "sess-1.jsonl"),
+    },
+    request: {
+      questions: [
+        { question: "A と B のどちらにしますか？", header: "選択", options: [{ label: "A" }, { label: "B" }], multiSelect: false },
+      ],
+    },
+    ...extra,
+  };
+}
+
+async function register(env: Env, toolUseId: string, extra: Record<string, unknown> = {}) {
+  const r = await api(env, "/api/decisions", { body: decisionBody(env, toolUseId, extra) });
+  assert.ok(r.status === 200 || r.status === 201, `register status ${r.status}`);
+  return (await r.json()) as { id: string; status: string; [k: string]: any };
+}
+
+async function getDecision(env: Env, id: string) {
+  return (await (await api(env, `/api/decisions/${id}`)).json()) as { status: string; response?: any; lease_until?: string };
+}
+
+async function waitForStatus(env: Env, id: string, status: string, ms = 4000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const d = await getDecision(env, id);
+    if (d.status === status) return d;
+    assert.ok(Date.now() < end, `status が ${status} にならない(現在 ${d.status})`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+async function answerFlow(env: Env, toolUseId: string) {
+  const d = await register(env, toolUseId);
+  await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { "A と B のどちらにしますか？": "B" } } });
+  const w = await api(env, `/api/decisions/${d.id}/wait?timeout_ms=100`);
+  assert.equal(w.status, 200);
+  return d.id;
+}
+
+test("登録 → wait 204 → answer → wait 200 → ack で answered", async () => {
+  const env = await setup();
+  const d = await register(env, "toolu_1");
+  assert.equal(d.status, "pending");
+
+  const w1 = await api(env, `/api/decisions/${d.id}/wait?timeout_ms=100`);
+  assert.equal(w1.status, 204);
+
+  const a = await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { "A と B のどちらにしますか？": "B" } } });
+  assert.equal(a.status, 200);
+  assert.equal(((await a.json()) as { status: string }).status, "answer_submitted");
+
+  const w2 = await api(env, `/api/decisions/${d.id}/wait?timeout_ms=100`);
+  assert.equal(w2.status, 200);
+  const body = (await w2.json()) as { response: { via: string; answers: Record<string, string>; decided_at: string } };
+  assert.equal(body.response.via, "gui");
+  assert.deepEqual(body.response.answers, { "A と B のどちらにしますか？": "B" });
+  assert.equal((await getDecision(env, d.id)).status, "answer_submitted");
+
+  const ack = await api(env, `/api/decisions/${d.id}/ack`, { body: {} });
+  assert.equal(ack.status, 200);
+  const acked = (await ack.json()) as { status: string; response: { delivered_at?: string } };
+  assert.equal(acked.status, "answered");
+  assert.ok(acked.response.delivered_at);
+
+  // answered への answer と二重 ack は 409
+  const again = await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { x: "y" } } });
+  assert.equal(again.status, 409);
+  assert.equal((await api(env, `/api/decisions/${d.id}/ack`, { body: {} })).status, 409);
+});
+
+test("pending の ack は 409、answers を approve_plan に送ると 400", async () => {
+  const env = await setup();
+  const d = await register(env, "toolu_2");
+  assert.equal((await api(env, `/api/decisions/${d.id}/ack`, { body: {} })).status, 409);
+  const bad = await api(env, `/api/decisions/${d.id}/answer`, { body: { approve: true } });
+  assert.equal(bad.status, 400);
+  const mixed = await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: {}, fallback: true } });
+  assert.equal(mixed.status, 400);
+  assert.equal((await api(env, "/api/decisions/nope")).status, 404);
+});
+
+test("ack 無しのまま lease 切れ → answer_lost", async () => {
+  const env = await setup({ leaseGraceMs: 150 });
+  const id = await answerFlow(env, "toolu_3");
+  const d = await waitForStatus(env, id, "answer_lost");
+  assert.equal(d.status, "answer_lost");
+  assert.equal((await api(env, `/api/decisions/${id}/ack`, { body: {} })).status, 409);
+});
+
+test("poll 途絶で lease 切れ → hook_disconnected", async () => {
+  const env = await setup({ leaseGraceMs: 150 });
+  const d = await register(env, "toolu_4");
+  assert.equal((await api(env, `/api/decisions/${d.id}/wait?timeout_ms=100`)).status, 204);
+  const after = await waitForStatus(env, d.id, "hook_disconnected");
+  assert.equal(after.status, "hook_disconnected");
+});
+
+test("poll 中は lease が切れない", async () => {
+  const env = await setup({ leaseGraceMs: 100 });
+  const d = await register(env, "toolu_5");
+  const w = await api(env, `/api/decisions/${d.id}/wait?timeout_ms=600`);
+  assert.equal(w.status, 204);
+  assert.equal((await getDecision(env, d.id)).status, "pending");
+});
+
+test("lease 切れから 10 秒以内の Stop で cancelled", async () => {
+  const env = await setup({ leaseGraceMs: 100 });
+  const d = await register(env, "toolu_6");
+  await api(env, `/api/decisions/${d.id}/wait?timeout_ms=50`);
+  await waitForStatus(env, d.id, "hook_disconnected");
+  const ev = await api(env, "/api/events", {
+    body: {
+      session_id: "sess-1",
+      transcript_path: join(env.home, ".claude", "projects", "p", "sess-1.jsonl"),
+      cwd: "/x",
+      hook_event_name: "Stop",
+      received_at: new Date().toISOString(),
+    },
+  });
+  assert.equal(ev.status, 204);
+  assert.equal((await getDecision(env, d.id)).status, "cancelled");
+});
+
+test("tool_use_id が同じ再登録は同じ id(200)", async () => {
+  const env = await setup();
+  const r1 = await api(env, "/api/decisions", { body: decisionBody(env, "toolu_7") });
+  const r2 = await api(env, "/api/decisions", { body: decisionBody(env, "toolu_7") });
+  assert.equal(r1.status, 201);
+  assert.equal(r2.status, 200);
+  assert.equal(((await r1.json()) as { id: string }).id, ((await r2.json()) as { id: string }).id);
+  const list = (await (await api(env, "/api/decisions?status=pending")).json()) as unknown[];
+  assert.equal(list.length, 1);
+});
+
+test("{fallback:true} → wait が 200 で via: terminal", async () => {
+  const env = await setup();
+  const d = await register(env, "toolu_8");
+  const a = await api(env, `/api/decisions/${d.id}/answer`, { body: { fallback: true } });
+  assert.equal(((await a.json()) as { status: string }).status, "fallback");
+  const w = await api(env, `/api/decisions/${d.id}/wait?timeout_ms=100`);
+  assert.equal(w.status, 200);
+  const body = (await w.json()) as { response: { via: string } };
+  assert.equal(body.response.via, "terminal");
+});
+
+test("認可と入力検証: 偽 Host 400 / トークン無し 401 / Content-Type 無し 415 / 不正パス 400 / 存在しない cwd でも 201", async () => {
+  const env = await setup();
+  const d = await register(env, "toolu_9");
+
+  // 偽 Host(fetch は Host を上書きできないので http で直接)
+  const status = await new Promise<number>((resolve, reject) => {
+    const req = httpRequest(
+      { host: "127.0.0.1", port: env.h.port, path: "/healthz", headers: { host: "evil.example:80" } },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+  assert.equal(status, 400);
+
+  assert.equal((await fetch(env.url + "/healthz")).status, 200);
+
+  const noAuth = await api(env, `/api/decisions/${d.id}/answer`, { body: { fallback: true }, auth: false });
+  assert.equal(noAuth.status, 401);
+  const wrongToken = await fetch(`${env.url}/api/decisions/${d.id}/answer`, {
+    method: "POST",
+    headers: { authorization: "Bearer wrong", "content-type": "application/json" },
+    body: JSON.stringify({ fallback: true }),
+  });
+  assert.equal(wrongToken.status, 401);
+  assert.equal((await api(env, "/api/decisions", { auth: false })).status, 401);
+  // wait は Bearer のみ
+  assert.equal((await api(env, `/api/decisions/${d.id}/wait?timeout_ms=10`, { auth: false })).status, 401);
+
+  const noCt = await api(env, `/api/decisions/${d.id}/answer`, { body: { fallback: true }, contentType: null });
+  assert.equal(noCt.status, 415);
+  const textCt = await api(env, `/api/decisions/${d.id}/answer`, { body: { fallback: true }, contentType: "text/plain" });
+  assert.equal(textCt.status, 415);
+
+  const badPath = decisionBody(env, "toolu_bad");
+  badPath.session.transcript_path = "/etc/passwd";
+  const bp = await api(env, "/api/decisions", { body: badPath });
+  assert.equal(bp.status, 400);
+
+  const badExplain = await api(env, "/api/decisions", {
+    body: decisionBody(env, "toolu_bad2", {
+      explanation: {
+        path: "/etc/passwd",
+        markdown: "x",
+        has: { mermaid: false, table: false, diff: false },
+        match: "question",
+        attached_via: "first_call",
+      },
+    }),
+  });
+  assert.equal(badExplain.status, 400);
+
+  const invalid = await api(env, "/api/decisions", { body: { tool_use_id: 1 } });
+  assert.equal(invalid.status, 400);
+  assert.ok(Array.isArray(((await invalid.json()) as { issues: unknown[] }).issues));
+
+  const ok = await api(env, "/api/decisions", { body: decisionBody(env, "toolu_nocwd") });
+  assert.equal(ok.status, 201);
+  assert.deepEqual(((await ok.json()) as { context: unknown }).context, {});
+});
+
+test("GUI の cookie で answer できる(GET / で発行、wait は不可)", async () => {
+  const env = await setup();
+  const d = await register(env, "toolu_cookie");
+  const page = await fetch(env.url + "/");
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /ukagai/);
+  const setCookie = page.headers.get("set-cookie") ?? "";
+  assert.match(setCookie, /ukagai_session=/);
+  assert.match(setCookie, /HttpOnly/i);
+  assert.match(setCookie, /SameSite=Strict/i);
+  const cookie = setCookie.split(";")[0]!;
+  assert.notEqual(cookie.split("=")[1], env.h.token);
+
+  const a = await fetch(`${env.url}/api/decisions/${d.id}/answer`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ fallback: true }),
+  });
+  assert.equal(a.status, 200);
+  const w = await fetch(`${env.url}/api/decisions/${d.id}/wait?timeout_ms=10`, { headers: { cookie } });
+  assert.equal(w.status, 401);
+});
+
+test("/public/* の配信とパストラバーサル拒否", async () => {
+  const env = await setup();
+  const r = await fetch(env.url + "/public/index.html");
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-type") ?? "", /text\/html/);
+  const t = await fetch(env.url + "/public/..%2fpackage.json");
+  assert.equal(t.status, 404);
+});
+
+test("token ファイルは 0600", async () => {
+  const env = await setup();
+  assert.equal(statSync(join(env.dataDir, "token")).mode & 0o777, 0o600);
+});
+
+test("再起動で pending / answer_submitted が hook_disconnected として復元される", async () => {
+  const home = tmp();
+  const dataDir = tmp();
+  const env1 = await setup({ home, dataDir });
+  const p = await register(env1, "toolu_r1");
+  const s = await register(env1, "toolu_r2");
+  await api(env1, `/api/decisions/${s.id}/answer`, { body: { answers: { q: "A" } } });
+  await env1.h.close();
+
+  const env2 = await setup({ home, dataDir });
+  assert.equal((await getDecision(env2, p.id)).status, "hook_disconnected");
+  assert.equal((await getDecision(env2, s.id)).status, "hook_disconnected");
+  // 同じ tool_use_id は復元された判断を返す
+  const again = await register(env2, "toolu_r1");
+  assert.equal(again.id, p.id);
+});
+
+test("/api/metrics: (a') は answered 2 / fallback 1 → 2/3", async () => {
+  const env = await setup();
+  for (const id of ["m1", "m2"]) {
+    const did = await answerFlow(env, id);
+    await api(env, `/api/decisions/${did}/ack`, { body: {} });
+  }
+  const f = await register(env, "m3");
+  await api(env, `/api/decisions/${f.id}/answer`, { body: { fallback: true } });
+  // pending は分母に入らない
+  await register(env, "m4");
+
+  const m = (await (await api(env, "/api/metrics")).json()) as any;
+  assert.equal(m.a.answered, 2);
+  assert.equal(m.a.fallback, 1);
+  assert.equal(m.a.total, 3);
+  assert.ok(Math.abs(m.a.rate - 2 / 3) < 1e-9);
+  assert.equal(m.b.human.count, 2);
+  // 説明なしの 4 件はすべて none
+  assert.equal(m.d.none, 4);
+  assert.equal(m.d.attach_rate, 0);
+});
+
+test("/api/metrics: (b) の基準値と (d) の after_deny / plan_mode 除外、escaped_question", async () => {
+  const env = await setup();
+  const base = { session_id: "s", transcript_path: join(env.home, ".claude", "projects", "p", "s.jsonl"), cwd: "/x" };
+  const ev = (extra: Record<string, unknown>) => api(env, "/api/events", { body: { ...base, ...extra } });
+  await ev({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_use_id: "t1", received_at: "2026-10-02T00:00:00.000Z", observe: { phase: "start" } });
+  await ev({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_use_id: "t1", received_at: "2026-10-02T00:00:10.000Z", observe: { phase: "end" } });
+  await ev({ hook_event_name: "PreToolUse", tool_name: "ExitPlanMode", tool_use_id: "t2", received_at: "2026-10-02T00:01:00.000Z", observe: { phase: "start" } });
+  await ev({ hook_event_name: "PostToolUse", tool_name: "ExitPlanMode", tool_use_id: "t2", received_at: "2026-10-02T00:01:30.000Z", observe: { phase: "end" } });
+  await ev({ hook_event_name: "Stop", received_at: new Date().toISOString(), escaped_question: true });
+
+  const expl = (attached_via: string, none_reason?: string) => ({
+    path: join(env.home, ".ukagai", "explain", "x.md"),
+    markdown: "x",
+    has: { mermaid: false, table: true, diff: false },
+    match: "question",
+    attached_via,
+    ...(none_reason ? { none_reason } : {}),
+  });
+  // 説明なしの deny → 同じ質問を説明付きで再登録
+  const denied = await api(env, "/api/decisions", { body: decisionBody(env, "d0", { status: "denied_explain" }) });
+  assert.equal(((await denied.json()) as { status: string }).status, "denied_explain");
+  const after = await register(env, "d1", { explanation: expl("after_deny") });
+  assert.ok(after.first_denied_at);
+  await register(env, "d2", { explanation: expl("first_call") });
+  await register(env, "d3", { explanation: expl("none", "plan_mode") });
+  await register(env, "d4", { explanation: expl("none", "loop_guard") });
+
+  // denied_explain は一覧に出ない
+  const list = (await (await api(env, "/api/decisions")).json()) as unknown[];
+  assert.equal(list.length, 4);
+
+  const m = (await (await api(env, "/api/metrics")).json()) as any;
+  assert.deepEqual(m.b.baseline, { count: 2, median_ms: 20000, mean_ms: 20000 });
+  assert.equal(m.b.agent.count, 1);
+  assert.deepEqual({ ...m.d }, { first_call: 1, after_deny: 1, none: 1, total: 3, attach_rate: 2 / 3 });
+  assert.equal(m.a.escaped_question, 1);
+  assert.equal(m.a.total, 1);
+});
+
+test("セッション状態と pending-mode-switch", async () => {
+  const env = await setup();
+  const base = { session_id: "sess-1", transcript_path: join(env.home, ".claude", "projects", "p", "s.jsonl"), cwd: "/x" };
+  const ev = (name: string) => api(env, "/api/events", { body: { ...base, hook_event_name: name, received_at: new Date().toISOString() } });
+  const state = async () => ((await (await api(env, "/api/sessions")).json()) as { session_id: string; state: string }[]).find((s) => s.session_id === "sess-1")?.state;
+
+  await ev("SessionStart");
+  assert.equal(await state(), "working");
+  const d = await register(env, "toolu_plan", { kind: "approve_plan", request: { plan: "p", planFilePath: "/x/plan.md" } });
+  assert.equal(await state(), "waiting_decision");
+  await ev("Stop");
+  assert.equal(await state(), "idle");
+  await ev("UserPromptSubmit");
+  assert.equal(await state(), "working");
+  await ev("SessionEnd");
+  assert.equal(await state(), "ended");
+
+  const pms = () => api(env, "/api/sessions/sess-1/pending-mode-switch").then((r) => r.json()) as Promise<{ pending: boolean }>;
+  assert.equal((await pms()).pending, false);
+  const a = await api(env, `/api/decisions/${d.id}/answer`, { body: { approve: true, set_mode_auto: true } });
+  assert.equal(a.status, 200);
+  assert.equal((await pms()).pending, true);
+  const c1 = await api(env, "/api/sessions/sess-1/pending-mode-switch/consume", { body: {} });
+  assert.deepEqual(await c1.json(), { consumed: true });
+  const c2 = await api(env, "/api/sessions/sess-1/pending-mode-switch/consume", { body: {} });
+  assert.deepEqual(await c2.json(), { consumed: false });
+  assert.equal((await pms()).pending, false);
+});
+
+test("SSE で decision.created が届く", async () => {
+  const env = await setup();
+  const res = await fetch(env.url + "/api/stream", { headers: { authorization: `Bearer ${env.h.token}` } });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  const timer = setTimeout(() => reader.cancel(), 4000);
+  await register(env, "toolu_sse");
+  while (!buf.includes("event: decision.created")) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value);
+  }
+  clearTimeout(timer);
+  await reader.cancel();
+  assert.match(buf, /event: decision\.created\ndata: \{.*"tool_use_id":"toolu_sse"/);
+  assert.match(buf, /event: session\.updated/);
+});
+
+test("文脈: 許可された transcript から直前のテキスト・ツール・タイトルを集める(サブエージェント優先)", async () => {
+  const env = await setup();
+  const dir = join(env.home, ".claude", "projects", "p");
+  mkdirSync(join(dir, "sess-1", "subagents"), { recursive: true });
+  const line = (o: unknown) => JSON.stringify(o) + "\n";
+  writeFileSync(
+    join(dir, "sess-1.jsonl"),
+    line({ type: "ai-title", aiTitle: "親のタイトル" }) +
+      line({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "親のテキスト" }] } }),
+  );
+  writeFileSync(
+    join(dir, "sess-1", "subagents", "agent-a1.jsonl"),
+    "broken line\n" +
+      line({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "子のテキスト" }, { type: "tool_use", name: "Edit", input: { file_path: "/a/b.ts" } }] } }) +
+      line({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", name: "Bash", input: { command: "x".repeat(200) } }] } }),
+  );
+  const body = decisionBody(env, "toolu_ctx");
+  (body.session as Record<string, unknown>).agent_id = "a1";
+  const r = await api(env, "/api/decisions", { body });
+  const d = (await r.json()) as { context: any };
+  assert.equal(d.context.last_assistant_text, "子のテキスト");
+  assert.deepEqual(d.context.recent_tools, [
+    { name: "Edit", summary: "/a/b.ts" },
+    { name: "Bash", summary: "x".repeat(80) },
+  ]);
+
+  const body2 = decisionBody(env, "toolu_ctx2");
+  const d2 = (await (await api(env, "/api/decisions", { body: body2 })).json()) as { context: any; session: { title?: string } };
+  assert.equal(d2.context.last_assistant_text, "親のテキスト");
+  assert.equal(d2.context.ai_title, "親のタイトル");
+  assert.equal(d2.session.title, "親のタイトル");
+});
