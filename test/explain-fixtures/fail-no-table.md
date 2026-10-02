@@ -9,7 +9,7 @@ recommended: node:test
 
 ## Why this decision is needed now
 
-Decide the runner before starting to write W3's tests. CLAUDE.md specifies `node:test` + `tsx`.
+Decide the runner before starting to write the tests. CLAUDE.md specifies `node:test` + `tsx`.
 
 ## Options
 

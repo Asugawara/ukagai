@@ -593,9 +593,10 @@ test("coined_term: the five tokens of the real example are found; codes in the t
   assert.deepEqual(validateExplanation(titled).missing, ["coined_term"]);
 });
 
-test("coined_term: allowlisted abbreviations, versions, issue numbers, HTTP statuses and A1 are not hits", () => {
-  const text = "CI and API on S3 with UTF-8 over HTTP-2 and SHA-256, v0.2.0-DT1, release v1, #12, error 404, cell A1, M3, EC2, P95.";
+test("coined_term: allowlisted abbreviations, versions, issue numbers and HTTP statuses are not hits; one letter + one digit is", () => {
+  const text = "CI and API on S3 with UTF-8 over HTTP-2 and SHA-256, v0.2.0-DT1, release v1, #12, error 404, EC2, P95.";
   assert.deepEqual(extractCoined(text), []);
+  assert.deepEqual(extractCoined("W3's server, plan item P1 and cell A1"), ["W3", "P1", "A1"]);
   assert.deepEqual(extractCoined("step by step, the day one plan, a Gate way, Phase CI"), []);
 });
 

@@ -99,7 +99,7 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - Put details, evidence and logs in the "What I checked" section as bullets. Do not write what the decision does not need.
 - **Risk cells say how to undo.** Each cell of "Risks and how to undo" must contain a whole word such as undo / revert / roll back / restore / reinstall / recreate / re-run / `git checkout` / delete the … / remove the …, or say it cannot be undone (cannot be restored / irreversible / permanent / unrecoverable; Japanese 戻せ / 戻す / 元に戻 / 消せ / やり直 / 再実行 / 再作成 / 復元 / 戻せない / 元に戻らない). Without it the hook denies (`undo`). The GUI / TUI paint the cannot-be-undone phrases red and the how-to-undo words green.
 - **Evidence by footnote.** Cite what you checked from the body with `[^1]` and define it in "What I checked" (`[^1]: \`grep -rn jsonl src\` finds nothing`). The GUI shows the evidence on hover. A definition without a reference is fine; a reference without a definition is denied (`footnote`).
-- **No coined identifiers.** The hook scans the title and body (not code fences; inline code counts) for short codes such as `W-T2`, `FT4`, `TM28`, `P-GH`, and for `Phase 2` / `Gate B` / `フェーズ 2` / `第 3 段階`. Abbreviations like CI / API / JSON, versions (`v0.2.0`), `#12`, HTTP statuses and one-letter + one-digit cell names (`A1`) are fine, and so are tokens in the question or in option labels. Any other token must be defined under Terms in at least 12 characters of plain words ("the plan item" / "plan の行" alone does not count), or you get `coined_term`; rewrite in plain words instead.
+- **No coined identifiers.** The hook scans the title and body (not code fences; inline code counts) for short codes such as `W-T2`, `FT4`, `TM28`, `P-GH`, and for `Phase 2` / `Gate B` / `フェーズ 2` / `第 3 段階`. Abbreviations like CI / API / JSON, versions (`v0.2.0`), `#12` and HTTP statuses are fine (one letter + one digit such as `W3` or `P1` is a hit), and so are tokens in the question or in option labels. Any other token must be defined under Terms in at least 12 characters of plain words ("the plan item" / "plan の行" alone does not count), or you get `coined_term`; rewrite in plain words instead.
 - **Order of the codes** the hook reports: … `cell_long`, `coined_term`, `undo`, … `diagram`, `checked`, `footnote`.
 
 - Make the labels match the AskUserQuestion `options[].label` (a trailing `(Recommended)` is optional).
@@ -241,7 +241,7 @@ scope: repo
 
 ## Why this decision is needed now
 
-W3's store cannot be written until the storage format is decided. JSONL needs only appends; SQLite is strong at search, but `node:sqlite` is experimental and needs schema migrations.[^1] How the log will be used is something I cannot know, so a human decides.
+The store cannot be written until the storage format is decided. JSONL needs only appends; SQLite is strong at search, but `node:sqlite` is experimental and needs schema migrations.[^1] How the log will be used is something I cannot know, so a human decides.
 
 ## What only you know
 

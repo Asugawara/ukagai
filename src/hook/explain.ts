@@ -508,7 +508,7 @@ export function extractCoined(text: string): string[] {
   const found: { at: number; token: string }[] = [];
   for (const m of s.matchAll(COINED_TOKEN)) {
     const t = m[0];
-    if (/^[A-Z]\d$/.test(t) || coinedAllowed(t)) continue;
+    if (coinedAllowed(t)) continue;
     if (/v\d[\w.]*-$/i.test(s.slice(Math.max(0, m.index - 24), m.index))) continue; // part of a version such as v0.2.0-DT1
     found.push({ at: m.index, token: t });
   }

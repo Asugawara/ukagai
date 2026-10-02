@@ -9,7 +9,7 @@ recommended: node:test
 
 ## なぜ今この判断が要るか
 
-W3 のテストを書き始める前に、ランナーを決めます。CLAUDE.md は `node:test` + `tsx` と定めています。
+テストを書き始める前に、ランナーを決めます。CLAUDE.md は `node:test` + `tsx` と定めています。
 
 ## 選択肢
 

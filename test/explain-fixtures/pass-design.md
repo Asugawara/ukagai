@@ -9,7 +9,7 @@ recommended: SSE
 
 ## Why this decision is needed now
 
-W3's server must settle the notification mechanism before it implements `/api/stream`. The choice changes both the server's delivery code and the receiving code in `public/`, so switching later means rewriting both. I cannot tell the notification requirements (who wants the GUI updated, and within how many seconds), and only a human can say whether two-way operations are planned.
+The server must settle the notification mechanism before it implements `/api/stream`. The choice changes both the server's delivery code and the receiving code in `public/`, so switching later means rewriting both. I cannot tell the notification requirements (who wants the GUI updated, and within how many seconds), and only a human can say whether two-way operations are planned.
 
 ## Options
 
