@@ -2,13 +2,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ApiError, TuiApi } from "./api.js";
+import { refetch as syncOnce, streamLoop } from "./sync.js";
 import { App, type Effect } from "./app.js";
 import { ESC_TIMEOUT_MS, KeyParser } from "./keys.js";
 import { renderFrame } from "./render.js";
 
 const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h";
 const LEAVE_SCREEN = "\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l";
-const RECONNECT_MS = 2000;
 const REFETCH_MS = 5000;
 
 interface Options {
@@ -39,6 +39,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   const api = new TuiApi(opts.server, opts.dataDir);
   const app = new App();
+  app.server = opts.server;
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());
@@ -71,14 +72,7 @@ export async function run(argv: string[]): Promise<number> {
 
   const refetch = async () => {
     try {
-      const stale = app.replacePending(await api.listPending(), Date.now());
-      for (const id of stale) {
-        try {
-          app.upsert(await api.get(id), Date.now());
-        } catch {
-          // 次の再取得で
-        }
-      }
+      await syncOnce(api, app);
       schedule();
     } catch {
       // 切れているあいだは SSE の再接続と次の再取得に任せる
@@ -160,22 +154,8 @@ export async function run(argv: string[]): Promise<number> {
     schedule();
   });
 
-  // SSE。切れたら 2 秒後に再接続し、つなぎ直したら一覧を取り直す
-  void (async () => {
-    while (!abort.signal.aborted) {
-      try {
-        void refetch();
-        await api.stream((ev) => {
-          app.upsert(ev.decision, Date.now());
-          schedule();
-        }, abort.signal);
-      } catch {
-        // 再接続へ
-      }
-      if (abort.signal.aborted) return;
-      await new Promise((r) => setTimeout(r, RECONNECT_MS));
-    }
-  })();
+  // SSE。切れたら 2 秒後(以後 5 秒上限)に再接続し、つながるたびに一覧を同期する
+  void streamLoop(api, app, abort.signal, { onChange: schedule });
 
   return finished;
 }

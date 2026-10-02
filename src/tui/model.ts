@@ -78,6 +78,12 @@ export interface ScreenModel {
 const SUFFIX_RE = /\s*[(（]\s*(recommended|推奨)\s*[)）]\s*$/i;
 const stripSuffix = (s: string): string => s.replace(SUFFIX_RE, "");
 
+const NONE_REASON: Record<string, string> = {
+  loop_guard: "書き直しの指示に従わなかったため",
+  plan_mode: "plan mode のため",
+  not_required: "説明を要求していないため",
+};
+
 const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
 
 const tail = (cwd: string): string => cwd.split("/").filter(Boolean).pop() || cwd;
@@ -127,7 +133,7 @@ export function titleOf(d: Decision, fm: Record<string, string>): string {
     return /^#[ \t]+(.+?)[ \t]*$/m.exec(planOf(d))?.[1] ?? "計画の承認";
   }
   const q = questionsOf(d)[0]?.question;
-  return d.session.title || q || "質問";
+  return stripSuffix(d.session.title || q || "質問");
 }
 
 function metaOf(d: Decision, fm: Record<string, string>, key: "reversibility" | "scope"): string | undefined {
@@ -253,7 +259,8 @@ export function buildModel(d: Decision): ScreenModel {
   };
 
   if (!explained) {
-    const reason = d.explanation?.none_reason ?? "";
+    const code = d.explanation?.none_reason ?? "";
+    const reason = NONE_REASON[code] ?? code;
     return {
       ...base,
       kind: "question",

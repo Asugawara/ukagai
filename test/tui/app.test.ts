@@ -194,7 +194,7 @@ test("Tab でフォーカス切替。背景フォーカスの j/k は 1 行ス�
   assert.equal(app.focus, "background");
   const f = redraw(app);
   assert.match(stripAnsi(f.lines.find((l) => l.includes("背景"))!), /背景/);
-  assert.ok(f.lines.some((l) => l.includes("\x1b[7m 背景")), "フォーカス列の見出しは反転");
+  assert.ok(f.lines.some((l) => l.includes("\x1b[7m ▶ 背景")), "フォーカス列の見出しは反転 + ▶");
   press(app, ch("j"), ch("j"), { name: "down" });
   assert.equal(app.scroll, 3);
   press(app, ch("k"));

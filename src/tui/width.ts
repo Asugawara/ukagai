@@ -78,6 +78,9 @@ export function padEnd(s: string, w: number): string {
   return gap > 0 ? s + " ".repeat(gap) : s;
 }
 
+// 行頭に置かない文字(句読点・閉じ括弧)。折り返しで来そうなら、直前の 1 文字を一緒に次の行へ送る
+const NO_LINE_START = new Set(Array.from("。、，．）」』】〕〉》！？：；,.!?)]}"));
+
 /**
  * 表示幅 max で折り返す。空白で切れる所は空白で、無ければ(日本語など)文字単位で切る。
  * ANSI の装飾は行をまたいで引き継ぐ(行末で reset、次行頭で再掲)。
@@ -90,6 +93,8 @@ export function wrap(s: string, max: number): string[] {
   let active = ""; // 現在有効な SGR
   let lastBreak = -1; // cur 内で空白の直後の位置(文字列 index)
   let widthAtBreak = 0;
+  let lastCharAt = -1; // cur 内で直前の文字が始まる位置(文字列 index)
+  let lastCharW = 0;
   const flush = (text: string) => lines.push(active && !text.endsWith("\x1b[0m") ? text + "\x1b[0m" : text);
 
   for (const t of tokens(s)) {
@@ -103,6 +108,7 @@ export function wrap(s: string, max: number): string[] {
       cur = active;
       curW = 0;
       lastBreak = -1;
+      lastCharAt = -1;
       continue;
     }
     if (curW + t.w > max) {
@@ -120,6 +126,12 @@ export function wrap(s: string, max: number): string[] {
         flush(head);
         cur = active + tail;
         curW = curW - widthAtBreak;
+      } else if (NO_LINE_START.has(t.text) && lastCharAt > 0 && lastCharW > 0 && cur[lastCharAt] !== " ") {
+        // 禁則: 句読点を行頭に置かない。直前の 1 文字を一緒に次の行へ
+        const head = cur.slice(0, lastCharAt);
+        flush(/\x1b\[/.test(head) && !head.endsWith("\x1b[0m") ? head + "\x1b[0m" : head);
+        cur = active + cur.slice(lastCharAt);
+        curW = lastCharW;
       } else {
         flush(cur);
         cur = active;
@@ -127,6 +139,8 @@ export function wrap(s: string, max: number): string[] {
       }
       lastBreak = -1;
     }
+    lastCharAt = cur.length;
+    lastCharW = t.w;
     cur += t.text;
     curW += t.w;
     if (t.text === " ") {
