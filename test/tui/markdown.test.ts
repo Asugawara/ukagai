@@ -125,3 +125,12 @@ test("table risk column is detected by the English or the Japanese header", () =
     assert.ok(raw[1]!.includes("\x1b[1;31mbad"), head);
   }
 });
+
+test("a footnote definition right after a bullet stays its own line (not folded into the bullet)", () => {
+  const md = "- reads package.json.[^1]\n[^1]: grep -rn x (no hits)\n[^2]: second";
+  const { lines, footnotes } = renderMarkdownRich(md, 60);
+  const text = lines.map(stripAnsi);
+  assert.equal(text[0], "• reads package.json.[1]");
+  assert.ok(text.includes("[1] grep -rn x (no hits)") && text.includes("[2] second"), text.join("|"));
+  assert.deepEqual(footnotes.map((f) => f.id), ["1", "2"]);
+});
