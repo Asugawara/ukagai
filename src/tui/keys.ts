@@ -2,7 +2,9 @@
 
 export type Key =
   | { name: "char"; ch: string }
-  | { name: "up" | "down" | "left" | "right" | "enter" | "esc" | "backspace" | "tab" | "ctrl-c" | "ctrl-d" | "ctrl-u" | "pgup" | "pgdn" };
+  | { name: "up" | "down" | "left" | "right" | "enter" | "esc" | "backspace" | "tab" | "ctrl-c" | "ctrl-d" | "ctrl-u" | "pgup" | "pgdn" }
+  /** マウスホイール(SGR 報告)。x / y は 1 始まりの端末座標 */
+  | { name: "wheel"; dir: "up" | "down"; x: number; y: number };
 
 /** Esc 単独と矢印のエスケープ列を分ける待ち時間 */
 export const ESC_TIMEOUT_MS = 30;
@@ -41,9 +43,19 @@ export class KeyParser {
       const c = s[i]!;
       if (c === "\x1b") {
         const rest = s.slice(i + 1);
-        if (rest === "" || rest === "[" || rest === "O" || /^\[[0-9;]*$/.test(rest)) {
+        if (rest === "" || rest === "[" || rest === "O" || /^\[<?[0-9;]*$/.test(rest)) {
           this.pending = s.slice(i);
           break;
+        }
+        // SGR マウス報告 `ESC [ < b ; x ; y M|m`。ホイールだけ拾い、クリックやドラッグは捨てる
+        const mouse = /^\[<(\d+);(\d+);(\d+)([Mm])/.exec(rest);
+        if (mouse) {
+          const b = Number(mouse[1]);
+          if (mouse[4] === "M" && b & 64 && (b & 3) < 2) {
+            keys.push({ name: "wheel", dir: b & 1 ? "down" : "up", x: Number(mouse[2]), y: Number(mouse[3]) });
+          }
+          i += 1 + mouse[0].length;
+          continue;
         }
         const m = /^(\[[0-9;]*[~A-Za-z]|O[A-D])/.exec(rest);
         if (m) {
@@ -87,6 +99,8 @@ export class KeyParser {
 
 export type Mode = "normal" | "input" | "list";
 export type Kind = "question" | "plan";
+/** 矢印や j/k が効く列。背景 = 左の説明、decision = 右の判断 */
+export type Focus = "background" | "decision";
 
 export type Action =
   | { type: "move"; delta: 1 | -1 }
@@ -103,7 +117,10 @@ export type Action =
   | { type: "approve" }
   | { type: "approve-auto" }
   | { type: "reject" }
-  | { type: "scroll"; delta: 1 | -1 }
+  /** 背景を半画面(half)または 1 行(line)スクロール */
+  | { type: "scroll"; delta: 1 | -1; unit: "half" | "line" }
+  | { type: "scroll-edge"; to: "top" | "bottom" }
+  | { type: "focus" }
   | { type: "input-char"; ch: string }
   | { type: "input-backspace" }
   | { type: "input-confirm" }
@@ -115,6 +132,7 @@ export type Action =
 export interface KeyContext {
   mode: Mode;
   kind: Kind;
+  focus?: Focus;
   /** gg の 1 つ目の g の時刻(無ければ 0) */
   lastG: number;
   now: number;
@@ -151,11 +169,20 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
 
   const ch = key.name === "char" ? key.ch : null;
   if (ch === "q") return done({ type: "quit" });
+  if (key.name === "tab") return done({ type: "focus" });
+  if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
+  if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1, unit: "half" });
+  if (ctx.focus === "background") {
+    if (down) return done({ type: "scroll", delta: 1, unit: "line" });
+    if (up) return done({ type: "scroll", delta: -1, unit: "line" });
+    if (ch === "G") return done({ type: "scroll-edge", to: "bottom" });
+    if (ch === "g") {
+      return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "scroll-edge", to: "top" }) : done(null, ctx.now);
+    }
+  }
   if (ch === "h" || key.name === "left") return ctx.kind === "plan" && key.name === "left" ? done({ type: "move", delta: -1 }) : done({ type: "prev" });
   if (ch === "l" || key.name === "right") return ctx.kind === "plan" && key.name === "right" ? done({ type: "move", delta: 1 }) : done({ type: "next" });
   if (ch === "b") return done({ type: "list" });
-  if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1 });
-  if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1 });
   if (down) return done({ type: "move", delta: 1 });
   if (up) return done({ type: "move", delta: -1 });
   if (key.name === "enter") return done({ type: "submit" });

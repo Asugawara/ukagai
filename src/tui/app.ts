@@ -1,7 +1,7 @@
 import { MULTI_SELECT_SEPARATOR, type Decision } from "../contract.js";
-import { interpret, type Action, type Key, type Mode } from "./keys.js";
+import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
 import { buildModel, hasExplanation, isBlocker, titleOf, chipsOf, type ScreenModel } from "./model.js";
-import type { ListItem, View } from "./render.js";
+import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 
 // 状態遷移(I/O なし)。キーを渡すと、呼び出し側が実行する Effect を返す。
@@ -19,6 +19,8 @@ interface Draft {
 }
 
 export const TOAST_MS = 2000;
+/** ホイール 1 ノッチの行数 */
+export const WHEEL_LINES = 3;
 
 const STATUS_TEXT: Record<string, string> = {
   answer_submitted: "届けています…",
@@ -33,7 +35,15 @@ export class App {
   readonly decisions = new Map<string, Decision>();
   shownId: string | null = null;
   mode: Mode = "normal";
+  /** 背景(上下配置では画面全体)の先頭行 */
   scroll = 0;
+  /** 判断列の先頭行。null ならカーソルに追従 */
+  rscroll: number | null = null;
+  focus: Focus = "decision";
+  /** 直近に描いた画面の寸法(スクロールの量と範囲に使う) */
+  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows"> = {
+    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20,
+  };
   /** クリップボードに送れるか(pbcopy の有無。index.ts が決める) */
   copySupported = true;
   private models = new Map<string, ScreenModel>();
@@ -87,6 +97,7 @@ export class App {
   private show(id: string | null): void {
     this.shownId = id;
     this.scroll = 0;
+    this.rscroll = null;
     this.input = null;
     if (this.mode === "input") this.mode = "normal";
   }
@@ -148,19 +159,52 @@ export class App {
       list,
       copy: this.copySupported,
       scroll: this.scroll,
+      rscroll: this.rscroll,
+      focus: this.focus,
       now,
     };
   }
 
-  clampScroll(max: number): void {
-    this.scroll = Math.max(0, Math.min(this.scroll, max));
+  /** 描いた画面の寸法を受け取り、スクロール位置を範囲に収める */
+  syncFrame(f: Frame): void {
+    this.frame = f;
+    this.scroll = Math.max(0, Math.min(this.scroll, f.scrollMax));
+    if (this.rscroll != null) this.rscroll = Math.max(0, Math.min(this.rscroll, f.rightMax));
+  }
+
+  /** 左右配置のときだけフォーカスが意味を持つ */
+  private effectiveFocus(): Focus {
+    return this.frame.wide ? this.focus : "decision";
+  }
+
+  /** 背景(上下配置では画面全体)を to へ。現在の見え方 cur から相対で動かすときは呼び出し側が計算する */
+  private setScroll(to: number): void {
+    this.scroll = Math.max(0, Math.min(this.frame.scrollMax, to));
+  }
+
+  private wheel(dir: "up" | "down", x: number): void {
+    const d = (dir === "down" ? 1 : -1) * WHEEL_LINES;
+    const f = this.frame;
+    if (f.wide && x - 1 >= f.split) {
+      if (f.rightMax <= 0) return;
+      this.rscroll = Math.max(0, Math.min(f.rightMax, (this.rscroll ?? f.rightOff) + d));
+    } else if (f.wide) {
+      this.setScroll(this.scroll + d);
+    } else {
+      // 上下配置は 0 のときカーソル追従。いま見えている位置から動かす
+      this.setScroll((this.scroll || f.off) + d);
+    }
   }
 
   // ---- キー ----
 
   handle(key: Key, now: number): Effect[] {
     const m = this.model();
-    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", lastG: this.lastG, now });
+    if (key.name === "wheel") {
+      if (this.mode === "normal") this.wheel(key.dir, key.x);
+      return [];
+    }
+    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), lastG: this.lastG, now });
     this.lastG = lastG;
     return action ? this.apply(action, m, now) : [];
   }
@@ -184,7 +228,14 @@ export class App {
         return [];
       }
       case "list-close": this.mode = "normal"; return [];
-      case "scroll": this.scroll = Math.max(0, this.scroll + a.delta * 5); return [];
+      case "scroll": {
+        const n = a.unit === "half" ? Math.max(1, Math.floor(this.frame.bodyRows / 2)) : 1;
+        // 上下配置は 0 のときカーソル追従。いま見えている位置から動かす
+        this.setScroll((this.frame.wide ? this.scroll : this.scroll || this.frame.off) + a.delta * n);
+        return [];
+      }
+      case "scroll-edge": this.setScroll(a.to === "top" ? 0 : this.frame.scrollMax); return [];
+      case "focus": this.focus = this.focus === "decision" ? "background" : "decision"; return [];
       case "input-char": if (this.input) this.input.text += a.ch; return [];
       case "input-backspace": if (this.input) this.input.text = Array.from(this.input.text).slice(0, -1).join(""); return [];
       case "input-cancel": this.input = null; this.mode = "normal"; return [];
@@ -228,6 +279,7 @@ export class App {
     if (!n) return;
     dr.cursor = clamp(to, n);
     this.scroll = 0;
+    this.rscroll = null;
     const q = m.question;
     if (!q || q.multi) return;
     // 単一選択は移動 = 選択

@@ -41,12 +41,31 @@ test("diff は + 緑 / - 赤 / @@ 青", () => {
   assert.ok(raw[2]!.includes("\x1b[32m+new"));
 });
 
-test("mermaid は注記つきで原文を dim で出す", () => {
-  const raw = renderMarkdown("```mermaid\nflowchart LR\n  A --> B\n```\n", 60);
+test("mermaid は罫線の図に描く(ノード名を含み、幅は列幅以内)", () => {
+  const lines = renderMarkdown("```mermaid\nflowchart LR\n  A[調査] --> B[判断] --> C[実装]\n```\n", 60).map(stripAnsi);
+  const text = lines.join("\n");
+  for (const s of ["調査", "判断", "実装", "┌", "►"]) assert.ok(text.includes(s), s);
+  assert.ok(!text.includes("描画に失敗"));
+  for (const l of lines) assert.ok(width(l) <= 60, l);
+  // 全角を含んでも箱の右辺がそろう
+  const tops = lines.filter((l) => l.includes("┌")).map((l) => l.indexOf("┌"));
+  assert.ok(tops.length > 0);
+  const row = lines.find((l) => l.includes("調査"))!;
+  assert.equal(width(row), width(lines.find((l) => l.includes("┌"))!));
+});
+
+test("mermaid: 幅が足りないときは退避文と定義", () => {
+  const raw = renderMarkdown("```mermaid\nflowchart LR\n  A[調査] --> B[判断] --> C[実装]\n```\n", 20);
   const lines = raw.map(stripAnsi);
-  assert.equal(lines[0], "(図: Mermaid は GUI で表示。以下は定義)");
+  assert.match(lines[0]!, /^\(図は幅 \d+ 列が必要。端末を広げるか GUI で表示\)$/);
   assert.ok(lines.includes("  flowchart LR"));
   assert.ok(raw[1]!.includes("\x1b[2m"));
+});
+
+test("mermaid: 描けない定義は失敗の退避文と定義", () => {
+  const lines = renderMarkdown("```mermaid\nnot a diagram at all\n```\n", 60).map(stripAnsi);
+  assert.equal(lines[0], "(図: 描画に失敗。以下は定義)");
+  assert.ok(lines.includes("  not a diagram at all"));
 });
 
 test("callout は GUI と同じラベルと色の帯", () => {

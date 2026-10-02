@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App } from "../../src/tui/app.js";
 import type { Key } from "../../src/tui/keys.js";
+import { renderFrame } from "../../src/tui/render.js";
+import { stripAnsi } from "../../src/tui/width.js";
 import { V2_MD, blockerDecision, decision, withExplanation } from "./helpers.js";
 
 const ch = (c: string): Key => ({ name: "char", ch: c });
@@ -120,4 +122,113 @@ test("blocker でない判断では c は何もしない", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
   assert.deepEqual(press(app, ch("c")), []);
+});
+
+// ---- スクロール ----
+
+const LONG = V2_MD + "\n" + Array.from({ length: 80 }, (_, i) => `- 行 ${i}`).join("\n") + "\n";
+const wheel = (dir: "up" | "down", x: number, y = 10): Key => ({ name: "wheel", dir, x, y });
+const SIZE = { cols: 140, rows: 24 };
+
+function longApp(): App {
+  const app = new App();
+  app.upsert(decision(withExplanation(LONG)), t);
+  app.syncFrame(renderFrame(app.view(t), SIZE));
+  return app;
+}
+const redraw = (app: App) => {
+  const f = renderFrame(app.view(t), SIZE);
+  app.syncFrame(f);
+  return f;
+};
+
+test("ホイール: 左の列は背景を 3 行、右の列は判断を動かす。端で止まる", () => {
+  const app = longApp();
+  assert.equal(app.scroll, 0);
+  press(app, wheel("down", 10));
+  assert.equal(app.scroll, 3);
+  press(app, wheel("up", 10), wheel("up", 10));
+  assert.equal(app.scroll, 0, "上端で止まる");
+  const f = redraw(app);
+  for (let i = 0; i < 100; i++) press(app, wheel("down", 10));
+  assert.equal(app.scroll, f.scrollMax, "下端で止まる");
+  // 右の列(split 以降)は背景を動かさない。判断が溢れていなければ何も起きない
+  const before = app.scroll;
+  press(app, wheel("up", f.split + 5));
+  assert.equal(app.scroll, before);
+  assert.equal(app.rscroll, null);
+});
+
+test("ホイール: 右の列が溢れるときは判断を動かし、カーソル移動で追従に戻る", () => {
+  const app = longApp();
+  const small = { cols: 140, rows: 14 };
+  const f = renderFrame(app.view(t), small);
+  app.syncFrame(f);
+  assert.ok(f.rightMax > 0, "右が溢れる");
+  press(app, wheel("down", f.split + 5));
+  assert.equal(app.rscroll, Math.min(f.rightMax, f.rightOff + 3));
+  assert.equal(app.scroll, 0);
+  press(app, ch("j"));
+  assert.equal(app.rscroll, null);
+});
+
+test("PgDn / PgUp は半画面、Ctrl-D / Ctrl-U も同じ。端で止まる", () => {
+  const app = longApp();
+  const f = redraw(app);
+  const half = Math.floor(f.bodyRows / 2);
+  press(app, { name: "pgdn" });
+  assert.equal(app.scroll, half);
+  press(app, { name: "ctrl-d" });
+  assert.equal(app.scroll, half * 2);
+  press(app, { name: "pgup" }, { name: "ctrl-u" }, { name: "pgup" });
+  assert.equal(app.scroll, 0);
+  for (let i = 0; i < 50; i++) press(app, { name: "pgdn" });
+  assert.equal(app.scroll, f.scrollMax);
+});
+
+test("Tab でフォーカス切替。背景フォーカスの j/k は 1 行スクロール、G / gg は端、判断のカーソルは動かない", () => {
+  const app = longApp();
+  const cursorBefore = app.view(t).cursor;
+  assert.equal(app.focus, "decision");
+  press(app, { name: "tab" });
+  assert.equal(app.focus, "background");
+  const f = redraw(app);
+  assert.match(stripAnsi(f.lines.find((l) => l.includes("背景"))!), /背景/);
+  assert.ok(f.lines.some((l) => l.includes("\x1b[7m 背景")), "フォーカス列の見出しは反転");
+  press(app, ch("j"), ch("j"), { name: "down" });
+  assert.equal(app.scroll, 3);
+  press(app, ch("k"));
+  assert.equal(app.scroll, 2);
+  press(app, ch("G"));
+  assert.equal(app.scroll, f.scrollMax);
+  press(app, ch("g"), ch("g"));
+  assert.equal(app.scroll, 0);
+  assert.equal(app.view(t).cursor, cursorBefore);
+  press(app, { name: "tab" });
+  assert.equal(app.focus, "decision");
+  press(app, ch("j"));
+  assert.notEqual(app.view(t).cursor, cursorBefore);
+});
+
+test("上下配置: ホイールと PgDn は画面全体を動かす(フォーカスは効かない)", () => {
+  const app = new App();
+  app.upsert(decision(withExplanation(LONG)), t);
+  const narrow = { cols: 80, rows: 20 };
+  const f = renderFrame(app.view(t), narrow);
+  app.syncFrame(f);
+  assert.ok(!f.wide && f.scrollMax > 0);
+  press(app, { name: "tab" }, ch("j"));
+  assert.equal(app.view(t).cursor, 1, "上下配置では j は判断のカーソル");
+  press(app, wheel("down", 5));
+  assert.ok(app.scroll >= 3);
+  press(app, { name: "pgdn" });
+  assert.ok(app.scroll >= 3 + Math.floor(f.bodyRows / 2));
+});
+
+test("入力中・一覧中のホイールは無視。次の判断に移ると位置は戻る", () => {
+  const app = longApp();
+  press(app, wheel("down", 10));
+  press(app, ch("b"));
+  press(app, wheel("down", 10));
+  assert.equal(app.scroll, 3);
 });

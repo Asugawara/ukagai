@@ -20,11 +20,12 @@ test("140x40: 見出し・chips・推奨・カード・背景・ヒント・状�
   for (const s of [
     "◈ ukagai", "⎇ feat/tui", "⧉ feat-tui", "戻すのにコストがかかる", "repo",
     "GUI の更新通知を SSE と WebSocket のどちらにするか",
-    "なぜ今この判断が要るか", "確かめたこと", "(図: Mermaid は GUI で表示。以下は定義)",
+    "なぜ今この判断が要るか", "確かめたこと", "hook", "serve",
     "推奨", "SSE を推します", "▸ ● SSE", "○ WebSocket", "server から GUI への一方向配信", "自由記述",
     "j/k 移動 · Enter 回答 · i 自由記述", "保留 1", "h/l 切替  b 一覧  q 終了",
   ]) assert.ok(out.includes(s), `含まれない: ${s}`);
-  assert.ok(lines.some((l) => l.includes(" │ ")), "2 カラム");
+  assert.ok(lines.some((l) => l.includes(" │ ") && l.includes("◄") === false && l.includes("SSE")), "2 カラム");
+  assert.ok(lines.some((l) => l.includes("背景") && l.includes("判断")), "見出し");
   for (const l of lines) assert.ok(width(l) <= 140);
 });
 
@@ -44,7 +45,7 @@ test("狭い(80 桁)と上下に並び、判断が先に来る", () => {
   const rec = lines.findIndex((l) => l.includes("▸ ● SSE"));
   const bg = lines.findIndex((l) => l.includes("なぜ今この判断が要るか"));
   assert.ok(rec > 0 && bg > rec);
-  assert.ok(!lines.some((l) => l.includes(" │ ")));
+  assert.ok(!lines.some((l) => l.includes("背景") && l.includes("判断")));
 });
 
 test("背景が収まらないときだけスクロールの印と scrollMax", () => {
@@ -52,10 +53,13 @@ test("背景が収まらないときだけスクロールの印と scrollMax", (
   const v = viewOf(decision(withExplanation(long)));
   const f = renderFrame(v, { cols: 140, rows: 24 });
   assert.ok(f.scrollMax > 0);
-  assert.ok(stripAnsi(f.text).includes("Ctrl-U/D"));
+  const txt = stripAnsi(f.text);
+  assert.ok(/▼ 1-\d+\/\d+/.test(txt), "位置表示");
+  assert.ok(txt.includes("PgUp/PgDn 背景をスクロール · Tab 列の切替"));
+  assert.ok(txt.includes("█"), "スクロールバー");
   const short = renderFrame(viewOf(), { cols: 140, rows: 60 });
   assert.equal(short.scrollMax, 0);
-  assert.ok(!stripAnsi(short.text).includes("Ctrl-U/D"));
+  assert.ok(!stripAnsi(short.text).includes("PgUp/PgDn"));
   const scrolled = renderFrame({ ...v, scroll: f.scrollMax }, { cols: 140, rows: 24 });
   assert.ok(stripAnsi(scrolled.text).includes("行 79"));
 });

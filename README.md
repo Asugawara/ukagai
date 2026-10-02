@@ -14,7 +14,7 @@ node dist/cli.js serve              # 127.0.0.1:4818
 node dist/cli.js install --dry-run  # ~/.claude/settings.json への登録内容を確認
 node dist/cli.js install            # 登録(バックアップを取る)。uninstall で元に戻す
 node dist/cli.js doctor             # 登録と server の診断
-node dist/cli.js tui                # ターミナルで同じ判断画面(j/k 移動、Enter 送信、i 自由記述、h/l 切替、b 一覧、q 終了)
+node dist/cli.js tui                # ターミナルで同じ判断画面(j/k 移動、Enter 送信、i 自由記述、h/l 切替、b 一覧、q 終了、ホイール / PgUp / PgDn / Tab で背景をスクロール)
 node dist/cli.js tui --server http://127.0.0.1:4832 --data-dir /tmp/ukagai-x   # 別の server に接続
 ```
 
@@ -39,6 +39,8 @@ node dist/cli.js tui --server http://127.0.0.1:4832 --data-dir /tmp/ukagai-x   #
 | `docs/verification/03-e2e.md` | serve + hook + GUI + install を Claude Code 本体で通した E2E 検証 |
 | (removed before publication) |
 | (removed before publication) |
+
+TUI の図は beautiful-mermaid(MIT)で描く。
 
 ## 状態
 

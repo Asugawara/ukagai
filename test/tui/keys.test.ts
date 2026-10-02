@@ -85,3 +85,39 @@ test("Enter(CR)・Backspace・日本語・Ctrl-D", () => {
   assert.deepEqual(p.feed("日本"), [ch("日"), ch("本")]);
   assert.deepEqual(p.feed("\x04"), [{ name: "ctrl-d" }]);
 });
+
+test("SGR マウス: ホイールの上下と座標、クリックとドラッグは無視", () => {
+  const p = new KeyParser();
+  assert.deepEqual(p.feed("\x1b[<65;10;12M"), [{ name: "wheel", dir: "down", x: 10, y: 12 }]);
+  assert.deepEqual(p.feed("\x1b[<64;100;3M"), [{ name: "wheel", dir: "up", x: 100, y: 3 }]);
+  assert.deepEqual(p.feed("\x1b[<0;5;5M\x1b[<0;5;5m\x1b[<32;6;5M"), []);
+  assert.deepEqual(p.feed("\x1b[<66;5;5M"), [], "横ホイールは無視");
+  // 修飾キー付き(Shift = +4)でも縦ホイール
+  assert.deepEqual(p.feed("\x1b[<69;1;1M"), [{ name: "wheel", dir: "down", x: 1, y: 1 }]);
+});
+
+test("SGR マウス: 途中で切れた列は保留して続きで確定、後続のキーも拾う", () => {
+  const p = new KeyParser();
+  assert.deepEqual(p.feed("\x1b[<65;1"), []);
+  assert.ok(p.hasPending);
+  assert.deepEqual(p.feed("0;12Mj"), [{ name: "wheel", dir: "down", x: 10, y: 12 }, { name: "char", ch: "j" }]);
+});
+
+test("背景フォーカスでは ↑↓ jk が 1 行スクロール、gg / G は端。Tab でフォーカス切替", () => {
+  const ctx = { mode: "normal", kind: "question", focus: "background", lastG: 0, now: 100 } as const;
+  assert.deepEqual(interpret({ name: "down" }, ctx).action, { type: "scroll", delta: 1, unit: "line" });
+  assert.deepEqual(interpret({ name: "char", ch: "k" }, ctx).action, { type: "scroll", delta: -1, unit: "line" });
+  assert.deepEqual(interpret({ name: "char", ch: "G" }, ctx).action, { type: "scroll-edge", to: "bottom" });
+  const first = interpret({ name: "char", ch: "g" }, ctx);
+  assert.equal(first.action, null);
+  assert.deepEqual(interpret({ name: "char", ch: "g" }, { ...ctx, lastG: first.lastG, now: 200 }).action, { type: "scroll-edge", to: "top" });
+  assert.deepEqual(interpret({ name: "tab" }, ctx).action, { type: "focus" });
+  // 判断フォーカスなら従来どおりカーソル移動
+  assert.deepEqual(interpret({ name: "down" }, { ...ctx, focus: "decision" }).action, { type: "move", delta: 1 });
+});
+
+test("PageUp / PageDown / Ctrl-U / Ctrl-D は半画面", () => {
+  const ctx = { mode: "normal", kind: "question", focus: "decision", lastG: 0, now: 0 } as const;
+  for (const n of ["pgdn", "ctrl-d"] as const) assert.deepEqual(interpret({ name: n }, ctx).action, { type: "scroll", delta: 1, unit: "half" });
+  for (const n of ["pgup", "ctrl-u"] as const) assert.deepEqual(interpret({ name: n }, ctx).action, { type: "scroll", delta: -1, unit: "half" });
+});
