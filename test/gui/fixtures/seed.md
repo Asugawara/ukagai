@@ -7,18 +7,18 @@ reversibility: reversible
 scope: file
 ---
 
-## なぜ今この判断が要るか
+## Why this decision is needed now
 
-キーボードだけで回答できるかを確かめるための判断です。好みの問題なので人が決めます。
+This decision exists to check that the GUI can be answered with the keyboard alone. It is a matter of taste, so a person decides.
 
-## 選択肢
+## Options
 
-| 選択肢 | 選ぶと起きること | リスクと戻し方 |
+| Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| A | A が選ばれる | なし |
-| B | B が選ばれる | なし |
-| C | C が選ばれる | なし |
+| A | A is selected | None |
+| B | B is selected | None |
+| C | C is selected | None |
 
-## 推奨
+## Recommendation
 
-B を推します。理由は確認用だからです。
+I recommend B because this is only a check.

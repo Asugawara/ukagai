@@ -1,26 +1,27 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en" data-lang="en">
 <head>
 <meta charset="utf-8">
+<!-- The server injects lang / data-lang into <html>; static text is replaced at startup by i18n.js (applyStatic). -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ukagai</title>
 <link rel="stylesheet" href="/public/app.css">
 </head>
 <body>
-<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden>保留 <span id="pending-count">0</span> <kbd class="kbd">←</kbd><kbd class="kbd">→</kbd></button>
+<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden><span data-i18n="pending">Pending</span> <span id="pending-count">0</span> <kbd class="kbd">←</kbd><kbd class="kbd">→</kbd></button>
 <div id="banner" class="banner" hidden></div>
 <main id="main" hidden>
-  <section id="background" aria-label="背景"></section>
-  <section id="decision" aria-label="判断"></section>
+  <section id="background" aria-label="Background" data-i18n-aria-label="aria_background"></section>
+  <section id="decision" aria-label="Decision" data-i18n-aria-label="aria_decision"></section>
 </main>
 <div id="empty" class="empty">
-  <div id="empty-title" class="empty-title">判断待ちはありません</div>
-  <div id="empty-sub" class="empty-sub">エージェントが質問すると、ここに表示されます</div>
+  <div id="empty-title" class="empty-title">Nothing to decide</div>
+  <div id="empty-sub" class="empty-sub">Decisions from the agent will appear here</div>
 </div>
 <div id="backdrop" class="backdrop" hidden></div>
-<aside id="drawer" class="drawer" aria-label="保留一覧" aria-hidden="true">
-  <h2>保留一覧</h2>
-  <div class="keys"><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd><span>移動</span> · <kbd class="kbd">Enter</kbd><span>表示</span> · <kbd class="kbd">Esc</kbd><kbd class="kbd">←</kbd><span>閉じる</span></div>
+<aside id="drawer" class="drawer" aria-label="Pending decisions" data-i18n-aria-label="pending_list" aria-hidden="true">
+  <h2 data-i18n="pending_list">Pending decisions</h2>
+  <div class="keys"><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd><span data-i18n="key_move">Move</span> · <kbd class="kbd">Enter</kbd><span data-i18n="key_show">Show</span> · <kbd class="kbd">Esc</kbd><kbd class="kbd">←</kbd><span data-i18n="key_close">Close</span></div>
   <ul id="pending-list"></ul>
 </aside>
 <script src="/public/vendor/marked.umd.js"></script>

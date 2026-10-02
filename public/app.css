@@ -23,7 +23,7 @@ body {
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
 
-/* 保留ボタン(2 件以上のときだけ出る) */
+/* Pending button (shown only with 2 or more decisions) */
 .pending-btn { position: fixed; top: 10px; right: 10px; z-index: 20; font: inherit; font-size: 12px; line-height: 1.4; padding: 2px 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: inherit; cursor: pointer; }
 .badge { font-size: 12px; line-height: 20px; border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; white-space: nowrap; color: var(--muted); }
 .badge.irreversible { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
@@ -31,7 +31,7 @@ body {
 .badge.reversible { color: var(--fg); }
 .badge.none { color: var(--yellow); border-color: var(--yellow); }
 .head { margin-bottom: 10px; }
-@media (min-width: 1100px) { .has-pending-btn .blocker-band, .has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } } /* 右上固定の保留ボタン(保留 N + ← →)の幅ぶん。1100px 未満は見出しの右端にインライン */
+@media (min-width: 1100px) { .has-pending-btn .blocker-band, .has-pending-btn .v2-title, .has-pending-btn .head .question { padding-right: 150px; } } /* Width of the fixed top-right pending button (Pending N + ← →). Below 1100px it is inline at the right end of the heading */
 .title-row { display: flex; align-items: flex-start; gap: 8px; }
 .title-row > :first-child { flex: 1; min-width: 0; }
 .title-row .pending-btn { position: static; flex: none; margin-top: 2px; }
@@ -47,9 +47,9 @@ body {
 .cwd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .meta-line .badge { color: var(--fg); }
 .meta-line .badge.irreversible { color: #fff; }
-.banner { grid-row: 1; background: var(--red); color: #fff; padding: 8px 16px; } /* 通常フロー。表示中は下の行(main / .empty)を押し下げる */
+.banner { grid-row: 1; background: var(--red); color: #fff; padding: 8px 16px; } /* Normal flow. While shown it pushes the rows below (main / .empty) down */
 main, .empty { grid-row: 2; }
-code .nb { white-space: nowrap; } /* `-` を含む語は途中で折らない(語の境目は <wbr>) */
+code .nb { white-space: nowrap; } /* Words containing `-` are not broken in the middle (word boundaries are <wbr>) */
 
 /* main */
 main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); min-height: 0; }
@@ -70,7 +70,7 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 }
 .bg-note { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
 
-/* 判断 */
+/* Decision */
 .status { padding: 6px 10px; border-radius: 6px; background: var(--code); margin-bottom: 10px; font-size: 13px; }
 .qs { flex: 1 0 auto; }
 .q { margin-bottom: 18px; }
@@ -140,19 +140,19 @@ pre code { background: none; padding: 0; white-space: pre; overflow-wrap: normal
 .mermaid-ok.wide { overflow-x: auto; }
 .wide-chip { display: block; font: inherit; font-size: 12px; line-height: 18px; padding: 1px 8px; margin: 0 0 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted); cursor: pointer; }
 
-/* 全幅表示: 判断列を隠して背景だけを広く(Esc / f / Tab で戻る。Enter は無効) */
+/* Full-width view: hide the decision column and widen the background (Esc / f / Tab to return; Enter is disabled) */
 body.fullwide main { grid-template-columns: minmax(0, 1fr); }
 body.fullwide #decision, body.fullwide .pending-btn { display: none; }
 body.fullwide #background { border-right: 0; }
 details { margin: 8px 0; }
 details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 
-/* 空状態 */
+/* Empty state */
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
 .empty-title { font-size: 18px; }
 .empty-sub { font-size: 13px; color: var(--muted); }
 
-/* ドロワー */
+/* Drawer */
 .backdrop { position: fixed; inset: 0; background: #0000004d; z-index: 40; }
 .drawer { position: fixed; top: 0; bottom: 0; right: 0; width: 320px; max-width: 100vw; z-index: 50; background: var(--panel); border-left: 1px solid var(--line); box-shadow: -4px 0 16px #00000033; transform: translateX(105%); transition: transform .18s ease; display: flex; flex-direction: column; padding: 14px; visibility: hidden; }
 .drawer.open { transform: none; visibility: visible; }
@@ -163,8 +163,8 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .row .title { font-weight: 600; overflow-wrap: anywhere; }
 .row .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
-/* トースト */
-/* 送信ボタン群(.actions)の真上に縦に積む。判断が無いときだけ右下固定 */
+/* Toasts */
+/* Stacked vertically right above the button group (.actions). Fixed bottom right only when nothing is shown */
 .toasts { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; z-index: 60; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
 .toasts.floating { position: fixed; left: auto; right: 16px; bottom: 16px; margin: 0; max-width: min(420px, calc(100vw - 32px)); }
 .toast { background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; box-shadow: 0 2px 10px #0004; overflow-wrap: anywhere; }
@@ -172,12 +172,12 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .toast.ok { background: color-mix(in srgb, var(--green) 22%, var(--bg)); color: var(--fg); border: 1px solid var(--green); box-shadow: none; }
 .toast.soft { background: var(--panel); color: var(--muted); border: 1px solid var(--line); box-shadow: none; }
 
-/* 強調: 太字 = 決め手、リスク欄の太字は赤 */
+/* Emphasis: bold = the deciding point; bold in the risk column is red */
 .md strong, .rec strong, .opt .desc strong { color: var(--accent); font-weight: 700; }
 .opt .desc.muted strong { color: var(--red); }
 .badge strong { color: inherit; }
 
-/* callout(GitHub 形式の alert) */
+/* Callouts (GitHub-style alerts) */
 .md blockquote { margin: 8px 0; padding: 6px 10px; border-left: 3px solid var(--line); }
 .md blockquote.callout { --c: var(--accent); border-left: 3px solid var(--c); background: color-mix(in srgb, var(--c) 10%, transparent); border-radius: 0 6px 6px 0; }
 .md blockquote.callout.tip { --c: var(--green); }
@@ -190,7 +190,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .build { font-size: 11px; color: var(--muted); opacity: 0.7; }
 .empty-build { position: fixed; right: 12px; bottom: 8px; }
 
-/* ブロッカー(人の作業待ち) */
+/* Blocker (waiting for human work) */
 .blocker-band { background: var(--blocker); color: #1d1d1f; font-weight: 700; font-size: 13px; padding: 2px 12px; border-radius: 4px; margin-bottom: 8px; }
 .badge.blocker { border-color: var(--blocker); color: var(--blocker); font-weight: 600; }
 .todo { border: 2px solid var(--blocker); background: color-mix(in srgb, var(--blocker) 8%, transparent); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
@@ -198,7 +198,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .codewrap { position: relative; }
 .copy-btn { position: absolute; top: 12px; right: 6px; font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }
 
-/* 長い説明の折りたたみ(`.` で展開): 推奨は約 6 行、カード本文は各 3 行 */
+/* Folding of long text (`.` expands): about 6 lines for the recommendation, 3 lines per card body */
 .impact { position: relative; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 .impact-cap { font-size: 11px; font-weight: 700; color: var(--muted); }
 .impact-body { max-height: calc(8 * 1.6em); overflow: hidden; }
