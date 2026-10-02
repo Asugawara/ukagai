@@ -141,7 +141,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
         const fig = renderMermaid(body.join("\n"));
         if (fig.ok) {
           if (fig.width > w) {
-            out.push(...wrap(`${DIM}(図: 幅 ${fig.width} 桁。←→ で横スクロール${opts.fullHint === false ? "" : " · f で全幅"})${RESET}`, w));
+            out.push(...wrap(`${DIM}(図: 幅 ${fig.width} 桁。←→ / 横ホイールでスクロール${opts.fullHint === false ? "" : " · f で全幅"})${RESET}`, w));
             for (const l of fig.lines) {
               if (width(l) > w) wideRows.set(out.length, l);
               out.push(sliceCols(l, 0, w));

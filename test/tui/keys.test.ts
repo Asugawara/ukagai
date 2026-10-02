@@ -91,7 +91,9 @@ test("SGR マウス: ホイールの上下と座標、クリックとドラッ�
   assert.deepEqual(p.feed("\x1b[<65;10;12M"), [{ name: "wheel", dir: "down", x: 10, y: 12 }]);
   assert.deepEqual(p.feed("\x1b[<64;100;3M"), [{ name: "wheel", dir: "up", x: 100, y: 3 }]);
   assert.deepEqual(p.feed("\x1b[<0;5;5M\x1b[<0;5;5m\x1b[<32;6;5M"), []);
-  assert.deepEqual(p.feed("\x1b[<66;5;5M"), [], "横ホイールは無視");
+  assert.deepEqual(p.feed("\x1b[<66;5;5M"), [{ name: "hwheel", dir: "left" }]);
+  assert.deepEqual(p.feed("\x1b[<67;5;5M"), [{ name: "hwheel", dir: "right" }]);
+  assert.deepEqual(p.feed("\x1b[H\x1b[F\x1b[1~\x1b[4~\x1bOH\x1bOF"), ["home", "end", "home", "end", "home", "end"].map((name) => ({ name })));
   // 修飾キー付き(Shift = +4)でも縦ホイール
   assert.deepEqual(p.feed("\x1b[<69;1;1M"), [{ name: "wheel", dir: "down", x: 1, y: 1 }]);
 });

@@ -76,6 +76,9 @@ export interface Frame {
 
 export const WIDE_COLS = 120;
 
+/** 左右配置の判断列の幅。残りを背景に充てる */
+export const decisionWidth = (cols: number): number => Math.max(44, Math.min(58, Math.round(cols * 0.34)));
+
 const CHIP_COLOR: Record<Chip["kind"], string> = { repo: MAGENTA, branch: GREEN, worktree: YELLOW };
 const BADGE_IRREVERSIBLE = "\x1b[41;97m";
 const BADGE_COSTLY = "\x1b[43;30m";
@@ -218,12 +221,13 @@ function window(lines: string[], rows: number, offset: number): string[] {
   return out;
 }
 
-function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; hint?: boolean } = {}): string {
+function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; hint?: boolean; hscrollable?: boolean } = {}): string {
+  const hscrollable = o.hscrollable ?? false;
   let left: string;
   if (v.list) left = `${DIM}j/k 移動  Enter 表示  Esc 戻る${RESET}`;
   else if (o.full) left = `保留 ${v.pending}  ${DIM}f / Esc で戻る  ←→ 横スクロール  j/k PgUp/PgDn 縦  q 終了${RESET}`;
   else {
-    left = `保留 ${v.pending}  ${DIM}h/l 切替  b 一覧  q 終了${overflow ? "  PgUp/PgDn 背景をスクロール · Tab 列の切替" : ""}${RESET}`;
+    left = `保留 ${v.pending}  ${DIM}h/l 切替${hscrollable ? "  ←→ 図を横スクロール" : ""}  b 一覧  q 終了${overflow ? "  PgUp/PgDn 背景をスクロール · Tab 列の切替" : ""}${RESET}`;
   }
   if (v.toast) left += `  ${BOLD}${GREEN}${v.toast}${RESET}`;
   if (o.hint) left += `  ${BOLD}${YELLOW}図が列幅を超えています: f で全幅表示${RESET}`;
@@ -272,7 +276,7 @@ export function renderFrame(v: View, size: Size): Frame {
   const fin = (body: string[], head: string[], meta: Partial<Frame> = {}, overflow = false): Frame => {
     const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false };
     const f = { ...base, ...meta };
-    const lines = [...head, ...body, footer(v, cols, overflow, { full: f.full, hint: v.fullHint && f.figOver && !f.full })].map((l) => truncate(l, cols));
+    const lines = [...head, ...body, footer(v, cols, overflow, { full: f.full, hint: v.fullHint && f.figOver && !f.full, hscrollable: f.hMax > 0 })].map((l) => truncate(l, cols));
     return { text: lines.join("\n"), lines, ...f };
   };
 
@@ -292,8 +296,8 @@ export function renderFrame(v: View, size: Size): Frame {
   if (cols >= WIDE_COLS) {
     const SEP = " │ ";
     const full = v.full;
-    const leftW = full ? cols : Math.floor((cols - SEP.length) / 2);
-    const rightW = cols - SEP.length - leftW;
+    const rightW = decisionWidth(cols);
+    const leftW = full ? cols : cols - SEP.length - rightW;
     // 見出し行(フォーカスのある列を反転)を 1 行取り、残りが列の窓
     const winRows = Math.max(1, bodyRows - 1);
     const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ${label} ${RESET}` : `${DIM} ${label}${RESET}`, w);

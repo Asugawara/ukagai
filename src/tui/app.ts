@@ -224,6 +224,10 @@ export class App {
 
   handle(key: Key, now: number): Effect[] {
     const m = this.model();
+    if (key.name === "hwheel") {
+      if (this.mode === "normal") this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
+      return [];
+    }
     if (key.name === "wheel") {
       if (this.mode === "normal") this.wheel(key.dir, key.x);
       return [];
@@ -260,6 +264,7 @@ export class App {
       }
       case "scroll-edge": this.setScroll(a.to === "top" ? 0 : this.frame.scrollMax); return [];
       case "hscroll": this.hscroll = Math.max(0, Math.min(this.frame.hMax, this.hscroll + a.delta * HSCROLL_STEP)); return [];
+      case "hscroll-edge": this.hscroll = a.to === "start" ? 0 : this.frame.hMax; return [];
       case "full": this.full = !this.full; this.scroll = 0; return [];
       case "focus": this.focus = this.focus === "decision" ? "background" : "decision"; return [];
       case "input-char": if (this.input) this.input.text += a.ch; return [];
