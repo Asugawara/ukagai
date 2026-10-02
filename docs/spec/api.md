@@ -265,3 +265,16 @@ stateDiagram-v2
 - `WaitResponse` は `{ "response": DecisionResponse }`(計画は「200 + response」)。
 - `POST /api/decisions/:id/ack` の応答は `Decision`、エラー本文は `{"error":...}`、`POST /api/events` の応答は 204。
 - `Metrics` の形(`a` / `b` / `c` / `d`)は計画 2 節の指標名からの起案。
+
+## W4(hook)が足した取り決め
+
+W3 の実装と合わせた hook 側の取り決め。
+
+- `CreateDecisionRequest` に任意の `status: "denied_explain"`(`contract.ts`。W3 も同じ追記をしているのでマージ時に重複を解く)。hook は説明なしの deny を記録するとき `status: "denied_explain"` を付けて `POST /api/decisions` する(`explanation` は付けない)。`first_denied_at` は server が付けるので hook は送らない。`attached_via` は hook が決めて送る。
+- 全 POST は `Content-Type: application/json`。本文の無い ack / consume も本文 `{}` を送る。
+- `POST /api/decisions` は新規 201、既存 200。hook は両方を成功として扱う。timeout は 3 秒(文脈収集が最大 1.5 秒)、wait は `timeout_ms + 5` 秒、その他 1 秒。
+- ループ保険: `GET /api/decisions?status=denied_explain` の全件を hook が `session_id`、`agent_id`、`questions[0].question`(ExitPlanMode は `kind: approve_plan`)、直近 2 分で絞る。失敗(接続不可 / 200 以外)したら deny せず無出力。
+- wait が 200 を返すのは `answer_submitted` / `fallback` のみ。fallback は `response.via: "terminal"` で、hook は何も出力せず ack もしない。
+- 説明なし(`attached_via: none`)と ExitPlanMode の `explanation` は `path: ""`(plan は `markdown` に計画本文、none は `markdown: ""`)、`match: "question"` 固定。server は空の `path` を弾かない。
+- `GET /api/sessions/:id/pending-mode-switch` は 200 + `{"pending": boolean}`、`POST .../consume` は 2xx。
+- hook の引数: `--poll-timeout-ms`(test 用)、`--deny-template A|B`(既定 A)。
