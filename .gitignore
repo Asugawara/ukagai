@@ -8,3 +8,5 @@ verification/log/
 verification/answer.json
 verification/mode
 verification/e2e-settings*.json
+verification/state/
+verification/e3-note.md
