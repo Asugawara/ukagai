@@ -18,6 +18,7 @@ function write(out: Record<string, unknown> | null | undefined): void {
 
 /** フェイルオープン: どの経路でも例外は握りつぶし、常に 0 を返す */
 export async function run(argv: string[]): Promise<number> {
+  process.stdout.on("error", () => {});
   const startedAt = Date.now();
   try {
     const opts = parseArgs(argv);

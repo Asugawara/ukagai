@@ -32,6 +32,16 @@ async function main(argv: string[]): Promise<number> {
     process.stderr.write(`ukagai: unknown command: ${name} (try --help)\n`);
     return 2;
   }
+  if (name === "hook") {
+    // フェイルオープン: 読み込みに失敗しても stdout は空、exit 0
+    try {
+      const mod = (await import("./hook/index.js")) as { run: (argv: string[]) => Promise<number> };
+      return await mod.run(rest);
+    } catch (err) {
+      process.stderr.write(`ukagai hook: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 0;
+    }
+  }
   const mod = (await import(`./${name}/index.js`)) as {
     run: (argv: string[]) => Promise<number>;
   };
