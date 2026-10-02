@@ -67,8 +67,8 @@ Claude Code の hook から呼ばれる。失敗しても何も出力せず exit
   --budget <sec>        hook の持ち時間(既定: 590)
   --observe             観測のみ
   --no-autostart        SessionStart で server を自動起動しない
-  --server <url>        server の URL
-  --data-dir <dir>      token の置き場
+  --server <url>        server の URL(既定: http://127.0.0.1:4818)
+  --data-dir <dir>      token の置き場(既定: ~/.ukagai)
   --deny-template <A|B> deny 理由文の文体(既定 A)
   --poll-timeout-ms <ms>  1 回の long-poll の長さ(test 用)
   -h, --help            この使い方を表示する

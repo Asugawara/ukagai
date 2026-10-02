@@ -3,7 +3,7 @@
  * 「対象語」と「詰まり語」の両方が同じ文(「。」「.」改行区切り)に入っているときだけ一致にする
  */
 export const BLOCKER_TARGET =
-  /認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵|login|sign[ -]?in|api[ _-]?key|APIキー|API キー|\\bauth\\b/i;
+  /認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵|login|sign[ -]?in|api[ _-]?key|APIキー|API キー|\bauth\b/i;
 export const BLOCKER_STUCK =
   /ない|無い|なく|なければ|無く|無ければ|ありません|切れ|失敗|必要|してください|お願い|できません|進められません|進めません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked/i;
 
