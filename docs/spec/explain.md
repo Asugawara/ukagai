@@ -55,11 +55,17 @@ The names are exported from `src/hook/explain.ts` as `SECTION`:
 | `options` | Options | 選択肢 | options |
 | `recommend` | Recommendation | 推奨 | recommendation |
 | `diagram` | Diagram | 図 | diagram |
+| `checked` | What I checked | 確かめたこと | whatichecked |
+| `terms` | Terms | 用語 | terms |
+| `unknowns` | What only you know | あなたにしか分からないこと | whatonlyyouknow |
+| `assumptions` | Assumptions | 前提 | assumptions |
+| `against` | Counterargument | 反論 | counterargument |
+| `affects` | Affected | 影響を受けるもの | affected |
 | (blocker) `why` | Why I stopped | なぜ止まったか | whyistopped |
 | (blocker) `todo` | What you need to do | 人にしてほしいこと | whatyouneedtodo |
 | (plan) `impact` | Scope and reversibility | 影響範囲と可逆性 | scopeandreversibility |
 
-"What I checked" (確かめたこと) and "Related diff" (関係する差分) are not matched (section 3.2).
+"Related diff" (関係する差分) is not matched (section 3.2). `terms` / `unknowns` / `assumptions` / `against` / `affects` are optional and only parsed (section 3.7); the hook does not check them yet.
 
 `findSection(headings, total, names)` takes an array of names.
 
@@ -71,7 +77,12 @@ The names are exported from `src/hook/explain.ts` as `SECTION`:
 | Options | Always required. A table of 3.3 inside the section. A heading such as "Options compared" (選択肢の比較) also passes by partial match |
 | Recommendation | Always required. At least one non-empty line in the section. Write which option you recommend, the reason (aim for 3 sentences, limit 5 sentences and 400 characters), and **the condition under which another option is right** ("if …, B") (the content is checked only for the condition words; see `recommend_cond`) |
 | Diagram | **Required when `reversibility` is anything but `reversible`, or `scope` is `machine` / `external`** (`repo` + `reversible` is optional). At least one ` ```mermaid ` code block inside the section. When `scope` or `reversibility` is missing or invalid it is treated as required (the safe side). Even when required, if the difference between the options does not show in a diagram, do not draw one and make the table rows more detailed (guidance in the skill; not checked) |
-| What I checked | Optional. file:line and command results. Mark guesses as guesses. Not checked |
+| What I checked | **Required unless `reversibility` is `reversible` and `scope` is `file`** (code `checked`). At least one non-empty line in the section. file:line and command results. Mark guesses as guesses. Put evidence in footnotes: `[^1]: evidence` here, `[^1]` in the body (3.7). Not required for a blocker |
+| What only you know | Optional (the skill says to always write it). 1–3 bullets: what the agent could not settle by investigating. The GUI shows it as the "You decide:" band under the title |
+| Assumptions | Optional (the skill says to always write it). One premise per bullet. The GUI shows a checklist under the recommendation |
+| Counterargument | Optional. The strongest argument against the recommendation, 1–2 sentences |
+| Affected | Optional. Concrete names (files, services, people, environments), one per bullet. The GUI shows chips (up to 6, then "+N") |
+| Terms | Optional. `- **term** — definition` per item (3.7). The GUI annotates the term in the body |
 | Related diff | Write it when code changes are involved. The hook cannot judge it, so it is **not checked** (optional). At most 20 lines in a ` ```diff ` block |
 
 **When `type: blocker`** (the options are exactly 3: `Done. Continue (Recommended)` / `Skip this step and continue` / `Stop here`; `recommended` is `Done. Continue`; `reversibility` / `scope` as usual, typically `reversible` / `machine`). The Japanese labels `対応した。続けて` / `この手順は飛ばして続けて` / `ここで中断` are accepted as aliases (exported as `BLOCKER_LABELS`):
@@ -95,6 +106,9 @@ Inside the "Options" section there must be a GFM table (header row + separator r
 4. When the options are known from stdin, for each label there is a row whose first cell matches by `normalizeLabel`.
 
 If a section has several tables, one of them satisfying the conditions is enough.
+
+5. **Extra columns.** The table may have 3 or more columns: the label, the `COLUMN_HAPPENS` column, the `COLUMN_RISK` column and any others (cost, effort, …). Columns may be in any order after the label. `Table.extraColumns` lists the indexes of the columns that are neither the label (0), `COLUMN_HAPPENS` nor `COLUMN_RISK` (empty for the usual 3 columns). Extra columns are not checked (the hook does not look at their cells).
+6. **Undo (`undo`).** Every data row's `COLUMN_RISK` cell matches `UNDO_WORDS` (`/undo|revert|roll ?back|restore|reinstall|delete the|remove the|cannot be undone|irreversible|戻|消せ|やり直|再実行|元に戻らない/i`; 「戻せない」 matches by 「戻」), or says in other words that it cannot be undone. For a blocker, the rows of the 3 fixed labels are exempt (they need no undo sentence); any other row is checked. Evaluated only for tables satisfying 1–4, and only when `cell_long` is evaluated, right after it.
 
 ### 3.4 `has` (facts for the record)
 
@@ -125,11 +139,24 @@ So that option cards are not pushed off screen in the right column of the GUI, l
 
 - Sentences are split on `。` `!` `?` (also `！` `？` after NFKC) and on a `.` followed by whitespace or the end (`file.ts` and `0.5` are not split).
 - `cell_long` looks only at tables that satisfy 3.3. For a blocker `recommend_long` / `recommend_cond` are not evaluated (there is no Recommendation section).
-- Put details, evidence and logs in the "What I checked" section (not checked).
+- Put details, evidence and logs in the "What I checked" section (required unless reversible + file; the content is not checked).
+
+### 3.7 Parsers (exported; the GUI keeps its own copy, the TUI imports these)
+
+All take the whole Markdown (front matter included; it is skipped). Lines inside code fences are ignored. Headings are matched by the rules of 3.1.
+
+| Export | Signature | Result |
+|---|---|---|
+| `parseBullets` | `(markdown: string, names: readonly string[]) => string[]` (`names` e.g. `SECTION.unknowns`) | The bullet items (`-` `*` `+` `1.` `1)`) of the section, marker removed. Indented continuation lines are joined with a space. `[]` when the section is absent |
+| `parseTerms` | `(markdown: string) => { term: string; definition: string }[]` | The items of the Terms section. Accepted: `- **term** — definition`, `- **term**: definition` (also `**term:** definition`), `- term — definition` (a `:` also works for the plain form; `—` `–` `―` `-` and `：` are separators). Items without a separator or with an empty side are skipped |
+| `parseFootnotes` | `(markdown: string) => { defs: { id: string; text: string }[]; refs: string[] }` | `defs`: lines `[^id]: text` anywhere in the body (indented continuation lines joined; the first definition of an id wins). `refs`: distinct `[^id]` references in order of appearance (definition lines, inline code and fences are not references) |
+| `Table.extraColumns` | `number[]` on each table from `findTables` | See 3.3 item 5 |
+
+**Footnotes (`footnote`).** For every id in `refs` there must be a definition in `defs`, anywhere in the body (recommended: in "What I checked"). A definition without a reference is fine. Not evaluated for a blocker.
 
 ## 4. Check result
 
-The check lists the following `missing` codes **in this order**. When `missing` is empty, `valid: true`.
+The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter` … `recommended`, `why`, `why_long`, `options`, `table`, `cell_long`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `diagram`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
 
 | Code | Condition (added when it is not satisfied) | Name in the deny reason |
 |---|---|---|
@@ -146,12 +173,15 @@ The check lists the following `missing` codes **in this order**. When `missing` 
 | `options` | The "Options" section is absent | the "Options" section |
 | `table` | `options` exists but there is no table of 3.3 (not evaluated when `options` is absent) | the options table (first column is the label; columns for what happens if chosen and for risks and how to undo; one row per option) |
 | `cell_long` | A cell of a table satisfying 3.3 exceeds the limit of 3.6 (not evaluated when `table` failed) | a cell in the options table is too long (at most 160 characters per cell) |
+| `undo` | A risk cell of a table satisfying 3.3 matches none of `UNDO_WORDS` (3.3 item 6; blocker: the 3 fixed rows are exempt; not evaluated when `table` failed; right after `cell_long`) | each risk cell must say how to undo (or that it cannot be undone) |
 | `todo` | `type: blocker` but the "What you need to do" section is absent or empty, or has no code block | the "What you need to do" section (with a code block of commands) |
 | `recommend` | (not evaluated for a blocker) The "Recommendation" section is absent or empty | the "Recommendation" section |
 | `recommend_long` | (not evaluated for a blocker) The "Recommendation" section exceeds the limit of 3.6 (not evaluated when `recommend` failed) | the "Recommendation" section is too long (at most 5 sentences and 400 characters) |
 | `recommend_cond` | (not evaluated for a blocker) The body of the "Recommendation" section (excluding code blocks and callout lines) contains none of the words matched by `RECOMMEND_COND`: `なら` (not `ならない` / `ならず`) / `なければ` (not `なければなら…`; includes 「でなければ」) / `場合` / `とき` (not `ときどき`) / `であれば` / `際は` / `際に` / `\bif\b` / `\bwhen\b` / `\bunless\b` / `\botherwise\b` / `\bin case\b` (Latin letters are case-insensitive) (not evaluated when `recommend` failed; right after `recommend_long`) | a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.) |
 | `multi` | (not a check; used in step 0 of section 5) `questions` has two or more entries | one question per call |
 | `diagram` | (not evaluated for a blocker) A diagram is required (3.2) but the "Diagram" section or the ` ```mermaid ` block is absent | a "Diagram" section with a Mermaid diagram |
+| `checked` | (not evaluated for a blocker) Not (`reversibility: reversible` and `scope: file`), and the "What I checked" section is absent or empty (right after `diagram`) | the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes) |
+| `footnote` | (not evaluated for a blocker) The body has a `[^id]` reference with no `[^id]: …` definition (3.7; right after `checked`) | a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked") |
 | `impact` | (plans only, section 9) The "Scope and reversibility" section is absent or empty | the "Scope and reversibility" section |
 
 - Without front matter only `front_matter` is added, and `question` `title` `reversibility` `scope` `recommended` are not evaluated (the diagram requirement is judged "required" on the safe side).
@@ -214,12 +244,17 @@ reversibility: reversible | costly | irreversible
 scope: file | repo | machine | external
 ---
 ## Why this decision is needed now
+## What only you know  (1-3 bullets: what you could not settle by investigating)
 ## Options
 | Option | What happens if chosen | Risks and how to undo |
 ## Recommendation
 (the option you recommend and why; the last sentence names the condition that makes another option right)
+## Assumptions  (one premise per bullet)
 ## Diagram  (Mermaid; for anything not reversible, or scope machine / external)
+## What I checked  (commands run and files read; evidence as [^1]: ... cited from the body; not needed for reversible + file)
 ```
+
+Terms, Counterargument and Affected are optional and are not in the template. The placeholders under "What only you know" and "Assumptions" are in parentheses on the heading line, so leaving them as they are does not pass any check.
 
 When the file found has `type: blocker`, the blocker template is pasted whenever anything at all is missing: the front matter has `type: blocker`, `recommended: Done. Continue`, `reversibility: reversible`, `scope: machine`; the sections are "Why I stopped", "What you need to do" and "Options" (the table header and the rows of the 3 fixed labels; no Recommendation or Diagram).
 
@@ -239,9 +274,9 @@ The hook reads `lang` with `readConfig(dataDir)` (`<data-dir>/config.json`; defa
 ```
 Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.
 When you do ask, write the explanation the human reads as Markdown in {absolute location}/ following skill ukagai-explain. {language sentence}
-front matter: question is the AskUserQuestion question verbatim, title is the decision for the human in one sentence, recommended is the label of the option you recommend, reversibility is reversible / costly / irreversible, scope is file / repo / machine / external. Body: "Why this decision is needed now", "Options" (table: first column is the label; columns for what happens if chosen and for risks and how to undo), "Recommendation" (reason, and the condition under which another option is right). Recommendation: first sentence names the option and why, last sentence is "if ..., B" (at most 5 sentences and 400 characters); table cells at most 160 characters. Draw a Mermaid diagram only when the decision is hard to undo (anything but reversible) or scope is machine / external, and the options differ in structure or flow.
+front matter: question is the AskUserQuestion question verbatim, title is the decision for the human in one sentence, recommended is the label of the option you recommend, reversibility is reversible / costly / irreversible, scope is file / repo / machine / external. Body: "Why this decision is needed now", "Options" (table: first column is the label; columns for what happens if chosen and for risks and how to undo), "Recommendation" (reason, and the condition under which another option is right). Recommendation: first sentence is a conclusion that decides on its own and names the option, last sentence is "if ..., B" (at most 5 sentences and 400 characters); table cells at most 160 characters and each risk cell says how to undo. Also write "What only you know" (1-3 bullets) and "Assumptions" (one per line), and unless reversible + file, "What I checked" with evidence as footnotes ([^1]) cited from the body. Optional: "Terms", "Counterargument", "Affected". Draw a Mermaid diagram only when the decision is hard to undo (anything but reversible) or scope is machine / external, and the options differ in structure or flow.
 Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section. No explanation file is needed for AskUserQuestion in plan mode.
-When stopped by human work such as authentication or permissions, do not end in prose: write a blocker-format explanation and ask with AskUserQuestion (Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work.
+When stopped by human work such as authentication or permissions, do not end in prose: write a blocker-format explanation and ask with AskUserQuestion (Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work. If an answer starts with "None of these — ", act on its type: add options, fix the premise and re-ask, add evidence, or ask later.
 ```
 
 `AskUserQuestion` is not provided inside a subagent, so no decision arises there (confirmed with Claude Code 2.1.287). The additionalContext of SubagentStart arrives but is never used.
@@ -268,9 +303,9 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 
 ## 11. Fixtures
 
-`test/explain-fixtures/` has 20. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
+`test/explain-fixtures/` has 24. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
 
-The fixtures are written in English. The `question:` line keeps the original question text, because `expected.json` records it. Three Japanese variants (`*-ja.md`, with the same `expected.json` contents) exercise the Japanese aliases.
+`pass-*` and the other `fail-*` fixtures satisfy `checked` and `undo` (their text was extended), so each `fail-*` reports only its own code. The fixtures are written in English. The `question:` line keeps the original question text, because `expected.json` records it. Three Japanese variants (`*-ja.md`, with the same `expected.json` contents) exercise the Japanese aliases.
 
 | File | valid | missing |
 |---|---|---|
@@ -294,6 +329,10 @@ The fixtures are written in English. The `question:` line keeps the original que
 | `fail-cell-long.md` | false | `cell_long` |
 | `fail-recommend-long.md` | false | `recommend_long` |
 | `fail-why-long.md` | false | `why_long` |
+| `pass-rich.md` | true | none (every section, a 4-column table, footnotes `[^1]` `[^2]` with definitions in "What I checked") |
+| `fail-no-undo.md` | false | `undo` (`pass-rich.md` with risk cells that do not say how to undo) |
+| `fail-no-checked.md` | false | `checked` (costly + repo, no "What I checked") |
+| `fail-footnote.md` | false | `footnote` (`[^2]` referenced, not defined) |
 
 ## 12. Stop hook safeguard (a blocker stopped in prose)
 
@@ -322,12 +361,19 @@ English is canonical and preferred; the Japanese alias is accepted anywhere the 
 | Section | Recommendation | 推奨 |
 | Section | Diagram | 図 |
 | Section | What I checked | 確かめたこと |
+| Section | What only you know | あなたにしか分からないこと |
+| Section | Assumptions | 前提 |
+| Section | Counterargument | 反論 |
+| Section | Affected | 影響を受けるもの |
+| Section | Terms | 用語 |
 | Section | Related diff | 関係する差分 |
 | Section (blocker) | Why I stopped | なぜ止まったか |
 | Section (blocker) | What you need to do | 人にしてほしいこと |
 | Section (plan) | Scope and reversibility | 影響範囲と可逆性 |
 | Table column | `/happens\|outcome/i`, e.g. "What happens if chosen" | 起きること, e.g. 「選ぶと起きること」 |
 | Table column | `/risk/i`, e.g. "Risks and how to undo" | リスク, e.g. 「リスクと戻し方」 |
+| Undo words (risk cells) | undo / revert / roll back / restore / reinstall / delete the / remove the / cannot be undone / irreversible | 戻 / 消せ / やり直 / 再実行 / 戻せない / 元に戻らない |
+| "None of these" type | Missing option / Wrong premise / Need more evidence / Ask me later | 選択肢が足りない / 前提が違う / 証拠が足りない / あとで聞いて |
 | Blocker label | Done. Continue | 対応した。続けて |
 | Blocker label | Skip this step and continue | この手順は飛ばして続けて |
 | Blocker label | Stop here | ここで中断 |
@@ -335,6 +381,16 @@ English is canonical and preferred; the Japanese alias is accepted anywhere the 
 | Recommendation condition | if / when / unless / otherwise / in case | なら / 場合 / とき / であれば / 際は / 際に |
 
 GUI and TUI show the section headings as written in the file (they are not translated). Only the UI's own text follows the display language.
+
+## 14. The "None of these" answer
+
+After the options the GUI / TUI offers "None of these…" (ja 「どれでもない…」). The human picks one of four types and may add one line of text. The answer reaches the agent as a free-text answer in this exact form (English, whatever the display language):
+
+```
+None of these — <type>: <text>
+```
+
+`<type>` is one of `Missing option` / `Wrong premise` / `Need more evidence` / `Ask me later`; `<text>` may be empty (then `None of these — <type>`). The hook does not check it. The skill tells the agent to act on the type: add the missing option (read `<text>`) and ask again; fix the premise and ask again; add the missing evidence to "What I checked" and ask again; do not ask now and proceed with work that does not depend on the answer.
 
 ## Known limitations
 

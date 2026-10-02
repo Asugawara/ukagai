@@ -18,14 +18,20 @@ import {
   SECTION,
   validateExplanation,
   validatePlan,
+  parseBullets,
+  parseFootnotes,
+  parseTerms,
+  findTables,
+  scanFences,
+  UNDO_WORDS,
 } from "../../src/hook/explain.js";
 import { tmpDir, writeFile } from "./helpers.js";
 
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 20 fixtures", () => {
-  assert.equal(mdFiles.length, 20);
+test("there are 24 fixtures", () => {
+  assert.equal(mdFiles.length, 24);
 });
 
 for (const f of mdFiles) {
@@ -50,8 +56,8 @@ Reason
 ## Options
 | Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| A | a | b |
-| B | a | b |
+| A | a | Revert it |
+| B | a | Revert it |
 ## Recommendation
 I recommend A. If C, choose B.
 `;
@@ -110,7 +116,7 @@ test("a heading such as \"Options compared\" matches partially", () => {
 test("findSection prefers an exact match (takes \"Options\" after \"Recommended options\")", () => {
   const md = GOOD.replace("## Options\n", "## Recommended options\nThis section has no table\n## Options\n");
   assert.equal(validateExplanation(md).valid, true);
-  const bad = GOOD.replace("## Recommendation\n", "## Recommended options\n").replace("| B | a | b |", "| B | a | - |");
+  const bad = GOOD.replace("## Recommendation\n", "## Recommended options\n").replace("| B | a | Revert it |", "| B | a | - |");
   assert.ok(validateExplanation(bad).missing.includes("table"));
 });
 
@@ -133,13 +139,13 @@ test("normalizeLabel: NFKC, suffix removal, whitespace removal, lowercase", () =
 });
 
 test("a cell with only - is a table defect", () => {
-  const md = GOOD.replace("| B | a | b |", "| B | a | - |");
+  const md = GOOD.replace("| B | a | Revert it |", "| B | a | - |");
   assert.deepEqual(validateExplanation(md).missing, ["table"]);
 });
 
 test("without front matter only front_matter is reported (question etc. are not evaluated), and a diagram is required", () => {
   const md = GOOD.replace(/^---[\s\S]*?---\n/, "");
-  assert.deepEqual(validateExplanation(md).missing, ["front_matter", "diagram"]);
+  assert.deepEqual(validateExplanation(md).missing, ["front_matter", "diagram", "checked"]);
 });
 
 test("headings inside code fences are not sections", () => {
@@ -298,9 +304,9 @@ gcloud auth login
 ## Options
 | Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| Done. Continue (Recommended) | a | b |
-| Skip this step and continue | a | b |
-| Stop here | a | b |
+| Done. Continue (Recommended) | a | Revert it |
+| Skip this step and continue | a | Revert it |
+| Stop here | a | Revert it |
 `;
 
 const BLOCKER_OPTION_LABELS = ["Done. Continue (Recommended)", "Skip this step and continue", "Stop here"];
@@ -339,7 +345,7 @@ test("mismatched blocker labels are a table defect; a todo without a code block 
 
 test("with type decision, todo is not needed and recommend is required as usual", () => {
   assert.equal(validateExplanation(GOOD.replace("ukagai: 1", "ukagai: 1\ntype: decision")).valid, true);
-  assert.deepEqual(validateExplanation(BLOCKER.replace("type: blocker", "type: decision")).missing, ["why", "recommend", "diagram"]);
+  assert.deepEqual(validateExplanation(BLOCKER.replace("type: blocker", "type: decision")).missing, ["why", "recommend", "diagram", "checked"]);
 });
 
 test("Recommendation without a condition (なら / 場合 / とき / if ...) is a recommend_cond defect; blockers are not evaluated", () => {
@@ -364,7 +370,7 @@ test("Recommendation without a condition (なら / 場合 / とき / if ...) is 
 });
 
 test("diagram requirement: repo + reversible is optional; costly / machine / external required", () => {
-  const noDiagram = GOOD.replace(/## Diagram[\s\S]*?(?=\n## |$)/, "");
+  const noDiagram = GOOD.replace(/## Diagram[\s\S]*?(?=\n## |$)/, "") + "## What I checked\n- read the code\n";
   const fm = (rev: string, scope: string) => noDiagram.replace(/reversibility: .*/, `reversibility: ${rev}`).replace(/scope: .*/, `scope: ${scope}`);
   assert.equal(validateExplanation(fm("reversible", "file")).valid, true);
   assert.equal(validateExplanation(fm("reversible", "repo")).valid, true);
@@ -386,9 +392,162 @@ test("length limits: Recommendation 400 characters / 5 sentences, cells 160 char
   assert.deepEqual(validateExplanation(rec("If so. Two. Three. Four. Five. Six.")).missing, ["recommend_long"]);
   assert.equal(validateExplanation(rec("Use file.ts and 0.5 if needed.")).valid, true);
   assert.equal(validateExplanation(rec("```\n" + "a".repeat(500) + "\n```\nI recommend A. If C, choose B.")).valid, true);
-  assert.deepEqual(validateExplanation(GOOD.replace("| A | a | b |", `| A | ${"a".repeat(161)} | b |`)).missing, ["cell_long"]);
-  assert.deepEqual(validateExplanation(GOOD.replace("| A | a | b |", `| A | a | ${"a".repeat(161)} |`)).missing, ["cell_long"]);
-  assert.equal(validateExplanation(GOOD.replace("| A | a | b |", `| A | ${"a".repeat(160)} | b |`)).valid, true);
+  assert.deepEqual(validateExplanation(GOOD.replace("| A | a | Revert it |", `| A | ${"a".repeat(161)} | Revert it |`)).missing, ["cell_long"]);
+  assert.deepEqual(validateExplanation(GOOD.replace("| A | a | Revert it |", `| A | a | Revert ${"a".repeat(154)} |`)).missing, ["cell_long"]);
+  assert.equal(validateExplanation(GOOD.replace("| A | a | Revert it |", `| A | ${"a".repeat(160)} | Revert it |`)).valid, true);
   assert.deepEqual(validateExplanation(GOOD.replace("Reason\n", "a".repeat(601) + "\n")).missing, ["why_long"]);
   assert.equal(validateExplanation(GOOD.replace("Reason\n", "a".repeat(600) + "\n")).valid, true);
+});
+
+// ---- rich sections (M1) ----
+
+test("parseTerms: bold + dash, bold + colon, plain + dash, plain + colon; items without a separator are skipped", () => {
+  const md = `## Terms
+
+- **SSE** — one-way streaming over HTTP.
+- **long-poll**: a request held open.
+- **ping:** keeps a connection alive.
+- plain term — plain definition
+- other: other definition
+- no separator here
+- **only term**
+\`\`\`
+- **in fence** — ignored
+\`\`\`
+## Next
+- **after** — ignored
+`;
+  assert.deepEqual(parseTerms(md), [
+    { term: "SSE", definition: "one-way streaming over HTTP." },
+    { term: "long-poll", definition: "a request held open." },
+    { term: "ping", definition: "keeps a connection alive." },
+    { term: "plain term", definition: "plain definition" },
+    { term: "other", definition: "other definition" },
+  ]);
+  assert.deepEqual(parseTerms("## 用語\n- **用語A** — 説明。\n"), [{ term: "用語A", definition: "説明。" }]);
+  assert.deepEqual(parseTerms("no section"), []);
+});
+
+test("parseBullets: marker removed, continuation joined, other sections and fences ignored, Japanese alias", () => {
+  const md = `---
+ukagai: 1
+---
+## What only you know
+- First
+  continued
+* Second
+1. Third
+Plain line
+## Assumptions
+- Other
+`;
+  assert.deepEqual(parseBullets(md, SECTION.unknowns), ["First continued", "Second", "Third"]);
+  assert.deepEqual(parseBullets(md, SECTION.assumptions), ["Other"]);
+  assert.deepEqual(parseBullets(md, SECTION.against), []);
+  assert.deepEqual(parseBullets("## あなたにしか分からないこと\n- 好み\n", SECTION.unknowns), ["好み"]);
+});
+
+test("parseFootnotes: refs and defs; a ref without a def is detected; defs only is fine; code and fences are ignored", () => {
+  const md = `Body[^1] and again[^1] with [^b]. \`[^code]\`
+| cell[^t] |
+## What I checked
+[^1]: evidence one
+  continued
+[^b]: evidence b
+\`\`\`
+[^fence]
+\`\`\`
+`;
+  const n = parseFootnotes(md);
+  assert.deepEqual(n.refs, ["1", "b", "t"]);
+  assert.deepEqual(n.defs, [
+    { id: "1", text: "evidence one continued" },
+    { id: "b", text: "evidence b" },
+  ]);
+  assert.deepEqual(parseFootnotes("text\n[^x]: only a def\n"), { defs: [{ id: "x", text: "only a def" }], refs: [] });
+});
+
+test("footnote: a ref without a definition is a footnote defect; a definition without a ref passes", () => {
+  const base = GOOD.replace("Reason", "Reason[^1]");
+  assert.deepEqual(validateExplanation(base).missing, ["footnote"]);
+  assert.equal(validateExplanation(base + "## What I checked\n[^1]: grep output\n").valid, true);
+  assert.equal(validateExplanation(GOOD + "## What I checked\n[^9]: unused\n").valid, true);
+  // blockers are not evaluated
+  assert.ok(!validateExplanation(BLOCKER.replace("Authentication error.", "Authentication error.[^1]"), "answer_question", BLOCKER_OPTION_LABELS).missing.includes("footnote"));
+});
+
+test("undo: every risk cell needs an undo word (or says it cannot be undone); English and Japanese", () => {
+  const risk = (cell: string) => GOOD.replace("| B | a | Revert it |", `| B | a | ${cell} |`);
+  assert.deepEqual(validateExplanation(risk("Slow.")).missing, ["undo"]);
+  for (const ok of ["Undo with git", "revert the commit", "Roll back", "rollback", "restore from .bak", "reinstall it", "delete the file", "remove the entry", "It cannot be undone", "Irreversible", "戻すには git revert", "消せる", "やり直せる", "再実行する", "元に戻らない", "戻せない"]) {
+    assert.equal(validateExplanation(risk(ok)).valid, true, ok);
+  }
+  assert.ok(UNDO_WORDS.test("UNDO"));
+  // Japanese columns work too
+  assert.equal(validateExplanation(GOOD_JA).valid, true);
+  assert.deepEqual(validateExplanation(GOOD_JA.replace("| B | a | Revert it |", "| B | a | 遅い |")).missing, ["undo"]);
+  // a table defect is reported alone, without undo
+  assert.deepEqual(validateExplanation(GOOD.replace("| B | a | Revert it |", "| B | a | - |")).missing, ["table"]);
+});
+
+test("undo in a blocker: the fixed 3 labels are exempt, other rows are checked", () => {
+  assert.equal(validateExplanation(BLOCKER, "answer_question", BLOCKER_OPTION_LABELS).valid, true);
+  assert.equal(validateExplanation(BLOCKER_JA, "answer_question", ["対応した。続けて (Recommended)", "この手順は飛ばして続けて", "ここで中断"]).valid, true);
+  const extra = BLOCKER + "| Retry later | a | slow |\n";
+  assert.deepEqual(validateExplanation(extra).missing, ["undo"]);
+});
+
+test("checked: required unless reversible + file; blockers are exempt; order of the codes", () => {
+  const withMeta = (rev: string, scope: string) => GOOD.replace(/reversibility: .*/, `reversibility: ${rev}`).replace(/scope: .*/, `scope: ${scope}`);
+  assert.equal(validateExplanation(GOOD).valid, true);
+  assert.deepEqual(validateExplanation(withMeta("reversible", "repo")).missing, ["checked"]);
+  assert.deepEqual(validateExplanation(withMeta("costly", "file")).missing, ["diagram", "checked"]);
+  assert.equal(validateExplanation(withMeta("reversible", "repo") + "## 確かめたこと\n- 読んだ\n").valid, true);
+  assert.deepEqual(validateExplanation(withMeta("reversible", "repo") + "## What I checked\n\n").missing, ["checked"]);
+  assert.ok(!validateExplanation(BLOCKER, "answer_question", BLOCKER_OPTION_LABELS).missing.includes("checked"));
+  // order: cell_long, undo, ..., diagram, checked, footnote
+  const all = withMeta("costly", "machine")
+    .replace("| A | a | Revert it |", `| A | ${"a".repeat(161)} | slow |`)
+    .replace("Reason", "Reason[^1]");
+  assert.deepEqual(validateExplanation(all).missing, ["cell_long", "undo", "diagram", "checked", "footnote"]);
+});
+
+test("findTables: extraColumns lists the columns besides the label, happens and risk", () => {
+  const lines = toLines(`| Option | What happens if chosen | Risks and how to undo | Cost | Effort |
+|---|---|---|---|---|
+| A | a | b | c | d |
+`);
+  const t = findTables(lines, scanFences(lines).inFence, 0, lines.length)[0]!;
+  assert.deepEqual(t.extraColumns, [3, 4]);
+  const lines3 = toLines("| 選択肢 | 選ぶと起きること | リスクと戻し方 |\n|---|---|---|\n| A | a | b |\n");
+  assert.deepEqual(findTables(lines3, scanFences(lines3).inFence, 0, lines3.length)[0]!.extraColumns, []);
+  // columns in any order
+  const lines4 = toLines("| Option | Cost | Risk | Outcome |\n|---|---|---|---|\n| A | a | b | c |\n");
+  assert.deepEqual(findTables(lines4, scanFences(lines4).inFence, 0, lines4.length)[0]!.extraColumns, [1]);
+});
+
+test("a 4-column table passes validation", () => {
+  const md = GOOD.replace("| Option | What happens if chosen | Risks and how to undo |\n|---|---|---|", "| Option | What happens if chosen | Risks and how to undo | Cost |\n|---|---|---|---|")
+    .replace("| A | a | Revert it |", "| A | a | Revert it | 1d |")
+    .replace("| B | a | Revert it |", "| B | a | Revert it | 2d |");
+  assert.equal(validateExplanation(md).valid, true);
+});
+
+test("the new section names are in SECTION with an English name first and a Japanese alias", () => {
+  for (const k of ["terms", "unknowns", "assumptions", "against", "affects"] as const) {
+    assert.equal(SECTION[k].length, 2);
+    assert.doesNotMatch(SECTION[k][0], /[ぁ-んァ-ン一-龥]/);
+    assert.match(SECTION[k][1], /[ぁ-んァ-ン一-龥]/);
+  }
+});
+
+test("denyReason template: has What only you know, Assumptions and What I checked; optional sections are not in it", () => {
+  const r = denyReason("A", { path: "/p/ukagai/explain.md", question: "Q", missing: ["x"], codes: ["file"] });
+  assert.match(r, /## What only you know/);
+  assert.match(r, /## Assumptions/);
+  assert.match(r, /## What I checked/);
+  assert.doesNotMatch(r, /## (Terms|Counterargument|Affected)/);
+  assert.ok(r.length <= 1600);
+  const rec = r.split("## Assumptions")[1]!.split("\n")[0]!;
+  assert.doesNotMatch(rec, RECOMMEND_COND);
 });

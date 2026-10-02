@@ -72,14 +72,19 @@ scope: file | repo | machine | external
 | Section | Required | What to write |
 |---|---|---|
 | Why this decision is needed now | Always | The situation, and **why a human must decide** (what you cannot know). 2–3 sentences |
-| Options | Always | A table. First column = option label. Columns: "What happens if chosen" and "Risks and how to undo". One row per option |
-| Recommendation | Always | **Keep it to 3 sentences.** Sentence 1 = the option you recommend and why, sentence 2 = supplement (optional), last sentence = the condition under which another option is right (write it as "if …, B", "when …, B", "unless …, A", etc.). More than 5 sentences is denied (`recommend_long`) |
+| What only you know | Always (1–3 bullets) | What you could not settle by investigating and only the human can say (taste, plans, external circumstances). Shown as the "You decide:" band under the title. Not required by the hook yet, but always write it |
+| Options | Always | A table. First column = option label. Columns: "What happens if chosen" and "Risks and how to undo", then optionally extra columns (cost, effort, …; 3 or more columns are allowed). One row per option. **Every risk cell says how to undo** (or that it cannot be undone), else `undo` |
+| Recommendation | Always | **Keep it to 3 sentences.** Sentence 1 = **a conclusion that lets the human decide from that sentence alone**: the option you recommend and why. It is shown as the headline. Sentence 2 = supplement (optional), last sentence = the condition under which another option is right (write it as "if …, B", "when …, B", "unless …, A", etc.). More than 5 sentences is denied (`recommend_long`) |
+| Assumptions | Always (one premise per bullet) | The premises under which the recommendation holds. The GUI shows them as a checklist: "if any one is wrong, another option is right". Not required by the hook yet |
+| Counterargument | Optional | The strongest argument against your recommendation, in 1–2 sentences. Shown beside the recommendation as "Against this:" |
+| Affected | Optional | Concrete names (files, services, people, environments), one per bullet. Shown as chips (up to 6, then "+N") |
+| Terms | Optional | `- **term** — definition` for each word the human may not know (`- **term**: definition` and `- term — definition` also work). The GUI annotates the term wherever it appears |
 | Diagram | When reversibility is anything but reversible, or scope is machine / external (`repo` + `reversible` is optional) | Mermaid |
-| What I checked | Optional | file:line, command results. Mark guesses as guesses |
+| What I checked | **Required unless `reversible` + `file`** (`checked`) | file:line, command results. Mark guesses as guesses. Put evidence in footnotes: write `[^1]` in the body and `[^1]: evidence` here. A `[^n]` in the body without a definition is denied (`footnote`) |
 | Related diff | Optional | Only the hunks that bear on the decision. At most 20 lines in a ` ```diff ` block |
 
 - Each cell of the options table is 1–2 sentences. The reader decides with arrow keys and Enter only, so write **sentences that let one card carry the decision**.
-- Japanese headings and column names are accepted as aliases: 「なぜ今この判断が要るか」「選択肢」「推奨」「図」「確かめたこと」「関係する差分」「影響範囲と可逆性」, and columns 「選ぶと起きること」「リスクと戻し方」. Prefer the English names.
+- Japanese headings and column names are accepted as aliases: 「なぜ今この判断が要るか」「あなたにしか分からないこと」「選択肢」「推奨」「前提」「反論」「影響を受けるもの」「用語」「図」「確かめたこと」「関係する差分」「影響範囲と可逆性」, and columns 「選ぶと起きること」「リスクと戻し方」. Prefer the English names.
 
 ### Length limits
 
@@ -90,6 +95,9 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - Why this decision is needed now (for a blocker, "Why I stopped"): aim for 2–3 sentences. The limit is 600 characters (`why_long`).
 - Recommendation needs the condition under which another option is right ("if …, B"). The text of the section must contain one of: if / when / unless / otherwise / in case, or the Japanese なら / 場合 / とき / であれば / 際は / 際に. Without it the hook denies (`recommend_cond`). "ならない", "なければならない" and "ときどき" do not count.
 - Put details, evidence and logs in the "What I checked" section as bullets. Do not write what the decision does not need.
+- **Risk cells say how to undo.** Each cell of "Risks and how to undo" must contain a word such as undo / revert / roll back / restore / reinstall / delete the … / remove the …, or say it cannot be undone (irreversible / cannot be undone; Japanese 戻 / 消せ / やり直 / 再実行 / 戻せない / 元に戻らない). Without it the hook denies (`undo`).
+- **Evidence by footnote.** Cite what you checked from the body with `[^1]` and define it in "What I checked" (`[^1]: \`grep -rn jsonl src\` finds nothing`). The GUI shows the evidence on hover. A definition without a reference is fine; a reference without a definition is denied (`footnote`).
+- **Order of the codes** the hook reports: … `cell_long`, `undo`, … `diagram`, `checked`, `footnote`.
 
 - Make the labels match the AskUserQuestion `options[].label` (a trailing `(Recommended)` is optional).
 - Draw only structure, flow and dependencies. Pick one type:
@@ -100,6 +108,33 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - Draw the diagram so that the difference between the options shows. **Even when a diagram is required, if the difference between the options does not show in it, do not write one; make the table rows more detailed instead.**
 - Write Mermaid so that it is readable in the TUI too (advice; the hook does not check): put spaces around arrows (`A --> B`, not `A-->B`), at most 10 nodes, at most 100 columns per line.
 - Do not include the whole diff (the GUI attaches `git diff` separately).
+
+## Writing for the three layers
+
+The GUI reads the file in layers. Write each piece so it works at its layer.
+
+| Layer | What the human sees in that time | Write |
+|---|---|---|
+| 1 second | title, the first sentence of the Recommendation (headline), reversibility and scope, Affected chips, "You decide:" | A headline that is a conclusion on its own; 1–3 things only the human knows; concrete names in Affected |
+| 10 seconds | rest of the Recommendation, Assumptions, Counterargument, option cards | One premise per line; the strongest counterargument in 1–2 sentences; two-sentence cells |
+| 60 seconds | Why, What I checked (footnotes), diagram, diff, Terms, comparison table | Evidence, definitions, details |
+
+- **Terms**: define each word the human may not know, in one line.
+- **What only you know**: 1–3 bullets, phrased as the thing to decide ("Whether the GUI will ever send messages to the server"). Never list things you could have checked yourself.
+- **Assumptions**: one premise per line, checkable ("Only server-to-browser pushes are needed").
+- **Counterargument**: argue against yourself honestly; do not write a strawman.
+- **Affected**: concrete names, not "the code" or "some files".
+
+## When the answer is "None of these"
+
+The GUI offers "None of these…" after the options. If the answer starts with `None of these — `, the format is `None of these — <type>: <text>` (`<text>` may be empty). Act on the type:
+
+| Type | Do |
+|---|---|
+| `Missing option` | Add the option the human has in mind (read `<text>`) and ask again with a new explanation file |
+| `Wrong premise` | Fix the premise (see Assumptions), then ask again |
+| `Need more evidence` | Add what is missing to "What I checked" (run the commands), then ask again |
+| `Ask me later` | Do not ask now: proceed with the work that does not depend on it and ask later |
 
 ## Emphasis
 
@@ -188,7 +223,7 @@ gcloud auth application-default login
 - Paraphrase `question`.
 - Write the GUI URL or API in the explanation.
 
-## Good example (design fork, two options)
+## Good example (design fork, two options; everything included)
 
 ````markdown
 ---
@@ -202,21 +237,46 @@ scope: repo
 
 ## Why this decision is needed now
 
-W3's store cannot be written until the storage format is decided. JSONL needs only appends; SQLite is strong at search, but `node:sqlite` is experimental and schema migrations are needed. How the log will be used (whether search and aggregation are wanted early) is something I cannot know, so a human decides.
+W3's store cannot be written until the storage format is decided. JSONL needs only appends; SQLite is strong at search, but `node:sqlite` is experimental and needs schema migrations.[^1] How the log will be used is something I cannot know, so a human decides.
+
+## What only you know
+
+- Whether you will search or aggregate the log within the next month.
+- Whether another tool will read the log file directly.
+
+## Terms
+
+- **JSONL** — one JSON object per line; appended, never rewritten.
+- **migration** — rewriting existing data into a new format.
 
 ## Options
 
-| Option | What happens if chosen | Risks and how to undo |
-|---|---|---|
-| JSONL | Stores by appending only, and **restores by reading once at startup**. About 0.5 days to implement. | Search and aggregation read everything. Move to SQLite when needed (**migration code is needed**). |
-| SQLite | Search and aggregation are written in SQL. About 1.5 days to implement. | `node:sqlite` is experimental and needs schema migrations. Going back to JSONL needs an export. |
+| Option | What happens if chosen | Risks and how to undo | Cost |
+|---|---|---|---|
+| JSONL | Stores by appending only, and **restores by reading once at startup**. | Search reads everything. To undo, move to SQLite (**migration code is needed**). | about 0.5 day |
+| SQLite | Search and aggregation are written in SQL. | `node:sqlite` is experimental. To undo, export back to JSONL. | about 1.5 days |
 
 ## Recommendation
 
-I recommend **JSONL**. Two weeks of logs need no search, and with no dependency restoring is one read. SQLite becomes the right choice if you already know you will use aggregation or search from the start.
+I recommend **JSONL**: two weeks of logs need no search, and with no dependency restoring is one read.[^2] SQLite becomes the right choice if you already know you will use aggregation or search from the start.
 
 > [!WARNING]
 > Changing the storage format requires a migration that re-reads existing logs.
+
+## Assumptions
+
+- The log stays under about 10 MB.
+- Nothing outside ukagai reads `decisions.jsonl`.
+
+## Counterargument
+
+Starting with SQLite avoids the later migration entirely, and a migration written under pressure is where data gets lost.
+
+## Affected
+
+- `src/server/store.ts`
+- `~/.ukagai/decisions.jsonl`
+- The metrics tally in `docs/verification/`
 
 ## Diagram
 
@@ -229,7 +289,8 @@ flowchart LR
 
 ## What I checked
 
-- `src/server/` has no persistence implementation yet (`grep -rn jsonl src` finds nothing).
+[^1]: `node:sqlite` is marked experimental in the Node 22 docs; `node --version` is v22.x here.
+[^2]: `src/server/` has no persistence yet (`grep -rn jsonl src` finds nothing); two weeks of logs are about 244 KB (`ls -l ~/.ukagai`).
 ````
 
 ## Bad example (same subject)

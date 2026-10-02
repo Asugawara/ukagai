@@ -16,6 +16,11 @@ export const SECTION = {
   blockerWhy: ["Why I stopped", "なぜ止まったか"],
   blockerTodo: ["What you need to do", "人にしてほしいこと"],
   impact: ["Scope and reversibility", "影響範囲と可逆性"],
+  terms: ["Terms", "用語"],
+  unknowns: ["What only you know", "あなたにしか分からないこと"],
+  assumptions: ["Assumptions", "前提"],
+  against: ["Counterargument", "反論"],
+  affects: ["Affected", "影響を受けるもの"],
 } as const;
 
 /** Fixed option labels for blockers (suffix "(Recommended)" allowed on the first). */
@@ -28,6 +33,13 @@ export const BLOCKER_LABELS = {
 /** Table column detection (header cell text). The first column is always the option label. */
 export const COLUMN_HAPPENS = /happens|outcome|起きること/i;
 export const COLUMN_RISK = /risk|リスク/i;
+
+/**
+ * Words that say how to undo (or that nothing can be undone). Every cell in the risk column must match one.
+ * Case-insensitive; Japanese entries are plain substrings.
+ */
+export const UNDO_WORDS =
+  /undo|revert|roll ?back|restore|reinstall|delete the|remove the|cannot be undone|irreversible|戻|消せ|やり直|再実行|元に戻らない/i;
 
 export type MissingCode =
   | "file"
@@ -46,8 +58,11 @@ export type MissingCode =
   | "recommend_long"
   | "recommend_cond"
   | "cell_long"
+  | "undo"
   | "why_long"
   | "diagram"
+  | "checked"
+  | "footnote"
   | "impact"
   | "multi";
 
@@ -82,8 +97,11 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters)',
   recommend_cond: 'a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.)',
   cell_long: "a cell in the options table is too long (at most 160 characters per cell)",
+  undo: "each risk cell must say how to undo (or that it cannot be undone)",
   why_long: 'the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked")',
   diagram: 'a "Diagram" section with a Mermaid diagram',
+  checked: 'the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes)',
+  footnote: 'a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked")',
   impact: 'the "Scope and reversibility" section',
   multi: "one question per call",
 };
@@ -215,6 +233,16 @@ export function findSection(
 export interface Table {
   header: string[];
   rows: string[][];
+  /** Indexes of the columns other than the label (0), "what happens" and "risk" (empty for a 3-column table) */
+  extraColumns: number[];
+}
+
+/** Columns after the label that are neither "what happens" nor "risk" */
+function extraColumnsOf(header: string[]): number[] {
+  const cells = header.map((h) => h.normalize("NFKC"));
+  const happens = cells.findIndex((h) => COLUMN_HAPPENS.test(h));
+  const risk = cells.findIndex((h) => COLUMN_RISK.test(h));
+  return cells.map((_, i) => i).filter((i) => i > 0 && i !== happens && i !== risk);
 }
 
 function splitRow(line: string): string[] {
@@ -239,7 +267,8 @@ export function findTables(lines: string[], inFence: boolean[], from: number, to
       rows.push(splitRow(lines[j]!));
       j++;
     }
-    tables.push({ header: splitRow(head), rows });
+    const header = splitRow(head);
+    tables.push({ header, rows, extraColumns: extraColumnsOf(header) });
     i = j - 1;
   }
   return tables;
@@ -266,6 +295,13 @@ function tableOk(t: Table, labels: string[] | undefined): boolean {
     if (!labels.every((l) => first.has(normalizeLabel(l)))) return false;
   }
   return true;
+}
+
+/** Every risk cell says how to undo. In a blocker table, the fixed 3 labels are exempt */
+function tableUndoOk(t: Table, blocker: boolean): boolean {
+  const risk = columnsOf(t)[1];
+  const fixed = Object.values(BLOCKER_LABELS).flatMap((names) => names.map(normalizeLabel));
+  return t.rows.every((r) => (blocker && fixed.includes(normalizeLabel(r[0] ?? ""))) || UNDO_WORDS.test(r[risk] ?? ""));
 }
 
 /** Length limits (spec 3.2). Characters are code points after NFKC */
@@ -330,6 +366,93 @@ function hasOf(lines: string[], inFence: boolean[], blocks: FenceBlock[]): Has {
   };
 }
 
+// ---- parsers for the optional sections (shared with the TUI) ----
+
+/** Inside the body, outside code fences, with the front matter dropped */
+function bodyOf(markdown: string): { lines: string[]; inFence: boolean[]; headings: ReturnType<typeof scanHeadings> } {
+  const all = toLines(markdown);
+  const lines = all.slice(parseFrontMatter(all).bodyStart);
+  const { inFence } = scanFences(lines);
+  return { lines, inFence, headings: scanHeadings(lines, inFence) };
+}
+
+/**
+ * Bullet items (`-` / `*` / `+` / `1.`) of the section named by `names` (e.g. `SECTION.unknowns`), marker removed.
+ * Indented continuation lines are joined with a space. Empty when the section is missing.
+ */
+export function parseBullets(markdown: string, names: readonly string[]): string[] {
+  const { lines, inFence, headings } = bodyOf(markdown);
+  const sec = findSection(headings, lines.length, names);
+  if (!sec) return [];
+  const out: string[] = [];
+  for (let i = sec.start + 1; i < sec.end; i++) {
+    if (inFence[i]) continue;
+    const m = /^ {0,3}(?:[-*+]|\d+[.)])\s+(.*\S)\s*$/.exec(lines[i]!);
+    if (m) out.push(m[1]!);
+    else if (out.length > 0 && /^\s{2,}\S/.test(lines[i]!)) out[out.length - 1] += " " + lines[i]!.trim();
+  }
+  return out;
+}
+
+export interface TermDef {
+  term: string;
+  definition: string;
+}
+
+/**
+ * Items of the Terms section. Accepted shapes:
+ * `- **term** — definition`, `- **term**: definition`, `- term — definition` (a `:` also works for the plain form).
+ * Items without a separator or with an empty side are skipped.
+ */
+export function parseTerms(markdown: string): TermDef[] {
+  const out: TermDef[] = [];
+  for (const item of parseBullets(markdown, SECTION.terms)) {
+    const bold = /^\*\*(.+?)\*\*\s*(?:[:：]|[—–―-]+)?\s*(.*)$/.exec(item);
+    let term: string;
+    let definition: string;
+    if (bold) {
+      term = bold[1]!;
+      definition = bold[2]!;
+    } else {
+      const m = /^(.+?)\s*(?:\s[—–―-]+\s|[:：]\s*|[—―]\s*)(.+)$/.exec(item);
+      if (!m) continue;
+      term = m[1]!;
+      definition = m[2]!;
+    }
+    term = term.replace(/[:：]$/, "").trim();
+    definition = definition.trim();
+    if (term && definition) out.push({ term, definition });
+  }
+  return out;
+}
+
+export interface Footnotes {
+  /** `[^id]: text` definitions, anywhere in the body (first one wins for a repeated id) */
+  defs: { id: string; text: string }[];
+  /** Distinct `[^id]` references in the order they appear (definitions and code are not references) */
+  refs: string[];
+}
+
+export function parseFootnotes(markdown: string): Footnotes {
+  const { lines, inFence } = bodyOf(markdown);
+  const defs: { id: string; text: string }[] = [];
+  const refs: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (inFence[i]) continue;
+    const d = /^ {0,3}\[\^([^\]\s]+)\]:\s*(.*)$/.exec(lines[i]!);
+    if (d) {
+      let text = d[2]!.trim();
+      while (i + 1 < lines.length && !inFence[i + 1] && /^(?: {2,}|\t)\S/.test(lines[i + 1]!)) text += " " + lines[++i]!.trim();
+      if (!defs.some((x) => x.id === d[1])) defs.push({ id: d[1]!, text });
+      continue;
+    }
+    for (const m of lines[i]!.replace(/`[^`]*`/g, "").matchAll(/\[\^([^\]\s]+)\](?!:)/g)) {
+      if (!refs.includes(m[1]!)) refs.push(m[1]!);
+    }
+  }
+  return { defs, refs };
+}
+
 // ---- validation ----
 
 /** spec section 4. Plans (ExitPlanMode) are delegated to validatePlan */
@@ -369,7 +492,10 @@ export function validateExplanation(
     const tables = findTables(lines, inFence, options.start + 1, options.end);
     const okTables = tables.filter((t) => tableOk(t, labels));
     if (okTables.length === 0) missing.push("table");
-    else if (okTables.some((t) => tableCellsLong(t))) missing.push("cell_long");
+    else {
+      if (okTables.some((t) => tableCellsLong(t))) missing.push("cell_long");
+      if (okTables.some((t) => !tableUndoOk(t, blocker))) missing.push("undo");
+    }
   }
 
   if (blocker) {
@@ -400,6 +526,17 @@ export function validateExplanation(
   if (diagramRequired) {
     const diagram = findSection(headings, lines.length, SECTION.diagram);
     if (!diagram || !sectionHasMermaid(blocks, diagram)) missing.push("diagram");
+  }
+
+  if (!blocker) {
+    // Required unless reversible + file
+    if (!(rev === "reversible" && scope === "file")) {
+      const checked = findSection(headings, lines.length, SECTION.checked);
+      if (!checked || !hasContent(lines, checked)) missing.push("checked");
+    }
+    const notes = parseFootnotes(markdown);
+    const defined = new Set(notes.defs.map((d) => d.id));
+    if (notes.refs.some((id) => !defined.has(id))) missing.push("footnote");
   }
 
   return {
@@ -526,11 +663,14 @@ function templateBlock(p: DenyParams): string {
         "scope: file | repo | machine | external",
         "---",
         `## ${SECTION.why[0]}`,
+        `## ${SECTION.unknowns[0]}  (1-3 bullets: what you could not settle by investigating)`,
         `## ${SECTION.options[0]}`,
         OPTIONS_HEADER,
         `## ${SECTION.recommendation[0]}`,
         "(the option you recommend and why; the last sentence names the condition that makes another option right)",
+        `## ${SECTION.assumptions[0]}  (one premise per bullet)`,
         `## ${SECTION.diagram[0]}  (Mermaid; for anything not reversible, or scope machine / external)`,
+        `## ${SECTION.checked[0]}  (commands run and files read; evidence as [^1]: ... cited from the body; not needed for reversible + file)`,
       ];
   return "```\n" + body.join("\n") + "\n```";
 }

@@ -15,8 +15,8 @@ As background, I list the investigation so far in order. As background, I list t
 
 | Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
-| SSE | One-way delivery from the server to the GUI. `EventSource` reconnects automatically, and Hono needs only a few dozen lines. | If two-way becomes necessary, switch to WebSocket. Both delivery and receiving must be rewritten (about 1 day). |
-| WebSocket | Two-way is possible. Reconnection and ping must be written by hand. | Adds a dependency and takes about 1.5 days. Switching later means fixing both delivery and receiving. |
+| SSE | One-way delivery from the server to the GUI. `EventSource` reconnects automatically, and Hono needs only a few dozen lines. | To undo, switch to WebSocket if two-way becomes necessary. Both delivery and receiving must be rewritten (about 1 day). |
+| WebSocket | Two-way is possible. Reconnection and ping must be written by hand. | Adds a dependency and takes about 1.5 days. To undo, switch back, which means fixing both delivery and receiving. |
 
 ## Recommendation
 

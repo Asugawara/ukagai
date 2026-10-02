@@ -44,3 +44,7 @@ flowchart TD
 +mv "$HOME/.ukagai/decisions.jsonl" "$HOME/.ukagai/decisions.jsonl.bak"
 +: > "$HOME/.ukagai/decisions.jsonl"
 ```
+
+## What I checked
+
+- `decisions.jsonl` has one broken line at the end (read the file).
