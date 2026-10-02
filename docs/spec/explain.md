@@ -175,6 +175,12 @@ front matter: question は AskUserQuestion の質問文を一字一句そのま�
 
 サブエージェント内では AskUserQuestion が提供されないため判断は発生しない(Claude Code 2.1.287 で確認)。SubagentStart の additionalContext は届くが、使われる場面はない。
 
+### 8.1 SessionStart の自動起動(hook の挙動)
+
+- SessionStart の hook は additionalContext を返す前に `GET /healthz`(300 ms)で server を確かめる。届かず、server URL が `127.0.0.1` / `localhost` なら `cli.js serve` を detached で起動し(log は `<data-dir>/serve.log`)、最大 2 秒 healthz を待つ。全体で 2.5 秒以内。
+- server に届いたとき、`<data-dir>/gui-opened` の日付(ローカル `YYYY-MM-DD`)が今日でなければ `open`(darwin)/ `xdg-open`(linux)で GUI を開き、今日の日付を書く。
+- `--no-autostart` なら何もしない(`install --no-autostart` で SessionStart の args に入る)。SubagentStart では何もしない。失敗は握りつぶす(フェイルオープン)。
+
 ## 9. ExitPlanMode
 
 - 別ファイルは要求しない。`tool_input.plan`(計画本文)を検査する。

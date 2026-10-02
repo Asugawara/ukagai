@@ -359,7 +359,7 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
   test(`${ev} → additionalContext に scratchpad パスが入る(server 不要)`, async () => {
     const sp = "/private/tmp/x/scratchpad";
     const r = await runHook(
-      ["--data-dir", tmpDir()],
+      ["--data-dir", tmpDir(), "--no-autostart"],
       JSON.stringify({ session_id: "s1", transcript_path: "/t", cwd: "/c", scratchpad_dir: sp, hook_event_name: ev }),
     );
     const out = JSON.parse(r.stdout).hookSpecificOutput;
@@ -374,7 +374,7 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
 test("SessionStart に scratchpad_dir が無ければ data-dir/explain/<session_id>", async () => {
   const dd = tmpDir();
   const r = await runHook(
-    ["--data-dir", dd],
+    ["--data-dir", dd, "--no-autostart"],
     JSON.stringify({ session_id: "s9", transcript_path: "/t", cwd: "/c", hook_event_name: "SessionStart" }),
   );
   assert.ok(JSON.parse(r.stdout).hookSpecificOutput.additionalContext.includes(join(dd, "explain", "s9")));

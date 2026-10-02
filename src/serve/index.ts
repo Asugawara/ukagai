@@ -43,10 +43,6 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   store.load();
 
   const token = randomBytes(32).toString("hex");
-  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const tokenFile = join(dataDir, "token");
-  writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
-  chmodSync(tokenFile, 0o600);
 
   let port = opts.port ?? DEFAULT_PORT;
   const app = createApp({
@@ -67,6 +63,11 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     });
     s.once("error", reject);
   });
+  // 待ち受けに成功してから書く(ポート使用中で落ちる 2 つ目が、動いている server の token を壊さない)
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const tokenFile = join(dataDir, "token");
+  writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
+  chmodSync(tokenFile, 0o600);
   store.startMonitor();
 
   return {
@@ -120,7 +121,9 @@ export async function run(argv: string[]): Promise<number> {
   try {
     handle = await start({ port, dataDir: values["data-dir"], leaseGraceMs });
   } catch (err) {
-    process.stderr.write(`ukagai serve: ${err instanceof Error ? err.message : String(err)}\n`);
+    const e = err as NodeJS.ErrnoException;
+    const msg = e?.code === "EADDRINUSE" ? `ポート ${port} は使用中です(server は起動済みかもしれません)` : err instanceof Error ? err.message : String(err);
+    process.stderr.write(`ukagai serve: ${msg}\n`);
     return 1;
   }
   process.stdout.write(`ukagai serve: http://${HOST}:${handle.port}\n`);

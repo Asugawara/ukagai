@@ -16,6 +16,8 @@ node dist/cli.js install            # 登録(バックアップを取る)。unin
 node dist/cli.js doctor             # 登録と server の診断
 ```
 
+`install` 後は `claude` を起動するだけで server が立ち、その日最初のセッションでブラウザが開く。手動で `serve` を打つ必要はない。止めるときは `pkill -f "cli.js serve"`、自動起動を止めるには `install --no-autostart`。
+
 開発中のセッションに hook をかけないときは `install --settings <file>` で別ファイルに書き、テスト用セッションを `claude --settings <file>` で起動する。
 
 ## ドキュメント

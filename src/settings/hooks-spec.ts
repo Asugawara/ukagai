@@ -24,6 +24,8 @@ export interface BuildOptions {
   cli: string;
   timeout: number;
   observe: boolean;
+  /** false なら SessionStart の hook に --no-autostart を渡す。省略は true */
+  autostart?: boolean;
   /** 全 hook に渡す共通の引数(--data-dir / --server) */
   hookArgs?: string[];
 }
@@ -76,7 +78,7 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
   return {
     PreToolUse: group(pre, DECISION_MATCHER),
     PermissionRequest: group(mk([], 5), "Write|Edit"),
-    SessionStart: group(mk([], 5)),
+    SessionStart: group(mk(opts.autostart === false ? ["--no-autostart"] : [], 5)),
     SubagentStart: group(mk([], 5)),
     UserPromptSubmit: group(mk([], 5, { async: true })),
     Stop: group(mk([], 5, { async: true })),

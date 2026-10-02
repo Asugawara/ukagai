@@ -8,6 +8,8 @@ export interface HookOptions {
   /** hook の持ち時間(秒) */
   budgetSec: number;
   observe: boolean;
+  /** SessionStart で server の自動起動と GUI を開くのをしない */
+  noAutostart: boolean;
   server: string;
   dataDir: string;
   pollTimeoutMs: number;
@@ -19,6 +21,7 @@ export function parseArgs(argv: string[]): HookOptions {
   const opts: HookOptions = {
     budgetSec: 590,
     observe: false,
+    noAutostart: false,
     server: "http://127.0.0.1:4818",
     dataDir: join(homedir(), ".ukagai"),
     pollTimeoutMs: POLL_TIMEOUT_MS,
@@ -28,6 +31,7 @@ export function parseArgs(argv: string[]): HookOptions {
     const a = argv[i];
     const next = (): string | undefined => argv[++i];
     if (a === "--observe") opts.observe = true;
+    else if (a === "--no-autostart") opts.noAutostart = true;
     else if (a === "--budget") {
       const n = Number(next());
       if (Number.isFinite(n) && n > 0) opts.budgetSec = n;

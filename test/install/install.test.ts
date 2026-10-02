@@ -146,6 +146,16 @@ test("--observe: PreToolUse に --observe、PostToolUse の matcher に AskUserQ
   assert.match(s.hooks.PostToolUse[0].matcher, /AskUserQuestion/);
 });
 
+test("--no-autostart: SessionStart の hook だけに --no-autostart、既定では付かない", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings]);
+  assert.ok(!(await readJson(e.settings)).hooks.SessionStart[0].hooks[0].args.includes("--no-autostart"));
+  await ukagai(e, ["install", "--settings", e.settings, "--no-autostart"]);
+  const s = await readJson(e.settings);
+  assert.ok(s.hooks.SessionStart[0].hooks[0].args.includes("--no-autostart"));
+  assert.ok(!s.hooks.Stop[0].hooks[0].args.includes("--no-autostart"));
+});
+
 test("--project は .claude/settings.json と .claude/skills に書く", async () => {
   const e = await setup();
   const proj = join(e.dir, "proj");

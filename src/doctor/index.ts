@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { HOOK_EVENTS } from "../settings/hooks-spec.js";
 import { findManaged, readSettings } from "../settings/merge.js";
@@ -45,6 +45,18 @@ export async function run(argv: string[]): Promise<number> {
   }
   add(await exists(join(t.dataDir, "token")), "token", join(t.dataDir, "token"));
   add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
+
+  const ss = findManaged(settings, "SessionStart");
+  const off = Array.isArray(ss?.["args"]) && (ss["args"] as unknown[]).includes("--no-autostart");
+  add(true, "autostart", off ? "off(--no-autostart)" : "on");
+  add(true, "serve.log", join(t.dataDir, "serve.log"));
+  let opened = "(なし)";
+  try {
+    opened = (await readFile(join(t.dataDir, "gui-opened"), "utf8")).trim() || opened;
+  } catch {
+    // 未記録
+  }
+  add(true, "gui-opened", opened);
 
   const w = Math.max(...rows.map((r) => r[1].length));
   for (const [ok, name, note] of rows) {
