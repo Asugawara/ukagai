@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
@@ -121,6 +121,13 @@ export function createApp(deps: AppDeps): Hono {
       cookies.add(value);
       if (cookies.size > MAX_COOKIES) cookies.delete(cookies.values().next().value as string);
       setCookie(c, COOKIE_NAME, value, { httpOnly: true, sameSite: "Strict", path: "/" });
+    }
+    // app.js / app.css の URL に更新時刻の版を付け、古い版が残らないようにする(vendor は変えない)
+    for (const name of ["app.js", "app.css"]) {
+      try {
+        const v = Math.floor((await stat(join(deps.publicDir, name))).mtimeMs).toString(36);
+        html = html.replace(`"/public/${name}"`, `"/public/${name}?v=${v}"`);
+      } catch {}
     }
     c.header("Cache-Control", "no-store");
     return c.html(html);

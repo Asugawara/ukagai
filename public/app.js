@@ -9,6 +9,10 @@ let ui = null; // 表示中の判断の操作(キーボード用)
 
 const $ = (id) => document.getElementById(id);
 
+// どの版の app.js を見ているかを画面に出す(index.html が付ける ?v=<版>)
+const BUILD = (() => { try { return new URL(import.meta.url).searchParams.get("v") ?? "?"; } catch { return "?"; } })();
+const buildTag = () => el("span", { class: "build", text: `build ${BUILD}` });
+
 function el(tag, props = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -357,7 +361,7 @@ function renderRight(d) {
     function updateSubmit() { submit.disabled = closed || !complete(); }
     const actions = el("div", { class: "actions" }, submit);
     if (single) {
-      actions.append(el("div", { class: "hint", text: `j/k 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · i 自由記述 · h/l 保留の切替 · b 一覧` }));
+      actions.append(el("div", { class: "hint" }, `j/k 移動 · ${qs[0].multiSelect ? "Space 切替 · " : ""}Enter 回答 · i 自由記述 · h/l 保留の切替 · b 一覧`, " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
@@ -398,7 +402,7 @@ function renderRight(d) {
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(approve, auto, reject, el("div", { class: "hint", text: "j/k 移動 · Enter 決定 · y 承認 · a auto · n 却下 · h/l 保留の切替 · b 一覧" }));
+  actions.append(approve, auto, reject, el("div", { class: "hint" }, "j/k 移動 · Enter 決定 · y 承認 · a auto · n 却下 · h/l 保留の切替 · b 一覧", " ", buildTag()));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
@@ -846,6 +850,8 @@ $("backdrop").addEventListener("click", () => setDrawer(false));
 setInterval(() => {
   for (const e of document.querySelectorAll(".age")) e.textContent = elapsed(e.dataset.created);
 }, 10000);
+
+$("empty").append(el("div", { class: "build empty-build", text: `build ${BUILD}` }));
 
 loadAll().catch(() => {});
 connect();

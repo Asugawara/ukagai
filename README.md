@@ -18,6 +18,8 @@ node dist/cli.js doctor             # 登録と server の診断
 
 `install` 後は `claude` を起動するだけで server が立ち、その日最初のセッションでブラウザが開く。手動で `serve` を打つ必要はない。止めるときは `pkill -f "cli.js serve"`、自動起動を止めるには `install --no-autostart`。
 
+`npm test` の GUI のテスト(`test/gui/`)は `agent-browser` がある環境でだけ走る(無ければ skip)。
+
 開発中のセッションに hook をかけないときは `install --settings <file>` で別ファイルに書き、テスト用セッションを `claude --settings <file>` で起動する。
 
 ## ドキュメント
