@@ -20,12 +20,15 @@ const USAGE = `ukagai - 判断を 1 か所に集める hooks + GUI
 `;
 
 const SETTINGS_OPTIONS = `  --settings <file>  対象の settings ファイル(既定: ~/.claude/settings.json)
+                     指定すると skill は扱わない(扱うなら --skill)
   --project          <cwd>/.claude/ を対象にする
-  --dry-run          差分だけ表示し、何も書かない
+  --skill            --settings 指定時にも skill を扱う
   --no-skill         skill を扱わない
-  --server <url>     server の URL(既定以外なら hook にも渡す)
-  --data-dir <dir>   token などの置き場(既定以外なら hook にも渡す)
   -h, --help         この使い方を表示する
+`;
+
+const SERVER_OPTIONS = `  --server <url>     server の URL(既定以外なら hook にも渡す)
+  --data-dir <dir>   token などの置き場(既定以外なら hook にも渡す)
 `;
 
 const HELP: Record<Subcommand, string> = {
@@ -47,7 +50,7 @@ GUI と API の server を起動する。
 
 オプション:
   --port <n>              待ち受けポート(既定: 4818)
-  --host <host>           127.0.0.1 固定
+  --host <host>           127.0.0.1 のみ(他は受け付けない)
   --data-dir <dir>        データの置き場(既定: ~/.ukagai)
   --lease-grace-ms <ms>   lease の猶予
   -h, --help              この使い方を表示する
@@ -70,18 +73,24 @@ Claude Code の settings に hook を登録し、skill を配置する。
 オプション:
   --observe          観測のみの hook にする
   --timeout <sec>    PreToolUse の timeout(15 以上、既定: 3600)
-${SETTINGS_OPTIONS}`,
+  --dry-run          差分だけ表示し、何も書かない
+${SERVER_OPTIONS}${SETTINGS_OPTIONS}`,
   uninstall: `使い方: ukagai uninstall [options]
 
 install が登録した hook と skill だけを外す。
 
 オプション:
+  --dry-run          差分だけ表示し、何も書かない
+  --server <url>     settings の特定に使う(server の URL)
+  --data-dir <dir>   settings の特定に使う(データの置き場)
 ${SETTINGS_OPTIONS}`,
   doctor: `使い方: ukagai doctor [options]
 
 登録と接続の状態を診断する。
 
 オプション:
+  --server <url>     診断する server の URL(既定: http://127.0.0.1:4818)
+  --data-dir <dir>   token などの置き場(既定: ~/.ukagai)
 ${SETTINGS_OPTIONS}`,
 };
 

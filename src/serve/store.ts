@@ -186,6 +186,7 @@ export class Store {
       created_at: new Date(now).toISOString(),
     };
     if (req.explanation) decision.explanation = req.explanation;
+    if (denied && req.missing) decision.missing = req.missing;
     if (!denied) {
       decision.lease_until = new Date(now + this.opts.leaseGraceMs).toISOString();
       const denial = req.explanation?.attached_via === "after_deny" ? this.findRecentDenial(decision, now) : undefined;

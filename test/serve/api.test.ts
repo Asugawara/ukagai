@@ -542,3 +542,17 @@ test("M3: denied_explain と同じ tool_use_id の本登録は新規作成され
   const d = (await real.json()) as { status: string };
   assert.equal(d.status, "pending");
 });
+
+test("denied_explain の missing は保存され、一覧と再読込で返る。通常の判断には付かない", async () => {
+  const env = await setup();
+  const res = await api(env, "/api/decisions", {
+    body: decisionBody(env, "tu-miss", { status: "denied_explain", missing: ["table", "recommend_cond"] }),
+  });
+  assert.equal(res.status, 201);
+  const d = (await res.json()) as { id: string; missing?: string[] };
+  assert.deepEqual(d.missing, ["table", "recommend_cond"]);
+  const list = (await (await api(env, "/api/decisions?status=denied_explain")).json()) as { id: string; missing?: string[] }[];
+  assert.deepEqual(list.find((x) => x.id === d.id)?.missing, ["table", "recommend_cond"]);
+  const real = await api(env, "/api/decisions", { body: decisionBody(env, "tu-miss2", { missing: ["x"] }) });
+  assert.equal(((await real.json()) as { missing?: string[] }).missing, undefined);
+});

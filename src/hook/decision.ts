@@ -123,7 +123,7 @@ export async function handleDecision(
             t - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
         );
         if (!multiGuarded) {
-          const reg = await client.createDecision({ ...base, status: "denied_explain" });
+          const reg = await client.createDecision({ ...base, status: "denied_explain", missing: ["multi"] });
           if (!reg) return null;
           return deny(multiDenyReason(parsed.data.questions.length));
         }
@@ -161,13 +161,13 @@ export async function handleDecision(
       } else if (linked.length > 0 || multiGuarded) {
         explanation = noExplanation("loop_guard");
       } else {
-        const missing = (v ? v.missing : ["file" as const]).map((c) => MISSING_LABELS[c]);
+        const codes = v ? v.missing : ["file" as const];
         const reason = denyReason(opts.denyTemplate, {
           path: join(dir, "explain.md"),
           question: q0.question,
-          missing,
+          missing: codes.map((c) => MISSING_LABELS[c]),
         });
-        const reg = await client.createDecision({ ...base, status: "denied_explain" });
+        const reg = await client.createDecision({ ...base, status: "denied_explain", missing: codes });
         if (!reg) return null;
         return deny(reason);
       }
@@ -194,7 +194,7 @@ export async function handleDecision(
       explanation = noExplanation("loop_guard");
     } else {
       const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((c) => MISSING_LABELS[c]) });
-      const reg = await client.createDecision({ ...base, status: "denied_explain" });
+      const reg = await client.createDecision({ ...base, status: "denied_explain", missing: v.missing });
       if (!reg) return null;
       return deny(reason);
     }

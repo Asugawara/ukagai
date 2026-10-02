@@ -17,8 +17,8 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("fixture が 16 ある", () => {
-  assert.equal(mdFiles.length, 16);
+test("fixture が 17 ある", () => {
+  assert.equal(mdFiles.length, 17);
 });
 
 for (const f of mdFiles) {
@@ -203,15 +203,37 @@ test("type が decision なら todo は要らず、従来どおり recommend が
   assert.deepEqual(validateExplanation(BLOCKER.replace("type: blocker", "type: decision")).missing, ["why", "recommend", "diagram"]);
 });
 
+test("推奨に条件(なら / 場合 / とき / if )が無いと recommend_cond。blocker では評価しない", () => {
+  const rec = (body: string) => GOOD.replace("A を推す。C なら B。", body);
+  assert.deepEqual(validateExplanation(rec("A を推す。")).missing, ["recommend_cond"]);
+  for (const ok of ["C の場合は B。", "速さが要るときは B。", "Use B if C.", "C なら B。"]) {
+    assert.equal(validateExplanation(rec(ok)).valid, true, ok);
+  }
+  // 長すぎて条件も無いときは両方、順序は recommend_long の直後
+  assert.deepEqual(validateExplanation(rec("あ".repeat(401))).missing, ["recommend_long", "recommend_cond"]);
+  assert.ok(!validateExplanation(BLOCKER, "answer_question", BLOCKER_LABELS).missing.includes("recommend_cond"));
+});
+
+test("図の必須条件: repo + reversible は任意、costly / machine / external は必須", () => {
+  const noDiagram = GOOD.replace(/## 図[\s\S]*?(?=\n## |$)/, "");
+  const fm = (rev: string, scope: string) => noDiagram.replace(/reversibility: .*/, `reversibility: ${rev}`).replace(/scope: .*/, `scope: ${scope}`);
+  assert.equal(validateExplanation(fm("reversible", "file")).valid, true);
+  assert.equal(validateExplanation(fm("reversible", "repo")).valid, true);
+  assert.deepEqual(validateExplanation(fm("reversible", "machine")).missing, ["diagram"]);
+  assert.deepEqual(validateExplanation(fm("reversible", "external")).missing, ["diagram"]);
+  assert.deepEqual(validateExplanation(fm("costly", "file")).missing, ["diagram"]);
+  assert.deepEqual(validateExplanation(fm("irreversible", "repo")).missing, ["diagram"]);
+});
+
 test("長さの上限: 推奨は 400 文字 / 5 文、セルは 160 文字、なぜは 600 文字。全角半角は同じ 1 文字", () => {
   const rec = (body: string) => GOOD.replace("A を推す。C なら B。", body);
-  assert.equal(validateExplanation(rec("あ".repeat(400))).valid, true);
-  assert.deepEqual(validateExplanation(rec("あ".repeat(401))).missing, ["recommend_long"]);
-  assert.deepEqual(validateExplanation(rec("Ａ".repeat(401))).missing, ["recommend_long"]);
-  assert.equal(validateExplanation(rec("一。二。三。四。五。")).valid, true);
-  assert.deepEqual(validateExplanation(rec("一。二。三。四。五。六。")).missing, ["recommend_long"]);
-  assert.equal(validateExplanation(rec("file.ts と 0.5 を使う。")).valid, true);
-  assert.equal(validateExplanation(rec("```\n" + "あ".repeat(500) + "\n```\nA を推す。")).valid, true);
+  assert.equal(validateExplanation(rec("なら" + "あ".repeat(398))).valid, true);
+  assert.deepEqual(validateExplanation(rec("なら" + "あ".repeat(399))).missing, ["recommend_long"]);
+  assert.deepEqual(validateExplanation(rec("なら" + "Ａ".repeat(399))).missing, ["recommend_long"]);
+  assert.equal(validateExplanation(rec("なら。二。三。四。五。")).valid, true);
+  assert.deepEqual(validateExplanation(rec("なら。二。三。四。五。六。")).missing, ["recommend_long"]);
+  assert.equal(validateExplanation(rec("file.ts と 0.5 を使う場合。")).valid, true);
+  assert.equal(validateExplanation(rec("```\n" + "あ".repeat(500) + "\n```\nA を推す。C なら B。")).valid, true);
   assert.deepEqual(validateExplanation(GOOD.replace("| A | a | b |", `| A | ${"あ".repeat(161)} | b |`)).missing, ["cell_long"]);
   assert.deepEqual(validateExplanation(GOOD.replace("| A | a | b |", `| A | a | ${"あ".repeat(161)} |`)).missing, ["cell_long"]);
   assert.equal(validateExplanation(GOOD.replace("| A | a | b |", `| A | ${"あ".repeat(160)} | b |`)).valid, true);

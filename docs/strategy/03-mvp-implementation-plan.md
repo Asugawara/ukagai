@@ -140,7 +140,7 @@ hook の出力(検証で確定した形):
 
 - 置き場: **`<scratchpad_dir>/ukagai/<自由な名前>.md`**。`scratchpad_dir` は hook の stdin にあり、Claude は自分の scratchpad を system prompt で知っていて、auto 以外のモードでも許可プロンプト無しで書ける見込み(E4 で default / acceptEdits / plan を確認)。`scratchpad_dir` が無い古い版では `~/.ukagai/explain/<session_id>/`。リポジトリの中には置かない。server は本文を Decision に複写する。
 - front matter: `ukagai: 1`、**`question:`(質問文の原文。`questions[0].question` をそのまま)**、`title`、`reversibility`、`scope`。
-- 本文の見出し: 「なぜ今この判断が要るか」「選択肢の比較」(表。各選択肢の利点・欠点・コスト)は必須。「図」(```mermaid)は `scope` が `repo` 以上または `reversibility` が `reversible` 以外のときだけ必須、それ以外は任意。「関係する差分」(```diff)はコード変更が絡むときだけ。hook は Mermaid の構文を検査できないので、GUI は描画に失敗したらコードをそのまま表示してエラーを添える。
+- 本文の見出し: 「なぜ今この判断が要るか」「選択肢の比較」(表。各選択肢の利点・欠点・コスト)は必須。「図」(```mermaid)は `reversibility` が `reversible` 以外、または `scope` が `machine` / `external` のときだけ必須、それ以外は任意。「関係する差分」(```diff)はコード変更が絡むときだけ。hook は Mermaid の構文を検査できないので、GUI は描画に失敗したらコードをそのまま表示してエラーを添える。
 - ExitPlanMode は別ファイルを要求しない。計画本文(`tool_input.plan`)に「影響範囲と可逆性」の節があるかだけを見る(見出しの照合は空白・全角半角・「と」「・」を正規化した部分一致)。Mermaid は推奨(無ければ `has.mermaid: false` で (d) に数える)。無ければ deny で直させるのは同一セッションで 1 回まで。
 - plan mode(`permission_mode === "plan"`)中の AskUserQuestion は説明ファイルを要求しない(`attached_via: none`、`none_reason: plan_mode`)。(d) の分母から除く。
 

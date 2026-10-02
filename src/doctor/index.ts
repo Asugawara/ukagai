@@ -44,7 +44,8 @@ export async function run(argv: string[]): Promise<number> {
     add(false, `server ${t.server}/healthz`, `接続できません(${(err as Error).cause instanceof Error ? ((err as Error).cause as Error).message : (err as Error).message})`);
   }
   add(await exists(join(t.dataDir, "token")), "token", join(t.dataDir, "token"));
-  add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
+  if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
+  else add(true, "skill ukagai-explain", "対象外");
 
   const ss = findManaged(settings, "SessionStart");
   const off = Array.isArray(ss?.["args"]) && (ss["args"] as unknown[]).includes("--no-autostart");

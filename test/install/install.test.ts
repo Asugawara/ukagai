@@ -50,7 +50,19 @@ test("空の settings に install: 全 event、exec form、statusMessage、--bud
   assert.equal(s.hooks.Stop[0].hooks[0].timeout, 5);
   assert.equal(s.hooks.SubagentStop[0].hooks[0].async, true);
   assert.equal(s.hooks.SessionStart[0].hooks[0].async, undefined);
+  assert.ok(!(await exists(join(e.home, ".claude"))), "--settings では skill に触らない");
+});
+
+test("--settings + --skill のときだけ skill を置き、uninstall も --skill のときだけ消す", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
   assert.ok(await exists(SKILL(e)));
+  const r1 = await ukagai(e, ["uninstall", "--settings", e.settings]);
+  assert.doesNotMatch(r1.out, /skill:/);
+  assert.ok(await exists(SKILL(e)), "--settings だけの uninstall は skill を消さない");
+  const r2 = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
+  assert.match(r2.out, /skill:/);
+  assert.ok(!(await exists(SKILL(e))));
 });
 
 test("--data-dir / --server 指定で全 hook の args に入り、未指定では入らない", async () => {
@@ -112,8 +124,8 @@ test("既存の hooks を保持し、2 回 install しても重複しない", as
 test("uninstall で元と等価に戻り、skill が消える", async () => {
   const e = await setup();
   await writeFile(e.settings, JSON.stringify(OTHER));
-  await ukagai(e, ["install", "--settings", e.settings]);
-  const r = await ukagai(e, ["uninstall", "--settings", e.settings]);
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  const r = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(await readJson(e.settings), OTHER);
   assert.ok(!(await exists(SKILL(e))));
@@ -187,5 +199,14 @@ test("doctor: install 済み + server 不在 → hook ○、server ×、exit 1",
   assert.match(r.out, /○ +hook PreToolUse/);
   assert.match(r.out, /× +server/);
   assert.match(r.out, /× +token/);
-  assert.match(r.out, /○ +skill/);
+  assert.match(r.out, /○ +skill ukagai-explain +対象外/);
+});
+
+test("doctor --skill: skill の有無を判定する", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  const args = ["doctor", "--settings", e.settings, "--skill", "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")];
+  assert.match((await ukagai(e, args)).out, /○ +skill ukagai-explain +\S*SKILL\.md/);
+  await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
+  assert.match((await ukagai(e, args)).out, /× +skill ukagai-explain/);
 });

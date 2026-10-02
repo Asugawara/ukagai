@@ -32,7 +32,7 @@
 
 **ラベル照合**(`normalizeLabel`。hook と GUI で同じ規則): 両辺を NFKC → 末尾の `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）` を除去 → 空白(全種)を削除 → 小文字化、にして完全一致で比べる。
 
-「`scope` が `repo` 以上」= `repo` / `machine` / `external`(順序は `file` < `repo` < `machine` < `external`)。
+「`scope` が `machine` 以上」= `machine` / `external`(順序は `file` < `repo` < `machine` < `external`)。図の必須条件(3.2)に使う。
 
 ## 3. 本文
 
@@ -61,7 +61,7 @@
 | なぜ今この判断が要るか | 常に必須。節に空でない行が 1 行以上。状況と、**人でなければ決められない理由**(エージェントが知り得ないこと)を書く(内容は検査しない) |
 | 選択肢 | 常に必須。節の中に 3.3 の表。旧見出し「選択肢の比較」も部分一致で通る |
 | 推奨 | 常に必須。節に空でない行が 1 行以上。どれを推すか、理由(3 文以内)、**別の選択肢が正しくなる条件**(「〜なら B」)を書く(内容は検査しない) |
-| 図 | **`scope` が `repo` 以上、または `reversibility` が `reversible` 以外のとき必須**。節の中に ` ```mermaid ` のコードブロックが 1 つ以上。`scope` か `reversibility` が欠落・不正なときは必須として扱う(安全側)。それ以外は任意 |
+| 図 | **`reversibility` が `reversible` 以外、または `scope` が `machine` / `external` のとき必須**(`repo` + `reversible` は任意)。節の中に ` ```mermaid ` のコードブロックが 1 つ以上。`scope` か `reversibility` が欠落・不正なときは必須として扱う(安全側)。必須でも、選択肢の違いが図に出ないなら描かず表の行を詳しくする(skill の指針。検査しない) |
 | 確かめたこと | 任意。file:line、コマンドの結果。推測は「推測」と書く。検査しない |
 | 関係する差分 | コード変更が絡むときに書く。hook は判定できないので**検査しない**(任意)。` ```diff ` で 20 行以内 |
 
@@ -115,7 +115,7 @@ GUI の右列で選択肢カードが画面外に押し出されないよう、�
 | 「なぜ今この判断が要るか」(blocker は「なぜ止まったか」)の本文 | 600 文字 | `why_long` |
 
 - 文の区切りは `。` `!` `?`(NFKC 後なので `！` `？` も)と、直後が空白か末尾の `.`(`file.ts` や `0.5` は区切らない)。
-- `cell_long` は 3.3 を満たした表だけを見る。blocker では `recommend_long` を評価しない(推奨の節が無いため)。
+- `cell_long` は 3.3 を満たした表だけを見る。blocker では `recommend_long` / `recommend_cond` を評価しない(推奨の節が無いため)。
 - 詳細・根拠・ログは「確かめたこと」の節に書く(検査しない)。
 
 ## 4. 検査結果
@@ -140,6 +140,7 @@ GUI の右列で選択肢カードが画面外に押し出されないよう、�
 | `todo` | `type: blocker` なのに、「人にしてほしいこと」の節が無い・空、または節の中にコードブロックが無い | 「人にしてほしいこと」の節(コマンドのコードブロック付き) |
 | `recommend` | (blocker では評価しない)「推奨」の節が無い、または空 | 「推奨」の節 |
 | `recommend_long` | (blocker では評価しない)「推奨」の節が 3.6 の上限を超える(`recommend` が落ちたときは評価しない) | 「推奨」の節が長い(3 文・400 文字以内) |
+| `recommend_cond` | (blocker では評価しない)「推奨」の節の本文に `なら` / `場合` / `とき` / `if `(大小無視)のいずれも無い(`recommend` が落ちたときは評価しない。`recommend_long` の直後) | 「推奨」に別の選択肢が正しくなる条件(「〜なら B」) |
 | `multi` | (検査ではなく 5 節の手順 0 で使う)`questions` が 2 つ以上 | 質問は 1 回に 1 問 |
 | `diagram` | (blocker では評価しない)図が必須(3.2)なのに、「図」の節か ` ```mermaid ` が無い | 「図」の節と Mermaid の図 |
 
@@ -200,8 +201,8 @@ AskUserQuestion の前に、人が判断するための説明ファイルを書�
 ```
 人に判断を求める前に、コードを読みコマンドで確かめて推奨を 1 つ決めること。人でなければ決められない理由(好み、外部の事情、戻せない変更、あなたが知り得ない前提)を 1 文で言えないなら、聞かずに推奨どおり進めて報告する。
 聞くときは、人が読む説明を Markdown で {置き場の絶対パス}/ に書くこと。書式は skill ukagai-explain に従う。
-front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。推奨は 3 文以内、表のセルは 2 文以内。構造や流れは Mermaid の図にする。
-文章で質問せず AskUserQuestion を使い、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
+front matter: question は AskUserQuestion の質問文を一字一句そのまま、title は人に決めてほしいこと 1 文、recommended は推す選択肢のラベル、reversibility は reversible / costly / irreversible、scope は file / repo / machine / external。本文: 「なぜ今この判断が要るか」「選択肢」(表。先頭列はラベル、列は選ぶと起きること・リスクと戻し方)「推奨」(理由と、別の選択肢が正しくなる条件)。推奨は 3 文以内、表のセルは 2 文以内。図は、戻しにくい(reversible 以外)か scope が machine / external で、選択肢の違いが構造や流れに出るときだけ Mermaid で描く。
+文章で質問せず、AskUserQuestion は最初から 1 問ずつ順に出し(まとめて出さない)、決め手は **太字**、戻せない影響は > [!CAUTION] の callout にし、推奨の選択肢を先頭に置いてラベル末尾に (Recommended) を付ける。計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。
 認証・権限など人の作業で止まるときは、文章で終えず blocker 形式の説明を書いて AskUserQuestion(対応した / 飛ばして続ける / 中断)で聞く。人が対応したら同じ作業を再試行する。
 ```
 
@@ -229,7 +230,7 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 
 ## 11. fixture
 
-`test/explain-fixtures/` に 13。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表は `labels` を渡さない前提(データ行 2 以上、ラベル照合なし)で判定する。
+`test/explain-fixtures/` に 14。各 `*.md` は説明(または計画)の全文、`*.expected.json` は検査の期待値 `{ valid, missing, has: {mermaid, table, diff}, question }`。`question` は front matter の値(無ければ `null`、計画は `null`)。`plan-` で始まるファイルは 9 節(計画本文)、他は 4 節の検査にかける。表は `labels` を渡さない前提(データ行 2 以上、ラベル照合なし)で判定する。
 
 | ファイル | valid | missing |
 |---|---|---|
@@ -246,6 +247,7 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 | `pass-blocker.md` | true | なし(`type: blocker`、`todo` にコードブロック、3 行の表、推奨節・図なし) |
 | `fail-blocker-no-todo.md` | false | `todo` |
 | `fail-bad-type.md` | false | `type`(`type: foo`) |
+| `fail-no-recommend-cond.md` | false | `recommend_cond` |
 
 ## 12. Stop hook の保険(文章で止まった blocker)
 
@@ -256,15 +258,16 @@ hook は Mermaid の構文を検査しない(コードブロックの有無だ�
 - `stop_hook_active` が false で `last_assistant_message` がブロッカー語彙に一致したら、stdout に `{"decision":"block","reason":"<理由文>"}` を返す。理由文(600 文字以内、URL なし。`src/hook/blocker.ts` の `BLOCKER_REASON`):
   `人の作業(認証・権限など)が要るなら、文章で終えずに ukagai の blocker 形式で聞いてください: skill ukagai-explain の「人の作業で止まったとき」に従って説明ファイル(type: blocker、「なぜ止まったか」「人にしてほしいこと」「選択肢」)を書き、AskUserQuestion を選択肢「対応した。続けて (Recommended)」「この手順は飛ばして続けて」「ここで中断」で出してください。人の作業が要らないなら、そのまま終えて構いません。`
 - ブロッカー語彙(`src/hook/blocker.ts`、大小無視): 文を「。」「.」改行で区切り、**同じ文に「対象語」と「詰まり語」の両方**が含まれるときだけ一致にする。
-  - 対象語(`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|api key|鍵`
-  - 詰まり語(`BLOCKER_STUCK`): `ない|無い|切れ|失敗|必要|してください|お願い|できません|進められません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked`
+  - 対象語(`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵`
+  - 詰まり語(`BLOCKER_STUCK`): `ない|無い|なく|なければ|無く|無ければ|ありません|切れ|失敗|必要|してください|お願い|できません|進められません|進めません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked`
+  - 否定の否定(`BLOCKER_SAFE`): 「問題ありません」「問題なく」「支障ない」「エラーなく」などは照合前に文から除く(「認証は問題ありません」を当たりにしない)
   - 一致する例: 「gcloud の認証がないため進められません」「Permission denied (403)」「トークンが期限切れです。再ログインしてください」。一致しない例: 「認証は有効です」「権限の実装を終えました」「どちらにしますか？」(片方だけ)。
   - `escaped_question`(末尾が ？)の判定とは独立。
 - 観測 event(`POST /api/events`)は今までどおり送り、語彙に一致したら `blocker_detected: true` を足す(`stop_hook_active` に関係なく)。POST は 1000 ms で打ち切り、hook 全体は 1.9 秒以内に返す。失敗しても何も出力しない(フェイルオープン)。
 
 ## 既知の制約
 
-- 多問 deny は `missing` を記録しない(Decision に `missing` の欄が無いため)。`denied_explain` かつ `request.questions` が 2 件以上であることで見分ける。
+- deny の `missing`(コード列)は `denied_explain` の Decision に残る(`missing?: string[]`)。多問 deny は `["multi"]`。
 - plan mode の多問は deny せず、従来どおり生の質問文・選択肢で GUI に出る。
 - `question` が複数行の質問文は front matter の 1 行スカラーで完全一致できず、recency に頼る。
 - recency は別の質問向けのファイルも拾いうる(10 分以内にちょうど 1 つあれば `match: recency` で添付される)。
