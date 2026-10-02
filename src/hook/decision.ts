@@ -25,6 +25,9 @@ import { join } from "node:path";
 
 type Out = Record<string, unknown>;
 
+/** シグナル受信後に cancel を待つ上限 */
+const CANCEL_TIMEOUT_MS = 300;
+
 const NO_HAS = { mermaid: false, table: false, diff: false };
 
 function deny(reason: string): Out {
@@ -183,20 +186,33 @@ export async function handleDecision(
     }
   }
 
-  // long-poll。残りが poll timeout + 5 秒を切ったら自分で降りる
-  const marginSec = opts.pollTimeoutMs / 1000 + 5;
-  for (;;) {
-    const remainingSec = opts.budgetSec - (Date.now() - startedAt) / 1000;
-    if (remainingSec < marginSec) {
-      await client.answerFallback(created.id);
-      return null;
+  // Esc / ctrl+c で来る終了シグナル: server に cancel を 1 回だけ伝え、何も出力せず終わる
+  const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  let cancelling = false;
+  const onSignal = () => {
+    if (cancelling) return;
+    cancelling = true;
+    void client.cancel(created.id, CANCEL_TIMEOUT_MS).finally(() => process.exit(0));
+  };
+  for (const s of signals) process.on(s, onSignal);
+  try {
+    // long-poll。残りが poll timeout + 5 秒を切ったら自分で降りる
+    const marginSec = opts.pollTimeoutMs / 1000 + 5;
+    for (;;) {
+      const remainingSec = opts.budgetSec - (Date.now() - startedAt) / 1000;
+      if (remainingSec < marginSec) {
+        await client.answerFallback(created.id);
+        return null;
+      }
+      const r = await client.wait(created.id, opts.pollTimeoutMs);
+      if (r.kind === "timeout") continue;
+      if (r.kind === "error") return null;
+      const out = buildOutput(kind, toolInput, r.response);
+      if (!out) return null;
+      if (!(await client.ack(created.id))) return null;
+      return out;
     }
-    const r = await client.wait(created.id, opts.pollTimeoutMs);
-    if (r.kind === "timeout") continue;
-    if (r.kind === "error") return null;
-    const out = buildOutput(kind, toolInput, r.response);
-    if (!out) return null;
-    if (!(await client.ack(created.id))) return null;
-    return out;
+  } finally {
+    for (const s of signals) process.off(s, onSignal);
   }
 }

@@ -363,6 +363,7 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
     assert.ok(out.additionalContext.includes(`${sp}/ukagai/`));
     assert.doesNotMatch(out.additionalContext, /https?:|\/api\//);
     assert.equal(out.additionalContext.split("\n").length, 3);
+    assert.ok(out.additionalContext.includes("reversibility は reversible / costly / irreversible、scope は file / repo / machine / external のいずれか"));
   });
 }
 

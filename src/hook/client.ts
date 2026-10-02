@@ -112,6 +112,11 @@ export class Client {
     return r?.status === 200;
   }
 
+  async cancel(id: string, timeoutMs: number): Promise<boolean> {
+    const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/cancel`, undefined, timeoutMs);
+    return r?.status === 200;
+  }
+
   async postEvent(event: Record<string, unknown>, timeoutMs: number): Promise<boolean> {
     const r = await this.request("POST", "/api/events", event, timeoutMs);
     return r !== null && r.status >= 200 && r.status < 300;

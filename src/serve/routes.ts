@@ -199,6 +199,10 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(store.ack(c.req.param("id")));
   });
 
+  app.post("/api/decisions/:id/cancel", auth("bearer"), jsonOnly, (c) => {
+    return c.json(store.cancel(c.req.param("id")));
+  });
+
   app.post("/api/decisions/:id/answer", auth("any"), jsonOnly, async (c) => {
     const id = c.req.param("id");
     if (!store.get(id)) return c.json({ error: "decision not found" }, 404);

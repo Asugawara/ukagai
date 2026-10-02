@@ -20,7 +20,7 @@ export function isEscapedQuestion(text: string | undefined): boolean {
 export function contextText(dir: string): string {
   return [
     `人に判断を求める前(AskUserQuestion の前、計画の提示の前)に、人が読む説明を Markdown で ${dir}/ に書くこと。書式は skill ukagai-explain に従う。`,
-    "front matter の question: には AskUserQuestion の質問文を一字一句そのまま入れる。選択肢の比較は表に、構造や流れは Mermaid の図にする。",
+    "front matter の question: には AskUserQuestion の質問文を一字一句そのまま入れる。reversibility は reversible / costly / irreversible、scope は file / repo / machine / external のいずれかにする。選択肢の比較は表に、構造や流れは Mermaid の図にする。",
     "文章で質問せず AskUserQuestion を使い、計画の本文には「影響範囲と可逆性」の節を入れる。plan mode 中の AskUserQuestion には説明ファイルは不要。",
   ].join("\n");
 }

@@ -104,15 +104,26 @@ export interface HookResult {
   ms: number;
 }
 
-export function runHook(args: string[], input: string): Promise<HookResult> {
-  return new Promise((resolve) => {
-    const t0 = Date.now();
-    const p = spawn(process.execPath, ["--import", "tsx", cli, "hook", ...args], { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    p.stdout.on("data", (c) => (stdout += c));
-    p.stderr.on("data", (c) => (stderr += c));
+export interface RunningHook {
+  signal: (sig: NodeJS.Signals) => void;
+  result: Promise<HookResult>;
+}
+
+/** 子プロセスにシグナルを送れる runHook */
+export function spawnHook(args: string[], input: string): RunningHook {
+  const t0 = Date.now();
+  const p = spawn(process.execPath, ["--import", "tsx", cli, "hook", ...args], { stdio: ["pipe", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  p.stdout.on("data", (c) => (stdout += c));
+  p.stderr.on("data", (c) => (stderr += c));
+  const result = new Promise<HookResult>((resolve) => {
     p.on("close", (code) => resolve({ stdout, stderr, code, ms: Date.now() - t0 }));
-    p.stdin.end(input);
   });
+  p.stdin.end(input);
+  return { signal: (sig) => p.kill(sig), result };
+}
+
+export function runHook(args: string[], input: string): Promise<HookResult> {
+  return spawnHook(args, input).result;
 }

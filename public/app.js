@@ -3,7 +3,7 @@ const MULTI_SELECT_SEPARATOR = ", "; // src/contract.ts と同じ値
 
 const decisions = new Map();
 const sessions = new Map();
-const drafts = new Map(); // id -> { sel: Map<qIndex, Set<label>>, rejecting, reason }
+const drafts = new Map(); // id -> { sel: Map<qIndex, Set<label>>, free: Map<qIndex, {on, text}>, rejecting, reason }
 let selectedId = null;
 
 const $ = (id) => document.getElementById(id);
@@ -118,7 +118,7 @@ function select(id) {
 
 function draftOf(d) {
   let dr = drafts.get(d.id);
-  if (!dr) drafts.set(d.id, (dr = { sel: new Map(), rejecting: false, reason: "" }));
+  if (!dr) drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "" }));
   return dr;
 }
 
@@ -153,6 +153,7 @@ function renderCard(d) {
     const qs = d.request.questions;
     qs.forEach((q, qi) => {
       const sel = dr.sel.get(qi) ?? dr.sel.set(qi, new Set()).get(qi);
+      const free = dr.free.get(qi) ?? dr.free.set(qi, { on: false, text: "" }).get(qi);
       const box = el("div", { class: "q" },
         el("div", { class: "header", text: q.header }),
         el("div", { class: "question", text: q.question }));
@@ -164,22 +165,48 @@ function renderCard(d) {
           checked: sel.has(o.label),
           onchange: (ev) => {
             if (q.multiSelect) ev.target.checked ? sel.add(o.label) : sel.delete(o.label);
-            else { sel.clear(); sel.add(o.label); }
+            else { sel.clear(); sel.add(o.label); free.on = false; }
             updateSubmit();
           },
         });
         box.append(el("label", { class: "opt" }, input,
           el("span", {}, el("div", { text: o.label }), o.description ? el("div", { class: "desc", text: o.description }) : null)));
       }
+      const freeInput = el("input", {
+        type: q.multiSelect ? "checkbox" : "radio",
+        name: `q${qi}`,
+        class: "free-toggle",
+        disabled: closed,
+        checked: free.on,
+        onchange: (ev) => {
+          free.on = ev.target.checked;
+          if (free.on && !q.multiSelect) sel.clear();
+          updateSubmit();
+        },
+      });
+      const freeText = el("input", {
+        type: "text", class: "free-text", placeholder: "自由記述", value: free.text, disabled: closed,
+        onfocus: () => { if (!free.on) freeInput.click(); },
+        oninput: (ev) => { free.text = ev.target.value; updateSubmit(); },
+      });
+      box.append(el("label", { class: "opt" }, freeInput, el("span", {}, el("div", { text: "自由記述" }))), freeText);
       card.append(box);
     });
-    const complete = () => qs.every((_, qi) => (dr.sel.get(qi)?.size ?? 0) > 0);
+    const freeOf = (qi) => dr.free.get(qi);
+    const complete = () => qs.every((_, qi) => {
+      const f = freeOf(qi);
+      if (f.on) return f.text.trim() !== "";
+      return (dr.sel.get(qi)?.size ?? 0) > 0;
+    });
     const submit = el("button", {
       class: "btn primary", id: "submit", disabled: closed || !complete(),
       onclick: () => {
         const answers = {};
         qs.forEach((q, qi) => {
           const picked = q.options.map((o) => o.label).filter((l) => dr.sel.get(qi).has(l));
+          const f = freeOf(qi);
+          if (f.on && !q.multiSelect) picked.length = 0;
+          if (f.on) picked.push(f.text.trim());
           answers[q.question] = picked.join(MULTI_SELECT_SEPARATOR);
         });
         send(d, { answers });

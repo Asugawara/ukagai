@@ -258,6 +258,18 @@ export class Store {
     return d;
   }
 
+  /** hook が SIGTERM / SIGINT / SIGHUP で降りる時の通知。pending は cancelled、answer_submitted は answer_lost */
+  cancel(id: string): Decision {
+    const d = this.decisions.get(id);
+    if (!d) throw new HttpError(404, "decision not found");
+    this.transition(d, d.status === "answer_submitted" ? "answer_lost" : "cancelled");
+    delete d.lease_until;
+    this.persist(d);
+    this.emit("decision.updated", d);
+    this.notify(d.id);
+    return d;
+  }
+
   ack(id: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
