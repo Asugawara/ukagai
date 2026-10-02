@@ -6,6 +6,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ukagai</title>
 <link rel="stylesheet" href="/public/app.css">
+<!-- highlight.js from cdnjs (optional: without network the code stays plain). Light/dark themes follow prefers-color-scheme -->
+<link rel="stylesheet" media="(prefers-color-scheme: light)" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 </head>
 <body>
 <button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden><span data-i18n="pending">Pending</span> <span id="pending-count">0</span> <kbd class="kbd">←</kbd><kbd class="kbd">→</kbd></button>
@@ -26,6 +29,7 @@
 </aside>
 <script src="/public/vendor/marked.umd.js"></script>
 <script src="/public/vendor/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" defer></script>
 <script type="module" src="/public/app.js"></script>
 </body>
 </html>

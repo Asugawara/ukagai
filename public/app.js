@@ -16,6 +16,11 @@ const SECTION = {
   blockerWhy: ["Why I stopped", "なぜ止まったか"],
   blockerTodo: ["What you need to do", "人にしてほしいこと"],
   impact: ["Scope and reversibility", "影響範囲と可逆性"],
+  terms: ["Terms", "用語"],
+  unknowns: ["What only you know", "あなたにしか分からないこと"],
+  assumptions: ["Assumptions", "前提"],
+  against: ["Counterargument", "反論"],
+  affects: ["Affected", "影響を受けるもの"],
 };
 // Fixed option labels of a blocker (a "(Recommended)" suffix is allowed on the first).
 const BLOCKER_LABELS = {
@@ -26,6 +31,22 @@ const BLOCKER_LABELS = {
 // Table column detection (header cell text). The first column is always the option label.
 const COLUMN_HAPPENS = /happens|outcome|起きること/i;
 const COLUMN_RISK = /risk|リスク/i;
+// Words in a risk cell. Same lists as the `undo` check in src/hook/explain.ts (BAD = "cannot be undone" family, UNDO = how to undo)
+const RISK_BAD = /cannot be undone|can't be undone|irreversible|unrecoverable|戻せない|元に戻らない/gi;
+const RISK_UNDO = /undo|revert|roll ?back|restore|reinstall|delete the|remove the|戻|消せ|やり直|再実行/gi;
+const hasBad = (s) => new RegExp(RISK_BAD.source, "i").test(s ?? "");
+// Option colors: --opt-0..3 in app.css; the recommended option uses the accent
+const optColor = (i, recommended) => (recommended ? "var(--accent)" : `var(--opt-${i % 4})`);
+// Confirmation / grace (seconds). `reversible` + `file` is sent at once; a decision without metadata too
+const CONFIRM_MS = 3000;
+const GRACE_S = { reversible: 2, costly: 3, irreversible: 5 };
+const NONE_TYPES = [
+  ["Missing option", "none_missing"],
+  ["Wrong premise", "none_premise"],
+  ["Need more evidence", "none_evidence"],
+  ["Ask me later", "none_later"],
+];
+const NONE_PREFIX = "None of these"; // the answer is `None of these — <type>: <text>`
 
 const decisions = new Map();
 const drafts = new Map(); // id -> { sel: Map<qIndex, Set<label>>, free: Map<qIndex, {on, text}>, rejecting, reason }
@@ -182,7 +203,7 @@ function elapsed(iso) {
 function diffBlock(text) {
   const pre = el("pre", { class: "diff" });
   for (const line of text.split("\n")) {
-    const cls = line.startsWith("@@") ? "hunk" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "";
+    const cls = /^(diff |index |\+\+\+ |--- )/.test(line) ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "";
     pre.append(el("span", { class: cls, text: line + "\n" }));
   }
   return pre;
@@ -266,12 +287,13 @@ function chips(d, cls = "") {
 function metaLine(d) {
   const line = el("div", { class: "meta-line" });
   line.append(chips(d));
-  line.append(el("span", { class: "cwd", text: tildePath(d.session.cwd), title: d.session.cwd }));
   const rev = reversibilityOf(d);
   if (rev === "irreversible") line.append(el("span", { class: "badge irreversible", text: t("irreversible") }));
   else if (rev === "costly") line.append(el("span", { class: "badge costly", text: t("costly") }));
+  else if (rev === "reversible") line.append(el("span", { class: "badge reversible", text: t("reversible") }));
   const scope = scopeOf(d);
   if (scope) line.append(el("span", { class: "badge", text: scope }));
+  line.append(el("span", { class: "cwd", text: tildePath(d.session.cwd), title: d.session.cwd }));
   line.append(el("span", { class: "badge age", "data-created": d.created_at, text: elapsed(d.created_at) }));
   return line;
 }
@@ -439,6 +461,243 @@ function clampMeta() {
 }
 window.addEventListener("resize", () => { clampMeta(); refreshWide(); });
 
+// ---- Weight (Enter twice) and grace (undo) ----
+
+// How long a sent answer waits before the POST (0 = at once). `reversible` + `file`, or no metadata at all, is immediate
+function graceSecs(d) {
+  const rev = reversibilityOf(d);
+  if (!rev || (rev === "reversible" && scopeOf(d) === "file")) return 0;
+  return GRACE_S[rev] ?? 0;
+}
+
+function syncConfirm(dr) {
+  const bar = document.querySelector("#decision .confirm-bar");
+  if (bar) bar.hidden = !dr.confirmKey;
+  document.querySelector("#decision .btn.primary")?.classList.toggle("confirming", !!dr.confirmKey);
+}
+function clearConfirm(dr) {
+  clearTimeout(dr.confirmTimer);
+  dr.confirmKey = null;
+  syncConfirm(dr);
+}
+function armConfirm(d, dr, key) {
+  clearTimeout(dr.confirmTimer);
+  dr.confirmKey = key;
+  dr.confirmTimer = setTimeout(() => { dr.confirmKey = null; if (shownId === d.id) syncConfirm(dr); }, CONFIRM_MS);
+  syncConfirm(dr);
+}
+
+// Send an answer. A weighty one needs Enter twice within 3 seconds; then the grace period runs (Undo with `u` / Esc) before the POST
+function attempt(d, dr, key, body, weighty) {
+  if (weighty && dr.confirmKey !== key) { armConfirm(d, dr, key); return; }
+  clearConfirm(dr);
+  const secs = graceSecs(d);
+  if (!secs) { send(d, body); return; }
+  const grace = { body, until: Date.now() + secs * 1000, timer: 0 };
+  dr.grace = grace;
+  grace.timer = setInterval(() => {
+    const left = grace.until - Date.now();
+    if (left <= 0) {
+      clearInterval(grace.timer);
+      if (dr.grace !== grace) return;
+      dr.grace = null;
+      send(d, body);
+      return;
+    }
+    const n = document.querySelector("#decision .grace-n");
+    if (n && shownId === d.id) n.textContent = String(Math.ceil(left / 1000));
+  }, 200);
+  if (shownId === d.id) renderRight(d);
+}
+
+function cancelGrace(d) {
+  const dr = drafts.get(d.id);
+  if (!dr?.grace) return false;
+  clearInterval(dr.grace.timer);
+  dr.grace = null;
+  if (shownId === d.id) renderRight(d);
+  return true;
+}
+
+function graceBar(d, dr) {
+  const left = Math.max(1, Math.ceil((dr.grace.until - Date.now()) / 1000));
+  const text = t("sent_in", { n: "\u0000" }).split("\u0000");
+  return el("div", { class: "grace-bar" },
+    el("span", { class: "grace-text" }, text[0], el("b", { class: "grace-n", text: String(left) }), text[1] ?? ""),
+    el("button", { class: "btn", type: "button", onclick: () => cancelGrace(d) }, el("span", { text: t("undo") }), kbd("u")));
+}
+
+const confirmBar = (dr) => el("div", { class: "confirm-bar", hidden: !dr.confirmKey, text: t("confirm_again") });
+
+// ---- Tooltips (terms and footnotes), evidence jump, badge copy ----
+
+const tip = el("div", { class: "tip", role: "tooltip", hidden: true });
+document.body.append(tip);
+let lastFn = null; // id of the footnote reference last hovered / focused
+let fnCursor = -1;
+let lastBadge = null;
+
+function showTip(target) {
+  const def = target.dataset.def;
+  if (!def) return hideTip();
+  tip.textContent = target.classList.contains("fn") ? `[${target.dataset.fn}] ${def}` : def;
+  tip.hidden = false;
+  const r = target.getBoundingClientRect();
+  const w = Math.min(360, innerWidth - 16);
+  tip.style.maxWidth = `${w}px`;
+  const left = Math.max(8, Math.min(innerWidth - w - 8, r.left));
+  tip.style.left = `${left}px`;
+  const below = r.bottom + 8 + tip.offsetHeight < innerHeight || r.top < tip.offsetHeight + 12;
+  tip.style.top = `${below ? r.bottom + 6 : r.top - tip.offsetHeight - 6}px`;
+}
+function hideTip() { tip.hidden = true; }
+function tipTarget(e) { return e.target instanceof Element ? e.target.closest(".term[data-def], .fn[data-def]") : null; }
+document.addEventListener("mouseover", (e) => {
+  const x = tipTarget(e);
+  if (x) { if (x.classList.contains("fn")) { lastFn = x.dataset.fn; fnCursor = -1; } showTip(x); } else hideTip();
+  const b = e.target instanceof Element ? e.target.closest(".cbadge") : null;
+  if (b) lastBadge = b;
+});
+document.addEventListener("focusin", (e) => {
+  const x = tipTarget(e);
+  if (x) { if (x.classList.contains("fn")) { lastFn = x.dataset.fn; fnCursor = -1; } showTip(x); } else hideTip();
+  const b = e.target instanceof Element ? e.target.closest(".cbadge") : null;
+  if (b) lastBadge = b;
+});
+document.addEventListener("focusout", hideTip);
+document.addEventListener("click", (e) => {
+  const x = e.target instanceof Element ? e.target.closest(".fn[data-fn]") : null;
+  if (x && !x.closest(".fn-def")) { lastFn = x.dataset.fn; jumpEvidence(); return; }
+  const b = e.target instanceof Element ? e.target.closest(".cbadge") : null;
+  if (b) copyBadge(b);
+});
+
+// `e`: scroll the left column to the evidence of the footnote last hovered / focused (else the next one), flashing it for 1 second
+function jumpEvidence() {
+  const defs = [...document.querySelectorAll("#background .fn-def")];
+  if (!defs.length) return;
+  let target = lastFn == null ? null : defs.find((x) => x.dataset.fn === lastFn);
+  if (!target) { fnCursor = (fnCursor + 1) % defs.length; target = defs[fnCursor]; }
+  lastFn = null;
+  target.scrollIntoView({ block: "center" });
+  target.classList.add("flash");
+  setTimeout(() => target.classList.remove("flash"), 1000);
+}
+
+async function copyBadge(badge) {
+  const text = (badge ?? lastBadge ?? document.querySelector("#background .cbadge"))?.textContent ?? "";
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(t("badge_copied", { text: clip(text) }));
+  } catch {
+    toast(t("copy_failed"));
+  }
+}
+
+// ---- Overlays: the term list (`?`) and the comparison table (`v`) ----
+
+let overlay = null; // { kind, el, sel?, v2?, ui? }
+function closeOverlay() {
+  overlay?.el.remove();
+  overlay = null;
+}
+function openOverlay(kind, title, body, extra = {}) {
+  closeOverlay();
+  const card = el("div", { class: `overlay-card ${kind}` }, el("div", { class: "overlay-title" }, el("span", { text: title }), kbd("Esc")), body);
+  const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-label": title, onclick: (e) => { if (e.target === root) closeOverlay(); } }, card);
+  document.body.append(root);
+  overlay = { kind, el: root, ...extra };
+}
+
+function openTerms(v2) {
+  if (!v2?.terms.length) return;
+  const list = el("dl", { class: "terms-list" });
+  for (const x of v2.terms) list.append(el("dt", { text: x.term }), el("dd", { text: x.def }));
+  openOverlay("terms", t("terms_title"), list);
+}
+
+function openCompare(v2, ui) {
+  if (!v2?.hasExtra) return;
+  const names = [];
+  for (const c of v2.cards) for (const col of c.cols) if (!names.includes(col.name)) names.push(col.name);
+  const table = el("table", { class: "cmp" });
+  const head = el("tr", {}, el("th"));
+  v2.cards.forEach((c, i) => head.append(el("th", { class: "cmp-h" + (c.recommended ? " is-rec" : ""), "data-i": String(i), onclick: () => { overlay.sel = i; syncCompare(); } },
+    el("span", { class: "opt-chip", style: `--oc:${c.color}`, text: c.label }))));
+  table.append(el("thead", {}, head));
+  const body = el("tbody");
+  for (const name of names) {
+    const tr = el("tr", {}, el("th", { class: "cmp-row", text: name }));
+    v2.cards.forEach((c, i) => {
+      const col = c.cols.find((x) => x.name === name);
+      const td = el("td", { class: "cmp-c" + (c.recommended ? " is-rec" : ""), "data-i": String(i) });
+      if (col?.cell) td.append(inlineClone(col.cell)); else td.append("—");
+      decorate(td, { terms: v2.terms }, { risk: COLUMN_RISK.test(name) });
+      tr.append(td);
+    });
+    body.append(tr);
+  }
+  table.append(body);
+  const wrap = el("div", {}, table, el("div", { class: "overlay-hint", text: t("compare_hint") }));
+  openOverlay("compare", t("compare_title"), wrap, { sel: clamp(ui.cursor, v2.cards.length), v2, ui });
+  syncCompare();
+}
+function syncCompare() {
+  if (overlay?.kind !== "compare") return;
+  for (const e of overlay.el.querySelectorAll("[data-i]")) e.classList.toggle("sel", Number(e.dataset.i) === overlay.sel);
+}
+
+function overlayKey(ev) {
+  const key = logicalKey(ev);
+  ev.preventDefault();
+  if (key === "Escape" || key === "?" && overlay.kind === "terms" || key === "v" && overlay.kind === "compare") { closeOverlay(); return; }
+  if (overlay.kind !== "compare") return;
+  const n = overlay.v2.cards.length;
+  if (key === "ArrowDown" || key === "ArrowRight" || key === "j" || key === "l") overlay.sel = clamp(overlay.sel + 1, n);
+  else if (key === "ArrowUp" || key === "ArrowLeft" || key === "k" || key === "h") overlay.sel = clamp(overlay.sel - 1, n);
+  else if (key === "Enter") {
+    const { sel, ui } = overlay;
+    closeOverlay();
+    ui.setCursor(sel, true);
+    if (ui.multi) return;
+    if (!ui.submit.disabled) ui.submit.click();
+    return;
+  }
+  syncCompare();
+}
+
+// ---- Right column pieces for the 1-second layer ----
+
+const affectsRow = (v2) => {
+  if (!v2?.affects.length) return null;
+  const row = el("div", { class: "affects", title: t("affected") }, el("span", { class: "aff-cap", text: `${t("affected")}:` }));
+  for (const a of v2.affects.slice(0, 6)) row.append(el("span", { class: "chip aff", text: a }));
+  if (v2.affects.length > 6) row.append(el("span", { class: "chip aff more", text: `+${v2.affects.length - 6}`, title: v2.affects.slice(6).join(", ") }));
+  return row;
+};
+
+const unknownsRow = (v2) => {
+  if (!v2?.unknowns.length) return null;
+  const list = el("ul", {});
+  for (const li of v2.unknowns) list.append(el("li", {}, ...[...li.cloneNode(true).childNodes]));
+  return el("div", { class: "unknowns" }, el("b", { class: "unknowns-cap", text: t("you_decide") }), list);
+};
+
+const optRow = (v2) => {
+  if (!v2?.cards.length) return null;
+  const row = el("div", { class: "optrow" });
+  for (const c of v2.cards) row.append(el("span", { class: "opt-chip" + (c.recommended ? " starred" : ""), style: `--oc:${c.color}`, text: c.label }));
+  return row;
+};
+
+function assumptionsBox(v2) {
+  if (!v2?.assumptions.length) return null;
+  const list = el("ul", {});
+  for (const li of v2.assumptions) list.append(el("li", {}, ...[...li.cloneNode(true).childNodes]));
+  return el("div", { class: "assumptions" }, el("div", { class: "assumptions-hint", text: t("assumptions_hint") }), list);
+}
+
 function renderRightBody(d) {
   const root = $("decision");
   stashPending();
@@ -448,7 +707,7 @@ function renderRightBody(d) {
   ui = null;
   if (!d) return;
   const dr = draftOf(d);
-  const closed = d.status !== "pending";
+  const closed = d.status !== "pending" || !!dr.grace; // while the grace period runs the screen is frozen (Undo only)
   if (STATUS_KEYS[d.status]) root.append(el("div", { class: "status", text: statusText(d.status) }));
 
   if (d.kind === "answer_question") {
@@ -457,6 +716,7 @@ function renderRightBody(d) {
     const v2 = single ? modelFor(d).v2 : null;
     const cards = []; // { input, card } when there is one question (for the arrow keys)
     let freeTextEl = null;
+    let noneNote = null;
     const qsBox = el("div", { class: "qs" });
     qs.forEach((q, qi) => {
       const sel = dr.sel.get(qi) ?? dr.sel.set(qi, new Set()).get(qi);
@@ -466,16 +726,23 @@ function renderRightBody(d) {
       if (v2) {
         box.append(el("div", { class: "head" },
           isBlocker(d) ? el("div", { class: "blocker-band", text: t("blocker_band") }) : null,
-          titleRow(el("div", { class: "v2-title", text: titleOf(d) })), metaLine(d)));
+          titleRow(el("div", { class: "v2-title", text: titleOf(d) })),
+          v2.headline ?? null,
+          metaLine(d), affectsRow(v2), unknownsRow(v2), optRow(v2)));
         if (v2.todoBox) box.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
-        if (v2.recBox) {
+        if (v2.recBox || v2.assumptions.length) {
           // Callouts (CAUTION / WARNING ...) are exempt from folding. Show them inside the recommendation frame, right under the folded body
-          const callouts = [...v2.recBox.querySelectorAll(".callout")].filter((c) => !c.parentElement.closest(".callout"));
+          const callouts = v2.recBox ? [...v2.recBox.querySelectorAll(".callout")].filter((c) => !c.parentElement.closest(".callout")) : [];
           for (const c of callouts) c.remove();
-          box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: v2.recCap }), el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)), callouts.length ? el("div", { class: "md rec-callouts" }, ...callouts) : null));
+          box.append(el("div", { class: "rec" },
+            el("div", { class: "rec-cap", text: v2.recCap ?? SECTION.recommendation[0] }),
+            v2.recBox ? el("div", { class: "rec-main" }, el("div", { class: "clampable rec-body" }, v2.recBox)) : null,
+            assumptionsBox(v2),
+            callouts.length ? el("div", { class: "md rec-callouts" }, ...callouts) : null));
         }
+        if (v2.against) box.append(el("div", { class: "against" }, el("div", { class: "against-cap", text: t("against_cap") }), v2.against));
         items = [
-          ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
+          ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk })),
           ...v2.extras.map(rawItem),
         ];
         // A blocker without a recommended row starts on the fixed "Done. Continue" option
@@ -511,11 +778,36 @@ function renderRightBody(d) {
             updateSubmit();
           },
         });
-        const lab = el("div", { class: "lab" }, el("span", { text: it.label }), it.badge ? el("span", { class: "rec-badge", text: t("recommended") }) : null);
-        const card = el("label", { class: "opt" + (it.badge ? " rec" : "") }, input,
-          el("span", { class: "grow" }, lab, ...it.lines.map((l) => el("div", { class: (l.muted ? "desc muted" : "desc") + " clampable" }, l.cell ? inlineClone(l.cell) : l.text))));
-        if (single) { const idx = cards.length; cards.push({ input, card }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
+        const labText = el("span", it.color ? { class: "opt-chip", style: `--oc:${it.color}`, text: it.label } : { text: it.label });
+        const lab = el("div", { class: "lab" }, labText, it.badge ? el("span", { class: "rec-badge", text: t("recommended") }) : null);
+        const descs = it.lines.map((l) => {
+          const dd = el("div", { class: (l.muted ? "desc muted" : "desc") + (l.extra ? " extra" : "") + " clampable" },
+            l.extra ? el("b", { class: "xcol", text: `${l.extra}: ` }) : null, l.cell ? inlineClone(l.cell) : l.text);
+          if (v2) decorate(dd, { terms: v2.terms }, { risk: !!l.muted });
+          return dd;
+        });
+        const card = el("label", { class: "opt" + (it.badge ? " rec" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null }, input,
+          el("span", { class: "grow" }, lab, ...descs));
+        if (single) { const idx = cards.length; cards.push({ input, card, risk: it.risk ?? "" }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
         box.append(card);
+      }
+      if (single) {
+        const none = dr.none;
+        box.append(el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
+          el("span", { text: t("none_of_these") }), kbd("n")));
+        if (none && !closed) {
+          const panel = el("div", { class: "none-panel" });
+          NONE_TYPES.forEach(([type, key], k) => panel.append(el("div", {
+            class: "none-type" + (k === none.cursor ? " cursor" : ""), "data-type": type,
+            onclick: () => { none.cursor = k; syncNone(); ui?.submitNone(); },
+          }, el("span", { text: t(key) }))));
+          noneNote = el("input", {
+            type: "text", class: "none-note", placeholder: t("none_note"), value: none.note,
+            oninput: (ev) => { none.note = ev.target.value; },
+          });
+          panel.append(noneNote);
+          box.append(panel);
+        }
       }
       const freeInput = el("input", {
         type: q.multiSelect ? "checkbox" : "radio",
@@ -546,42 +838,60 @@ function renderRightBody(d) {
       if (f.on) return f.text.trim() !== "";
       return (dr.sel.get(qi)?.size ?? 0) > 0;
     });
+    // The answers as they stand, and whether sending them is weighty (an irreversible decision, or a chosen option whose risk cell says it cannot be undone)
+    const collect = () => {
+      const answers = {};
+      let weighty = reversibilityOf(d) === "irreversible";
+      qs.forEach((q, qi) => {
+        const sel = dr.sel.get(qi);
+        // Answer with the original option.label (not the table's rendering)
+        const picked = q.options.map((o) => o.label).filter((l) => sel.has(l));
+        const f = dr.free.get(qi);
+        if (f.on && !q.multiSelect) picked.length = 0;
+        if (f.on) picked.push(f.text.trim());
+        if (single && v2) for (const l of picked) if (hasBad(v2.cards.find((c) => c.option.label === l)?.risk)) weighty = true;
+        answers[q.question] = picked.join(MULTI_SELECT_SEPARATOR);
+      });
+      return { answers, weighty };
+    };
     const submit = el("button", {
       class: "btn primary", type: "button", id: "submit", disabled: closed || !complete(),
-      onclick: () => {
-        const answers = {};
-        qs.forEach((q, qi) => {
-          const sel = dr.sel.get(qi);
-          // Answer with the original option.label (not the table's rendering)
-          const picked = q.options.map((o) => o.label).filter((l) => sel.has(l));
-          const f = dr.free.get(qi);
-          if (f.on && !q.multiSelect) picked.length = 0;
-          if (f.on) picked.push(f.text.trim());
-          answers[q.question] = picked.join(MULTI_SELECT_SEPARATOR);
-        });
-        send(d, { answers });
-      },
+      onclick: () => { const { answers, weighty } = collect(); attempt(d, dr, "submit", { answers }, weighty); },
     }, el("span", { text: t("answer") }), kbd("Enter"));
     function updateSubmit() { submit.disabled = closed || !complete(); }
-    const actions = el("div", { class: "actions" }, submit);
+    const actions = el("div", { class: "actions" }, confirmBar(dr), dr.grace ? graceBar(d, dr) : submit);
     if (single) {
-      actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}Enter ${t("hint_answer")} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}←→ ${t("hint_next")} · Esc ${t("hint_back")}`, " ", buildTag()));
+      const extraHints = [
+        v2?.terms.length ? `? ${t("hint_terms")} · ` : "",
+        modelFor(d).fnCount ? `e ${t("hint_evidence")} · ` : "",
+        v2?.hasExtra ? `v ${t("hint_compare")} · ` : "",
+        d.explanation && hasExplanation(d) ? `y ${t("hint_copy_badge")} · ` : "",
+        `n ${t("hint_none")} · `,
+      ].join("");
+      actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}Enter ${t("hint_answer")} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}←→ ${t("hint_next")} · Esc ${t("hint_back")}`, " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
     ui = {
-      kind: "question", cards, multi, submit, closed, freeText: freeTextEl,
+      kind: "question", cards, multi, submit, closed, single, v2, freeText: freeTextEl, noneNote,
       copy: v2?.todoBox?.querySelector("pre") ? () => copyCode(v2.todoBox.querySelector("pre")) : null,
       setCursor(i, select) {
         if (!cards.length) return;
         i = clamp(i, cards.length);
+        if (i !== dr.cursor) clearConfirm(dr);
         dr.cursor = i;
         cards.forEach((c, k) => c.card.classList.toggle("cursor", k === i));
-        cards[i].card.scrollIntoView({ block: "nearest" });
+        if (select) cards[i].card.scrollIntoView({ block: "nearest" }); // not on first render: the top (headline) stays in view
         if (select && !multi && !closed) cards[i].input.click();
       },
       get cursor() { return dr.cursor ?? 0; },
       toggleExpand: () => toggleExpand(dr),
+      submitNone() {
+        if (!dr.none) return;
+        const [type] = NONE_TYPES[dr.none.cursor];
+        const note = dr.none.note.trim();
+        attempt(d, dr, "none", { answers: { [qs[0].question]: `${NONE_PREFIX} — ${type}${note ? `: ${note}` : ""}` } }, reversibilityOf(d) === "irreversible");
+      },
     };
     if (single && !closed) ui.setCursor(dr.cursor, false);
     markClamps(root, dr);
@@ -595,10 +905,11 @@ function renderRightBody(d) {
   const impact = impactBox(d);
   if (impact) qsBox.append(impact);
   root.append(qsBox);
-  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: false }) }, el("span", { text: t("approve") }), kbd("y"));
-  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: t("approve_auto") }), kbd("a"));
+  const weighty = reversibilityOf(d) === "irreversible";
+  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => attempt(d, dr, "approve", { approve: true, set_mode_auto: false }, weighty) }, el("span", { text: t("approve") }), kbd("y"));
+  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => attempt(d, dr, "auto", { approve: true, set_mode_auto: true }, weighty) }, el("span", { text: t("approve_auto") }), kbd("a"));
   const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }), kbd("n"));
-  const actions = el("div", { class: "actions" });
+  const actions = el("div", { class: "actions" }, confirmBar(dr));
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
       class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
@@ -611,13 +922,16 @@ function renderRightBody(d) {
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(approve, auto, reject, el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · ←→ ${t("hint_next")}`, " ", buildTag()));
+  if (dr.grace) actions.append(graceBar(d, dr));
+  else actions.append(approve, auto, reject);
+  actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · ←→ ${t("hint_next")}`, " ", buildTag()));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
     kind: "plan", buttons, closed, approve, auto,
     setCursor(i) {
       i = clamp(i, buttons.length);
+      if (i !== dr.cursor) clearConfirm(dr);
       dr.cursor = i;
       buttons.forEach((b, k) => b.classList.toggle("cursor", k === i));
     },
@@ -626,6 +940,23 @@ function renderRightBody(d) {
   };
   if (!closed) ui.setCursor(dr.cursor ?? 0);
   markClamps(root, dr);
+}
+
+// "None of these…": open the type picker under the card (the answer is `None of these — <type>: <note>`)
+function openNone(d) {
+  const dr = draftOf(d);
+  dr.none = { cursor: 0, note: "" };
+  renderRight(d);
+}
+function closeNone(d) {
+  draftOf(d).none = null;
+  renderRight(d);
+}
+function syncNone() {
+  const d = decisions.get(shownId);
+  const none = d && draftOf(d).none;
+  if (!none) return;
+  document.querySelectorAll("#decision .none-type").forEach((e, k) => e.classList.toggle("cursor", k === none.cursor));
 }
 
 function startReject(d) {
@@ -665,7 +996,29 @@ function getMermaid() {
   return m;
 }
 
-async function renderMermaid(codeEl) {
+// Color the diagram nodes whose text is an option label: shape stroke and text fill in the option's color
+function colorMermaid(svg, opts) {
+  if (!opts.length) return;
+  for (const t of svg.querySelectorAll("text, .nodeLabel")) {
+    const text = (t.textContent ?? "").trim();
+    if (!text || t.closest(".optcolored")) continue;
+    const o = opts.find((x) => sameLabel(x.label, text));
+    if (!o) continue;
+    t.classList.add("optcolored");
+    if (t.tagName.toLowerCase() === "text") t.style.setProperty("fill", o.color, "important");
+    else t.style.setProperty("color", o.color, "important");
+    // Flowchart / state nodes: every shape of the node group. Sequence actors: the shapes next to the text
+    const node = t.closest("g.node, g.cluster");
+    let shapes = [];
+    if (node) shapes = [...node.querySelectorAll("rect, polygon, path, circle, ellipse")].filter((x) => !x.closest(".label, foreignObject, text"));
+    else {
+      for (let g = t.parentElement; g && g !== svg && !shapes.length; g = g.parentElement) shapes = [...g.children].filter((c) => /^(rect|polygon|path|circle|ellipse)$/i.test(c.tagName));
+    }
+    for (const sh of shapes) { sh.style.setProperty("stroke", o.color, "important"); sh.style.setProperty("stroke-width", "3px", "important"); }
+  }
+}
+
+async function renderMermaid(codeEl, opts = []) {
   const pre = codeEl.closest("pre") ?? codeEl;
   const source = codeEl.textContent ?? "";
   const id = `mmd-${++mermaidSeq}`;
@@ -676,6 +1029,7 @@ async function renderMermaid(codeEl) {
     const box = el("div", { class: "mermaid-ok" });
     box.innerHTML = svg;
     const el0 = box.querySelector("svg");
+    if (el0) colorMermaid(el0, opts);
     const natural = el0?.viewBox?.baseVal?.width || parseFloat(el0?.style.maxWidth) || 0;
     if (natural) box.dataset.natural = String(natural);
     pre.replaceWith(box);
@@ -761,7 +1115,8 @@ function inlineClone(node) {
         e.append(inlineClone(c));
         if (tag === "code") hyphenText(e);
         out.append(e);
-      } else if (tag === "br") out.append(" ");
+      } else if (tag === "sup" && c.classList.contains("fn")) out.append(c.cloneNode(true));
+      else if (tag === "br") out.append(" ");
       else out.append(inlineClone(c));
     }
   }
@@ -799,15 +1154,192 @@ function softHyphens(root) {
   for (const code of root.querySelectorAll("code")) if (!code.closest("pre")) hyphenText(code);
 }
 
+
+// ---- Rich text: wrap matches in text nodes (terms, option labels, risk words, numbers, footnotes) ----
+
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const SKIP_RICH = "pre, .term, .optref, .fn, .fn-n, button, kbd, .risk-bad, .risk-undo, .num, .cbadge";
+
+// Wrap every match of the global regex `re` in text nodes under root; make(m) returns the node to put in, or null to leave the text
+function wrapText(root, re, make, skip = SKIP_RICH) {
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  for (let n = w.nextNode(); n; n = w.nextNode()) if (!n.parentElement?.closest(skip)) nodes.push(n);
+  for (const n of nodes) {
+    const text = n.textContent ?? "";
+    re.lastIndex = 0;
+    let last = 0;
+    let frag = null;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      if (m[0] === "") { re.lastIndex++; continue; }
+      const node = make(m);
+      if (!node) continue;
+      frag ??= document.createDocumentFragment();
+      frag.append(text.slice(last, m.index), node);
+      last = m.index + m[0].length;
+    }
+    if (frag) { frag.append(text.slice(last)); n.replaceWith(frag); }
+  }
+}
+
+const wordEdge = (s) => (/^\w/.test(s) ? "(?<![\\w])" : "") + esc(s) + (/\w$/.test(s) ? "(?![\\w])" : "");
+
+// Terms: longest match first, the first occurrence under each root only
+function termMarks(root, terms) {
+  const sorted = [...terms].sort((a, b) => b.term.length - a.term.length);
+  const re = new RegExp(sorted.map((x) => wordEdge(x.term)).join("|"), "gi");
+  const seen = new Set();
+  wrapText(root, re, (m) => {
+    const key = m[0].toLowerCase();
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const def = sorted.find((x) => x.term.toLowerCase() === key)?.def;
+    return def ? el("span", { class: "term", tabindex: "0", "data-def": def, text: m[0] }) : null;
+  });
+}
+
+// Option labels: a <strong> / <code> that is exactly a label (any length); plain text for labels of 3+ characters
+function optMarks(root, opts) {
+  for (const e of root.querySelectorAll("strong, code")) {
+    if (e.closest("pre, .optref")) continue;
+    const o = opts.find((x) => sameLabel(x.label, e.textContent ?? ""));
+    if (o) { e.classList.add("optref"); e.style.setProperty("--oc", o.color); }
+  }
+  const long = opts.filter((o) => o.label.length >= 3).sort((a, b) => b.label.length - a.label.length);
+  if (!long.length) return;
+  const re = new RegExp(long.map((o) => wordEdge(o.label)).join("|"), "g");
+  wrapText(root, re, (m) => {
+    const o = long.find((x) => x.label === m[0]);
+    return o ? el("span", { class: "optref", style: `--oc:${o.color}`, text: m[0] }) : null;
+  });
+}
+
+// Risk words: the "cannot be undone" family red, the "how to undo" family green with an underline
+function riskMarks(root) {
+  wrapText(root, new RegExp(RISK_BAD.source, "gi"), (m) => el("span", { class: "risk-bad", text: m[0] }));
+  wrapText(root, new RegExp(RISK_UNDO.source, "gi"), (m) => el("span", { class: "risk-undo", text: m[0] }));
+}
+
+// A number with a unit gets a light emphasis
+const NUM_RE = /(?<![\w.])\d[\d,]*(?:\.\d+)?\s?(?:ms|s|sec|KB|MB|GB|%|件|行|個|倍|files?|lines?|tests?|errors?)(?![A-Za-z])/g;
+function numMarks(root) {
+  wrapText(root, new RegExp(NUM_RE.source, "g"), (m) => el("span", { class: "num", text: m[0] }), `${SKIP_RICH}, code`);
+}
+
+// ctx = { terms: [{term, def}], opts: [{label, color}] }
+function decorate(root, ctx, o = {}) {
+  if (ctx?.opts?.length) optMarks(root, ctx.opts);
+  if (ctx?.terms?.length) termMarks(root, ctx.terms);
+  if (o.risk) riskMarks(root);
+  if (o.num) numMarks(root);
+}
+
+// Footnotes: pull `[^n]: text` out of the Markdown and turn `[^n]` (outside code) into a superscript whose tooltip is the evidence
+function extractFootnotes(md) {
+  const defs = new Map();
+  let fence = false;
+  const kept = [];
+  for (const line of md.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    const d = !fence && /^\[\^([^\]\s]+)\]:\s*(.*)$/.exec(line);
+    if (d) defs.set(d[1], d[2]);
+    else kept.push(line);
+  }
+  if (!defs.size && !/\[\^[^\]\s]+\]/.test(md)) return { md, defs };
+  fence = false;
+  const out = kept.map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) { fence = !fence; return line; }
+    if (fence) return line;
+    return line.split(/(`[^`]*`)/).map((part, i) => (i % 2 ? part : part.replace(/\[\^([^\]\s]+)\]/g, (_, id) =>
+      `<sup class="fn" tabindex="0" data-fn="${escAttr(id)}" data-def="${escAttr(plainMd(defs.get(id) ?? ""))}">${escAttr(id)}</sup>`))).join("");
+  });
+  return { md: out.join("\n"), defs };
+}
+
+function footnoteDefs(defs) {
+  const box = el("div", { class: "fn-defs" });
+  for (const [id, text] of defs) {
+    const body = el("span", { class: "fn-text" });
+    body.innerHTML = sanitize(window.marked.parseInline(text, { async: false }));
+    dropExternalImages(body);
+    box.append(el("div", { class: "fn-def", "data-fn": id }, el("sup", { class: "fn-n", text: id }), body));
+  }
+  return box;
+}
+
+// Terms section: `- **term** — definition` (also `term: definition`)
+function parseTerms(sec) {
+  const out = [];
+  for (const li of bulletsOf(sec)) {
+    const text = (li.textContent ?? "").trim();
+    const strong = li.firstElementChild?.tagName === "STRONG" ? li.firstElementChild : null;
+    let term;
+    let def;
+    if (strong) {
+      term = (strong.textContent ?? "").trim();
+      def = text.slice(text.indexOf(term) + term.length);
+    } else {
+      const m = /^(.+?)(?:\s[—–-]\s|\s*[:：])\s*([\s\S]+)$/.exec(text);
+      if (!m) continue;
+      [, term, def] = m;
+    }
+    term = term.replace(/[:：]\s*$/, "").trim();
+    def = def.replace(/^\s*[:：—–-]+\s*/, "").trim();
+    if (term && def) out.push({ term, def });
+  }
+  return out;
+}
+
+// Top-level bullets of a section (elements holding the inline content)
+const bulletsOf = (sec) => sec.nodes.flatMap((n) => [...(n.querySelectorAll?.(":scope > li") ?? [])]);
+
+// Copy the first sentence of the first paragraph into a new element (the headline). The recommendation text itself stays whole.
+// null when there is none
+function splitHeadline(box) {
+  const p = box.firstElementChild;
+  if (!p || p.tagName !== "P") return null;
+  const text = p.textContent ?? "";
+  const end = /[。！？]|[.!?](?=\s|$)/.exec(text);
+  const upTo = end ? end.index + 1 : text.length;
+  const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+  let acc = 0;
+  const range = document.createRange();
+  range.setStart(p, 0);
+  let placed = false;
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    const len = n.textContent.length;
+    if (acc + len >= upTo) { range.setEnd(n, upTo - acc); placed = true; break; }
+    acc += len;
+  }
+  if (!placed) range.setEnd(p, p.childNodes.length);
+  const head = el("div", { class: "headline" });
+  head.append(range.cloneContents());
+  return (head.textContent ?? "").trim() ? head : null;
+}
+
 // Apply pre folding, diff and mermaid together (safe to call repeatedly)
-async function enhance(container) {
+async function enhance(container, opts = []) {
   callouts(container);
   softHyphens(container);
   for (const code of container.querySelectorAll("pre > code.language-diff")) {
     code.closest("pre").replaceWith(diffBlock(code.textContent ?? ""));
   }
-  await Promise.all([...container.querySelectorAll("pre > code.language-mermaid")].map(renderMermaid));
+  highlightCode(container);
+  await Promise.all([...container.querySelectorAll("pre > code.language-mermaid")].map((c) => renderMermaid(c, opts)));
   foldLongPre(container);
+}
+
+// highlight.js (cdnjs, optional): only fences that name a language. Without the script nothing changes
+function highlightCode(container) {
+  const hl = window.hljs;
+  if (!hl) return;
+  for (const code of container.querySelectorAll("pre > code[class*='language-']")) {
+    const lang = /language-([\w+-]+)/.exec(code.className)?.[1];
+    if (!lang || lang === "mermaid" || lang === "diff" || !hl.getLanguage(lang)) continue;
+    code.classList.add("hljs");
+    hl.highlightElement(code);
+  }
 }
 
 async function renderMarkdown(container, md) {
@@ -844,9 +1376,9 @@ function sectionsOf(container) {
 }
 
 // names: English first, Japanese alias second. Exact match against all names first, then partial match against all names
-function findSection(secs, names) {
+function findSection(secs, names, exact = false) {
   const ns = names.map(normHeading);
-  return secs.find((s) => ns.includes(s.norm)) ?? secs.find((s) => ns.some((n) => s.norm.includes(n)));
+  return secs.find((s) => ns.includes(s.norm)) ?? (exact ? undefined : secs.find((s) => ns.some((n) => s.norm.includes(n))));
 }
 
 const models = new Map(); // id -> { left, v2 }
@@ -861,9 +1393,11 @@ function buildModel(d) {
   if (d.kind !== "answer_question" || !hasExplanation(d)) return m;
   const { fm, body } = parseFrontMatter(d.explanation.markdown);
   const left = el("div", { class: "md" });
-  left.innerHTML = sanitize(window.marked.parse(body, { async: false }));
+  const fn = extractFootnotes(body);
+  left.innerHTML = sanitize(window.marked.parse(fn.md, { async: false }));
   dropExternalImages(left);
   m.left = left;
+  m.fnCount = fn.defs.size;
   const qs = d.request.questions;
   if (qs.length === 1) {
     const secs = sectionsOf(left);
@@ -874,6 +1408,31 @@ function buildModel(d) {
     const v2 = table ? parseOptionsTable(table, qs[0].options, fm) : null;
     if (v2) {
       if (v2.cards.length) for (const n of optSec.nodes) n.remove(); // if no row matched, leave the table in the left column
+      // Optional sections (Terms / What only you know / Assumptions / Counterargument / Affected) leave the left column
+      const takeSec = (names) => {
+        const sec = findSection(secs, names, true);
+        if (!sec || sec === optSec || sec === recSec) return null;
+        return sec;
+      };
+      const termsSec = takeSec(SECTION.terms);
+      const unknownsSec = takeSec(SECTION.unknowns);
+      const assumptionsSec = takeSec(SECTION.assumptions);
+      const againstSec = takeSec(SECTION.against);
+      const affectsSec = takeSec(SECTION.affects);
+      v2.terms = termsSec ? parseTerms(termsSec) : [];
+      v2.unknowns = unknownsSec ? bulletsOf(unknownsSec) : [];
+      v2.assumptions = assumptionsSec ? bulletsOf(assumptionsSec) : [];
+      v2.affects = affectsSec ? bulletsOf(affectsSec).map((li) => (li.textContent ?? "").trim()).filter(Boolean) : [];
+      if (againstSec) {
+        const box = el("div", { class: "md" });
+        for (const n of againstSec.nodes.slice(1)) box.append(n);
+        if (box.children.length) { v2.against = box; v2.againstCap = headingText(againstSec); }
+      }
+      for (const sec of [termsSec, unknownsSec, assumptionsSec, againstSec, affectsSec]) {
+        if (!sec) continue;
+        for (const n of sec.nodes) if (n.parentElement === left) n.remove();
+      }
+      v2.ctx = { terms: v2.terms, opts: v2.cards.map((c) => ({ label: c.label, color: c.color })) };
       const todoSec = (fm.type === "blocker" || d.explanation.type === "blocker") ? findSection(secs, SECTION.blockerTodo) : undefined;
       if (todoSec && todoSec !== optSec) {
         const todoBox = el("div", { class: "md" });
@@ -892,12 +1451,29 @@ function buildModel(d) {
         v2.recCap = headingText(recSec);
         for (const n of recSec.nodes.slice(1)) recBox.append(n);
         recSec.head.remove();
-        if (recBox.children.length) { v2.recBox = recBox; enhance(recBox).catch(() => {}); }
+        v2.headline = splitHeadline(recBox);
+        if (recBox.children.length) { v2.recBox = recBox; enhance(recBox, v2.ctx.opts).catch(() => {}); }
       }
+      // Footnote definitions go under What I checked (or at the end); path:line and `cmd` there become copyable badges
+      const checkedSec = findSection(secs, SECTION.checked);
+      if (fn.defs.size) {
+        const defs = footnoteDefs(fn.defs);
+        const at = checkedSec ? checkedSec.nodes.findLast((n) => n.parentElement === left) : null;
+        if (at) at.after(defs); else left.append(defs);
+      }
+      if (checkedSec) {
+        const hosts = [...checkedSec.nodes, ...left.querySelectorAll(".fn-defs")];
+        for (const n of hosts) {
+          for (const c of n.querySelectorAll?.("code") ?? []) if (!c.closest("pre")) { c.classList.add("cbadge"); c.tabIndex = 0; }
+        }
+      }
+      // Decorate: option colors in the text, terms, risk words (cells are handled when the cards are built), numbers with units
+      for (const e of [v2.recBox, v2.headline, v2.against, v2.todoBox, ...v2.unknowns, ...v2.assumptions].filter(Boolean)) decorate(e, v2.ctx);
+      decorate(left, v2.ctx, { num: true });
       m.v2 = v2;
     }
   }
-  enhance(left).catch(() => {});
+  enhance(left, m.v2?.ctx.opts ?? []).catch(() => {});
   return m;
 }
 
@@ -916,17 +1492,24 @@ function parseOptionsTable(table, options, fm) {
     const o = options.find((o) => sameLabel(o.label, row[0] ?? ""));
     if (!o || cards.some((c) => c.option === o)) continue;
     let lines;
-    if (hi >= 0 && ri >= 0) lines = [{ text: row[hi] ?? "", cell: tds[hi] }, { text: row[ri] ?? "", muted: true, cell: tds[ri] }];
-    else lines = row.slice(1).map((s, j) => ({ text: s ? `${header[j + 1] ?? ""}: ${s}` : "" })); // old format
+    const extra = [];
+    if (hi >= 0 && ri >= 0) {
+      lines = [{ text: row[hi] ?? "", cell: tds[hi] }, { text: row[ri] ?? "", muted: true, cell: tds[ri] }];
+      // Columns beyond label / happens / risk: a headed row on the card
+      header.forEach((h, j) => { if (j > 0 && j !== hi && j !== ri && row[j]) extra.push({ name: h, text: row[j], cell: tds[j] }); });
+      for (const x of extra) lines.push({ text: x.text, cell: x.cell, extra: x.name });
+    } else lines = row.slice(1).map((s, j) => ({ text: s ? `${header[j + 1] ?? ""}: ${s}` : "" })); // old format
     lines = lines.filter((l) => l.text && !/^[-—ー]+$/.test(l.text));
-    cards.push({ option: o, label: stripSuffix(row[0]), lines, suffix: SUFFIX_RE.test(row[0]), recommended: false });
+    const cols = header.map((h, j) => ({ name: h, text: row[j] ?? "", cell: tds[j] })).slice(1).filter((c) => c.text);
+    cards.push({ option: o, label: stripSuffix(row[0]), lines, cols, hasExtra: extra.length > 0, risk: ri >= 0 ? (row[ri] ?? "") : "", suffix: SUFFIX_RE.test(row[0]), recommended: false });
   }
   // Keep v2 even when no row matches (every option becomes a raw card)
   const want = fm.recommended ? fm.recommended : null;
   const byFm = want ? cards.filter((c) => sameLabel(c.option.label, want)) : [];
   for (const c of byFm.length ? byFm : cards.filter((c) => c.suffix)) c.recommended = true;
+  cards.forEach((c, i) => { c.color = optColor(i, c.recommended); });
   const extras = options.filter((o) => !cards.some((c) => c.option === o));
-  return { cards, extras };
+  return { cards, extras, hasExtra: cards.some((c) => c.hasExtra) };
 }
 
 // ---- Left column: background ----
@@ -963,6 +1546,7 @@ function renderLeft(d) {
 
 function renderAll() {
   document.body.classList.remove("fullwide");
+  closeOverlay();
   const d = decisions.get(shownId);
   $("main").hidden = !d;
   $("empty").hidden = !!d;
@@ -987,6 +1571,8 @@ function advance() {
 function upsert(d) {
   const prev = decisions.get(d.id);
   decisions.set(d.id, d);
+  const grace = drafts.get(d.id)?.grace;
+  if (grace && d.status !== "pending") { clearInterval(grace.timer); drafts.get(d.id).grace = null; }
   if (d.id !== shownId) notifyBackground(prev, d);
   if (d.id === shownId) {
     if (d.status !== "pending") {
@@ -1069,13 +1655,14 @@ function cycle(step) {
 // With an IME enabled, keydown has key "Process" and keyCode 229, so the character is lost.
 // Outside text fields, decide the bound key from the physical key (code)
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", Period: ".",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyU: "u", Slash: "/", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
   if (ev.key !== "Process" && ev.keyCode !== 229 && !ev.isComposing) return ev.key;
   const k = CODE_KEYS[ev.code];
   if (k === undefined) return ev.key;
+  if (k === "/" && ev.shiftKey) return "?";
   return k === "g" && ev.shiftKey ? "G" : k;
 }
 
@@ -1113,6 +1700,7 @@ document.addEventListener("keydown", (ev) => {
     else if (k === "Enter") ev.preventDefault(); // no submit while full width
     return;
   }
+  if (overlay) { overlayKey(ev); return; }
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
   if (!typing && key === "f" && hasWide()) { ev.preventDefault(); setFullwide(true); return; }
@@ -1123,11 +1711,37 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if (!typing && key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
+  // During the grace period only Undo (u / Esc) works
+  const shown = decisions.get(shownId);
+  if (shown && drafts.get(shown.id)?.grace) {
+    if (key === "u" || key === "Escape") { ev.preventDefault(); cancelGrace(shown); }
+    else if (key === "Enter" || key === " " || key.startsWith("Arrow")) ev.preventDefault();
+    return;
+  }
   if (!ui || ui.closed) return;
   const isBtn = t instanceof HTMLButtonElement;
 
   if (ui.kind === "question") {
     const n = ui.cards.length;
+    const dr = draftOf(decisions.get(shownId));
+    if (dr.none) {
+      // The "None of these" type picker
+      const move = (step) => { dr.none.cursor = clamp(dr.none.cursor + step, NONE_TYPES.length); syncNone(); };
+      if (typing && t === ui.noneNote) {
+        if (key === "Enter") { ev.preventDefault(); ui.submitNone(); }
+        else if (key === "Escape") { ev.preventDefault(); t.blur(); }
+        else if (key === "ArrowUp" || key === "ArrowDown") { ev.preventDefault(); t.blur(); move(key === "ArrowDown" ? 1 : -1); }
+        return;
+      }
+      if (key === "Enter" && isBtn) return;
+      if (key === "ArrowDown" || key === "j") { ev.preventDefault(); move(1); }
+      else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); move(-1); }
+      else if (key === "Enter") { ev.preventDefault(); ui.submitNone(); }
+      else if (key === "i") { ev.preventDefault(); ui.noneNote?.focus(); }
+      else if (key === "Escape" || key === "n") { ev.preventDefault(); closeNone(decisions.get(shownId)); }
+      else if (typing) return;
+      return;
+    }
     if (typing) {
       if (key === "Enter") { ev.preventDefault(); if (!ui.submit.disabled) ui.submit.click(); }
       else if (key === "Escape") { ev.preventDefault(); t.blur(); }
@@ -1160,6 +1774,24 @@ document.addEventListener("keydown", (ev) => {
       if (!ui.copy) return;
       ev.preventDefault();
       ui.copy();
+    } else if (key === "?") {
+      if (!ui.v2?.terms.length) return;
+      ev.preventDefault();
+      openTerms(ui.v2);
+    } else if (key === "e") {
+      ev.preventDefault();
+      jumpEvidence();
+    } else if (key === "v") {
+      if (!ui.v2?.hasExtra) return;
+      ev.preventDefault();
+      openCompare(ui.v2, ui);
+    } else if (key === "y") {
+      ev.preventDefault();
+      copyBadge();
+    } else if (key === "n") {
+      if (!ui.single) return;
+      ev.preventDefault();
+      openNone(decisions.get(shownId));
     } else if (key === "i") {
       if (!ui.freeText) return;
       ev.preventDefault();

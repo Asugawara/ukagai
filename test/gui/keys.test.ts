@@ -79,7 +79,7 @@ async function api(path: string, body?: unknown) {
 }
 
 type Opt = { label: string; description?: string };
-type Seed = { title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string; noneReason?: string; jaSeed?: boolean };
+type Seed = { reversibility?: string; scope?: string; title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string; noneReason?: string; jaSeed?: boolean };
 
 /** Seed a decision. Defaults to a single-select with a v2 explanation (A / B(Recommended) / C) */
 async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }> {
@@ -99,7 +99,7 @@ async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }
     body.explanation = { path: "", markdown: "", has: { mermaid: false, table: false, diff: false }, match: "question", attached_via: "none", none_reason: s.noneReason };
   } else if (explain) {
     body.explanation = {
-      path: "", title, question, reversibility: "reversible", scope: "file",
+      path: "", title, question, reversibility: s.reversibility ?? "reversible", scope: s.scope ?? "file",
       markdown: s.markdown ?? (s.jaSeed ? SEED_JA_MD : SEED_MD).replace("__QUESTION__", question).replace("__TITLE__", title),
       has: { mermaid: false, table: true, diff: false }, match: "question", attached_via: "first_call",
     };
@@ -810,4 +810,332 @@ gui("an English-headed explanation puts the options table on the cards, not in t
   assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent === "A is selected"`), true);
   assert.equal(ev<boolean>(`!document.querySelector("#background").textContent.includes("Options")`), true);
   assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes("Why this decision is needed now")`), true);
+});
+
+// ---- Rich decision screen (M2) ----
+
+const RICH_MD = readFileSync(new URL("./fixtures/rich.md", import.meta.url), "utf8");
+const RICH_OPTIONS: Opt[] = [{ label: "Sqlite (Recommended)", description: "Sqlite" }, { label: "Postgres", description: "Postgres" }, { label: "Flat files", description: "Flat" }];
+
+/** Seed the all-in-one explanation (Terms / Unknowns / Assumptions / Against / Affected / 4 columns / footnotes / Mermaid / diff) */
+async function seedRich(s: Seed = {}) {
+  const n = seq + 1;
+  const title = s.title ?? `Rich check ${n}`;
+  const question = `Rich question ${n}: which store?`;
+  return seedQuestion({ options: RICH_OPTIONS, reversibility: "costly", scope: "repo", ...s, title, markdown: RICH_MD.replace("__QUESTION__", question).replace("__TITLE__", title) });
+}
+
+// textContent of the first match ("" when there is none). Prefixed so that ev() does not turn "3" into a number
+const q1 = (sel: string) => ev<string>(`"t:" + ((document.querySelector(${JSON.stringify(sel)}) ?? {}).textContent ?? "")`).slice(2);
+const count = (sel: string) => ev<number>(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
+const RICH_READY = "document.querySelector('#decision .headline') && document.querySelector('#background .mermaid-ok svg')";
+
+gui("layers: the headline copies the first sentence of the recommendation, the box keeps the whole text", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.equal(q1("#decision .headline"), "I recommend Sqlite because it keeps reads fast without a server.");
+  // the recommendation box keeps the whole text (the headline is a copy of its first sentence)
+  assert.equal(q1("#decision .rec-body").startsWith("I recommend Sqlite"), true);
+  assert.equal(q1("#decision .rec-body").includes("It also fits"), true);
+  // 1-second layer order: title, headline, meta line, affected, you decide, option chips
+  const order = ev<string[]>(`JSON.stringify([...document.querySelector("#decision .head").children].map(e => e.className.split(" ")[0]))`);
+  assert.deepEqual(order.filter((c) => ["title-row", "headline", "meta-line", "affects", "unknowns", "optrow"].includes(c)), ["title-row", "headline", "meta-line", "affects", "unknowns", "optrow"]);
+  assert.equal(q1("#decision .unknowns").startsWith("You decide:"), true);
+  assert.equal(count("#decision .unknowns li"), 2);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .optrow .opt-chip")].map(e => e.textContent + (e.classList.contains("starred") ? "*" : "")))`), ["Sqlite*", "Postgres", "Flat files"]);
+  // 60-second layer stays on the left: Why, checked evidence, diagram, diff
+  assert.equal(q1("#background").includes("What I checked"), true);
+  assert.equal(count("#background pre.diff"), 1);
+});
+
+gui("reversibility shape: ↺ / ◐ / ■ in the badge, with the scope next to it", async () => {
+  await seedQuestion();
+  await reopen();
+  assert.equal(q1("#decision .badge.reversible"), "↺ Reversible");
+  await cancelAll();
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.equal(q1("#decision .badge.costly"), "◐ Costly to undo");
+  assert.equal(count("#decision .meta-line .badge:not(.age)"), 2);
+  assert.equal(q1("#decision .meta-line .badge.costly + .badge"), "repo");
+  await cancelAll();
+  await seedRich({ reversibility: "irreversible", scope: "machine" });
+  await reopen(RICH_READY);
+  assert.equal(q1("#decision .badge.irreversible"), "■ Irreversible");
+});
+
+gui("weight: on an irreversible decision Enter needs a second press within 3 seconds", async () => {
+  const { id } = await seedRich({ reversibility: "irreversible", scope: "machine" });
+  await reopen(RICH_READY);
+  const bar = () => ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`);
+  assert.equal(bar(), false);
+  press("Enter");
+  assert.equal(bar(), true);
+  assert.equal(q1("#decision .confirm-bar"), "Press Enter again to confirm (3s)");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending"); // one Enter does not send
+  await sleep(3400);
+  assert.equal(bar(), false); // released after 3 seconds
+  press("Enter");
+  assert.equal(bar(), true);
+  press("Enter");
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .grace-bar")`), true); // second Enter starts the grace period
+  press("u");
+  assert.equal(ev<boolean>(`!document.querySelector("#decision .grace-bar") && !!document.getElementById("submit")`), true);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+});
+
+gui("weight: a risk cell that says it cannot be undone makes that option's Enter a double press", async () => {
+  const { id } = await seedRich();
+  await reopen(RICH_READY);
+  const bar = () => ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`);
+  press("Enter"); // Sqlite: "Revert by deleting the db file" — no confirmation, straight to the grace period
+  assert.equal(bar(), false);
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .grace-bar")`), true);
+  press("u");
+  press("j"); // Postgres: "The migration cannot be undone"
+  press("Enter");
+  assert.equal(bar(), true);
+  assert.equal(ev<boolean>(`!document.querySelector("#decision .grace-bar")`), true);
+  press("k"); // moving away releases the confirmation
+  assert.equal(bar(), false);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+});
+
+gui("grace: costly waits 3 seconds then POSTs, u undoes, reversible + file is immediate", async () => {
+  const { id } = await seedRich();
+  await reopen(RICH_READY);
+  press("Enter");
+  assert.equal(q1("#decision .grace-bar").startsWith("Sent in"), true);
+  assert.equal(q1("#decision .grace-bar .grace-n"), "3");
+  await sleep(1200);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending"); // the agent still waits
+  const d = await waitStatus(id, "answer_submitted", 5000);
+  assert.equal(Object.values(d.response.answers)[0], "Sqlite (Recommended)");
+
+  const two = await seedRich({ reversibility: "costly" });
+  await reopen(RICH_READY);
+  press("Enter");
+  press("Escape"); // Esc undoes too
+  assert.equal(ev<boolean>(`!document.querySelector("#decision .grace-bar")`), true);
+  assert.deepEqual(view().cursor, 0); // back on the screen with the choice kept
+  await sleep(3500);
+  assert.equal((await api(`/api/decisions/${two.id}`)).status, "pending");
+  await cancelAll();
+
+  const fast = await seedQuestion(); // reversible + file: no grace
+  await reopen();
+  press("Enter");
+  await waitStatus(fast.id, "answer_submitted", 1500);
+});
+
+gui("grace: reversible outside a file waits 2 seconds", async () => {
+  const { id } = await seedRich({ reversibility: "reversible", scope: "repo" });
+  await reopen(RICH_READY);
+  press("Enter");
+  assert.equal(q1("#decision .grace-bar .grace-n"), "2");
+  await sleep(600);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  await waitStatus(id, "answer_submitted", 4000);
+});
+
+gui("None of these: n opens the type picker; the answer is `None of these — <type>: <note>`", async () => {
+  const { id } = await seedQuestion();
+  await reopen();
+  press("n");
+  assert.equal(count("#decision .none-type"), 4);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .none-type")].map(e => e.textContent))`), ["Missing option", "Wrong premise", "Need more evidence", "Ask me later"]);
+  press("Escape");
+  assert.equal(count("#decision .none-type"), 0);
+  press("n", "j", "j", "i");
+  ab("keyboard", "type", "see the logs");
+  press("Enter");
+  const d = await waitStatus(id, "answer_submitted");
+  assert.equal(Object.values(d.response.answers)[0], "None of these — Need more evidence: see the logs");
+  await cancelAll();
+  const b = await seedQuestion();
+  await reopen();
+  press("n", "Enter");
+  const d2 = await waitStatus(b.id, "answer_submitted");
+  assert.equal(Object.values(d2.response.answers)[0], "None of these — Missing option");
+});
+
+gui("None of these does not take n from the plan card (n still rejects a plan)", async () => {
+  await seedPlan();
+  await reopen("document.querySelector('#decision .btn')");
+  press("n");
+  assert.equal(ev(`document.activeElement.id`), "reason");
+  assert.equal(count("#decision .none-card"), 0);
+});
+
+gui("terms: the first occurrence is annotated, the tooltip shows the definition, ? lists them, Terms is not in the left column", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  const terms = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background .term")].map(e => e.textContent + "=" + e.dataset.def))`);
+  assert.ok(terms.includes("cache layer=the module that keeps recent reads in memory"), JSON.stringify(terms));
+  assert.equal(count("#background .term[tabindex='0']") >= 1, true);
+  // a term inside a card cell is annotated too (the option labels win over terms: Sqlite is a label, not a term)
+  assert.equal(q1("#decision .opt .term"), "migration");
+  assert.equal(q1("#background").includes("the module that keeps recent reads in memory"), false); // no Terms section on the left
+  ev(`document.querySelector("#background .term").focus(), "ok"`);
+  assert.equal(ev<boolean>(`!document.querySelector(".tip").hidden`), true);
+  assert.equal(q1(".tip").length > 5, true);
+  ev(`document.activeElement.blur(), "ok"`);
+  assert.equal(ev<boolean>(`document.querySelector(".tip").hidden`), true);
+  press("?");
+  assert.equal(count(".overlay.terms dt"), 2);
+  assert.equal(q1(".overlay.terms dd"), "the module that keeps recent reads in memory");
+  press("Escape");
+  assert.equal(count(".overlay"), 0);
+});
+
+gui("option colors: chips, label mentions in the text and Mermaid nodes share the option's color", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  const oc = (sel: string) => ev<string>(`document.querySelector(${JSON.stringify(sel)}).style.getPropertyValue("--oc")`);
+  assert.equal(oc("#decision .opt:nth-of-type(1) .opt-chip") || ev<string>(`[...document.querySelectorAll("#decision .opt")][0].style.getPropertyValue("--oc")`), "var(--accent)");
+  const cardColors = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt.colored")].map(e => e.style.getPropertyValue("--oc")))`);
+  assert.deepEqual(cardColors, ["var(--accent)", "var(--opt-1)", "var(--opt-2)"]);
+  assert.equal(ev<string>(`[...document.querySelectorAll("#background .optref")].find(e => e.textContent === "Postgres").style.getPropertyValue("--oc")`), "var(--opt-1)");
+  assert.equal(ev<string>(`document.querySelector("#decision .headline .optref").style.getPropertyValue("--oc")`), "var(--accent)");
+  // Mermaid: the Postgres node's shape stroke and label color
+  const node = ev<{ n: number; stroke: string }>(`(() => {
+    const labels = [...document.querySelectorAll("#background .mermaid-ok .optcolored")];
+    const pg = labels.find(e => e.textContent.trim() === "Postgres");
+    const shapes = [...(pg?.closest("g.node")?.querySelectorAll("rect, polygon, path") ?? [])].filter(x => !x.closest(".label, foreignObject"));
+    return JSON.stringify({ n: labels.length, stroke: shapes.map(x => x.style.getPropertyValue("stroke")).find(Boolean) ?? "" });
+  })()`);
+  assert.equal(node.n >= 3, true);
+  assert.equal(node.stroke, "var(--opt-1)");
+});
+
+gui("assumptions, counterargument and affected names", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.equal(count("#decision .assumptions li"), 2);
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#decision .assumptions li"), "::before").content`).replace(/"/g, ""), "☐");
+  assert.equal(q1("#decision .assumptions-hint"), "If any one is wrong, another option fits");
+  assert.equal(q1("#decision .against .against-cap"), "Against this:");
+  assert.equal(q1("#decision .against").includes("Postgres would scale further"), true);
+  assert.equal(count("#decision .affects .chip.aff:not(.more)"), 6); // at most 6 names
+  assert.equal(q1("#decision .affects .chip.more"), "+2");
+  assert.equal(q1("#decision .affects .chip.aff"), "src/store.ts");
+  // none of them is repeated in the left column
+  assert.equal(q1("#background").includes("Whether the team will run a database server"), false);
+  assert.equal(q1("#background").includes("The data stays under 1 GB"), false);
+});
+
+gui("footnotes: [^n] becomes a superscript with the evidence on hover, e jumps to it, units are emphasized", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.equal(count("#background sup.fn"), 2);
+  assert.equal(q1("#background").includes("[^"), false);
+  ev(`document.querySelector("#background sup.fn").focus(), "ok"`);
+  assert.equal(q1(".tip").startsWith("[1] Measured with"), true);
+  press("e");
+  assert.equal(ev<boolean>(`document.querySelector('#background .fn-def[data-fn="1"]').classList.contains("flash")`), true);
+  await sleep(1300);
+  assert.equal(ev<boolean>(`!!document.querySelector("#background .fn-def.flash")`), false); // the highlight lasts 1 second
+  ev(`document.activeElement.blur(), "ok"`);
+  press("e"); // without a hover the next definition
+  assert.equal(count("#background .fn-def.flash"), 1);
+  assert.equal(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background .num")].map(e => e.textContent))`).includes("12 MB"), true);
+});
+
+gui("badges: path:line and `cmd` under What I checked are monospace badges; y copies one", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; })(), "ok"`);
+  const badges = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background .cbadge")].map(e => e.textContent))`);
+  assert.ok(badges.includes("src/store/read.ts:42") && badges.includes("npm run bench"), JSON.stringify(badges));
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .cbadge")).fontFamily`).includes("mono"), true);
+  press("y");
+  assert.deepEqual(ev<string[]>(`JSON.stringify(window.__clip)`), ["src/store/read.ts:42"]);
+  assert.equal(q1(".toast").startsWith("Copied: src/store/read.ts:42"), true);
+  ev(`document.querySelectorAll("#background .cbadge")[1].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })), "ok"`);
+  press("y");
+  assert.equal(ev<string>(`window.__clip.at(-1)`), "npm run bench");
+});
+
+gui("extra columns: headed rows on the cards, v opens the comparison table, Enter answers the column", async () => {
+  const { id } = await seedRich();
+  await reopen(RICH_READY);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt .desc.extra")].map(e => e.textContent))`), ["Cost: 1 day", "Cost: 5 days", "Cost: 0 days"]);
+  assert.equal(q1("#decision .hint").includes("v Compare"), true);
+  press("v");
+  assert.equal(count(".overlay.compare"), 1);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll(".overlay.compare th.cmp-row")].map(e => e.textContent))`), ["What happens if chosen", "Risks and how to undo", "Cost"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll(".overlay.compare thead .opt-chip")].map(e => e.textContent))`), ["Sqlite", "Postgres", "Flat files"]);
+  assert.equal(count(".overlay.compare thead th.is-rec"), 1); // the recommended column is emphasized
+  assert.equal(ev<number>(`+document.querySelector(".overlay.compare thead th.sel").dataset.i`), 0); // opens on the cursor
+  assert.equal(count(".overlay.compare td.sel"), 3);
+  assert.equal(count(".overlay.compare .risk-bad"), 1);
+  press("ArrowDown", "ArrowDown");
+  assert.equal(ev<number>(`+document.querySelector(".overlay.compare thead th.sel").dataset.i`), 2);
+  press("Enter");
+  assert.equal(count(".overlay"), 0);
+  const d = await waitStatus(id, "answer_submitted", 6000); // costly: 3-second grace
+  assert.equal(Object.values(d.response.answers)[0], "Flat files");
+});
+
+gui("diff fence: file headings, additions, deletions and hunks have their own classes", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  const cls = ev<Record<string, number>>(`JSON.stringify(Object.fromEntries(["file", "add", "del", "hunk"].map(c => [c, document.querySelectorAll("#background pre.diff ." + c).length])))`);
+  assert.deepEqual(cls, { file: 3, add: 1, del: 1, hunk: 1 });
+  const bg = (c: string) => ev<string>(`getComputedStyle(document.querySelector("#background pre.diff .${c}")).backgroundColor`);
+  assert.notEqual(bg("add"), bg("del"));
+  assert.notEqual(bg("file"), bg("hunk"));
+});
+
+gui("risk column: 'cannot be undone' is red, the way back is green and underlined", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.equal(q1("#decision .opt .risk-bad"), "cannot be undone");
+  assert.equal(count("#decision .opt .risk-undo") >= 2, true); // Revert / delete the / Restore
+  const style = ev<{ bad: string; undo: string; line: string }>(`JSON.stringify({
+    bad: getComputedStyle(document.querySelector("#decision .risk-bad")).color,
+    undo: getComputedStyle(document.querySelector("#decision .risk-undo")).color,
+    line: getComputedStyle(document.querySelector("#decision .risk-undo")).textDecorationLine })`);
+  assert.notEqual(style.bad, style.undo);
+  assert.equal(style.line.includes("underline"), true);
+});
+
+gui("plan: an irreversible plan needs Enter twice too, and the grace period can be undone", async () => {
+  const n = ++seq;
+  const plan = "# Drop the old store\n\nStep 1";
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_gui_${process.pid}_${n}`, kind: "approve_plan",
+    session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan, planFilePath: "/tmp/plan.md" },
+    explanation: { path: "", title: "Drop the old store", reversibility: "irreversible", scope: "machine", markdown: plan, has: { mermaid: false, table: false, diff: false }, match: "recency", attached_via: "first_call" },
+  });
+  assert.ok(d.id);
+  await reopen("document.querySelector('#decision .btn')");
+  press("y");
+  assert.equal(ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`), true);
+  assert.equal((await api(`/api/decisions/${d.id}`)).status, "pending");
+  press("y");
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .grace-bar")`), true);
+  assert.equal(q1("#decision .grace-bar .grace-n"), "5");
+  press("u");
+  assert.equal(count("#decision .grace-bar"), 0);
+  await sleep(300);
+  assert.equal((await api(`/api/decisions/${d.id}`)).status, "pending");
+});
+
+gui("ja: the shape, You decide, Against, None of these and the confirmation follow the language", async () => {
+  await seedRich({ reversibility: "irreversible", scope: "machine" });
+  await reopen(RICH_READY);
+  try {
+    await setLang("ja", `document.querySelector("#decision .badge.irreversible")?.textContent === "■ 元に戻せない"`);
+    assert.equal(q1("#decision .unknowns-cap"), "あなたが決めること:");
+    assert.equal(q1("#decision .against-cap"), "反論:");
+    assert.equal(q1("#decision .none-card").startsWith("どれでもない…"), true);
+    press("Enter");
+    assert.equal(q1("#decision .confirm-bar"), "もう一度 Enter で確定(3 秒)");
+    press("n");
+    assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .none-type")].map(e => e.textContent))`), ["選択肢が足りない", "前提が違う", "証拠が足りない", "あとで聞いて"]);
+  } finally {
+    ev(`document.documentElement.dataset.lang = "en", "ok"`);
+  }
 });
