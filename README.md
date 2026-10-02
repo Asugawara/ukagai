@@ -49,6 +49,8 @@ npm test              # GUI tests (test/gui/) run only when agent-browser is ava
 npm run dev:serve
 ```
 
+`claude --settings <file>` is used together with the global settings, so a globally installed hook also fires in a test session and writes into your real queue. For tests, run `UKAGAI_DISABLE=1 claude …` to silence the global hook (the `hook` subcommand then prints nothing and exits 0 for every event), or enable only the hook in the test settings file.
+
 | Path | Content |
 |---|---|
 | `docs/strategy/` | Strategy and the current MVP implementation plan (`03-*`) |

@@ -65,7 +65,7 @@ The names are exported from `src/hook/explain.ts` as `SECTION`:
 | (blocker) `todo` | What you need to do | 人にしてほしいこと | whatyouneedtodo |
 | (plan) `impact` | Scope and reversibility | 影響範囲と可逆性 | scopeandreversibility |
 
-"Related diff" (関係する差分) is not matched (section 3.2). `terms` / `unknowns` / `assumptions` / `against` / `affects` are optional and only parsed (section 3.7); the hook does not check them yet.
+"Related diff" (関係する差分) is not matched (section 3.2). `terms` / `unknowns` / `assumptions` / `against` / `affects` are optional and only parsed (section 3.7); the hook checks only one thing about them: `against_weak` (section 4). **Use only the section names defined here for H2**: a heading that is not in this table is not shown prominently on the decision screen, and the hook does not warn about it.
 
 `findSection(headings, total, names)` takes an array of names.
 
@@ -108,7 +108,7 @@ Inside the "Options" section there must be a GFM table (header row + separator r
 If a section has several tables, one of them satisfying the conditions is enough.
 
 5. **Extra columns.** The table may have 3 or more columns: the label, the `COLUMN_HAPPENS` column, the `COLUMN_RISK` column and any others (cost, effort, …). Columns may be in any order after the label. `Table.extraColumns` lists the indexes of the columns that are neither the label (0), `COLUMN_HAPPENS` nor `COLUMN_RISK` (empty for the usual 3 columns). Extra columns are not checked (the hook does not look at their cells).
-6. **Undo (`undo`).** Every data row's `COLUMN_RISK` cell matches `UNDO_WORDS` (`/undo|revert|roll ?back|restore|reinstall|delete the|remove the|cannot be undone|irreversible|戻|消せ|やり直|再実行|元に戻らない/i`; 「戻せない」 matches by 「戻」), or says in other words that it cannot be undone. For a blocker, the rows of the 3 fixed labels are exempt (they need no undo sentence); any other row is checked. Evaluated only for tables satisfying 1–4, and only when `cell_long` is evaluated, right after it.
+6. **Undo (`undo`).** Every data row's `COLUMN_RISK` cell matches `UNDO_BAD_WORDS` (phrases saying it cannot be undone) **or** `UNDO_WORDS` (phrases saying how to undo). Both are exported from `src/hook/explain.ts`, and the GUI / TUI use the same lists for colors (bad words red first, then the remaining undo words green; "cannot be restored" is red only). English entries match on word boundaries, Japanese entries as substrings, all case-insensitive. `UNDO_BAD_WORDS` = `/\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i`. `UNDO_WORDS` = `/\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i`. For a blocker, the rows of the 3 fixed labels are exempt (they need no undo sentence); any other row is checked. Evaluated only for tables satisfying 1–4, and only when `cell_long` is evaluated, right after it.
 
 ### 3.4 `has` (facts for the record)
 
@@ -179,6 +179,7 @@ The check lists the following `missing` codes **in this order** (the table is by
 | `recommend_long` | (not evaluated for a blocker) The "Recommendation" section exceeds the limit of 3.6 (not evaluated when `recommend` failed) | the "Recommendation" section is too long (at most 5 sentences and 400 characters) |
 | `recommend_cond` | (not evaluated for a blocker) The body of the "Recommendation" section (excluding code blocks and callout lines) contains none of the words matched by `RECOMMEND_COND`: `なら` (not `ならない` / `ならず`) / `なければ` (not `なければなら…`; includes 「でなければ」) / `場合` / `とき` (not `ときどき`) / `であれば` / `際は` / `際に` / `\bif\b` / `\bwhen\b` / `\bunless\b` / `\botherwise\b` / `\bin case\b` (Latin letters are case-insensitive) (not evaluated when `recommend` failed; right after `recommend_long`) | a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.) |
 | `multi` | (not a check; used in step 0 of section 5) `questions` has two or more entries | one question per call |
+| `against_weak` | (not a blocker; only when both sections exist) The "Counterargument" body, with whitespace, punctuation and symbols removed (NFKC, lowercase), is a substring of the "Recommendation" body normalized the same way (right after `recommend_cond`) | the Counterargument repeats the Recommendation; make it attack the pick |
 | `diagram` | (not evaluated for a blocker) A diagram is required (3.2) but the "Diagram" section or the ` ```mermaid ` block is absent | a "Diagram" section with a Mermaid diagram |
 | `checked` | (not evaluated for a blocker) Not (`reversibility: reversible` and `scope: file`), and the "What I checked" section is absent or empty (right after `diagram`) | the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes) |
 | `footnote` | (not evaluated for a blocker) The body has a `[^id]` reference with no `[^id]: …` definition (3.7; right after `checked`) | a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked") |
@@ -275,7 +276,7 @@ The hook reads `lang` with `readConfig(dataDir)` (`<data-dir>/config.json`; defa
 Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.
 When you do ask, write the explanation the human reads as Markdown in {absolute location}/ following skill ukagai-explain. {language sentence}
 front matter: question is the AskUserQuestion question verbatim, title is the decision for the human in one sentence, recommended is the label of the option you recommend, reversibility is reversible / costly / irreversible, scope is file / repo / machine / external. Body: "Why this decision is needed now", "Options" (table: first column is the label; columns for what happens if chosen and for risks and how to undo), "Recommendation" (reason, and the condition under which another option is right). Recommendation: first sentence is a conclusion that decides on its own and names the option, last sentence is "if ..., B" (at most 5 sentences and 400 characters); table cells at most 160 characters and each risk cell says how to undo. Also write "What only you know" (1-3 bullets) and "Assumptions" (one per line), and unless reversible + file, "What I checked" with evidence as footnotes ([^1]) cited from the body. Optional: "Terms", "Counterargument", "Affected". Draw a Mermaid diagram only when the decision is hard to undo (anything but reversible) or scope is machine / external, and the options differ in structure or flow.
-Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section. No explanation file is needed for AskUserQuestion in plan mode.
+Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section whose first 2 lines are "Reversibility: reversible|costly|irreversible" and "Scope: file|repo|machine|external". No explanation file is needed for AskUserQuestion in plan mode.
 When stopped by human work such as authentication or permissions, do not end in prose: write a blocker-format explanation and ask with AskUserQuestion (Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work. If an answer starts with "None of these — ", act on its type: add options, fix the premise and re-ask, add evidence, or ask later.
 ```
 
@@ -294,6 +295,7 @@ When stopped by human work such as authentication or permissions, do not end in 
 - Mermaid is **recommended** and not required. Without it `has.mermaid: false` is counted in (d).
 - A deny for a defect happens **at most once per session (`session_id`)**. From the second time it does not deny and registers (`attached_via: none`, `none_reason: loop_guard`).
 - When it passes, `attached_via` is `first_call` (`after_deny` if denied before). `explanation.markdown` holds the plan body.
+- Reversibility and scope: `parsePlanImpact` reads `Reversibility:` / `Scope:` lines (also `reversibility:` / `scope:` / `可逆性:` / `影響範囲:`; a bullet, bold or backticks are fine; values are the English words, 3 / 4 of them) from the "Scope and reversibility" section. When found they are sent as `explanation.reversibility` / `explanation.scope` (the GUI / TUI then apply the confirm-twice and undo grace rules). A missing or unknown value is left out, and that plan is sent at once. They are not validated and never deny.
 - It is required even in plan mode (ExitPlanMode is only called in plan mode). The exemption of section 6 is for AskUserQuestion only.
 - The deny reason follows the variant of section 7, with `{missing}` = "the "Scope and reversibility" section" and the `{path}` / `{question}` lines omitted.
 
@@ -303,7 +305,7 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 
 ## 11. Fixtures
 
-`test/explain-fixtures/` has 24. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
+`test/explain-fixtures/` has 25. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
 
 `pass-*` and the other `fail-*` fixtures satisfy `checked` and `undo` (their text was extended), so each `fail-*` reports only its own code. The fixtures are written in English. The `question:` line keeps the original question text, because `expected.json` records it. Three Japanese variants (`*-ja.md`, with the same `expected.json` contents) exercise the Japanese aliases.
 
@@ -326,6 +328,7 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 | `fail-blocker-no-todo.md` | false | `todo` |
 | `fail-bad-type.md` | false | `type` (`type: foo`) |
 | `fail-no-recommend-cond.md` | false | `recommend_cond` |
+| `fail-against-weak.md` | false | `against_weak` (`pass-rich.md` whose Counterargument repeats a sentence of the Recommendation) |
 | `fail-cell-long.md` | false | `cell_long` |
 | `fail-recommend-long.md` | false | `recommend_long` |
 | `fail-why-long.md` | false | `why_long` |
@@ -372,7 +375,7 @@ English is canonical and preferred; the Japanese alias is accepted anywhere the 
 | Section (plan) | Scope and reversibility | 影響範囲と可逆性 |
 | Table column | `/happens\|outcome/i`, e.g. "What happens if chosen" | 起きること, e.g. 「選ぶと起きること」 |
 | Table column | `/risk/i`, e.g. "Risks and how to undo" | リスク, e.g. 「リスクと戻し方」 |
-| Undo words (risk cells) | undo / revert / roll back / restore / reinstall / delete the / remove the / cannot be undone / irreversible | 戻 / 消せ / やり直 / 再実行 / 戻せない / 元に戻らない |
+| Undo words (risk cells) | `UNDO_WORDS` and `UNDO_BAD_WORDS` (section 3.3 item 6) | 戻せ / 戻す / 元に戻 / 消せ / やり直 / 再実行 / 再作成 / 復元 / 戻せない / 元に戻らない / 復元できない |
 | "None of these" type | Missing option / Wrong premise / Need more evidence / Ask me later | 選択肢が足りない / 前提が違う / 証拠が足りない / あとで聞いて |
 | Blocker label | Done. Continue | 対応した。続けて |
 | Blocker label | Skip this step and continue | この手順は飛ばして続けて |

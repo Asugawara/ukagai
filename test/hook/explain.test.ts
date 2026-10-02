@@ -23,15 +23,17 @@ import {
   parseTerms,
   findTables,
   scanFences,
+  UNDO_BAD_WORDS,
   UNDO_WORDS,
+  parsePlanImpact,
 } from "../../src/hook/explain.js";
 import { tmpDir, writeFile } from "./helpers.js";
 
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 24 fixtures", () => {
-  assert.equal(mdFiles.length, 24);
+test("there are 25 fixtures", () => {
+  assert.equal(mdFiles.length, 25);
 });
 
 for (const f of mdFiles) {
@@ -550,4 +552,29 @@ test("denyReason template: has What only you know, Assumptions and What I checke
   assert.ok(r.length <= 1600);
   const rec = r.split("## Assumptions")[1]!.split("\n")[0]!;
   assert.doesNotMatch(rec, RECOMMEND_COND);
+});
+
+test("undo vocabulary: bad words pass, undo words pass, 'gone' fails", () => {
+  const risk = (cell: string) => GOOD.replace("| B | a | Revert it |", `| B | a | ${cell} |`);
+  assert.equal(validateExplanation(risk("The history cannot be restored.")).valid, true);
+  assert.equal(validateExplanation(risk("To undo, restore from git.")).valid, true);
+  assert.deepEqual(validateExplanation(risk("The data is gone.")).missing, ["undo"]);
+  assert.ok(UNDO_BAD_WORDS.test("it cannot be restored"));
+  assert.ok(!UNDO_BAD_WORDS.test("restore from git"));
+});
+
+test("against_weak: a Counterargument inside the Recommendation is flagged; a real one is not", () => {
+  const withAgainst = (t: string) => GOOD + `## Counterargument\n${t}\n`;
+  assert.deepEqual(validateExplanation(withAgainst("If C, choose B!")).missing, ["against_weak"]);
+  assert.equal(validateExplanation(withAgainst("B avoids the lock-in that A creates.")).valid, true);
+  assert.equal(validateExplanation(GOOD).valid, true);
+});
+
+test("parsePlanImpact: reads Reversibility / Scope in several shapes, ignores unknown values", () => {
+  const plan = (body: string) => `# Plan\n\n## Scope and reversibility\n${body}\n`;
+  assert.deepEqual(parsePlanImpact(plan("- Reversibility: costly\n- Scope: repo")), { reversibility: "costly", scope: "repo" });
+  assert.deepEqual(parsePlanImpact(plan("reversibility: irreversible\nscope: external")), { reversibility: "irreversible", scope: "external" });
+  assert.deepEqual(parsePlanImpact(plan("可逆性: reversible\n影響範囲: file")), { reversibility: "reversible", scope: "file" });
+  assert.deepEqual(parsePlanImpact(plan("Reversibility: maybe\nOne file.")), {});
+  assert.deepEqual(parsePlanImpact("# Plan\nReversibility: costly\n"), {});
 });

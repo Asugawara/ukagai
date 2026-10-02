@@ -34,12 +34,12 @@ export const BLOCKER_LABELS = {
 export const COLUMN_HAPPENS = /happens|outcome|起きること/i;
 export const COLUMN_RISK = /risk|リスク/i;
 
-/**
- * Words that say how to undo (or that nothing can be undone). Every cell in the risk column must match one.
- * Case-insensitive; Japanese entries are plain substrings.
- */
+/** Phrases that say the change cannot be undone. Checked before UNDO_WORDS. */
+export const UNDO_BAD_WORDS =
+  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i;
+/** Phrases that say how to undo. */
 export const UNDO_WORDS =
-  /undo|revert|roll ?back|restore|reinstall|delete the|remove the|cannot be undone|irreversible|戻|消せ|やり直|再実行|元に戻らない/i;
+  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i;
 
 export type MissingCode =
   | "file"
@@ -57,6 +57,7 @@ export type MissingCode =
   | "recommend"
   | "recommend_long"
   | "recommend_cond"
+  | "against_weak"
   | "cell_long"
   | "undo"
   | "why_long"
@@ -96,6 +97,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   recommend: 'the "Recommendation" section',
   recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters)',
   recommend_cond: 'a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.)',
+  against_weak: "the Counterargument repeats the Recommendation; make it attack the pick",
   cell_long: "a cell in the options table is too long (at most 160 characters per cell)",
   undo: "each risk cell must say how to undo (or that it cannot be undone)",
   why_long: 'the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked")',
@@ -301,7 +303,7 @@ function tableOk(t: Table, labels: string[] | undefined): boolean {
 function tableUndoOk(t: Table, blocker: boolean): boolean {
   const risk = columnsOf(t)[1];
   const fixed = Object.values(BLOCKER_LABELS).flatMap((names) => names.map(normalizeLabel));
-  return t.rows.every((r) => (blocker && fixed.includes(normalizeLabel(r[0] ?? ""))) || UNDO_WORDS.test(r[risk] ?? ""));
+  return t.rows.every((r) => (blocker && fixed.includes(normalizeLabel(r[0] ?? ""))) || (UNDO_BAD_WORDS.test(r[risk] ?? "") || UNDO_WORDS.test(r[risk] ?? "")));
 }
 
 /** Length limits (spec 3.2). Characters are code points after NFKC */
@@ -348,6 +350,17 @@ function condText(text: string): string {
     .split("\n")
     .filter((l) => !l.startsWith(">"))
     .join("\n");
+}
+
+/** Lowercase NFKC text without whitespace, punctuation and symbols (for comparing two passages) */
+function squash(s: string): string {
+  return s.normalize("NFKC").replace(/[\s\p{P}\p{S}]/gu, "").toLowerCase();
+}
+
+/** The Counterargument body is a substring of the Recommendation body (it restates the pick instead of attacking it) */
+function againstRepeats(against: string, recommendation: string): boolean {
+  const a = squash(against);
+  return a !== "" && squash(recommendation).includes(a);
 }
 
 function hasContent(lines: string[], s: Section): boolean {
@@ -512,6 +525,8 @@ export function validateExplanation(
         missing.push("recommend_long");
       }
       if (!RECOMMEND_COND.test(condText(text))) missing.push("recommend_cond");
+      const against = findSection(headings, lines.length, SECTION.against);
+      if (against && againstRepeats(sectionText(lines, inFence, against), text)) missing.push("against_weak");
     }
   }
 
@@ -545,6 +560,36 @@ export function validateExplanation(
     has: hasOf(lines, inFence, blocks),
     question: f["question"] ? f["question"] : null,
   };
+}
+
+export interface PlanImpact {
+  reversibility?: "reversible" | "costly" | "irreversible";
+  scope?: "file" | "repo" | "machine" | "external";
+}
+
+/**
+ * Reads `Reversibility:` / `Scope:` (also `reversibility:`, `可逆性:`, `影響範囲:`; bullets, bold and backticks allowed)
+ * from the "Scope and reversibility" section of a plan. Values are the English words. Missing or unknown values are left out.
+ */
+export function parsePlanImpact(plan: string): PlanImpact {
+  const lines = toLines(plan);
+  const { inFence } = scanFences(lines);
+  const sec = findSection(scanHeadings(lines, inFence), lines.length, SECTION.impact);
+  const out: PlanImpact = {};
+  if (!sec) return out;
+  for (let i = sec.start + 1; i < sec.end; i++) {
+    if (inFence[i]) continue;
+    const m = /^\s*(?:[-*+]\s+)?\**(reversibility|可逆性|scope|影響範囲)\**\s*[:：]\s*\**`?([A-Za-z]+)`?\**/i.exec(lines[i]!);
+    if (!m) continue;
+    const key = m[1]!.toLowerCase();
+    const val = m[2]!.toLowerCase();
+    if ((key === "reversibility" || key === "可逆性") && out.reversibility === undefined && REVERSIBILITY.includes(val)) {
+      out.reversibility = val as PlanImpact["reversibility"];
+    } else if ((key === "scope" || key === "影響範囲") && out.scope === undefined && SCOPE.includes(val)) {
+      out.scope = val as PlanImpact["scope"];
+    }
+  }
+  return out;
 }
 
 /** spec section 9: a non-empty "Scope and reversibility" section exists */
