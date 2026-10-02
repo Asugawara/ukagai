@@ -7,13 +7,7 @@
 <link rel="stylesheet" href="/public/app.css">
 </head>
 <body>
-<header id="top">
-  <span class="logo">ukagai</span>
-  <span id="kind-icon" class="kind-icon" aria-hidden="true"></span>
-  <h1 id="title"></h1>
-  <div id="badges" class="badges"></div>
-  <button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false">保留 <span id="pending-count">0</span></button>
-</header>
+<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden>保留 <span id="pending-count">0</span></button>
 <div id="banner" class="banner" hidden></div>
 <main id="main" hidden>
   <section id="background" aria-label="背景"></section>
@@ -27,7 +21,6 @@
 <aside id="drawer" class="drawer" aria-label="保留一覧" aria-hidden="true">
   <h2>保留一覧</h2>
   <ul id="pending-list"></ul>
-  <div id="metrics" class="metrics" aria-label="メトリクス"></div>
 </aside>
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="/public/vendor/marked.umd.js"></script>

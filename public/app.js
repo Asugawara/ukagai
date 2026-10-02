@@ -69,8 +69,10 @@ function cwdTail(d) {
 
 function titleOf(d) {
   let t = d.explanation?.title;
-  if (!t && d.kind === "answer_question" && hasExplanation(d)) t = parseFrontMatter(d.explanation.markdown).fm.title;
-  return t || d.session.title || cwdTail(d);
+  if (!t && hasExplanation(d) && d.kind === "answer_question") t = parseFrontMatter(d.explanation.markdown).fm.title;
+  if (t) return t;
+  if (d.kind === "approve_plan") return /^#[ \t]+(.+?)[ \t]*$/m.exec(d.request.plan ?? "")?.[1] ?? "計画の承認";
+  return d.session.title || d.request.questions[0]?.question || "質問";
 }
 
 function reversibilityOf(d) {
@@ -121,32 +123,31 @@ function toast(msg) {
   toastTimer = setTimeout(() => (t.hidden = true), 2000);
 }
 
-// ---- header ----
+// ---- 保留ボタン / タイトル ----
 
 function renderHeader() {
-  const d = decisions.get(shownId);
   const n = pendingList().length;
   $("pending-count").textContent = String(n);
-  $("pending-btn").classList.toggle("hot", n >= 2);
+  $("pending-btn").hidden = n < 2; // 1 件なら表示中のものだけなので出さない
+  document.body.classList.toggle("has-pending-btn", n >= 2);
   document.title = n > 0 ? `(${n}) ukagai` : "ukagai";
-  const badges = $("badges");
-  badges.replaceChildren();
-  if (!d) {
-    $("kind-icon").textContent = "";
-    $("title").textContent = "";
-    return;
-  }
-  $("kind-icon").textContent = d.kind === "approve_plan" ? "📋" : "❓";
-  $("title").textContent = titleOf(d);
-  $("title").title = titleOf(d);
+}
+
+// 右列の title の直下: ブランチ・作業ディレクトリ(フルパス)・可逆性・scope・経過時間
+// 描画してよい context は branch だけ
+const tildePath = (p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+
+function metaLine(d) {
+  const line = el("div", { class: "meta-line" });
+  if (d.context?.branch) line.append(el("span", { class: "chip branch", text: `⎇ ${d.context.branch}` }));
+  line.append(el("span", { class: "cwd", text: tildePath(d.session.cwd), title: d.session.cwd }));
   const rev = reversibilityOf(d);
-  if (rev === "irreversible") badges.append(el("span", { class: "badge irreversible", text: "元に戻せない" }));
-  else if (rev === "costly") badges.append(el("span", { class: "badge costly", text: "戻すのにコストがかかる" }));
-  else if (rev === "reversible") badges.append(el("span", { class: "badge reversible", text: "戻せる" }));
+  if (rev === "irreversible") line.append(el("span", { class: "badge irreversible", text: "元に戻せない" }));
+  else if (rev === "costly") line.append(el("span", { class: "badge costly", text: "戻すのにコストがかかる" }));
   const scope = scopeOf(d);
-  if (scope) badges.append(el("span", { class: "badge", text: scope }));
-  badges.append(el("span", { class: "badge", text: cwdTail(d), title: d.session.cwd }));
-  badges.append(el("span", { class: "badge age", "data-created": d.created_at, text: elapsed(d.created_at) }));
+  if (scope) line.append(el("span", { class: "badge", text: scope }));
+  line.append(el("span", { class: "badge age", "data-created": d.created_at, text: elapsed(d.created_at) }));
+  return line;
 }
 
 // ---- ドロワー ----
@@ -156,8 +157,7 @@ function setDrawer(open) {
   $("drawer").setAttribute("aria-hidden", String(!open));
   $("backdrop").hidden = !open;
   $("pending-btn").setAttribute("aria-expanded", String(open));
-  if (open) refreshMetrics();
-  else if (document.activeElement === $("pending-btn")) $("pending-btn").blur(); // Enter が保留ボタンに吸われないように
+  if (!open && document.activeElement === $("pending-btn")) $("pending-btn").blur(); // Enter が保留ボタンに吸われないように
 }
 
 const drawerOpen = () => $("drawer").classList.contains("open");
@@ -244,14 +244,19 @@ function renderRight(d) {
       const box = el("div", { class: "q" });
       let items;
       if (v2) {
-        box.append(el("div", { class: "v2-title", text: v2.title }));
+        box.append(el("div", { class: "head" }, el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)));
         if (v2.recBox) box.append(el("div", { class: "rec" }, el("div", { class: "rec-cap", text: "推奨" }), v2.recBox));
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended })),
           ...v2.extras.map((o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: SUFFIX_RE.test(o.label) })),
         ];
       } else {
-        box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
+        const title = titleOf(d);
+        // title と質問文が同じなら 1 つだけ。違う(session.title)ときは title の下に質問文を出す
+        box.append(el("div", { class: "head" },
+          title === q.question ? el("div", { class: "header", text: q.header }) : null,
+          el("div", { class: "question", text: title }), metaLine(d)));
+        if (title !== q.question) box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
         items = q.options.map((o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: SUFFIX_RE.test(o.label) }));
       }
       if (single) {
@@ -347,7 +352,9 @@ function renderRight(d) {
   }
 
   // approve_plan
-  const qsBox = el("div", { class: "qs" }, el("div", { class: "plan-q", text: "この計画を承認しますか" }));
+  const qsBox = el("div", { class: "qs" },
+    el("div", { class: "head" }, el("div", { class: "v2-title", text: titleOf(d) }), metaLine(d)),
+    el("div", { class: "plan-q", text: "この計画を承認しますか" }));
   root.append(qsBox);
   const approve = el("button", { class: "btn primary", type: "button", disabled: closed, title: "キー: y", text: "承認", onclick: () => send(d, { approve: true, set_mode_auto: false }) });
   const auto = el("button", { class: "btn", type: "button", disabled: closed, title: "キー: a", text: "承認して auto", onclick: () => send(d, { approve: true, set_mode_auto: true }) });
@@ -513,7 +520,6 @@ function buildModel(d) {
     const table = optSec?.nodes.find((n) => n.tagName === "TABLE") ?? optSec?.nodes.map((n) => n.querySelector?.("table")).find(Boolean);
     const v2 = table ? parseOptionsTable(table, qs[0].options, fm) : null;
     if (v2) {
-      v2.title = fm.title || d.explanation.title || qs[0].question;
       for (const n of optSec.nodes) n.remove();
       if (recSec) {
         const recBox = el("div", { class: "md" });
@@ -641,16 +647,6 @@ async function loadAll() {
   else { renderHeader(); renderList(); }
 }
 
-async function refreshMetrics() {
-  try {
-    const m = await api("/api/metrics");
-    const pct = (r) => (r == null ? "-" : `${Math.round(r * 100)}%`);
-    $("metrics").replaceChildren(
-      el("span", { text: `GUI 回答率 ${pct(m.a.rate)} (${m.a.answered}/${m.a.total})` }),
-      el("span", { text: `説明添付率 ${pct(m.d.attach_rate)} (${m.d.total - m.d.none}/${m.d.total})` }));
-  } catch {}
-}
-
 function connect() {
   const es = new EventSource("/api/stream");
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
@@ -714,8 +710,6 @@ $("backdrop").addEventListener("click", () => setDrawer(false));
 setInterval(() => {
   for (const e of document.querySelectorAll(".age")) e.textContent = elapsed(e.dataset.created);
 }, 10000);
-setInterval(refreshMetrics, 30000);
 
 loadAll().catch(() => {});
-refreshMetrics();
 connect();
