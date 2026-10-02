@@ -1,0 +1,18 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000006",
+  "transcript_path": "/Users/user/.claude/projects/-Users-user-dev-ukagai/00000000-0000-4000-8000-000000000006.jsonl",
+  "cwd": "/Users/user/dev/ukagai",
+  "scratchpad_dir": "/tmp/scratchpad",
+  "prompt_id": "00000000-0000-4000-8000-000000000024",
+  "permission_mode": "plan",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "ExitPlanMode",
+  "tool_input": {
+    "plan": "# T5 検証メモ作成計画\n\n## Context\n`verification/` に検証用ファイルを置く運用の一環として、`verification/t5-note.md` を新規作成し、1 行だけ書く。\n\n## 変更内容\n- 新規: `/Users/user/dev/ukagai/verification/t5-note.md`\n- 内容: `T5 検証メモ`（1 行、末尾改行あり）\n- `verification/` は存在し、`t5-note.md` は未存在（ls で確認済み）。上書きの心配なし。\n\n## 分割\n分けない。1 ファイル・1 行の書き込みで、worker を立てるコストの方が大きい。定型作業（haiku 相当）。\n\n## 検証\n- `Read` で `verification/t5-note.md` が `T5 検証メモ` の 1 行のみであることを確認。\n- コミットはしない（依頼にない）。\n",
+    "planFilePath": "/Users/user/.claude/plans/verification-t5-note-md-t5-1-curried-valiant.md"
+  },
+  "tool_use_id": "toolu_01X2MxWUomJbgUGu16qQrF6j"
+}

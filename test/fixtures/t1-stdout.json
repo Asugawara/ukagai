@@ -1,0 +1,28 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "updatedInput": {
+      "questions": [
+        {
+          "question": "A と B のどちらにしますか？",
+          "header": "選択",
+          "options": [
+            {
+              "label": "A",
+              "description": "選択肢 A"
+            },
+            {
+              "label": "B",
+              "description": "選択肢 B"
+            }
+          ],
+          "multiSelect": false
+        }
+      ],
+      "answers": {
+        "A と B のどちらにしますか？": "B"
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "transcript_path": "/Users/user/.claude/projects/-Users-user-dev-ukagai/00000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/Users/user/dev/ukagai",
+  "scratchpad_dir": "/tmp/scratchpad",
+  "prompt_id": "00000000-0000-4000-8000-000000000002",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "A と B のどちらにしますか？",
+        "header": "選択",
+        "options": [
+          {
+            "label": "A",
+            "description": "選択肢 A"
+          },
+          {
+            "label": "B",
+            "description": "選択肢 B"
+          }
+        ],
+        "multiSelect": false
+      }
+    ]
+  },
+  "tool_use_id": "toolu_01C9XvdLwhw5t7NsMYWcdF4R"
+}
