@@ -1,4 +1,4 @@
-import { MULTI_SELECT_SEPARATOR, type Decision } from "../contract.js";
+import { MULTI_SELECT_SEPARATOR, type Decision, type SessionHistory } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
 import { buildModel, hasExplanation, isBlocker, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { Frame, ListItem, View } from "./render.js";
@@ -7,6 +7,7 @@ import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
+import { historyItems, type HistoryItem } from "./history.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -65,6 +66,15 @@ export class App {
   private hintUntil = 0;
   /** Whether copying to the clipboard is possible (whether pbcopy exists; decided by index.ts) */
   copySupported = true;
+  /** Fetches a session's instructions (set by index.ts; absent in tests that do not need it) and is told when one arrives */
+  fetchHistory: ((decisionId: string) => Promise<SessionHistory>) | null = null;
+  onHistory: () => void = () => {};
+  /** Instructions by session_id; a failed fetch leaves no entry (the next time the session is shown tries again) */
+  private histories = new Map<string, SessionHistory>();
+  private histLoading = new Set<string>();
+  /** The `s` overlay cursor, and the instruction shown in full in the background column (index into the items) */
+  private hist = { index: 0 };
+  private histDetail: number | null = null;
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
@@ -162,7 +172,31 @@ export class App {
     this.cannot = null;
     this.confirm = null;
     this.footIdx = -1;
-    if (this.mode === "input" || this.mode === "none" || this.mode === "cannot") this.mode = "normal";
+    this.histDetail = null;
+    if (this.mode === "input" || this.mode === "none" || this.mode === "cannot" || this.mode === "history") this.mode = "normal";
+    this.loadHistory(id);
+  }
+
+  /** Lazily fetch the session's instructions the first time a decision of that session is shown. Failures are ignored */
+  private loadHistory(id: string | null): void {
+    const d = id ? this.decisions.get(id) : undefined;
+    const sid = d?.session.session_id;
+    if (!d || !sid || !this.fetchHistory || this.histories.has(sid) || this.histLoading.has(sid)) return;
+    this.histLoading.add(sid);
+    this.fetchHistory(d.id).then(
+      (h) => {
+        this.histLoading.delete(sid);
+        this.histories.set(sid, h);
+        for (const x of this.decisions.values()) if (x.session.session_id === sid) this.models.delete(x.id);
+        this.onHistory();
+      },
+      () => this.histLoading.delete(sid),
+    );
+  }
+
+  private items(): HistoryItem[] {
+    const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
+    return historyItems(d ? (this.histories.get(d.session.session_id) ?? null) : null);
   }
 
   private advance(_now: number): void {
@@ -175,7 +209,7 @@ export class App {
     const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
     if (!d) return null;
     let m = this.models.get(d.id);
-    if (!m) this.models.set(d.id, (m = buildModel(d, this.lang)));
+    if (!m) this.models.set(d.id, (m = buildModel(d, this.lang, this.histories.get(d.session.session_id) ?? null)));
     return m;
   }
 
@@ -225,6 +259,8 @@ export class App {
       lang: this.lang,
       conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
       list,
+      history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
+      histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
       copy: this.copySupported,
       recFull: this.shownId !== null && this.recFull.has(this.shownId),
       scroll: this.scroll,
@@ -297,7 +333,7 @@ export class App {
       if (this.mode === "normal") this.wheel(key.dir, key.x);
       return [];
     }
-    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, lastG: this.lastG, now });
+    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, lastG: this.lastG, now });
     this.lastG = lastG;
     return action ? this.apply(action, m, now) : [];
   }
@@ -321,6 +357,31 @@ export class App {
         return [];
       }
       case "list-close": this.mode = "normal"; return [];
+      case "history": {
+        const n = this.items().length;
+        if (n) {
+          this.mode = "history";
+          this.hist.index = this.histDetail ?? n - 1;
+        }
+        return [];
+      }
+      case "history-move": this.hist.index = clamp(this.hist.index + a.delta, this.items().length); return [];
+      case "history-pick":
+        if (this.items()[this.hist.index]) {
+          this.histDetail = this.hist.index;
+          this.focus = "background";
+          this.scroll = 0;
+        }
+        this.mode = "normal";
+        return [];
+      case "history-close": this.mode = "normal"; return [];
+      case "history-back": {
+        this.histDetail = null;
+        this.focus = "decision";
+        this.scroll = 0;
+        if (this.items().length) this.mode = "history";
+        return [];
+      }
       case "scroll": {
         const n = a.unit === "half" ? Math.max(1, Math.floor(this.frame.bodyRows / 2)) : 1;
         // In the stacked layout 0 follows the cursor; move from the position currently visible

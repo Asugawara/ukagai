@@ -5,7 +5,8 @@ import { NONE_TYPES } from "./none.js";
 import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
 import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
-import { padEnd, sliceCols, truncate, width, wrap } from "./width.js";
+import { oneLine, type HistoryItem } from "./history.js";
+import { padEnd, sliceCols, stripAnsi, truncate, width, wrap } from "./width.js";
 
 // ScreenModel + interaction state to screen (strings). No I/O.
 
@@ -24,6 +25,10 @@ export interface View {
   model: ScreenModel | null;
   /** Display language */
   lang: Lang;
+  /** The `s` overlay (the session's instructions, chronological; cursor); null when closed */
+  history: { index: number; items: HistoryItem[] } | null;
+  /** One instruction shown in full in place of the background column */
+  histDetail: HistoryItem | null;
   /** Position of the card (plus the trailing free text); the button position for a plan */
   cursor: number;
   selected: ReadonlySet<string>;
@@ -325,7 +330,35 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
 
 // ---- Left: background ----
 
-function leftColumn(m: ScreenModel, w: number, lang: Lang, fullHint = true): Rendered {
+/** `Goal:` + the session's first instruction, cut at two rows with … */
+function goalLines(m: ScreenModel, w: number, lang: Lang): string[] {
+  const first = m.history?.first;
+  if (!first) return [];
+  const rows = wrap(`${BOLD}${CYAN}${t(lang, "goal_label")}${RESET} ${oneLine(first.text)}`, w);
+  if (rows.length <= 2) return [...rows, ""];
+  return [rows[0]!, `${truncate(rows.slice(1).map(stripAnsi).join(" "), Math.max(1, w - 1))}…`, ""];
+}
+
+function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true): Rendered {
+  const lang = v.lang;
+  if (v.histDetail) {
+    const e = v.histDetail;
+    const head = `${BOLD}${t(lang, "history_detail_title")}${RESET} ${DIM}${e.at ? elapsed(e.at, v.now, lang) : ""}${e.first ? ` · ${t(lang, "history_first")}` : ""}${RESET}`;
+    // Shown as typed: line breaks and spacing kept
+    const lines = [head, "", ...e.text.split("\n").flatMap((l) => (l === "" ? [""] : wrap(l, w)))];
+    return { lines, wide: lines.map(() => null), footnotes: [] };
+  }
+  const goal = goalLines(m, w, lang);
+  const r = leftBody(m, w, lang, fullHint);
+  if (!goal.length) return r;
+  return {
+    lines: [...goal, ...r.lines],
+    wide: [...goal.map(() => null), ...r.wide],
+    footnotes: r.footnotes.map((x) => ({ ...x, row: x.row + goal.length })),
+  };
+}
+
+function leftBody(m: ScreenModel, w: number, lang: Lang, fullHint: boolean): Rendered {
   if (m.backgroundNote) {
     const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
     return { lines, wide: lines.map(() => null), footnotes: [] };
@@ -356,9 +389,11 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   let left: string;
   if (v.notice) return truncate(`${BOLD}${YELLOW}${v.notice}${RESET}`, cols);
   if (v.list) left = `${DIM}${t(lang, "footer_list")}${RESET}`;
+  else if (v.history) left = `${DIM}${t(lang, "footer_history_list")}${RESET}`;
+  else if (v.histDetail) left = `${DIM}${t(lang, "footer_history_detail")}${RESET}`;
   else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_full")}${RESET}`;
   else {
-    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
+    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
   }
   if (v.conn?.state === "down") left = `${BOLD}${RED}${t(lang, "cannot_connect", { server: v.conn.server })}${RESET}  ${left}`;
   else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}${t(lang, "reconnected")}${RESET}  ${left}`;
@@ -380,6 +415,21 @@ function listBody(v: View, cols: number, rows: number): string[] {
     out.push(truncate(`    ${chipsText(it.chips)}  ${DIM}${meta}${RESET}`, cols));
   });
   return window(out, rows, 0);
+}
+
+/** The `s` overlay: when · first line of each instruction, the cursor kept in view */
+function historyBody(v: View, cols: number, rows: number): string[] {
+  const h = v.history!;
+  const head = [`${BOLD}${t(v.lang, "history_title")}${RESET}`, ""];
+  const size = Math.max(1, rows - head.length);
+  const off = Math.max(0, Math.min(h.index - Math.floor(size / 2), h.items.length - size));
+  const body = h.items.slice(off, off + size).map((it, k) => {
+    const on = off + k === h.index;
+    const when = padEnd(`${DIM}${it.at ? elapsed(it.at, v.now, v.lang) : ""}${RESET}`, 6);
+    const mark = it.first ? `${YELLOW}${t(v.lang, "history_first")}${RESET} ` : "";
+    return truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${when} ${mark}${on ? BOLD : ""}${oneLine(it.text)}${RESET}`, cols);
+  });
+  return window([...head, ...body], rows, 0);
 }
 
 /** A simple scrollbar for the right edge (`█` marks the position in a `│` column), size rows tall */
@@ -416,6 +466,7 @@ export function renderFrame(v: View, size: Size): Frame {
   };
 
   if (v.list) return fin(listBody(v, cols, rows - 1), []);
+  if (v.history) return fin(historyBody(v, cols, rows - 1), []);
 
   if (!m) {
     const body = new Array<string>(Math.max(0, rows - 1)).fill("");
@@ -439,7 +490,7 @@ export function renderFrame(v: View, size: Size): Frame {
     const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ▶ ${label} ${RESET}` : `${DIM}   ${label}${RESET}`, w);
 
     // Left: when it overflows (tall, or has a diagram that can shift sideways) put a bar on the right edge and the position on the last row; otherwise leave it as is
-    let leftR = leftColumn(m, leftW, v.lang);
+    let leftR = leftColumn(v, m, leftW);
     const hasWide = leftR.wide.some(Boolean);
     const leftOver = leftR.lines.length > winRows || hasWide;
     let scrollMax = 0;
@@ -449,7 +500,7 @@ export function renderFrame(v: View, size: Size): Frame {
     let textW = leftW;
     if (leftOver) {
       textW = leftW - 1;
-      leftR = leftColumn(m, textW, v.lang);
+      leftR = leftColumn(v, m, textW);
       const sh = shifted(leftR, textW, v.hscroll);
       hMax = sh.hMax;
       figW = sh.figW;
@@ -494,7 +545,7 @@ export function renderFrame(v: View, size: Size): Frame {
 
   // Narrow: stacked. Put the decision first (so it is always reachable) and continue with the background below
   const right = rightColumn(v, m, cols - 1, bodyRows);
-  const leftR = leftColumn(m, cols - 1, v.lang, false);
+  const leftR = leftColumn(v, m, cols - 1, false);
   const sh = shifted(leftR, cols - 1, v.hscroll);
   const leftAll = sh.lines;
   const all = [...right.lines, "", `${DIM}${right.hint}${RESET}`, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];
