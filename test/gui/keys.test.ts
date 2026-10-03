@@ -3,7 +3,7 @@
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -348,7 +348,7 @@ gui("?v= of GET / matches the build <v> on screen (with a decision and when empt
   assert.equal(v, mtime);
   assert.ok(new RegExp(`/public/app\\.css\\?v=[0-9a-z]+"`).test(html));
   await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  assert.equal(ev(`document.querySelector("#empty .build").textContent`), `build ${v}`);
+  assert.equal(ev(`document.querySelector("#build").textContent`), `build ${v}`);
   await seedQuestion();
   await reopen();
   assert.equal(ev(`document.body.innerText.includes("build ${v}")`), true);
@@ -418,7 +418,7 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   await seedQuestion();
   await seedQuestion();
   await reopen();
-  const hint = ev<string>(`document.querySelector("#decision .hint").textContent`);
+  const hint = ev<string>(`document.querySelector("#foot .hint").textContent`);
   assert.ok(hint.includes("↑↓"), hint);
   assert.ok(!hint.includes("j/k"), hint);
   assert.equal(count("kbd"), 0);
@@ -432,7 +432,7 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(count("kbd"), 0);
   assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Approve", "Approve and auto", "Reject"]);
-  const planHint = ev<string>(`document.querySelector("#decision .hint").textContent`);
+  const planHint = ev<string>(`document.querySelector("#foot .hint").textContent`);
   assert.ok(planHint.includes("y Approve") && planHint.includes("n Reject"), planHint);
 });
 
@@ -468,7 +468,7 @@ gui("a long headline folds at 2 lines with a Show all button, the cards and Answ
   const inView = (sel: string) => { const r = rect(sel); return r.top >= 0 && r.bottom <= vh; };
   const folded = `document.querySelector("#head .headline").scrollHeight > document.querySelector("#head .headline").clientHeight + 1`;
   assert.equal(inView("#decision .opt:last-of-type"), true);
-  assert.equal(inView("#decision .hint"), true);
+  assert.equal(inView("#foot .hint"), true);
   assert.equal(ev<boolean>(folded), true); // folded at 2 lines
   assert.equal(ev<number>(`document.querySelector("#head .headline").getBoundingClientRect().height`) < 2 * 1.5 * 15 + 2, true);
   assert.equal(ev<boolean>(`document.querySelector("#head .more-chip").hidden`), false);
@@ -479,7 +479,7 @@ gui("a long headline folds at 2 lines with a Show all button, the cards and Answ
   assert.equal(ev<boolean>(`!(${folded})`), true); // full text visible
   assert.equal(ev<boolean>(`document.querySelector("#head .headline").textContent.includes("and that is all.")`), true);
   assert.equal(q1("#head .more-chip"), "Collapse");
-  assert.equal(inView("#decision .hint"), true);
+  assert.equal(inView("#foot .hint"), true);
   press(".");
   assert.equal(ev<boolean>(folded), true); // . again folds it
   assert.equal(q1("#head .more-chip"), "Show all");
@@ -787,14 +787,14 @@ gui("ja: main UI strings are Japanese after data-lang is set to ja", async () =>
   await seedQuestion();
   await seedQuestion();
   await reopen();
-  assert.equal(ev<string>(`document.querySelector("#decision .hint-full").textContent`).includes("Send"), true);
+  assert.equal(ev<string>(`document.querySelector("#foot .hint-full").textContent`).includes("Send"), true);
   assert.equal(ev<string>(`document.getElementById("pending-btn").textContent`).startsWith("Pending"), true);
   try {
-    await setLang("ja", `document.querySelector("#decision .hint-full")?.textContent.includes("送信")`);
+    await setLang("ja", `document.querySelector("#foot .hint-full")?.textContent.includes("送信")`);
     assert.equal(ev<boolean>(`document.getElementById("pending-btn").textContent.startsWith("保留")`), true);
     assert.equal(ev<boolean>(`document.getElementById("drawer").getAttribute("aria-label") === "保留一覧"`), true);
     assert.equal(ev<boolean>(`document.querySelector("#decision .rec-badge").textContent === "★ 推奨"`), true);
-    assert.equal(ev<boolean>(`document.querySelector("#decision .hint").textContent.includes("次の保留")`), true);
+    assert.equal(ev<boolean>(`document.querySelector("#foot .hint").textContent.includes("次へ")`), true);
     assert.equal(ev<boolean>(`document.querySelector(".free-text").placeholder === "自由記述"`), true);
     assert.equal(ev<string>(`document.documentElement.lang`), "ja");
   } finally {
@@ -1115,7 +1115,7 @@ gui("extra columns: headed rows on the cards, v opens the comparison table, Ente
   const { id } = await seedRich();
   await reopen(RICH_READY);
   assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt .desc.extra")].map(e => e.textContent))`), ["Cost: 1 day", "Cost: 5 days", "Cost: 0 days"]);
-  assert.equal(q1("#decision .hint").includes("v Compare"), true);
+  assert.equal(q1("#foot .hint").includes("v Compare"), true);
   press("v");
   assert.equal(count(".overlay.compare"), 1);
   assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll(".overlay.compare th.cmp-row")].map(e => e.textContent))`), ["What happens if chosen", "Risks and how to undo", "Cost"]);
@@ -1205,7 +1205,7 @@ gui("Q5-01: the cursor card and the hint line are in the viewport at 1440x900, 1
       ab("set", "viewport", w, h);
       await reopen(RICH_READY);
       assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: cursor card ${JSON.stringify(rectIn("#decision .opt.cursor"))}`);
-      assert.equal(visible("#decision .hint"), true, `${w}x${h}: hint ${JSON.stringify(rectIn("#decision .hint"))}`);
+      assert.equal(visible("#foot .hint"), true, `${w}x${h}: hint ${JSON.stringify(rectIn("#foot .hint"))}`);
       // moving to the last card (free text) and back keeps the cursor card in view; the cards area is what scrolls
       press("G");
       assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: last card`);
@@ -1213,7 +1213,7 @@ gui("Q5-01: the cursor card and the hint line are in the viewport at 1440x900, 1
       press("g", "g");
       assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: first card`);
       // the hint line is one line at 1000x700
-      if (w === "1000") assert.ok(ev<number>(`document.querySelector("#decision .hint").getBoundingClientRect().height`) < 26, "hint is one line");
+      if (w === "1000") assert.ok(ev<number>(`document.querySelector("#foot .hint").getBoundingClientRect().height`) < 26, "hint is one line");
       // the header is whole at every size, and so is the lead of the left column
       assert.equal(visible("#head"), true);
       assert.equal(visible("#background .rec"), true);
@@ -1399,8 +1399,8 @@ gui("Can't answer: the hint line mentions x and stays on one line at 1000x700", 
   await reopen();
   ab("set", "viewport", "1000", "700");
   try {
-    assert.equal(q1("#decision .hint .hint-short").includes("x"), true);
-    const lines = ev<number>(`(() => { const h = document.querySelector("#decision .hint"); return Math.round(h.getBoundingClientRect().height / parseFloat(getComputedStyle(h).lineHeight)); })()`);
+    assert.equal(q1("#foot .hint .hint-short").includes("x"), true);
+    const lines = ev<number>(`(() => { const h = document.querySelector("#foot .hint"); return Math.round(h.getBoundingClientRect().height / parseFloat(getComputedStyle(h).lineHeight)); })()`);
     assert.equal(lines, 1);
   } finally { ab("set", "viewport", "1440", "900"); }
 });
@@ -1495,4 +1495,139 @@ gui("one click: the blocker's Stop here needs two clicks, Done sends at once", a
   assert.equal((await api(`/api/decisions/${b.id}`)).status, "pending");
   ab("click", `#decision .opt:nth-of-type(${stop + 1})`);
   assert.equal(answerOf(await waitStatus(b.id, "answer_submitted", 1500)), b.labels[stop]);
+});
+
+// ---- V4: Q6 GUI fixes + language consistency ----
+
+const SHOTS = process.env.UKAGAI_SHOTS_DIR ?? join(tmpdir(), "ukagai-shots");
+mkdirSync(SHOTS, { recursive: true });
+
+gui("V4 G-1: the hint is one line in the footer at 1440, 1280 and 1000, and the build stamp is not in it", async () => {
+  await seedRich();
+  try {
+    for (const [w, h] of [["1440", "900"], ["1280", "800"], ["1000", "700"]]) {
+      ab("set", "viewport", w, h);
+      await reopen(RICH_READY);
+      const r = ev<{ h: number; lh: number; sw: number; cw: number; inDecision: boolean; inBuild: boolean }>(`JSON.stringify((() => { const e = document.querySelector("#foot .hint"), vis = [...e.children].find(c => getComputedStyle(c).display !== "none"); const r = vis.getBoundingClientRect(); return { h: r.height, lh: parseFloat(getComputedStyle(e).lineHeight), sw: e.scrollWidth, cw: e.clientWidth, inDecision: !!document.querySelector("#decision .hint"), inBuild: e.textContent.includes("build") }; })())`);
+      assert.ok(r.h < r.lh * 1.5, `${w}x${h}: one line ${JSON.stringify(r)}`);
+      assert.ok(r.sw <= r.cw + 1, `${w}x${h}: not cut ${JSON.stringify(r)}`);
+      assert.equal(r.inDecision || r.inBuild, false);
+      assert.match(q1("#foot .hint"), w === "1000" ? /x/ : /Enter\/1-4 Send · \? Terms · e Evidence · v Compare · y Copy · n None · x Can't answer .*←→ Next · Esc$/);
+    }
+    ab("set", "viewport", "1440", "900");
+    ab("screenshot", join(SHOTS, "V4-hint-1440.png"));
+  } finally {
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+gui("V4 G-2/G-3/G-4: What I checked has no boxed code, no card highlight while a panel is open, Terms has a hint line", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.ok(count("#background .cbadge") > 0);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("#background .cbadge")].every(e => getComputedStyle(e).borderTopWidth === "0px" && getComputedStyle(e).backgroundColor === "rgba(0, 0, 0, 0)")`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .opt.cursor")).outlineStyle !== "none"`), true);
+  press("x");
+  await waitFor("panel", `document.querySelector("#decision .cannot-panel")`);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .opt.cursor")).outlineStyle === "none"`), true);
+  press("Escape");
+  await waitFor("panel closed", `!document.querySelector("#decision .cannot-panel")`);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .opt.cursor")).outlineStyle !== "none"`), true);
+  press("n");
+  await waitFor("none panel", `document.querySelector("#decision .none-panel")`);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#decision .opt.cursor")).outlineStyle === "none"`), true);
+  press("Escape");
+  press("?");
+  await waitFor("terms", `document.querySelector(".overlay.terms")`);
+  assert.equal(q1(".overlay.terms .overlay-hint"), "Esc Back");
+  press("Escape");
+});
+
+gui("V4 G-5: a blocker hint has one Copy key", async () => {
+  await seedBlocker();
+  await reopen();
+  const h = q1("#foot .hint-full");
+  assert.equal((h.match(/Copy/g) ?? []).length, 1, h);
+});
+
+gui("V4 G-6: the plan header shows the reversibility mark and scope (from the explanation, or from the plan text)", async () => {
+  const n = ++seq;
+  const plan = "# Drop the old store\n\nStep 1\n\n## Scope and reversibility\n\nReversibility: costly\nScope: repo\n";
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_gui_${process.pid}_${n}`, kind: "approve_plan",
+    session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan, planFilePath: "/tmp/plan.md" },
+  });
+  assert.ok(d.id);
+  await reopen("document.querySelector('#decision .btn')");
+  assert.equal(q1("#head .badge.costly"), "◐ Costly to undo");
+  assert.match(q1("#head .where"), /repo/);
+  ab("screenshot", join(SHOTS, "V4-plan-header.png"));
+});
+
+test("V4 G-7: ja tooltip says 用語, not Terms", async () => {
+  const { MESSAGES } = (await import(new URL("../../public/i18n.js", import.meta.url).href)) as { MESSAGES: Record<"en" | "ja", Record<string, string>> };
+  assert.equal(MESSAGES.ja.term_undefined_tip, "用語に定義なし");
+});
+
+gui("V4 I-1: known column names follow the display language in the compare table and on cards; others stay", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  await setLang("ja", `document.querySelector("#decision .cannot-card, #decision .escape-row")?.textContent.includes("返答不可")`);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt .desc.extra")].map(e => e.textContent.split(":")[0]))`), ["Cost", "Cost", "Cost"]);
+  press("v");
+  await waitFor("compare", `document.querySelector(".overlay.compare")`);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll(".overlay.compare th.cmp-row")].map(e => e.textContent))`), ["選ぶと起きること", "リスクと戻し方", "Cost"]);
+  press("Escape");
+  ev(`document.documentElement.dataset.lang = "en", "ok"`);
+});
+
+gui("V4 W1: (Recommended) / (推奨) are stripped from the card label, the value sent is the original; one recommended mark", async () => {
+  for (const [label, shown] of [["A (Recommended)", "A"], ["A (推奨)", "A"], ["A（推奨）", "A"]] as const) {
+    const { id } = await seedQuestion({ explain: false, options: [{ label, description: "x" }, { label: "B", description: "y" }] });
+    await reopen("document.querySelector('#decision .opt')");
+    assert.equal(q1("#decision .opt .lab .opt-label, #decision .opt .lab").replace(/★.*$/, "").trim(), shown);
+    assert.equal(count("#decision .rec-badge"), 1);
+    press("Enter");
+    assert.equal(answerOf(await waitStatus(id, "answer_submitted", 1500)), label);
+    await cancelAll();
+  }
+});
+
+gui("V4 W1: a blocker's fixed labels show in the display language; the value sent stays as written", async () => {
+  const b = await seedBlocker();
+  await reopen();
+  await setLang("ja", `document.querySelector("#decision .cannot-card, #decision .escape-row")?.textContent.includes("返答不可")`);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt .lab")].slice(0, 3).map(e => e.textContent.replace(/★.*$/, "").trim()))`), ["完了。続けて", "この手順を飛ばして続けて", "ここで止める"]);
+  ev(`document.documentElement.dataset.lang = "en", "ok"`);
+  await waitFor("en", `document.querySelector("#decision .opt .lab")?.textContent.includes("Done. Continue")`);
+  press("Enter");
+  assert.equal(answerOf(await waitStatus(b.id, "answer_submitted", 1500)), `${b.labels[0]} (Recommended)`);
+});
+
+gui("V4 §0: a new build of app.js reloads the page within 3 s after the server restarts", async () => {
+  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
+  const before = q1("#build");
+  const old = serve!;
+  old.kill();
+  await new Promise((r) => (old.exitCode !== null ? r(null) : old.once("exit", r)));
+  const file = join(ROOT, "public", "app.js");
+  const st = statSync(file);
+  const next = new Date(st.mtimeMs + 5000);
+  utimesSync(file, st.atime, next);
+  try {
+    await startServe();
+    const v = Math.floor(next.getTime()).toString(36);
+    await waitFor("reload with the new build", `document.querySelector("#build")?.textContent === "build ${v}"`, 3000);
+    assert.notEqual(q1("#build"), before);
+  } finally {
+    utimesSync(file, st.atime, st.mtime);
+  }
+});
+
+gui("V4 §0: free text stashed in sessionStorage before a reload is put back", async () => {
+  const { id } = await seedQuestion();
+  await reopen();
+  ev(`sessionStorage.setItem("ukagai.drafts", JSON.stringify({ ${JSON.stringify(id)}: { free: { 0: { on: true, text: "kept text" } }, reason: "" } })), location.reload(), "ok"`);
+  await waitFor("restored text", `document.querySelector("#decision .free-text")?.value === "kept text"`, 5000);
 });

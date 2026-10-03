@@ -23,7 +23,7 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `POST /api/sessions/:id/pending-rewrite/consume` | hook | Delete the memo above |
 | `GET /api/metrics` | GUI | Aggregates for (a')(b)(d) |
 | `GET /api/decisions/:id/history` | GUI / TUI (cookie or Bearer) | The human instructions of the decision's session (first + last 20), read from the transcript on request |
-| `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja" }`, the display language from `<data-dir>/config.json`, read once when the server starts (missing/malformed → `"en"`) |
+| `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja", "build": string }`: the display language from `<data-dir>/config.json` (read once at startup; missing/malformed → `"en"`) and the current `app.js` version (the `?v=` value). The GUI reloads itself when `build` differs from its own |
 | `GET /api/stream` | GUI | SSE. `decision.created` / `decision.updated` / `session.updated` |
 | `GET /healthz` | hook | Connectivity check |
 
@@ -237,8 +237,10 @@ null
 Returns the GUI display language, from `<data-dir>/config.json`. It is read once when the server starts; a missing or malformed file gives `"en"`. Allowed with cookie or Bearer.
 
 ```json
-{ "lang": "ja" }
+{ "lang": "ja", "build": "mabc12" }
 ```
+
+`build` is the mtime-based version of `app.js` (the same value as the `?v=` in index.html), read on every request. The GUI compares it with its own on every SSE `open` and calls `location.reload()` when they differ.
 
 ### GET /api/stream
 
