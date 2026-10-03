@@ -20,7 +20,7 @@ Restoring at startup fails because `decisions.jsonl` contains a broken line. Del
 
 ## Recommendation
 
-I recommend backing up, then deleting. It adds only one step, and you can later fix just the broken line to recover the history. Deleting as is is enough if you already know the history is no longer needed.
+I recommend "Back up, then delete". It adds only one step, and you can later fix just the broken line to recover the history. Deleting as is is enough if you already know the history is no longer needed.
 
 ## Diagram
 

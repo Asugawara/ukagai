@@ -35,8 +35,8 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 27 fixtures", () => {
-  assert.equal(mdFiles.length, 27);
+test("there are 29 fixtures", () => {
+  assert.equal(mdFiles.length, 29);
 });
 
 for (const f of mdFiles) {
@@ -98,7 +98,7 @@ test("a table with the wrong number of rows or labels is a table defect", () => 
 });
 
 test("recommended missing from the options is a recommended defect; (Recommended) still matches", () => {
-  assert.deepEqual(validateExplanation(GOOD.replace("recommended: A", "recommended: Z"), "answer_question", ["A", "B"]).missing, ["recommended"]);
+  assert.deepEqual(validateExplanation(GOOD.replace("recommended: A", "recommended: Z"), "answer_question", ["A", "B"]).missing, ["recommended", "recommend_name"]);
   assert.deepEqual(validateExplanation(GOOD.replace("recommended: A\n", "")).missing, ["recommended"]);
   assert.equal(validateExplanation(GOOD, "answer_question", ["A (Recommended)", "B"]).valid, true);
   const md = GOOD.replace("recommended: A", "recommended: a（推奨）").replace("| A |", "| A (Recommended) |");
@@ -354,7 +354,7 @@ test("with type decision, todo is not needed and recommend is required as usual"
 });
 
 test("Recommendation without a condition (なら / 場合 / とき / if ...) is a recommend_cond defect; blockers are not evaluated", () => {
-  const rec = (body: string) => GOOD.replace("I recommend A. If C, choose B.", body);
+  const rec = (body: string) => GOOD.replace("recommended: A", "recommended: x").replace("| A |", "| x |").replace("I recommend A. If C, choose B.", "x " + body);
   assert.deepEqual(validateExplanation(rec("I recommend A.")).missing, ["recommend_cond"]);
   for (const ok of ["C の場合は B。", "速さが要るときは B。", "Use B if C.", "C なら B。", "When C, use B.", "Unless C, use A.", "Otherwise B is fine.", "Pick B in case C happens."]) {
     assert.equal(validateExplanation(rec(ok)).valid, true, ok);
@@ -393,9 +393,9 @@ test("length limits: Recommendation 400 characters / 5 sentences, cells 160 char
   assert.equal(validateExplanation(rec("if " + "a".repeat(397))).valid, true);
   assert.deepEqual(validateExplanation(rec("if " + "a".repeat(398))).missing, ["recommend_long"]);
   assert.deepEqual(validateExplanation(rec("if " + "Ａ".repeat(398))).missing, ["recommend_long"]);
-  assert.equal(validateExplanation(rec("If so. Two. Three. Four. Five.")).valid, true);
-  assert.deepEqual(validateExplanation(rec("If so. Two. Three. Four. Five. Six.")).missing, ["recommend_long"]);
-  assert.equal(validateExplanation(rec("Use file.ts and 0.5 if needed.")).valid, true);
+  assert.equal(validateExplanation(rec("If a so. Two. Three. Four. Five.")).valid, true);
+  assert.deepEqual(validateExplanation(rec("If a so. Two. Three. Four. Five. Six.")).missing, ["recommend_long"]);
+  assert.equal(validateExplanation(rec("Use a file.ts and 0.5 if needed.")).valid, true);
   assert.equal(validateExplanation(rec("```\n" + "a".repeat(500) + "\n```\nI recommend A. If C, choose B.")).valid, true);
   assert.deepEqual(validateExplanation(GOOD.replace("| A | a | Revert it |", `| A | ${"a".repeat(161)} | Revert it |`)).missing, ["cell_long"]);
   assert.deepEqual(validateExplanation(GOOD.replace("| A | a | Revert it |", `| A | a | Revert ${"a".repeat(154)} |`)).missing, ["cell_long"]);
@@ -647,4 +647,38 @@ test("parseCannotAnswer: the three reasons, the terms split, and what is not a C
   assert.equal(parseCannotAnswer("Cannot answer — Whatever"), null);
   assert.equal(parseCannotAnswer("None of these — Wrong premise"), null);
   assert.equal(parseCannotAnswer("A"), null);
+});
+
+test("recommend_name: the first sentence names the recommended option by label, not by position", () => {
+  const rec = (label: string, body: string) =>
+    GOOD.replace("recommended: A", `recommended: ${label}`).replace("| A |", `| ${label} |`).replace("I recommend A. If C, choose B.", body);
+  const long = "Rewrite the heading sentence of the README";
+  assert.equal(validateExplanation(rec("A", "I recommend A. If C, choose B.")).valid, true);
+  // whole label, label with (Recommended), backticks / bold around the label
+  assert.equal(validateExplanation(rec("Keep it (Recommended)", "Keep it as is. If C, choose B.")).valid, true);
+  assert.equal(validateExplanation(rec("decisions.jsonl", "Use `decisions.jsonl`. If C, choose B.")).valid, true);
+  assert.equal(validateExplanation(rec("Private first", "Go with **Private** first. If C, choose B.")).valid, true);
+  // English opening (first 3 words) or Japanese opening (first 12 characters)
+  assert.equal(validateExplanation(rec(long, "Rewrite the heading to say it. If C, choose B.")).valid, true);
+  assert.equal(validateExplanation(rec("見出しの標語を今のまま残して本文だけ直す", "見出しの標語を今のまま残す。C の場合は B。")).valid, true);
+  // not named
+  assert.deepEqual(validateExplanation(rec(long, "I recommend the shorter one. If C, choose B.")).missing, ["recommend_name"]);
+  // only the first sentence counts
+  assert.deepEqual(validateExplanation(rec("Keep it", "I recommend this. Keep it. If C, choose B.")).missing, ["recommend_name"]);
+  // position wording fails even with the label present
+  for (const ng of ["The first one, Keep it, is best.", "Keep it (option A) wins.", "案 A の Keep it を勧める。", "Keep it is plan B's rival.", "1つ目の Keep it を勧める。", "選択肢 1 の Keep it を勧める。"]) {
+    assert.deepEqual(validateExplanation(rec("Keep it", `${ng} If C, choose B.`)).missing, ["recommend_name"], ng);
+  }
+  assert.ok(!validateExplanation(BLOCKER, "answer_question", BLOCKER_OPTION_LABELS).missing.includes("recommend_name"));
+  // order: right after recommend_cond, before against_weak
+  const both = rec("Keep it", "I recommend this.").replace("## Recommendation", "## Counterargument\nI recommend this.\n## Recommendation");
+  assert.deepEqual(validateExplanation(both).missing, ["recommend_cond", "recommend_name", "against_weak"]);
+});
+
+test("assumptions_long: more than 3 Assumptions bullets are a defect, after against_weak", () => {
+  const withA = (n: number) => GOOD + "\n## Assumptions\n" + Array.from({ length: n }, (_, i) => `- premise ${i}`).join("\n") + "\n";
+  assert.equal(validateExplanation(withA(3)).valid, true);
+  assert.deepEqual(validateExplanation(withA(4)).missing, ["assumptions_long"]);
+  assert.deepEqual(validateExplanation(withA(4).replace("I recommend A. If C, choose B.", "I recommend B.")).missing, ["recommend_cond", "recommend_name", "assumptions_long"]);
+  assert.equal(validateExplanation(withA(4).replace("- premise 0", "```\n- a\n- b\n```\n- premise 0")).missing.includes("assumptions_long"), true);
 });

@@ -58,7 +58,9 @@ export type MissingCode =
   | "recommend"
   | "recommend_long"
   | "recommend_cond"
+  | "recommend_name"
   | "against_weak"
+  | "assumptions_long"
   | "cell_long"
   | "coined_term"
   | "undo"
@@ -101,7 +103,10 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   recommend: 'the "Recommendation" section',
   recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters)',
   recommend_cond: 'a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.)',
+  recommend_name:
+    'the first sentence of "Recommendation" must name the recommended option by its label (quote its first words), not by position; do not refer to options by position ("the first one", "plan A")',
   against_weak: "the Counterargument repeats the Recommendation; make it attack the pick",
+  assumptions_long: "at most 3 Assumptions: keep only premises you did not verify and that would change the pick",
   cell_long: "a cell in the options table is too long (at most 160 characters per cell)",
   coined_term:
     "internal identifiers the reader cannot know (plan codes, phase / gate / worker names). Say what each is in plain words, or define it under Terms",
@@ -313,7 +318,7 @@ function tableUndoOk(t: Table, blocker: boolean): boolean {
 }
 
 /** Length limits (spec 3.2). Characters are code points after NFKC */
-export const LIMITS = { recommendChars: 400, recommendSentences: 5, cellChars: 160, whyChars: 600 };
+export const LIMITS = { recommendChars: 400, recommendSentences: 5, cellChars: 160, whyChars: 600, assumptions: 3 };
 
 function cpLength(s: string): number {
   return [...s.normalize("NFKC")].length;
@@ -356,6 +361,47 @@ function condText(text: string): string {
     .split("\n")
     .filter((l) => !l.startsWith(">"))
     .join("\n");
+}
+
+/** Ways of calling an option by position, which the reader cannot map to a card */
+export const POSITIONAL_REF =
+  /1つ目|2つ目|3つ目|一つ目|二つ目|三つ目|最初の案|案 ?[A-D]\b|選択肢 ?[0-9]|\bthe (first|second|third) (one|option)\b|\boption [0-9A-D]\b|\bplan [A-D]\b/i;
+
+/** First sentence of a Recommendation (callouts excluded; splits like countSentences) */
+function firstSentence(text: string): string {
+  const t = condText(text).normalize("NFKC").trim();
+  const m = /[。!?]|\.(?=\s|$)/u.exec(t);
+  return m ? t.slice(0, m.index) : t;
+}
+
+/** NFKC, no whitespace / backticks / asterisks, lowercase (for finding a label in a sentence) */
+function nameForm(s: string): string {
+  return s.normalize("NFKC").replace(/[\s`*]/gu, "").toLowerCase();
+}
+
+/**
+ * The first sentence of the Recommendation names the recommended option: it contains the whole label
+ * (without `(Recommended)` / `(推奨)`) or its opening (first 3 words for a spaced English label, else first 12 characters).
+ * Calling the option by position ("the first one", "案 A") fails even when the label is there.
+ */
+function namesRecommended(recommendation: string, label: string): boolean {
+  const sentence = firstSentence(recommendation);
+  if (POSITIONAL_REF.test(sentence)) return false;
+  const bare = label.normalize("NFKC").replace(/\s*\((?:recommended|推奨)\)\s*$/iu, "").trim();
+  const full = nameForm(bare);
+  if (full === "") return true;
+  const hay = nameForm(sentence);
+  if (hay.includes(full)) return true;
+  const words = bare.replace(/[`*]/gu, "").split(/\s+/u).filter((w) => w !== "");
+  const opening = words.length > 3 && /^[\x00-\x7f]+$/u.test(bare) ? nameForm(words.slice(0, 3).join(" ")) : [...full].slice(0, 12).join("");
+  return hay.includes(opening);
+}
+
+/** Number of bullets in the Assumptions section (fenced lines excluded) */
+function countBullets(lines: string[], inFence: boolean[], s: Section): number {
+  let n = 0;
+  for (let i = s.start + 1; i < s.end; i++) if (!inFence[i] && /^\s*(?:[-*+]|\d+[.)])\s+\S/u.test(lines[i]!)) n++;
+  return n;
 }
 
 /** Lowercase NFKC text without whitespace, punctuation and symbols (for comparing two passages) */
@@ -743,9 +789,12 @@ export function validateExplanation(
         missing.push("recommend_long");
       }
       if (!RECOMMEND_COND.test(condText(text))) missing.push("recommend_cond");
+      if (f["recommended"] && !namesRecommended(text, f["recommended"])) missing.push("recommend_name");
       const against = findSection(headings, lines.length, SECTION.against);
       if (against && againstRepeats(sectionText(lines, inFence, against), text)) missing.push("against_weak");
     }
+    const assumptions = findSection(headings, lines.length, SECTION.assumptions);
+    if (assumptions && countBullets(lines, inFence, assumptions) > LIMITS.assumptions) missing.push("assumptions_long");
   }
 
   const scope = f["scope"] ?? "";

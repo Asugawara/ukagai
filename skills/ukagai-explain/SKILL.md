@@ -74,11 +74,11 @@ scope: file | repo | machine | external
 
 | Section | Required | What to write |
 |---|---|---|
-| Why this decision is needed now | Always | The situation, and **why a human must decide** (what you cannot know). 2–3 sentences |
+| Why this decision is needed now | Always | The situation, and **why a human must decide** (what you cannot know). 2–3 sentences. **Sentence 1 is the situation: what is being decided, where, and when.** The reader did not watch your work |
 | What only you know | Always (1–3 bullets) | What you could not settle by investigating and only the human can say (taste, plans, external circumstances). Shown as the "You decide:" band under the title. Not required by the hook yet, but always write it |
 | Options | Always | A table. First column = option label. Columns: "What happens if chosen" and "Risks and how to undo", then optionally extra columns (cost, effort, …; 3 or more columns are allowed). One row per option. **Every risk cell says how to undo** (or that it cannot be undone), else `undo` |
-| Recommendation | Always | **Keep it to 3 sentences.** Sentence 1 = **a conclusion that lets the human decide from that sentence alone**: the option you recommend and why. It is shown as the headline. Sentence 2 = supplement (optional), last sentence = the condition under which another option is right (write it as "if …, B", "when …, B", "unless …, A", etc.). More than 5 sentences is denied (`recommend_long`) |
-| Assumptions | Always (one premise per bullet) | The premises under which the recommendation holds. The GUI shows them as a checklist: "if any one is wrong, another option is right". Not required by the hook yet |
+| Recommendation | Always | **Keep it to 3 sentences.** Sentence 1 = **a conclusion that lets the human decide from that sentence alone**: the option you recommend, **called by its label** (quote its first words with 「…」 / "…" when the label is a long sentence), and why. It is shown as the headline. **Never call an option by position ("the first one", `1つ目`, `案 A`, `option B`): the hook denies it (`recommend_name`)**. Sentence 2 = supplement (optional), last sentence = the condition under which another option is right (write it as "if …, B", "when …, B", "unless …, A", etc.). More than 5 sentences is denied (`recommend_long`) |
+| Assumptions | Always (one premise per bullet, **at most 3**) | The premises under which the recommendation holds. Keep only what you did not verify and what would change the pick; no implementation details (line numbers, which paragraph stays). More than 3 is denied (`assumptions_long`). The GUI shows them as a checklist: "if any one is wrong, another option is right". Not required by the hook yet |
 | Counterargument | Optional | The strongest argument against your recommendation, in 1–2 sentences. Shown beside the recommendation as "Against this:" |
 | Affected | Optional | Concrete names (files, services, people, environments), one per bullet. Shown as chips (up to 6, then "+N") |
 | Terms | Optional | `- **term** — definition` for each word the human may not know (`- **term**: definition` and `- term — definition` also work). The GUI annotates the term wherever it appears |
@@ -97,6 +97,7 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - Recommendation: at most 5 sentences and 400 characters (`recommend_long`). Aim for 3 sentences.
 - Table cells (what happens if chosen, risks and how to undo): at most 160 characters per cell (`cell_long`; sentences are not counted; aim for 2 sentences).
 - Why this decision is needed now (for a blocker, "Why I stopped"): aim for 2–3 sentences. The limit is 600 characters (`why_long`).
+- **The headline names the option.** The first sentence of the Recommendation must contain the recommended label (without `(Recommended)` / `(推奨)`) or its opening (first 3 words, or first 12 characters for a long or Japanese label), and no positional wording (`recommend_name`). Order of the new codes: `recommend_cond`, `recommend_name`, `against_weak`, `assumptions_long`.
 - Recommendation needs the condition under which another option is right ("if …, B"). The text of the section must contain one of: if / when / unless / otherwise / in case, or the Japanese なら / 場合 / とき / であれば / 際は / 際に. Without it the hook denies (`recommend_cond`). "ならない", "なければならない" and "ときどき" do not count.
 - Put details, evidence and logs in the "What I checked" section as bullets. Do not write what the decision does not need.
 - **Risk cells say how to undo.** Each cell of "Risks and how to undo" must contain a whole word such as undo / revert / roll back / restore / reinstall / recreate / re-run / `git checkout` / delete the … / remove the …, or say it cannot be undone (cannot be restored / irreversible / permanent / unrecoverable; Japanese 戻せ / 戻す / 元に戻 / 消せ / やり直 / 再実行 / 再作成 / 復元 / 戻せない / 元に戻らない). Without it the hook denies (`undo`). The GUI / TUI paint the cannot-be-undone phrases red and the how-to-undo words green.
@@ -113,6 +114,12 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - Draw the diagram so that the difference between the options shows. **Even when a diagram is required, if the difference between the options does not show in it, do not write one; make the table rows more detailed instead.**
 - Write Mermaid so that it is readable in the TUI too (advice; the hook does not check): put spaces around arrows (`A --> B`, not `A-->B`), at most 10 nodes, at most 100 columns per line.
 - Do not include the whole diff (the GUI attaches `git diff` separately).
+
+### Headline: good and bad (a real case: three English opening lines for a README)
+
+- Bad: 「説明文の1つ目を勧める。」 — which card is that? The human must go back and count. Denied (`recommend_name`).
+- Good: 「『Decisions made by humans, together』の標語を残す案を勧める。標語の印象を優先するなら、この案。」 — the label is quoted, so the headline matches exactly one card; the condition for another option follows.
+- Bad Assumptions (implementation notes, not premises): 「見出しの下にある説明段落(5 行目)は残す」「対象の『1 文』は見出し直下の標語(3 行目)を指す」. Good: 「近く他の agent に対応する予定はない」(unverified, and it would change the pick).
 
 ## Writing for the three layers
 
