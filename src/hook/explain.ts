@@ -939,6 +939,8 @@ const MAX_REASON_TEMPLATE = 1600;
 export interface DenyParams {
   /** AskUserQuestion only; omitted for plans */
   path?: string;
+  /** AskUserQuestion in plan mode: the plan file the explanation block goes into (instead of `path`) */
+  planFile?: string;
   question?: string;
   missing: string[];
   /** Codes behind `missing`; decides whether to show the template (omitted: no template) */
@@ -953,13 +955,38 @@ export interface DenyParams {
 const TEMPLATE_CODES: MissingCode[] = ["file", "front_matter", "question", "title", "recommended"];
 
 function needsTemplate(p: DenyParams): boolean {
-  if (p.path === undefined || p.question === undefined || !p.codes) return false;
+  if ((p.path === undefined && p.planFile === undefined) || p.question === undefined || !p.codes) return false;
   return p.blocker === true ? p.codes.length > 0 : p.codes.some((c) => TEMPLATE_CODES.includes(c));
 }
 
 const OPTIONS_HEADER = "| Option | What happens if chosen | Risks and how to undo |";
 
+/** Plan mode: the block shape in short (front matter and section headings; the details are in the skill / SessionStart context) */
+function planTemplateBlock(p: DenyParams): string {
+  const body = [
+    "<!-- ukagai-explain -->",
+    "---",
+    "ukagai: 1",
+    `question: ${p.question}`,
+    "title: <the decision for the human, in one sentence>",
+    "recommended: <label of the option you recommend>",
+    "reversibility: reversible | costly | irreversible",
+    "scope: file | repo | machine | external",
+    "---",
+    `## ${SECTION.why[0]}`,
+    `## ${SECTION.unknowns[0]}`,
+    `## ${SECTION.options[0]}`,
+    OPTIONS_HEADER,
+    `## ${SECTION.recommendation[0]}`,
+    `## ${SECTION.assumptions[0]}`,
+    `## ${SECTION.checked[0]}`,
+    "<!-- /ukagai-explain -->",
+  ];
+  return "```\n" + body.join("\n") + "\n```";
+}
+
 function templateBlock(p: DenyParams): string {
+  if (p.planFile !== undefined) return planTemplateBlock(p);
   const body = p.blocker
     ? [
         "---",
@@ -1029,6 +1056,14 @@ function composeReason(template: DenyTemplate, p: DenyParams, missingText: strin
 }
 
 function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
+  if (p.planFile !== undefined) {
+    const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
+    return template === "A"
+      ? `[ukagai, not a failure] First read skill ukagai-explain (if you have not). In plan mode the explanation goes into your plan file, not a separate file: append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: verbatim, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question. Missing: ${missingText}.` +
+          tpl
+      : `[ukagai, not a failure] Could you first read skill ukagai-explain (if you have not)? In plan mode the explanation goes into your plan file, not a separate file. Could you append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: identical to the question text, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question? Missing: ${missingText}.` +
+          tpl;
+  }
   const isPlan = p.path === undefined || p.question === undefined;
   if (isPlan) {
     return template === "A"

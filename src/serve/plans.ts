@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, sep } from "node:path";
-import type { PlanContent, PlanSection, PlanSummary } from "../contract.js";
+import { stripExplainBlocks, type PlanContent, type PlanSection, type PlanSummary } from "../contract.js";
 
 /** Whether a plan (name, mtime ISO) is marked read. Defaults to "never" */
 export type IsRead = (name: string, mtime: string) => boolean;
@@ -34,7 +34,7 @@ function splitLines(markdown: string): string[] {
  * hash = first 12 hex of sha256 of those lines joined with "\n". The GUI copies this rule.
  */
 export function sectionsOf(markdown: string): PlanSection[] {
-  const lines = splitLines(markdown);
+  const lines = splitLines(stripExplainBlocks(markdown));
   const heads: { index: number; level: number; heading: string }[] = [];
   let fence: string | undefined;
   for (let i = 0; i < lines.length; i++) {
@@ -75,7 +75,7 @@ function scan(markdown: string): { title: string | undefined; sections: number; 
   let title: string | undefined;
   let sections = 0;
   let fence: string | undefined;
-  const all = splitLines(markdown);
+  const all = splitLines(stripExplainBlocks(markdown));
   for (const line of all) {
     const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (f) {
@@ -152,7 +152,8 @@ export async function readPlan(home: string, name: string, since?: string, isRea
   const mtime = new Date(r.mtimeMs).toISOString();
   if (since !== undefined && since === mtime) return null;
   if (r.size > MAX_PLAN_BYTES) throw new PlanError(413, "plan too large");
-  const markdown = await readFile(r.path, "utf8");
+  // The explanation blocks written for AskUserQuestion are shown on the question screen, not in the plan
+  const markdown = stripExplainBlocks(await readFile(r.path, "utf8"));
   return { name, title: scan(markdown).title ?? name, mtime, markdown, read: isRead(name, mtime), sections: sectionsOf(markdown) };
 }
 

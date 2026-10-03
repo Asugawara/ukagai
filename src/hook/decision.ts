@@ -3,6 +3,9 @@ import {
   DENY_LINK_WINDOW_MS,
   decisionFingerprint,
   ExitPlanModeInput,
+  extractExplainBlocks,
+  PLAN_BLOCK_SUFFIX,
+  stripExplainBlocks,
   type CreateDecisionRequest,
   type Decision,
   type DecisionResponse,
@@ -18,6 +21,7 @@ import {
   multiDenyReason,
   explainDir,
   findExplanation,
+  type FoundExplanation,
   markUsed,
   MISSING_LABELS,
   coinedTermLabel,
@@ -29,7 +33,10 @@ import {
   type Validation,
 } from "./explain.js";
 import type { HookOptions } from "./options.js";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { blockFor, findPlanFile } from "./plan-file.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hookLog } from "./log.js";
 import { readConfig } from "../settings/config.js";
@@ -121,14 +128,17 @@ export async function handleDecision(
     status: client.lastFailure?.status,
     message: client.lastFailure?.message,
   });
-  const base = { tool_use_id: input.tool_use_id, kind, session, request: toolInput } as CreateDecisionRequest;
+  // What ukagai registers and fingerprints: a plan without the explanation blocks written for AskUserQuestion (the answer still goes back with the original input)
+  const regInput: Record<string, unknown> =
+    kind === "approve_plan" && typeof toolInput["plan"] === "string" ? { ...toolInput, plan: stripExplainBlocks(toolInput["plan"]) } : toolInput;
+  const base = { tool_use_id: input.tool_use_id, kind, session, request: regInput } as CreateDecisionRequest;
 
   // Input that is not a well-formed question / plan is never ours to handle
   const inputOk = kind === "answer_question" ? AskUserQuestionInput.safeParse(toolInput).success : ExitPlanModeInput.safeParse(toolInput).success;
   if (!inputOk) return null;
 
   // A question that is still open in ukagai (the previous leg handed off, or the hook died) is re-attached, never registered again
-  const open = await client.findOpen(input.session_id, decisionFingerprint(kind, toolInput), input.tool_use_id);
+  const open = await client.findOpen(input.session_id, decisionFingerprint(kind, regInput), input.tool_use_id);
   let created: Pick<Decision, "id"> | null;
   if (open) {
     created = { id: open.id };
@@ -141,7 +151,12 @@ export async function handleDecision(
       const parsed = AskUserQuestionInput.safeParse(toolInput);
       if (!parsed.success) return null;
       const q0 = parsed.data.questions[0]!;
-      if (input.permission_mode === "plan") {
+      // Plan mode (Claude): the plan file is the only writable file, so the explanation is a block inside it. Without a findable plan file (Codex, a reworded reminder) there is none
+      const planFile =
+        input.permission_mode === "plan" && (input.agent ?? opts.agent) !== "codex"
+          ? await findPlanFile(input.transcript_path, homedir(), q0.question)
+          : null;
+      if (input.permission_mode === "plan" && !planFile) {
         explanation = noExplanation("plan_mode");
       } else {
         const dir = explainDir(input.scratchpad_dir, opts.dataDir, input.session_id);
@@ -171,7 +186,18 @@ export async function handleDecision(
             return deny(multiDenyReason(parsed.data.questions.length, input.agent));
           }
         }
-        const found = await findExplanation(dir, q0.question);
+        let found: FoundExplanation | null;
+        if (planFile) {
+          let block: ReturnType<typeof blockFor>;
+          try {
+            block = blockFor(extractExplainBlocks(await readFile(planFile, "utf8")), q0.question);
+          } catch {
+            block = undefined;
+          }
+          found = block ? { path: planFile + PLAN_BLOCK_SUFFIX, markdown: block.body, match: "question" } : null;
+        } else {
+          found = await findExplanation(dir, q0.question);
+        }
         const labels = q0.options.map((o) => o.label);
         const lang = (await readConfig(opts.dataDir)).lang;
         const v = found
@@ -214,7 +240,8 @@ export async function handleDecision(
             match: found.match,
             attached_via: linked.length > 0 ? "after_deny" : "first_call",
           };
-          usedPath = found.path;
+          // The hook never edits a plan file: no rename for a plan-mode block
+          if (!planFile) usedPath = found.path;
         } else if ((linked.length > 0 && !memo) || multiGuarded) {
           // With a "Cannot answer" memo the loop guard does not apply: never hand the human, right after they said they could not read it, an explanation that still fails
           explanation = noExplanation("loop_guard");
@@ -222,7 +249,7 @@ export async function handleDecision(
           const own = v ? v.missing : ["file" as const];
           const codes = [...own, ...rewriteIssues.map((i) => i.code).filter((c) => !own.includes(c))];
           const reason = denyReason(opts.denyTemplate, {
-            path: join(dir, "explain.md"),
+            ...(planFile ? { planFile } : { path: join(dir, "explain.md") }),
             question: q0.question,
             missing: [
               ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0) : MISSING_LABELS[c])),
@@ -241,7 +268,7 @@ export async function handleDecision(
         }
       }
     } else {
-      const parsed = ExitPlanModeInput.safeParse(toolInput);
+      const parsed = ExitPlanModeInput.safeParse(regInput);
       if (!parsed.success) return null;
       const plan = parsed.data.plan;
       const v: Validation = validatePlan(plan);
@@ -284,7 +311,7 @@ export async function handleDecision(
       return null;
     }
     // The explanation got through: the human's "Cannot answer" has been answered with a new one
-    if (kind === "answer_question" && input.permission_mode !== "plan") await client.consumeRewrite(input.session_id);
+    if (kind === "answer_question" && explanation.none_reason !== "plan_mode") await client.consumeRewrite(input.session_id);
     if (usedPath) {
       try {
         await markUsed(usedPath);

@@ -214,7 +214,7 @@ The check lists the following `missing` codes **in this order** (the table is by
 
 ## 5. The hook's procedure (PreToolUse × AskUserQuestion)
 
-When `permission_mode === "plan"` no explanation is required (section 6). Otherwise:
+When `permission_mode === "plan"` the explanation is a block in the plan file (section 6; no plan file found, or Codex: no explanation is required). Otherwise:
 
 0. **Deny when there are several questions**: when `questions.length > 1`, before any lookup return `permissionDecision: "deny"` and register it as `denied_explain` (no `explanation` attached). The reason is the following (repeated in section 7; at most 1000 characters; no URL): `Ask one question per AskUserQuestion call (this call had N). The GUI shows one question at a time, with its explanation file. Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose.` (For `agent: codex`, `AskUserQuestion` reads `request_user_input`.) Loop guard: when a `denied_explain` with `questions.length > 1` exists for the same `session_id + agent_id` **within 2 minutes**, do not deny and go to step 1 (with no explanation: `attached_via: none` / `none_reason: loop_guard`). The question text is not compared (the first question after splitting has a different text).
 1. **Lookup**: among the `.md` files (excluding `.used.md`) in the location (section 1), look for one whose front matter `question` **exactly matches** `questions[0].question` (the latest mtime if several; `match: question`). If there is none, use the unused file written **within 10 minutes** (by mtime) if there is exactly one (`match: recency`). With zero or two or more it is "not found" (`file`).
@@ -224,7 +224,22 @@ When `permission_mode === "plan"` no explanation is required (section 6). Otherw
 
 ## 6. Plan mode
 
-An `AskUserQuestion` with `permission_mode === "plan"` does not require an explanation file and does no lookup. `attached_via: none`, `none_reason: plan_mode`. It is excluded from the denominator of (d).
+In plan mode the plan file is the only file the agent may write, so a Claude `AskUserQuestion` with `permission_mode === "plan"` carries its explanation **inside the plan file**, one block per question:
+
+```
+<!-- ukagai-explain -->
+---
+ukagai: 1
+question: <the question verbatim>
+...front matter and sections of an ordinary explanation file...
+<!-- /ukagai-explain -->
+```
+
+- **Plan file discovery** (`findPlanFile`, `src/hook/plan-file.ts`). The transcript (last 64 MB, streamed) is scanned for the plan-mode reminder: the last match of `create your plan at <abs path>.md` or `plan file … <abs path>.md` (also in the JSON-escaped `\/` form). The plans directory is configurable, so any absolute `*.md` is accepted, provided it exists, is a regular file, and its realpath is under the home directory. Fallback: the newest `<home>/.claude/plans/*.md` modified within 30 minutes that holds a block for this question.
+- **Block**: `extractExplainBlocks` returns every terminated block (an unterminated one is ignored); the block whose front matter `question` equals `questions[0].question` verbatim is validated with the same `validateExplanation` as a file (section 4). Missing or invalid → deny with the plan-mode text below (loop guard, multi-question guard, `--deny-template` and the "Cannot answer" memo apply as in section 5). Valid → registered with `explanation.markdown` = the block body and `explanation.path` = `<plan file>#ukagai-explain` (the hook never edits the plan file; no `.used.md` rename). The server accepts that path when the plan file is under home.
+- **No plan file found** (a reworded reminder, no transcript) and **Codex** (no plan file): no explanation is required, `attached_via: none`, `none_reason: plan_mode`, excluded from the denominator of (d).
+- **Deny text** (variant A; B is the polite variant): `First read skill ukagai-explain (if you have not). In plan mode the explanation goes into your plan file, not a separate file: append to <planFilePath> a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (…), then call AskUserQuestion again with the same question. Missing: <missing>.` plus a short block template when a front matter key is missing (at most 1600 characters).
+- **ExitPlanMode** strips every block from `plan` (`stripExplainBlocks`, `src/contract.ts`) before checking and registering it; the server's plan views (`/api/plans`) strip them too.
 
 ## 7. Deny reason templates
 
@@ -299,7 +314,7 @@ The hook reads `lang` with `readConfig(dataDir)` (`<data-dir>/config.json`; defa
 Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.
 When you do ask, write the explanation the human reads as Markdown in {absolute location}/ following skill ukagai-explain. {language sentence}
 front matter: question is the AskUserQuestion question verbatim, title is the decision for the human in one sentence, recommended is the label of the option you recommend, reversibility is reversible / costly / irreversible, scope is file / repo / machine / external. Body: "Why this decision is needed now", "Options" (table: first column is the label; columns for what happens if chosen and for risks and how to undo), "Recommendation" (reason, and the condition under which another option is right). Recommendation: first sentence is a conclusion that decides on its own and names the option, last sentence is "if ..., B" (at most 5 sentences and 400 characters); table cells at most 160 characters and each risk cell says how to undo. Also write "What only you know" (1-3 bullets) and "Assumptions" (one per line), and unless reversible + file, "What I checked" with evidence as footnotes ([^1]) cited from the body. Optional: "Terms", "Counterargument", "Affected". Draw a Mermaid diagram only when the decision is hard to undo (anything but reversible) or scope is machine / external, and the options differ in structure or flow.
-Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section whose first 2 lines are "Reversibility: reversible|costly|irreversible" and "Scope: file|repo|machine|external". No explanation file is needed for AskUserQuestion in plan mode.
+Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section whose first 2 lines are "Reversibility: reversible|costly|irreversible" and "Scope: file|repo|machine|external". In plan mode, put the explanation into your plan file between <!-- ukagai-explain --> and <!-- /ukagai-explain --> (same format) instead of a separate file.
 When stopped by human work such as authentication or permissions, do not end in prose: write a blocker-format explanation and ask with AskUserQuestion (Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work. If an answer starts with "None of these — ", act on its type: add options, fix the premise and re-ask, add evidence, or ask later.
 ```
 
@@ -319,7 +334,7 @@ When stopped by human work such as authentication or permissions, do not end in 
 - A deny for a defect happens **at most once per session (`session_id`)**. From the second time it does not deny and registers (`attached_via: none`, `none_reason: loop_guard`).
 - When it passes, `attached_via` is `first_call` (`after_deny` if denied before). `explanation.markdown` holds the plan body.
 - Reversibility and scope: `parsePlanImpact` reads `Reversibility:` / `Scope:` lines (also `reversibility:` / `scope:` / `可逆性:` / `影響範囲:`; a bullet, bold or backticks are fine; values are the English words, 3 / 4 of them) from the "Scope and reversibility" section. When found they are sent as `explanation.reversibility` / `explanation.scope` (the GUI / TUI then apply the confirm-twice and undo grace rules). A missing or unknown value is left out, and that plan is sent at once. They are not validated and never deny.
-- It is required even in plan mode (ExitPlanMode is only called in plan mode). The exemption of section 6 is for AskUserQuestion only.
+- It is required even in plan mode (ExitPlanMode is only called in plan mode). Section 6 (explanation blocks in the plan file) is for AskUserQuestion only.
 - The deny reason follows the variant of section 7, with `{missing}` = "the "Scope and reversibility" section" and the `{path}` / `{question}` lines omitted.
 
 ## 10. Handling of Mermaid
@@ -438,7 +453,7 @@ Cannot answer — <reason>: <detail>
 
 `parseCannotAnswer` (`src/contract.ts`) reads it; an unknown reason is not a Cannot answer.
 
-**Memo.** When the server stores such an answer it keeps one memo per session (a later one overwrites): `{question, reason, terms, body_hash, at}`, where `body_hash` is the SHA-256 of the answered explanation without its front matter (`bodyHash`). The hook reads it with `GET /api/sessions/:id/pending-rewrite` before it checks the next AskUserQuestion explanation (plan mode and a missing explanation file skip it; an unreachable server or a bad body means no memo, so the hook stays fail-open). The memo is held in server memory (lost on restart, like `pending-mode-switch`).
+**Memo.** When the server stores such an answer it keeps one memo per session (a later one overwrites): `{question, reason, terms, body_hash, at}`, where `body_hash` is the SHA-256 of the answered explanation without its front matter (`bodyHash`). The hook reads it with `GET /api/sessions/:id/pending-rewrite` before it checks the next AskUserQuestion explanation (a missing explanation skips it; an unreachable server or a bad body means no memo, so the hook stays fail-open). The memo is held in server memory (lost on restart, like `pending-mode-switch`).
 
 **Enforcement.** With a memo, the hook denies the explanation (the sentences are added to the usual deny reason) when:
 
