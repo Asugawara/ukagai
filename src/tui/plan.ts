@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { SECTION, normalizeHeading } from "../hook/explain.js";
 
 // The outline of a long plan: its ## / ### sections, with line and file counts. No I/O.
@@ -91,13 +92,49 @@ export function planOutline(md: string): PlanOutline {
 export interface PlanState {
   open: Set<number>;
   read: Set<number>;
+  /** Sections changed (or added) by a live update since they were last opened: shown with a dim `updated` word until opened */
+  updated: Set<number>;
   cur: number;
 }
 
 /** The first H2 is open and counts as read; the scope section is on screen in the decision column, so it counts as read too */
 export function initialPlanState(o: PlanOutline): PlanState {
   const first = o.entries.find((e) => e.level === 2);
-  return { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), cur: first?.i ?? 0 };
+  return { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), updated: new Set(), cur: first?.i ?? 0 };
+}
+
+/**
+ * One hash per outline entry: the first 12 hex digits of the SHA-256 of the section's lines (heading through the line before the next heading
+ * of the same or a shallower level, joined with "\n"). The same rule as `sectionsOf` in src/serve/plans.ts (test/tui/plans.test.ts pins them equal).
+ */
+export function sectionHashes(o: PlanOutline, text: string): string[] {
+  const lines = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  return o.entries.map((e) => createHash("sha256").update(lines.slice(e.at, e.at + e.lines).join("\n")).digest("hex").slice(0, 12));
+}
+
+/**
+ * The state of a plan whose text changed (a live update, or a plan file turning into its approval screen): a section whose hash is unchanged keeps
+ * its open / read state; a changed or new one is closed, unread and marked `updated`; removed ones are gone. The contents cursor follows its section.
+ */
+export function remapState(o: PlanOutline, hashes: string[], prev: { st: PlanState; hashes: string[] }): PlanState {
+  const used = new Set<number>();
+  const st: PlanState = { open: new Set(), read: new Set(), updated: new Set(), cur: 0 };
+  let cur: number | null = null;
+  o.entries.forEach((e, j) => {
+    const i = prev.hashes.findIndex((h, k) => h === hashes[j] && !used.has(k));
+    if (i < 0) {
+      if (e.scope) st.read.add(j);
+      else st.updated.add(j);
+      return;
+    }
+    used.add(i);
+    if (prev.st.open.has(i)) st.open.add(j);
+    if (prev.st.read.has(i) || e.scope) st.read.add(j);
+    if (prev.st.updated.has(i)) st.updated.add(j);
+    if (prev.st.cur === i) cur = j;
+  });
+  st.cur = cur ?? Math.max(0, Math.min(prev.st.cur, o.entries.length - 1));
+  return st;
 }
 
 /** The H2 sections never opened (the scope section excluded), in order */
@@ -112,10 +149,12 @@ export function setOpen(o: PlanOutline, st: PlanState, i: number, open: boolean)
   if (open) {
     st.open.add(i);
     st.read.add(i);
+    st.updated.delete(i);
     const p = parentOf(o, e);
     if (p) {
       st.open.add(p.i);
       st.read.add(p.i);
+      st.updated.delete(p.i);
     }
   } else st.open.delete(i);
 }

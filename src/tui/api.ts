@@ -13,10 +13,10 @@ export class ApiError extends Error {
   }
 }
 
-export interface StreamEvent {
-  event: string;
-  decision: Decision;
-}
+export type StreamEvent =
+  | { event: "decision.created" | "decision.updated"; decision: Decision }
+  | { event: "plan.updated"; plan: PlanSummary }
+  | { event: "plan.removed"; name: string };
 
 export interface PlanSummary {
   name: string;
@@ -25,6 +25,8 @@ export interface PlanSummary {
   bytes: number;
   sections: number;
   lines: number;
+  /** The human pressed Done reading at this mtime */
+  read: boolean;
 }
 
 export interface PlanFile {
@@ -32,6 +34,7 @@ export interface PlanFile {
   title: string;
   mtime: string;
   markdown: string;
+  read?: boolean;
 }
 
 export class TuiApi {
@@ -116,6 +119,12 @@ export class TuiApi {
     return (await res.json()) as PlanFile;
   }
 
+  /** Mark a plan read at the `mtime` the human actually read. Throws on any failure; callers ignore it */
+  async markRead(name: string, mtime: string): Promise<void> {
+    const res = await this.fetch(`/api/plans/${encodeURIComponent(name)}/read`, { method: "POST", body: { mtime }, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+  }
+
   async answer(id: string, body: Record<string, unknown>): Promise<Decision> {
     const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}/answer`, {
       method: "POST",
@@ -151,7 +160,7 @@ export class TuiApi {
   }
 }
 
-/** Text of one event, keeping only decision.created / decision.updated */
+/** Text of one event: decision.created / decision.updated, plan.updated and plan.removed; others are dropped */
 export function parseSse(block: string): StreamEvent | null {
   let event = "";
   const data: string[] = [];
@@ -159,10 +168,19 @@ export function parseSse(block: string): StreamEvent | null {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
   }
-  if (event !== "decision.created" && event !== "decision.updated") return null;
   try {
-    const r = Decision.safeParse(JSON.parse(data.join("\n")));
-    return r.success ? { event, decision: r.data } : null;
+    const j: unknown = JSON.parse(data.join("\n"));
+    if (event === "decision.created" || event === "decision.updated") {
+      const r = Decision.safeParse(j);
+      return r.success ? { event, decision: r.data } : null;
+    }
+    if (event === "plan.updated" && j && typeof j === "object" && typeof (j as PlanSummary).name === "string") {
+      return { event, plan: { ...(j as PlanSummary), read: (j as PlanSummary).read === true } };
+    }
+    if (event === "plan.removed" && j && typeof j === "object" && typeof (j as { name?: unknown }).name === "string") {
+      return { event, name: (j as { name: string }).name };
+    }
+    return null;
   } catch {
     return null;
   }

@@ -112,8 +112,10 @@ export interface ScreenModel {
   impact?: string | null;
   /** A long plan folded into sections: its outline, the plan text and what the hook appended after it (null for a short plan) */
   plan?: { outline: PlanOutline; text: string; extra: string } | null;
-  /** A plan file opened from the plan browser: no decision behind it, no buttons */
+  /** A plan file shown as an item of its own: no decision behind it, no buttons */
   readonly?: { name: string };
+  /** Key of the folding state when it is shared by a plan file and its approval decision (`plan:<file name>`); the id otherwise */
+  planKey?: string;
   /** Waiting for the human (explanation.type === "blocker") */
   blocker: boolean;
   /** Body of the blocker "What you need to do" section (Markdown), shown at the top of the right column */
@@ -155,6 +157,13 @@ const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
 const tail = (cwd: string): string => cwd.split("/").filter(Boolean).pop() || cwd;
 
 export const tildePath = (p: string): string => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+
+/** File name of the plan an approval decision is about (the basename of `planFilePath`); null when there is none */
+export function planNameOf(d: Decision): string | null {
+  if (d.kind !== "approve_plan") return null;
+  const p = (d.request as { planFilePath?: unknown }).planFilePath;
+  return typeof p === "string" && p ? (p.split(/[\\/]/).pop() || null) : null;
+}
 
 const planOf = (d: Decision): string => {
   const r = ExitPlanModeInput.safeParse(d.request);
@@ -352,7 +361,8 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
       background += extra;
     }
     const outline = planOutline(plan);
-    return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan), plan: outline.long ? { outline, text: plan, extra } : null };
+    const name = planNameOf(d);
+    return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan), plan: outline.long ? { outline, text: plan, extra } : null, ...(name ? { planKey: `plan:${name}` } : {}) };
   }
 
   const qs = questionsOf(d);
@@ -487,7 +497,7 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
   };
 }
 
-/** The screen model of a plan file shown read-only (the plan browser, `p`): the PL1 folding view with no decision behind it */
+/** The screen model of a plan file shown as an item of its own: the PL1 folding view with no decision behind it */
 export function buildPlanFileModel(name: string, title: string, markdown: string, mtime: string): ScreenModel {
   const outline = planOutline(markdown);
   return {
