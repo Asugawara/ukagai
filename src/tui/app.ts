@@ -498,7 +498,7 @@ export class App {
 
   private openNone(m: ScreenModel, dr: Draft): Effect[] {
     const q = m.question;
-    if (!q) return [];
+    if (!q || !q.cards.length) return [];
     dr.cursor = q.cards.length;
     if (!q.multi) {
       dr.sel.clear();
@@ -526,7 +526,7 @@ export class App {
 
   private openCannot(m: ScreenModel, dr: Draft): Effect[] {
     const q = m.question;
-    if (!q) return [];
+    if (!q || !q.cards.length) return [];
     dr.cursor = q.cards.length + 1;
     if (!q.multi) {
       dr.sel.clear();
@@ -555,7 +555,8 @@ export class App {
   private moveCursor(m: ScreenModel, dr: Draft, to: number): void {
     const n = this.slots(m);
     if (!n) return;
-    dr.cursor = clamp(to, n);
+    // With no options the cursor never rests on the hidden None of these / Can't answer rows (slots 0 and 1)
+    dr.cursor = m.question && !m.question.cards.length ? Math.max(2, clamp(to, n)) : clamp(to, n);
     this.scroll = 0;
     this.rscroll = null;
     const q = m.question;

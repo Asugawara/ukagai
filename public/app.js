@@ -30,6 +30,12 @@ const BLOCKER_LABELS = {
 };
 // What a blocker's fixed card shows, by display language (the answer value stays what the agent wrote)
 const BLOCKER_SHOWN = { en: { done: "Done. Continue", skip: "Skip this step and continue", stop: "Stop here" }, ja: { done: "完了。続けて", skip: "この手順を飛ばして続けて", stop: "ここで止める" } };
+// A sentence that gives the condition under which another option is right. Same content as RECOMMEND_COND in src/hook/explain.ts.
+const RECOMMEND_COND =
+  /なら(?!ない|ず)|なければ(?!なら)|場合|とき(?!どき)|であれば|際[はに]|\bif\b|\bwhen\b|\bunless\b|\botherwise\b|\bin case\b/i;
+// Codex approvals arrive as a question headed "Approval" with Allow / Deny: the command in backticks is shown in monospace, and Deny is never "cannot be undone"
+const isApproval = (d) => d.kind === "answer_question" && d.request.questions.length === 1 && /^approval$/i.test((d.request.questions[0].header ?? "").trim());
+const isDenyLabel = (s) => /^(deny|denied|reject|拒否|却下)\b|^(拒否|却下)/i.test(normLabel(s ?? ""));
 // Table column detection (header cell text). The first column is always the option label.
 const COLUMN_HAPPENS = /happens|outcome|起きること/i;
 const COLUMN_RISK = /risk|リスク/i;
@@ -407,6 +413,8 @@ function renderHead(d) {
     if (e.target.closest(".hd-goal")) openHistory(d);
     else if (e.target.closest(".headline, .v2-title")) toggleExpand(dr);
   };
+  const cond = d.kind === "answer_question" && d.request.questions.length === 1 ? modelFor(d).v2?.cond : null;
+  if (cond) head.append(el("div", { class: "hd-cond clampable", title: cond, text: `${t("cond_prefix")} ${cond}` }));
   renderGoal(d);
   loadHistory(d);
   head.classList.toggle("expanded", !!dr.expanded);
@@ -943,6 +951,7 @@ function renderRightBody(d) {
       const top = single ? el("div", { class: "q-top" }) : box;
       const cardsBox = single ? el("div", { class: "q-cards" }) : box;
       if (single) box.append(top, cardsBox);
+      if (single && isApproval(d)) top.append(el("div", { class: "approval-q" }, ...q.question.split(/(`[^`]+`)/).filter(Boolean).map((p) => (/^`[^`]+`$/.test(p) ? el("code", { class: "approval-cmd", text: p.slice(1, -1) }) : p))));
       let items;
       if (v2) {
         if (v2.todoBox) top.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
@@ -1010,7 +1019,8 @@ function renderRightBody(d) {
         const none = dr.none;
         const cannot = dr.cannot;
         // One quiet row of two underlined text buttons: "None of these…" (the options are wrong) and "Can't answer this…" (the explanation is unreadable)
-        cardsBox.append(el("div", { class: "escape-row" },
+        // With no options (a prose question) only free text is left: no None of these / Can't answer
+        if (items.length) cardsBox.append(el("div", { class: "escape-row" },
           el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
             el("span", { text: t("none_of_these") })),
           el("div", { class: "cannot-card" + (cannot ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openCannot(d); } },
@@ -1160,7 +1170,7 @@ function renderRightBody(d) {
           if (!answer) return;
         } else {
           answer = c.value;
-          if (hasBad(c.risk)) weighty = true;
+          if (hasBad(c.risk) && !(isApproval(d) && isDenyLabel(answer))) weighty = true;
           if (isBlocker(d) && BLOCKER_LABELS.stop.some((n) => sameLabel(answer, n))) weighty = true;
         }
         attempt(d, dr, `card:${idx}`, { answers: { [qs[0].question]: answer } }, weighty);
@@ -1225,7 +1235,9 @@ function renderRightBody(d) {
 }
 
 // "None of these…": open the type picker under the card (the answer is `None of these — <type>: <note>`)
+const hasOptions = (d) => (d.request.questions?.[0]?.options?.length ?? 0) > 0;
 function openNone(d) {
+  if (!hasOptions(d)) return;
   const dr = draftOf(d);
   dr.none = { cursor: 0, note: "" };
   dr.cannot = null;
@@ -1235,7 +1247,7 @@ function openNone(d) {
 // "Can't answer this…": reasons with the suspicious identifiers ticked under "Undefined terms" in one list (the cursor walks reasons and terms).
 // The answer is `Cannot answer — <reason>: <detail>`; `tick` (a clicked identifier) is ticked, and added when the scan did not find it
 function openCannot(d, tick) {
-  if (!d || d.status !== "pending" || d.kind !== "answer_question" || d.request.questions.length !== 1) return;
+  if (!d || d.status !== "pending" || d.kind !== "answer_question" || d.request.questions.length !== 1 || !hasOptions(d)) return;
   const dr = draftOf(d);
   dr.none = null;
   if (!dr.cannot) {
@@ -1625,6 +1637,15 @@ const bulletsOf = (sec) => sec.nodes.flatMap((n) => [...(n.querySelectorAll?.(":
 
 // Move the first sentence of the first paragraph out of the box into a new element (the headline), so the box does not repeat it.
 // null when there is none (the box is left whole)
+// The last sentence of the recommendation's paragraphs (callouts and code excluded) when it holds a condition word and is not the headline
+// itself (a one-sentence recommendation). null otherwise
+function condSentence(box) {
+  const text = [...box.children].filter((n) => n.tagName === "P").map((n) => n.textContent ?? "").join(" ");
+  const sentences = text.split(/(?<=[。！？])|(?<=[.!?])\s+/).map((x) => x.trim()).filter(Boolean);
+  const last = sentences.length > 1 ? sentences.at(-1) : "";
+  return last && RECOMMEND_COND.test(last) ? last : null;
+}
+
 function splitHeadline(box) {
   const p = box.firstElementChild;
   if (!p || p.tagName !== "P") return null;
@@ -1818,8 +1839,16 @@ function buildModel(d) {
         v2.recCap = t("sec_recommendation");
         for (const n of recSec.nodes.slice(1)) recBox.append(n);
         recSec.head.remove();
+        v2.cond = condSentence(recBox);
         v2.headline = splitHeadline(recBox);
         if (recBox.children.length) { v2.recBox = recBox; enhance(recBox, v2.ctx.opts).catch(() => {}); }
+      }
+      // "Why this decision is needed now" (or "Why I stopped") leads the left column
+      const whySec = findSection(secs, [...SECTION.why, ...SECTION.blockerWhy], true);
+      if (whySec && whySec !== optSec && whySec !== recSec) {
+        const whyBox = el("div", { class: "why md" });
+        for (const n of whySec.nodes) if (n.parentElement === left) whyBox.append(n);
+        if (whyBox.children.length) { v2.whyBox = whyBox; enhance(whyBox, v2.ctx.opts).catch(() => {}); }
       }
       // Footnote definitions go under What I checked (or at the end); path:line and `cmd` there become copyable badges
       const checkedSec = findSection(secs, SECTION.checked);
@@ -1837,6 +1866,7 @@ function buildModel(d) {
       // Decorate: option colors in the text, terms, risk words (cells are handled when the cards are built), numbers with units
       for (const e of [v2.recBox, v2.headline, v2.against, v2.todoBox, ...v2.unknowns, ...v2.assumptions].filter(Boolean)) decorate(e, v2.ctx);
       decorate(left, v2.ctx, { num: true });
+      if (v2.whyBox) decorate(v2.whyBox, v2.ctx, { num: true });
       m.v2 = v2;
     }
   }
@@ -1914,7 +1944,7 @@ function renderLeft(d) {
   }
   if (hasExplanation(d)) {
     const m = modelFor(d);
-    const lead = m.v2 ? [recBox(m.v2), unknownsRow(m.v2), assumptionsBox(m.v2), againstBox(m.v2)].filter(Boolean) : [];
+    const lead = m.v2 ? [m.v2.whyBox ?? null, recBox(m.v2), unknownsRow(m.v2), againstBox(m.v2), assumptionsBox(m.v2)].filter(Boolean) : [];
     if (lead.length) root.append(el("div", { class: "lead" }, ...lead));
     root.append(m.left);
     const aff = m.v2 ? affectsRow(m.v2) : null;

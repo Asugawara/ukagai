@@ -425,7 +425,7 @@ test("column widths: decision is clamp(round(cols*0.34), 44, 58), the background
 });
 
 test("long recommendation: when over half the column height it is cut at 8 rows with an expand hint, and . toggles full text / folded", () => {
-  const sentences = Array.from({ length: 14 }, (_, i) => `This is sentence number ${i} used to build a long recommendation. `).join("");
+  const sentences = Array.from({ length: 24 }, (_, i) => `This is sentence number ${i} used to build a long recommendation. `).join("");
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD.replace("I recommend SSE. It is the smaller implementation.", sentences))), t);
   const size = { cols: 140, rows: 30 };
@@ -436,7 +436,7 @@ test("long recommendation: when over half the column height it is cut at 8 rows 
   };
   let text = draw();
   assert.ok(text.includes("… (. to expand)"), "cut it and show the hint");
-  assert.ok(!text.includes("sentence number 13"), "the last sentence is hidden");
+  assert.ok(!text.includes("sentence number 23"), "the last sentence is hidden");
   press(app, ch("."));
   text = draw();
   

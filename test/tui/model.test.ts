@@ -20,7 +20,9 @@ test("v2: title / chips / recommendation / cards / background sections", () => {
   assert.equal(q.initialCursor, 0);
   assert.equal(q.cards[0]!.lines[1]!.risk, true);
   // The background has neither the options nor the recommendation
-  assert.match(m.background!, /Why this decision is needed now/);
+  // Why leads the background column on its own field
+  assert.match(m.why!.heading, /Why this decision is needed now/);
+  assert.doesNotMatch(m.background!, /Why this decision is needed now/);
   assert.match(m.background!, /Diagram/);
   assert.match(m.background!, /What I checked/);
   assert.doesNotMatch(m.background!, /What happens if chosen/);
@@ -32,7 +34,7 @@ test("v2: Japanese heading aliases build the same model as English headings", ()
   const ja = buildModel(decision(withExplanation(V2_MD_JA)));
   assert.deepEqual(ja.question, en.question);
   assert.equal(ja.recommendation, en.recommendation);
-  assert.match(ja.background!, /なぜ今この判断が要るか/);
+  assert.match(ja.why!.heading, /なぜ今この判断が要るか/);
   assert.doesNotMatch(ja.background!, /選択肢|選ぶと起きること/);
 });
 
@@ -87,7 +89,7 @@ test("blocker: todo leaves the background and its code blocks are extracted; the
   assert.equal(m.blocker, true);
   assert.match(m.todo ?? "", /Run the following in a terminal/);
   assert.deepEqual(m.todoCode, ["gcloud auth login\ngcloud auth application-default login"]);
-  assert.match(m.background ?? "", /Why I stopped/);
+  assert.match(m.why?.heading ?? "", /Why I stopped/);
   assert.doesNotMatch(m.background ?? "", /What you need to do/);
   assert.equal(m.recommendation, null);
   const q = m.question!;
