@@ -24,6 +24,8 @@ export type ServeOptions = {
   port?: number;
   dataDir?: string;
   leaseGraceMs?: number;
+  /** Lease after a hand-off: how long the agent has to call the tool again (default 120 s) */
+  handoffGraceMs?: number;
   /** Base of the allowed range for transcript / explanation paths. Defaults to os.homedir() */
   home?: string;
   /** Plan watcher timings (tests shorten them) */
@@ -66,6 +68,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const store = new Store({
     dir: dataDir,
     leaseGraceMs: opts.leaseGraceMs ?? LEASE_GRACE_MS,
+    handoffGraceMs: opts.handoffGraceMs,
     broadcast: (event, data) => hub.broadcast(event, data),
     onPlanDecisionClosed: (d) => void markPlanRead(d).catch(() => {}),
   });

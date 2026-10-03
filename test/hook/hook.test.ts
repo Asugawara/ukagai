@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bodyHash } from "../../src/contract.js";
+import { bodyHash, decisionFingerprint } from "../../src/contract.js";
 import { contextText, isEscapedQuestion } from "../../src/hook/context-hooks.js";
 import { dataDirWithToken, fakeServer, json, runHook, tmpDir, writeFile, type Fake, type Handler } from "./helpers.js";
 
@@ -110,20 +110,94 @@ test("without a token it is treated as unreachable and stdout is empty", async (
   });
 });
 
-test("--budget 30 (default poll timeout) sends the fallback without polling and stdout is empty", async () => {
+test("--budget 30 (default poll timeout) hands off without polling: deny asking for the same call, no fallback", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d, "--budget", "30"), JSON.stringify(t1(sp)));
     assert.equal(r.code, 0);
-    assert.equal(r.stdout, "");
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "deny");
+    assert.equal(
+      out.permissionDecisionReason,
+      "[ukagai, not a failure] The human has not answered yet; the question stays open in ukagai. Call AskUserQuestion again now with exactly the same question and options to keep waiting for the answer. Do not ask in prose and do not change the question.",
+    );
     assert.ok(!f.calls.some((c) => c.path.includes("/wait")));
-    const ans = f.calls.find((c) => c.path === "/api/decisions/dec-1/answer");
-    assert.deepEqual(ans?.body, { fallback: true });
+    const ho = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions/dec-1/handoff");
+    assert.deepEqual(ho?.body, { session_id: t1(sp).session_id });
+    assert.ok(!f.calls.some((c) => c.path.endsWith("/answer")));
   });
 });
 
-test("server that always returns 204: falls back once less than poll + 5 seconds remain", async () => {
+test("handoff: logged as `handoff` (not fallback_budget) with decision_id", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(() => false, async (f, d) => {
+    await runHook(args(f, d, "--budget", "30"), JSON.stringify(t1(sp)));
+    const log = readFileSync(join(d, "hook.log"), "utf8");
+    assert.match(log, /"event":"handoff"[^\n]*"decision_id":"dec-1"/);
+    assert.doesNotMatch(log, /fallback_budget/);
+  });
+});
+
+test("handoff that the server cannot record is a real failure: fallback and empty stdout", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  const h: Handler = (req, res) => (req.path.endsWith("/handoff") ? (res.writeHead(409).end(), true) : false);
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d, "--budget", "30"), JSON.stringify(t1(sp)));
+    assert.equal(r.stdout, "");
+    assert.deepEqual(f.calls.find((c) => c.path.endsWith("/answer"))?.body, { fallback: true });
+  });
+});
+
+test("handoff of an ExitPlanMode names ExitPlanMode", async () => {
+  const plan = "# Plan\n\n## Steps\n\n1. Fix it.\n\n## Scope and reversibility\n\nOne file only. Revertable with git revert.\n";
+  const input = { ...t1(tmpDir()), tool_name: "ExitPlanMode", tool_input: { plan, planFilePath: "/x/plan.md" }, permission_mode: "plan" };
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook(args(f, d, "--budget", "30"), JSON.stringify(input));
+    const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
+    assert.match(reason, /Call ExitPlanMode again now with the same plan to keep waiting/);
+    assert.ok(f.calls.some((c) => c.path.endsWith("/handoff")));
+  });
+});
+
+const openDecision = (id: string) => ({ decision: { id, status: "pending", handoffs: 1 } });
+
+test("re-attach: an open decision with the same fingerprint skips the explanation and delivers the answer", async () => {
+  const sp = tmpDir(); // no explanation file at all
+  const h: Handler = (req, res) => {
+    if (req.method === "GET" && req.path.startsWith("/api/sessions/")) return json(res, 200, openDecision("dec-open"));
+    if (req.path.includes("/wait")) return json(res, 200, { response: { via: "gui", answers: { [Q]: "B" }, decided_at: NOW() } });
+    return false;
+  };
+  await withServer(h, async (f, d) => {
+    const input = t1(sp, { tool_use_id: "toolu_second" });
+    const r = await runHook(args(f, d), JSON.stringify(input));
+    assert.deepEqual(JSON.parse(r.stdout).hookSpecificOutput.updatedInput.answers, { [Q]: "B" });
+    const open = f.calls.find((c) => c.path.startsWith(`/api/sessions/${input.session_id}/open?`));
+    const q = new URLSearchParams(open!.path.split("?")[1]);
+    assert.equal(q.get("tool_use_id"), "toolu_second");
+    assert.equal(q.get("fingerprint"), decisionFingerprint("answer_question", input.tool_input));
+    assert.ok(f.calls.some((c) => c.path === "/api/decisions/dec-open/wait?timeout_ms=25000"));
+    assert.ok(f.calls.some((c) => c.path === "/api/decisions/dec-open/ack"));
+    assert.ok(!f.calls.some((c) => c.method === "POST" && c.path === "/api/decisions"));
+    assert.match(readFileSync(join(d, "hook.log"), "utf8"), /"event":"reattach"[^\n]*"decision_id":"dec-open"/);
+  });
+});
+
+test("re-attach: /open answering 404 falls through to today's path (the explanation is required)", async () => {
+  const sp = tmpDir();
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+    assert.ok(f.calls.some((c) => c.path.startsWith("/api/sessions/") && c.path.includes("/open?")));
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.status, "denied_explain");
+  });
+});
+
+test("server that always returns 204: hands off once less than poll + 5 seconds remain", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   const h: Handler = (req, res) => {
@@ -135,9 +209,9 @@ test("server that always returns 204: falls back once less than poll + 5 seconds
   };
   await withServer(h, async (f, d) => {
     const r = await runHook(args(f, d, "--budget", "6.3", "--poll-timeout-ms", "1000"), JSON.stringify(t1(sp)));
-    assert.equal(r.stdout, "");
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
     assert.equal(f.calls.filter((c) => c.path.includes("/wait")).length, 1);
-    assert.deepEqual(f.calls.at(-1)?.body, { fallback: true });
+    assert.ok(f.calls.at(-1)?.path.endsWith("/handoff"));
   });
 });
 

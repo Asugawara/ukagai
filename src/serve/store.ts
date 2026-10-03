@@ -4,9 +4,11 @@ import { join } from "node:path";
 import {
   CANCEL_WINDOW_MS,
   DENY_LINK_WINDOW_MS,
+  HANDOFF_GRACE_MS,
   MODE_SWITCH_TTL_MS,
   bodyHash,
   canTransition,
+  decisionFingerprint,
   parseCannotAnswer,
   type CreateDecisionRequest,
   type Decision,
@@ -24,7 +26,7 @@ import type { SseEventName } from "./sse.js";
 
 export class HttpError extends Error {
   constructor(
-    public status: 400 | 401 | 404 | 409,
+    public status: 400 | 401 | 403 | 404 | 409,
     message: string,
     public issues?: unknown,
   ) {
@@ -35,6 +37,8 @@ export class HttpError extends Error {
 export type StoreOptions = {
   dir: string;
   leaseGraceMs: number;
+  /** Lease after a hand-off: how long the agent has to call the tool again (default HANDOFF_GRACE_MS) */
+  handoffGraceMs?: number;
   broadcast?: (event: SseEventName, data: unknown) => void;
   /** An approve_plan decision left `pending` (answered, cancelled, expired, answered in the terminal) */
   onPlanDecisionClosed?: (d: Decision) => void;
@@ -118,6 +122,7 @@ export class Store {
           if (typeof d.id !== "string") continue;
           this.decisions.set(d.id, d);
           this.byToolUse.set(d.tool_use_id, d.id);
+          for (const prev of d.previous_tool_use_ids ?? []) this.byToolUse.set(prev, d.id);
         } catch {
           // Skip malformed lines
         }
@@ -188,6 +193,12 @@ export class Store {
     }
 
     const denied = req.status === "denied_explain";
+    const fingerprint = decisionFingerprint(req.kind, req.request as Record<string, unknown>);
+    // An old hook build that registers again after a hand-off lands on the open decision instead of a second one
+    if (!denied) {
+      const open = this.findOpen(req.session.session_id, fingerprint);
+      if (open) return { decision: this.reattach(open, req.tool_use_id), created: false };
+    }
     const now = Date.now();
     const session = { ...req.session };
     if (!session.title && context.ai_title) session.title = context.ai_title;
@@ -200,6 +211,8 @@ export class Store {
       context,
       status: denied ? "denied_explain" : "pending",
       created_at: new Date(now).toISOString(),
+      fingerprint,
+      handoffs: 0,
     };
     if (req.explanation) decision.explanation = req.explanation;
     if (denied && req.missing) decision.missing = req.missing;
@@ -216,6 +229,51 @@ export class Store {
       this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
     }
     return { decision, created: true };
+  }
+
+  /** The newest decision of the session that is still open (pending, or its hook went away) and asks the same thing */
+  findOpen(sessionId: string, fingerprint: string): Decision | undefined {
+    let best: Decision | undefined;
+    for (const d of this.decisions.values()) {
+      if (d.session.session_id !== sessionId || d.fingerprint !== fingerprint) continue;
+      if (d.status !== "pending" && d.status !== "hook_disconnected") continue;
+      if (!best || d.created_at > best.created_at) best = d;
+    }
+    return best;
+  }
+
+  /** The tool was called again for an open decision: it takes the new tool_use_id and is waited for again (a lost hook is revived) */
+  reattach(d: Decision, toolUseId: string): Decision {
+    if (d.status === "hook_disconnected") {
+      this.transition(d, "pending");
+      this.expiredAt.delete(d.id);
+    }
+    if (toolUseId !== d.tool_use_id) {
+      d.previous_tool_use_ids = [...(d.previous_tool_use_ids ?? []), d.tool_use_id];
+      d.tool_use_id = toolUseId;
+      this.byToolUse.set(toolUseId, d.id);
+    }
+    delete d.handoff_at;
+    d.lease_until = new Date(Date.now() + this.opts.leaseGraceMs).toISOString();
+    this.persist(d);
+    this.emit("decision.updated", d);
+    this.touchSession(d.session.session_id, { state: "waiting_decision" });
+    return d;
+  }
+
+  /** The hook's budget for this leg ended: the decision stays pending and waits for the agent's next call */
+  handoff(id: string, sessionId: string): Decision {
+    const d = this.decisions.get(id);
+    if (!d) throw new HttpError(404, "decision not found");
+    if (d.session.session_id !== sessionId) throw new HttpError(403, "decision belongs to another session");
+    if (d.status !== "pending") throw new HttpError(409, `cannot hand off a ${d.status} decision`);
+    const now = Date.now();
+    d.handoff_at = new Date(now).toISOString();
+    d.handoffs = (d.handoffs ?? 0) + 1;
+    d.lease_until = new Date(now + (this.opts.handoffGraceMs ?? HANDOFF_GRACE_MS)).toISOString();
+    this.persist(d);
+    this.emit("decision.updated", d);
+    return d;
   }
 
   private findRecentDenial(d: Decision, now: number): Decision | undefined {
@@ -516,8 +574,12 @@ export class Store {
     const agent: number[] = [];
     const d = { first_call: 0, after_deny: 0, none: 0 };
     let cannot = 0;
+    let handoffs = 0;
+    let reattached = 0;
     for (const x of this.decisions.values()) {
       if (x.status === "denied_explain") continue;
+      handoffs += x.handoffs ?? 0;
+      reattached += x.previous_tool_use_ids?.length ?? 0;
       if (x.status in count) count[x.status as keyof typeof count]++;
       if (x.response?.answers && Object.values(x.response.answers).some((v) => parseCannotAnswer(v))) cannot++;
       if (x.response?.via === "gui") {
@@ -532,7 +594,7 @@ export class Store {
     const total = count.answered + count.fallback + count.hook_disconnected + count.answer_lost + count.cancelled + this.escapedQuestions;
     const dTotal = d.first_call + d.after_deny + d.none;
     return {
-      a: { ...count, escaped_question: this.escapedQuestions, blocker_detected: this.blockersDetected, cannot_answer: cannot, total, rate: total === 0 ? null : count.answered / total },
+      a: { ...count, escaped_question: this.escapedQuestions, blocker_detected: this.blockersDetected, handoffs, reattached, cannot_answer: cannot, total, rate: total === 0 ? null : count.answered / total },
       b: { human: stat(human), agent: stat(agent), baseline: stat(this.baseline) },
       c: { session_panel_opens: this.panelOpens },
       d: { ...d, total: dTotal, attach_rate: dTotal === 0 ? null : (d.first_call + d.after_deny) / dTotal },

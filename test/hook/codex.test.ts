@@ -164,13 +164,16 @@ test("\"Cannot answer — …\" is carried as the answer", async () => {
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /A or B\? = Cannot answer — Unclear\./);
 });
 
-test("fallback (budget ran out) prints nothing", async () => {
+test("budget ran out: a hand-off deny naming request_user_input (the question stays open)", async () => {
   const s = await realServer();
   const input = rui();
   writeFile(join(s.dataDir, "explain", input.session_id, "e.md"), explanationFor(Q));
   const r = await runHook(a(s.url, s.dataDir, "--budget", "30"), JSON.stringify(input));
   assert.equal(r.code, 0);
-  assert.equal(r.stdout, "");
+  const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
+  assert.match(reason, /^\[ukagai, not a failure\] The human has not answered yet/);
+  assert.match(reason, /Call request_user_input again now with exactly the same question and options/);
+  assert.doesNotMatch(reason, /AskUserQuestion/);
 });
 
 test("Stop with stop_hook_active: true → no output, no decision", async () => {

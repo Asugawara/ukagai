@@ -68,6 +68,8 @@ function defaultResponse(rec: Recorded, res: ServerResponse): void {
     json(res, 200, []);
   } else if (rec.path.endsWith("/ack")) {
     json(res, 200, { id: "dec-1", status: "answered" });
+  } else if (rec.path.endsWith("/handoff")) {
+    json(res, 200, { id: "dec-1" });
   } else if (rec.path.endsWith("/answer")) {
     json(res, 200, { id: "dec-1" });
   } else if (rec.path.startsWith("/api/events")) {

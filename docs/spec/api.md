@@ -11,6 +11,8 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `POST /api/decisions` | hook | Register a decision. Returns the existing one for the same `tool_use_id` |
 | `GET /api/decisions/:id/wait?timeout_ms=25000` | hook | Long-poll. If answered (`answer_submitted` / `fallback`), 200 + response; if unanswered and the timeout passes, 204; if the decision is closed (`answered` etc., including when it becomes so while waiting), 410 immediately. Updates `lease_until` at the end of each poll |
 | `POST /api/decisions/:id/ack` | hook | Confirmation that the response was received. Sets `answered` and `delivered_at` |
+| `POST /api/decisions/:id/handoff` | hook | The hook's budget for this leg ended: the decision stays `pending` and waits for the agent's next call (see "Hand-off") |
+| `GET /api/sessions/:id/open?fingerprint=&tool_use_id=` | hook | The still-open decision of the session with the same fingerprint (re-attach), or 404 |
 | `POST /api/decisions/:id/cancel` | hook | Notification when the hook exits on SIGTERM / SIGINT / SIGHUP. `pending` → `cancelled`, `answer_submitted` → `answer_lost` |
 | `POST /api/decisions/:id/answer` | GUI | Submit an answer |
 | `GET /api/decisions?status=pending` | GUI | List |
@@ -120,6 +122,16 @@ The hook sends the ack after receiving 200 and before writing to stdout (it prin
 
 No request body is needed, but `Content-Type: application/json` is required, so send `{}`. Response 200 with the `Decision` (`status: "answered"`, with `response.delivered_at`).
 
+### POST /api/decisions/:id/handoff
+
+Bearer required, body `{ "session_id": string }` (`Content-Type: application/json`). Marks a `pending` decision as awaiting re-attach: `handoff_at = now`, `handoffs += 1`, `lease_until = now + handoffGraceMs` (server option, default `HANDOFF_GRACE_MS` = 120 s). The status stays `pending`. Response 200 + `Decision` (SSE `decision.updated`). 403 when `session_id` is not the decision's session, 404 unknown id, 409 when the decision is not `pending`.
+
+### GET /api/sessions/:id/open
+
+Bearer required. Query: `fingerprint` (see `decisionFingerprint` in `src/contract.ts`) and `tool_use_id` (the caller's), both required (400 otherwise). Returns `{ decision }` for the newest decision of the session whose status is `pending` (handed off or not, so a crashed hook can re-attach too) or `hook_disconnected` and whose `fingerprint` matches; 404 otherwise. Side effects on a hit: a `hook_disconnected` decision is revived to `pending` (no second count in the metrics); `tool_use_id` becomes the caller's and the old one is appended to `previous_tool_use_ids` (every id ever used still finds the decision); `handoff_at` is cleared; the lease is re-armed with `LEASE_GRACE_MS`; SSE `decision.updated`. `POST /api/decisions` does the same when an open decision with the same fingerprint exists: it returns that decision (200) instead of creating one, so an older hook build re-attaches too.
+
+The fingerprint is the sha256 hex of the questions with their option labels (`question` and the label list only: descriptions, header and key order do not count), or, for `approve_plan`, of the trimmed plan text (the plan file path when the plan is empty).
+
 ### POST /api/decisions/:id/cancel
 
 Bearer required. `Content-Type: application/json` is required, so send `{}`. If `pending`, it becomes `cancelled`; if `answer_submitted`, it becomes `answer_lost`; response 200 + `Decision` (SSE `decision.updated`). 409 for a terminal state. The hook receives the SIGTERM that Claude Code sends on Esc / ctrl+c (E1-3) and sends this once, with a 300 ms timeout. This avoids the decision lingering in the GUI until the lease expires. It is not sent for signals before registration or after output.
@@ -224,7 +236,7 @@ null
 
 ```json
 {
-  "a": { "answered": 9, "fallback": 1, "hook_disconnected": 0, "answer_lost": 0, "cancelled": 0, "escaped_question": 0, "blocker_detected": 0, "cannot_answer": 0, "total": 10, "rate": 0.9 },
+  "a": { "answered": 9, "fallback": 1, "hook_disconnected": 0, "answer_lost": 0, "cancelled": 0, "escaped_question": 0, "blocker_detected": 0, "handoffs": 0, "reattached": 0, "cannot_answer": 0, "total": 10, "rate": 0.9 },
   "b": {
     "human": { "count": 9, "median_ms": 21000, "mean_ms": 25000 },
     "agent": { "count": 3, "median_ms": 18000, "mean_ms": 19000 },
@@ -236,6 +248,7 @@ null
 ```
 
 - (a') `rate = answered / total`. `total = answered + fallback + hook_disconnected + answer_lost + cancelled + escaped_question`. `null` if the denominator is 0.
+- `a.handoffs` is the sum of `Decision.handoffs`, `a.reattached` the number of re-attaches (the sum of `previous_tool_use_ids` lengths). Neither is part of `total`.
 - (b) `human` = `created_at → decided_at`, `agent` = `first_denied_at → created_at`, `baseline` = values taken with `--observe`.
 - (d) Decisions with `plan_mode` are excluded from `total`.
 
@@ -303,6 +316,7 @@ stateDiagram-v2
     answer_submitted --> answered: hook acks
     answer_submitted --> answer_lost: lease expired (no ack) or hook cancels (signal)
     hook_disconnected --> cancelled: UserPromptSubmit / Stop in the same session
+    hook_disconnected --> pending: the tool is called again (re-attach)
     answered --> [*]
     fallback --> [*]
     answer_lost --> [*]
@@ -314,6 +328,8 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 
 `lease_until` is the end of the last poll + `POLL_TIMEOUT_MS` (25 seconds) + `LEASE_GRACE_MS` (10 seconds).
 
+**Hand-off.** A Claude Code hook has a timeout (3600 s installed; the hook's own `--budget` is 3590 s) after which the tool call would go on without it and Claude Code would show its own prompt. So the hook never lets the budget end on a fallback: at the end of a leg it calls `POST /api/decisions/:id/handoff` and denies the tool call with "the human has not answered yet; the question stays open in ukagai; call the tool again now with the same question". The agent calls the tool again; the new hook run asks `GET /api/sessions/:id/open` first, skips the explanation check and waits on the same decision (fresh budget). The decision keeps its id, so the GUI / TUI show nothing new. If the agent does not call again within `handoffGraceMs` the lease expires (`hook_disconnected`, as above); a `UserPromptSubmit` cancels the open decision as always. Only when the hand-off itself cannot be recorded (server gone, 4xx) does the hook still answer with `fallback` and print nothing.
+
 **Server restart.** `store.load()` keeps `pending` / `answer_submitted` decisions as they are and re-arms `lease_until = now + LEASE_GRACE_MS`. A hook that resumes `wait` within its retry window (120 s) renews the lease and carries on with the same decision; if none comes, the lease expires and the decision becomes `hook_disconnected` (`pending`) / `answer_lost` (`answer_submitted`) as usual. The GUI / TUI get the current state on the SSE reconnect (`loadAll`).
 
 ## Authorization and input validation
@@ -324,7 +340,7 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 
 | Authorization | Endpoints |
 |---|---|
-| Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
+| Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `POST /api/decisions/:id/handoff`, `GET /api/sessions/:id/open`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
 | cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
 | none | `GET /healthz`, `GET /`, `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
