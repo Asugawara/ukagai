@@ -41,9 +41,9 @@ test("GET /api/config returns the language to a cookie or Bearer, 401 otherwise"
   const { url, token } = await boot("ja");
   assert.equal((await fetch(url + "/api/config")).status, 401);
   const viaBearer = await fetch(url + "/api/config", { headers: { authorization: `Bearer ${token}` } });
-  assert.deepEqual(await viaBearer.json(), { lang: "ja" });
+  assert.deepEqual({ ...(await viaBearer.json()), build: "x" }, { lang: "ja", build: "x" });
   const cookie = ((await fetch(url + "/")).headers.get("set-cookie") ?? "").split(";")[0]!;
   const viaCookie = await fetch(url + "/api/config", { headers: { cookie } });
   assert.equal(viaCookie.status, 200);
-  assert.deepEqual(await viaCookie.json(), { lang: "ja" });
+  assert.deepEqual({ ...(await viaCookie.json()), build: "x" }, { lang: "ja", build: "x" });
 });

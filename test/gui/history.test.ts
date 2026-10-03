@@ -193,7 +193,7 @@ gui("a single instruction shows the Goal without the count", async () => {
   await reopen(GOAL);
   assert.equal(q1("#head .goal-text"), "Goal: only one");
   assert.equal(count("#head .goal-n"), 0);
-  assert.equal(ev<boolean>(`!!document.querySelector("#decision .hint .hs:not([hidden])")`), false); // no `s` hint with one instruction
+  assert.equal(ev<boolean>(`!!document.querySelector("#foot .hint .hs:not([hidden])")`), false); // no `s` hint with one instruction
 });
 
 gui("`s` opens the panel in time order; Enter shows the full text with pre-wrap; Esc steps back, then closes", async () => {
@@ -285,12 +285,12 @@ gui("the Terms list and the history panel never open together", async () => {
 gui("the hint line gains `s History`; the short line gets the letter", async () => {
   await seed();
   await reopen(GOAL);
-  assert.match(q1("#decision .hint-full"), /s History · ←→/);
-  assert.match(q1("#decision .hint-short"), /\bs\b.*more/);
+  assert.match(q1("#foot .hint-full"), /s History · ←→/);
+  assert.match(q1("#foot .hint-short"), /\bs\b.*more/);
   // one line at 1000x700 (short hint)
   ab("set", "viewport", "1000", "700");
   await sleep(300);
-  assert.ok(ev<number>(`document.querySelector("#decision .hint-short").getBoundingClientRect().height`) < 24);
+  assert.ok(ev<number>(`document.querySelector("#foot .hint-short").getBoundingClientRect().height`) < 24);
   ab("set", "viewport", "1440", "900");
 });
 
@@ -362,7 +362,7 @@ gui("ja: Goal label, count, panel title and hint are translated", async () => {
   ev(`document.documentElement.dataset.lang = "ja", "ok"`);
   await waitFor("ja goal", `document.querySelector("#head .goal-text").textContent.startsWith("目的:")`);
   assert.equal(q1("#head .goal-n"), "· 3 件");
-  assert.match(q1("#decision .hint-full"), /s 履歴/);
+  assert.match(q1("#foot .hint-full"), /s 履歴/);
   press("s");
   assert.equal(q1(".overlay.history .overlay-title"), "このセッションの指示");
   assert.equal(q1(".overlay.history .hist-first"), "最初");

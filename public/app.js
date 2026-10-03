@@ -1,6 +1,6 @@
 // ukagai GUI. Strings that come from outside are inserted with textContent; innerHTML is only for marked / mermaid output.
 // Display strings go through t() (i18n.js); the language is read from <html data-lang>.
-import { t, applyStatic } from "./i18n.js";
+import { t, applyStatic, currentLang } from "./i18n.js";
 
 const MULTI_SELECT_SEPARATOR = ", "; // same value as src/contract.ts
 const FOLD_LINES = 9;
@@ -24,13 +24,17 @@ const SECTION = {
 };
 // Fixed option labels of a blocker (a "(Recommended)" suffix is allowed on the first).
 const BLOCKER_LABELS = {
-  done: ["Done. Continue", "対応した。続けて"],
-  skip: ["Skip this step and continue", "この手順は飛ばして続けて"],
-  stop: ["Stop here", "ここで中断"],
+  done: ["Done. Continue", "完了。続けて", "対応した。続けて"],
+  skip: ["Skip this step and continue", "この手順を飛ばして続けて", "この手順は飛ばして続けて"],
+  stop: ["Stop here", "ここで止める", "ここで中断"],
 };
+// What a blocker's fixed card shows, by display language (the answer value stays what the agent wrote)
+const BLOCKER_SHOWN = { en: { done: "Done. Continue", skip: "Skip this step and continue", stop: "Stop here" }, ja: { done: "完了。続けて", skip: "この手順を飛ばして続けて", stop: "ここで止める" } };
 // Table column detection (header cell text). The first column is always the option label.
 const COLUMN_HAPPENS = /happens|outcome|起きること/i;
 const COLUMN_RISK = /risk|リスク/i;
+// Column names of the explanation file: the two known ones follow the display language, any other (Cost...) stays as written
+const columnLabel = (name) => (COLUMN_HAPPENS.test(name) ? t("col_happens") : COLUMN_RISK.test(name) ? t("col_risk") : name);
 // Words in a risk cell. Same lists as UNDO_BAD_WORDS / UNDO_WORDS in src/hook/explain.ts (N0): checked in that order, so
 // "cannot be restored" is red only. English is matched at word boundaries, Japanese anywhere.
 const UNDO_BAD_WORDS =
@@ -112,7 +116,12 @@ const $ = (id) => document.getElementById(id);
 
 // Show which build of app.js is running (index.html appends ?v=<version>)
 const BUILD = (() => { try { return new URL(import.meta.url).searchParams.get("v") ?? "?"; } catch { return "?"; } })();
-const buildTag = () => el("span", { class: "build", text: `build ${BUILD}` });
+// The key hint lives in the footer row (full width, one line); the build stamp is fixed at the bottom right
+function setHint(node) {
+  const foot = $("foot");
+  foot.replaceChildren(...(node ? [node] : []));
+  foot.hidden = !node;
+}
 
 function el(tag, props = {}, ...children) {
   const e = document.createElement(tag);
@@ -232,19 +241,34 @@ function isBlocker(d) {
   return d.kind === "answer_question" && hasExplanation(d) && parseFrontMatter(ex.markdown).fm.type === "blocker";
 }
 
+// A plan carries them in explanation.reversibility / scope (the hook ran parsePlanImpact); when absent, read the plan's own
+// "Scope and reversibility" lines (same pattern as parsePlanImpact in src/hook/explain.ts)
+function planImpactOf(d) {
+  const plan = d.kind === "approve_plan" ? String(d.request?.plan ?? "") : "";
+  const out = {};
+  for (const line of plan.split(/\r?\n/)) {
+    const m = /^\s*(?:[-*+]\s+)?\**(reversibility|可逆性|scope|影響範囲)\**\s*[:：]\s*\**`?([A-Za-z]+)`?\**/i.exec(line);
+    if (!m) continue;
+    const key = /^(reversibility|可逆性)$/i.test(m[1]) ? "reversibility" : "scope";
+    const val = m[2].toLowerCase();
+    if (out[key] === undefined && (key === "reversibility" ? ["reversible", "costly", "irreversible"] : ["file", "repo", "machine", "external"]).includes(val)) out[key] = val;
+  }
+  return out;
+}
+
 function reversibilityOf(d) {
   const ex = d.explanation;
-  if (!ex) return undefined;
-  if (ex.reversibility) return ex.reversibility;
-  if (d.kind === "answer_question" && hasExplanation(d)) return parseFrontMatter(ex.markdown).fm.reversibility;
+  if (ex?.reversibility) return ex.reversibility;
+  if (d.kind === "approve_plan") return planImpactOf(d).reversibility;
+  if (ex && d.kind === "answer_question" && hasExplanation(d)) return parseFrontMatter(ex.markdown).fm.reversibility;
   return undefined;
 }
 
 function scopeOf(d) {
   const ex = d.explanation;
-  if (!ex) return undefined;
-  if (ex.scope) return ex.scope;
-  if (d.kind === "answer_question" && hasExplanation(d)) return parseFrontMatter(ex.markdown).fm.scope;
+  if (ex?.scope) return ex.scope;
+  if (d.kind === "approve_plan") return planImpactOf(d).scope;
+  if (ex && d.kind === "answer_question" && hasExplanation(d)) return parseFrontMatter(ex.markdown).fm.scope;
   return undefined;
 }
 
@@ -512,10 +536,48 @@ function renderList() {
 
 // ---- Right column: decision ----
 
+// A blocker's three fixed labels are shown in the display language whichever language they arrived in; the value is sent as written
+function blockerShown(d, it) {
+  if (!isBlocker(d)) return it.label;
+  const key = ["done", "skip", "stop"].find((k) => BLOCKER_LABELS[k].some((n) => sameLabel(it.value, n)));
+  return key ? BLOCKER_SHOWN[currentLang()][key] : it.label;
+}
+
 function draftOf(d) {
   let dr = drafts.get(d.id);
-  if (!dr) drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", cursor: null }));
+  if (!dr) {
+    drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", cursor: null }));
+    const kept = restored[d.id]; // typed text kept across a reload for a new build
+    if (kept) {
+      for (const [qi, f] of Object.entries(kept.free ?? {})) dr.free.set(Number(qi), { on: !!f.on, text: String(f.text ?? "") });
+      if (kept.reason) { dr.reason = kept.reason; dr.rejecting = true; }
+      delete restored[d.id];
+    }
+  }
   return dr;
+}
+
+// A new build of app.js reloads the page. Free text being typed survives in sessionStorage (this tab only) and is put back after the reload
+const DRAFT_KEY = "ukagai.drafts";
+const restored = (() => {
+  try { const v = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? "{}"); sessionStorage.removeItem(DRAFT_KEY); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+})();
+function stashDrafts() {
+  const out = {};
+  for (const [id, dr] of drafts) {
+    const free = {};
+    for (const [qi, f] of dr.free) if (f.text.trim()) free[qi] = { on: f.on, text: f.text };
+    if (Object.keys(free).length || dr.reason.trim()) out[id] = { free, reason: dr.reason };
+  }
+  try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify(out)); } catch {}
+}
+let reloading = false;
+async function checkBuild() {
+  if (reloading || BUILD === "?") return;
+  try {
+    const { build } = await api("/api/config");
+    if (build && build !== "?" && build !== BUILD) { reloading = true; stashDrafts(); location.reload(); }
+  } catch {}
 }
 
 const STATUS_KEYS = {
@@ -737,7 +799,7 @@ function openTerms(v2) {
   if (!v2?.terms.length) return;
   const list = el("dl", { class: "terms-list" });
   for (const x of v2.terms) list.append(el("dt", { text: x.term }), el("dd", { text: x.def }));
-  openOverlay("terms", t("terms_title"), list);
+  openOverlay("terms", t("terms_title"), el("div", {}, list, el("div", { class: "overlay-hint", text: t("terms_hint") })));
 }
 
 function openCompare(v2, ui) {
@@ -751,7 +813,7 @@ function openCompare(v2, ui) {
   table.append(el("thead", {}, head));
   const body = el("tbody");
   for (const name of names) {
-    const tr = el("tr", {}, el("th", { class: "cmp-row", text: name }));
+    const tr = el("tr", {}, el("th", { class: "cmp-row", text: columnLabel(name) }));
     v2.cards.forEach((c, i) => {
       const col = c.cols.find((x) => x.name === name);
       const td = el("td", { class: "cmp-c" + (c.recommended ? " is-rec" : ""), "data-i": String(i) });
@@ -849,6 +911,7 @@ function renderRightBody(d) {
   if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
+  setHint(null);
   if (!d) return;
   const dr = draftOf(d);
   const closed = d.status !== "pending";
@@ -907,11 +970,12 @@ function renderRightBody(d) {
             updateSubmit();
           },
         });
-        const labText = el("span", it.color ? { class: "opt-label", style: `--oc:${it.color}`, text: it.label } : { text: it.label });
+        const shown = blockerShown(d, it);
+        const labText = el("span", it.color ? { class: "opt-label", style: `--oc:${it.color}`, text: shown } : { text: shown });
         const lab = el("div", { class: "lab" }, labText, it.badge ? el("span", { class: "rec-badge", text: `★ ${t("recommended")}` }) : null);
         const descs = it.lines.map((l) => {
           const dd = el("div", { class: (l.muted ? "desc muted" : "desc") + (l.extra ? " extra" : "") + " clampable" },
-            l.extra ? el("b", { class: "xcol", text: `${l.extra}: ` }) : null, l.cell ? inlineClone(l.cell) : l.text);
+            l.extra ? el("b", { class: "xcol", text: `${columnLabel(l.extra)}: ` }) : null, l.cell ? inlineClone(l.cell) : l.text);
           if (v2) decorate(dd, { terms: v2.terms, undef: v2.undef }, { risk: !!l.muted });
           return dd;
         });
@@ -1036,27 +1100,28 @@ function renderRightBody(d) {
     function updateSubmit() { if (submit) submit.disabled = closed || !complete(); }
     const actions = el("div", { class: "actions" }, needSubmit ? confirmBar(dr) : null, submit);
     if (single) {
-      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", d.explanation && hasExplanation(d) ? "y" : "", "n", "x"].filter(Boolean);
+      // `c` (copy the command to run, blockers) and `y` (copy a badge) are one hint
+      const copyKey = v2?.todoBox?.querySelector("pre") ? "c" : d.explanation && hasExplanation(d) ? "y" : "";
+      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", copyKey, "n", "x"].filter(Boolean);
       const extraHints = [
         v2?.terms.length ? `? ${t("hint_terms")} · ` : "",
         modelFor(d).fnCount ? `e ${t("hint_evidence")} · ` : "",
         v2?.hasExtra ? `v ${t("hint_compare")} · ` : "",
-        d.explanation && hasExplanation(d) ? `y ${t("hint_copy_badge")} · ` : "",
+        copyKey ? `${copyKey} ${t("hint_copy")} · ` : "",
         `n ${t("hint_none")} · `,
         `${t("hint_cannot")} · `,
       ].join("");
       const hs = hasHistoryHint(d);
-      // The full line, and a short one that CSS swaps in below 1100px / 800px so that the hint stays on one line
+      // The full line (one line from 900px up), and a short one that CSS swaps in below 900px
       const sendFull = needSubmit ? `Enter ${t("hint_answer")}` : t("hint_send");
       const sendShort = needSubmit ? `Enter ${t("hint_short_answer")}` : t("hint_short_send");
-      const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}${sendFull} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}`;
-      const fullTail = `←→ ${t("hint_next")} · Esc ${t("hint_back")}`;
+      const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}${sendFull} · ${extraHints}`;
+      const fullTail = `←→ ${t("hint_next")} · Esc`;
       const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}${sendShort} · ${letters.join(" ")}`;
       const shortTail = ` ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
-      actions.append(el("div", { class: "hint" },
+      setHint(el("div", { class: "hint" },
         el("span", { class: "hint-full" }, full, el("span", { class: "hs", hidden: !hs, text: `${t("hint_history")} · ` }), fullTail),
-        el("span", { class: "hint-short" }, short, el("span", { class: "hs", hidden: !hs, text: " s" }), shortTail),
-        " ", buildTag()));
+        el("span", { class: "hint-short" }, short, el("span", { class: "hs", hidden: !hs, text: " s" }), shortTail)));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
@@ -1133,7 +1198,7 @@ function renderRightBody(d) {
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
   actions.append(approve, auto, reject);
-  actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`, " ", buildTag()));
+  setHint(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
@@ -1940,6 +2005,7 @@ function connect() {
     retryMs = 2000;
     if (connDown) setConnDown(false);
     else $("banner").hidden = true;
+    checkBuild();
     loadAll().catch(() => {});
   });
   es.addEventListener("error", () => {
@@ -2197,7 +2263,7 @@ setInterval(() => {
   for (const e of document.querySelectorAll(".age")) e.textContent = elapsed(e.dataset.created);
 }, 10000);
 
-$("empty").append(el("div", { class: "build empty-build", text: `build ${BUILD}` }));
+$("build").textContent = `build ${BUILD}`;
 
 // Apply the display language: static text in index.html, then everything rendered from decisions.
 // The language is read from <html data-lang>; changing it later (tests do) re-renders in place.

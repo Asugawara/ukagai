@@ -20,7 +20,7 @@ html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--fg); overflow: hidden;
   font: 14px/1.6 system-ui, -apple-system, "Hiragino Sans", sans-serif;
-  height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 .muted { color: var(--muted); }
 [hidden] { display: none !important; }
@@ -92,6 +92,7 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 .opt .desc.muted { color: var(--muted); font-size: 12px; }
 .opt .desc { margin-top: 2px; }
 .opt.cursor { outline: 2px solid var(--accent); outline-offset: 2px; }
+#decision:has(.esc-panel) .opt.cursor { outline: none; } /* None of these / Can't answer is open: only the panel looks active */
 .opt.free { background: transparent; border-style: dashed; color: var(--muted); }
 .opt.free .lab { font-weight: 500; }
 .rec-badge { margin-left: 8px; font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
@@ -186,7 +187,6 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .callout-label { font-size: 12px; font-weight: 700; color: var(--c); }
 
 .build { font-size: 11px; color: var(--muted); opacity: 0.7; }
-.empty-build { position: fixed; right: 12px; bottom: 8px; }
 
 /* Blocker (waiting for human work) */
 .todo { border: 2px solid var(--blocker); background: color-mix(in srgb, var(--blocker) 8%, transparent); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
@@ -238,7 +238,9 @@ sup.fn, sup.fn-n { font-size: 10px; line-height: 0; font-weight: 700; color: var
 .fn-defs { margin: 8px 0; font-size: 13px; }
 .fn-def { padding: 2px 6px; border-radius: 4px; display: flex; gap: 6px; }
 .fn-def.flash { background: var(--yellow-bg); transition: background .3s; }
-.cbadge { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; border: 1px solid var(--line); background: var(--code); border-radius: 4px; padding: 0 5px; cursor: copy; }
+/* path:line / command in What I checked: plain monospace, no box (boxes are for the header and the right column). Still click-to-copy */
+.cbadge { background: none; padding: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; cursor: copy; }
+.cbadge:hover { text-decoration: underline dotted; }
 .num { font-weight: 600; background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 3px; padding: 0 2px; }
 .risk-bad { color: var(--red); font-weight: 600; }
 .risk-undo { color: var(--green); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
@@ -321,13 +323,16 @@ pre code.hljs { background: none; padding: 0; }
 .affects li { margin: 1px 0; }
 .mark { color: var(--muted); } .mark.blocker { color: var(--blocker); }
 
-/* Hint line: the full text from 1100px up and 820px tall; one short line otherwise */
+/* Footer row: the key hint on one line, full width. The build stamp is fixed at the bottom right. Below 900px a shorter hint */
+.foot { grid-row: 4; padding: 5px 110px 6px 18px; border-top: 1px solid var(--line); background: var(--bg); min-width: 0; }
+.foot .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .hint-short { display: none; }
-@media (max-width: 1099px), (max-height: 820px) {
+@media (max-width: 899px) {
   .hint-full { display: none; }
   .hint-short { display: inline; }
-  .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .foot { position: sticky; bottom: 0; }
 }
+#build { position: fixed; right: 12px; bottom: 6px; z-index: 5; pointer-events: none; }
 .unknowns { margin-top: 6px; padding-top: 4px; padding-bottom: 4px; }
 .esc-panel input[type=text] { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 4px 2px; }
 .cardkey { flex: none; width: 10px; margin-top: 1px; color: var(--muted); font-size: 12px; opacity: .7; }

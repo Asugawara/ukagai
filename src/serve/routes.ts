@@ -190,7 +190,12 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(decision, created ? 201 : 200);
   });
 
-  app.get("/api/config", auth("any"), (c) => c.json({ lang: deps.lang ?? "en" }));
+  app.get("/api/config", auth("any"), async (c) => {
+    // Same value as the ?v= on app.js, so the GUI can tell whether it runs the newest build
+    let build = "?";
+    try { build = Math.floor((await stat(join(deps.publicDir, "app.js"))).mtimeMs).toString(36); } catch {}
+    return c.json({ lang: deps.lang ?? "en", build });
+  });
 
   app.get("/api/decisions", auth("any"), (c) => {
     const q = c.req.query("status");
