@@ -147,3 +147,12 @@ test("isAllowedExplanationPath", () => {
   assert.equal(isAllowedExplanationPath(`${home}/.ukagai/explain/a.md`, undefined, home), true);
   assert.equal(isAllowedExplanationPath(`${sp}/ukagai/a.md`, undefined, home), false);
 });
+
+test("isAllowedExplanationPath: a plan-file block path (<plan file>#ukagai-explain) is allowed under home only", () => {
+  const home = "/Users/someone";
+  assert.equal(isAllowedExplanationPath(`${home}/.claude/plans/p.md#ukagai-explain`, undefined, home), true);
+  assert.equal(isAllowedExplanationPath(`${home}/proj/plans/p.md#ukagai-explain`, undefined, home), true);
+  assert.equal(isAllowedExplanationPath("/etc/p.md#ukagai-explain", undefined, home), false);
+  assert.equal(isAllowedExplanationPath(`${home}/proj/p.txt#ukagai-explain`, undefined, home), false);
+  assert.equal(isAllowedExplanationPath(`${home}/../etc/p.md#ukagai-explain`, undefined, home), false);
+});

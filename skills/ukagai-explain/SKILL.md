@@ -47,7 +47,28 @@ When asking several questions in order, read the answers to the earlier ones and
 
 - **Right before** calling AskUserQuestion: a design fork, a hard-to-undo operation, naming.
 - ExitPlanMode needs no separate file. Put a "Scope and reversibility" section in the plan body, and make its first 2 lines `Reversibility: reversible | costly | irreversible` and `Scope: file | repo | machine | external` (English values; bullets are fine). The GUI uses them for the reversibility chip and the confirm-twice / undo grace; without them the plan is approved with a single press. Do not put steps nobody asked for (deletion, cleanup, unrelated changes) in the plan. If they are needed, give the reason and make them a separate option.
-- AskUserQuestion in plan mode needs none.
+- AskUserQuestion in plan mode: the explanation goes into the plan file (see "In plan mode" below), not a separate file.
+
+## In plan mode
+
+In plan mode the plan file (named in the plan-mode system message) is the only file you may write, so the explanation of an AskUserQuestion goes **into the plan file**: append one block per question, then call AskUserQuestion with the same question.
+
+```
+<!-- ukagai-explain -->
+---
+ukagai: 1
+question: <the AskUserQuestion question verbatim>
+title: ...
+recommended: ...
+reversibility: ...
+scope: ...
+---
+## Why this decision is needed now
+... (the normal explanation: same sections, same rules)
+<!-- /ukagai-explain -->
+```
+
+The block is checked exactly like an explanation file. The hook strips these blocks from the plan the human approves at ExitPlanMode, so do not delete them by hand.
 
 ## Where to write
 

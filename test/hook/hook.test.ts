@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bodyHash, decisionFingerprint } from "../../src/contract.js";
@@ -340,7 +340,133 @@ test("permission_mode: plan → no deny even without a file; none / plan_mode", 
   });
 });
 
+// ---- plan mode: the explanation is a block inside the plan file ----
+
+const BLOCK_OPEN = "<!-- ukagai-explain -->";
+const BLOCK_CLOSE = "<!-- /ukagai-explain -->";
+const blockFor = (q: string, explanation = explanationFor(q)) => `${BLOCK_OPEN}\n${explanation}${BLOCK_CLOSE}\n`;
+
+/** A temp HOME with a plan file and a transcript that names it in the plan-mode reminder */
+function planEnv(planText: string) {
+  const home = tmpDir("ukagai-planhome-");
+  const planPath = join(home, ".claude", "plans", "my-plan.md");
+  writeFile(planPath, planText);
+  const transcript = join(home, ".claude", "projects", "p", "s.jsonl");
+  const reminder = `Plan mode is active. You should create your plan at ${planPath} using the Write tool. You should build your plan incrementally.`;
+  writeFile(transcript, JSON.stringify({ type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: reminder }] } }) + "\n");
+  return { home, planPath: realpathSync(planPath), transcript };
+}
+const planInput = (e: { transcript: string }, extra: Record<string, unknown> = {}) => ({
+  ...t1(tmpDir()),
+  permission_mode: "plan",
+  transcript_path: e.transcript,
+  ...extra,
+});
+
+test("plan mode + plan file without a block → deny with the plan-mode text and the plan file path", async () => {
+  const e = planEnv("# Plan\n");
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "deny");
+    const reason: string = out.permissionDecisionReason;
+    assert.ok(reason.includes(e.planPath));
+    assert.match(reason, /In plan mode the explanation goes into your plan file/);
+    assert.ok(reason.includes(BLOCK_OPEN) && reason.includes(BLOCK_CLOSE));
+    assert.ok(reason.includes(Q));
+    assert.ok(reason.length <= 1600);
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.status, "denied_explain");
+    assert.deepEqual(create?.body.missing, ["file"]);
+  });
+});
+
+test("plan mode + valid block → registered with the block as the explanation; the plan file is untouched", async () => {
+  const text = "# Plan\n\n## Steps\n1. x\n\n" + blockFor(Q);
+  const e = planEnv(text);
+  const before = readdirSync(join(e.home, ".claude", "plans"));
+  await withServer(answerHandler({ [Q]: "A" }), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    const ex = create?.body.explanation;
+    assert.equal(ex.markdown, explanationFor(Q).trim());
+    assert.ok(ex.path.endsWith("#ukagai-explain"));
+    assert.ok(ex.path.startsWith(e.planPath));
+    assert.equal(ex.match, "question");
+    assert.equal(ex.attached_via, "first_call");
+    assert.equal(ex.none_reason, undefined);
+  });
+  assert.deepEqual(readdirSync(join(e.home, ".claude", "plans")), before);
+  assert.equal(readFileSync(e.planPath, "utf8"), text);
+});
+
+test("plan mode + invalid block (no Options table) → deny names the missing item", async () => {
+  const e = planEnv("# Plan\n" + blockFor(Q, explanationFor(Q).replace(/\| .*\|\n/g, "")));
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "deny");
+    assert.match(out.permissionDecisionReason, /In plan mode the explanation goes into your plan file/);
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.ok(create?.body.missing.includes("table"));
+    assert.match(out.permissionDecisionReason, /Missing: [^.]*(table|Options)/i);
+  });
+});
+
+test("plan mode + a block for another question only → deny", async () => {
+  const e = planEnv("# Plan\n" + blockFor("Something else?"));
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+  });
+});
+
+test("plan mode without any plan file → today's behaviour (none / plan_mode)", async () => {
+  const home = tmpDir("ukagai-planhome-");
+  const transcript = join(home, ".claude", "projects", "p", "s.jsonl");
+  writeFile(transcript, JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) + "\n");
+  await withServer(answerHandler({ [Q]: "A" }), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planInput({ transcript })), home);
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.explanation.attached_via, "none");
+    assert.equal(create?.body.explanation.none_reason, "plan_mode");
+  });
+});
+
+test("plan mode: a denied_explain within 2 minutes → loop guard (no explanation, none_reason loop_guard)", async () => {
+  const e = planEnv("# Plan\n");
+  const h: Handler = (req, res) =>
+    req.method === "GET" && req.path.startsWith("/api/decisions?")
+      ? json(res, 200, [deniedRecord(new Date(Date.now() - 30_000).toISOString())])
+      : answerHandler({ [Q]: "A" })(req, res);
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.explanation.none_reason, "loop_guard");
+  });
+});
+
+test("ExitPlanMode with explanation blocks in plan → the registered plan has none and still passes the Scope check", async () => {
+  const plan = GOOD_PLAN_FOR_BLOCKS + blockFor(Q) + blockFor("Second?");
+  const h: Handler = (req, res) =>
+    req.path.includes("/wait") ? json(res, 200, { response: { via: "gui", approve: true, decided_at: NOW() } }) : false;
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planWith(plan)));
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.kind, "approve_plan");
+    assert.equal(create?.body.status, undefined);
+    assert.equal(create?.body.request.plan, GOOD_PLAN_FOR_BLOCKS);
+    assert.ok(!create?.body.explanation.markdown.includes("ukagai-explain"));
+    assert.equal(create?.body.explanation.attached_via, "first_call");
+  });
+});
+
 const planWith = (extra: string) => ({ ...fx("t5-stdin.json"), tool_input: { ...fx("t5-stdin.json").tool_input, plan: extra } });
+const GOOD_PLAN_FOR_BLOCKS = "# Plan\n\n## Steps\n1. x\n\n## Scope and reversibility\nReversibility: reversible\nScope: file\nOne file only. A revert undoes it.\n\n";
 const GOOD_PLAN = "# Plan\n\n## Scope and reversibility\nOne file only. A revert undoes it.\n";
 
 test("T5: ExitPlanMode approve matches t5-stdout.json (a defective plan is denied the first time, so use a plan with the section)", async () => {
@@ -761,12 +887,21 @@ test("Cannot answer memo: an unreachable or broken memo endpoint changes nothing
   );
 });
 
-test("Cannot answer memo: plan mode never reads it", async () => {
+test("Cannot answer memo: plan mode without a plan file never reads it", async () => {
   const sp = tmpDir();
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   await withServer(rewriteHandler(memoOf({ body_hash: bodyHash(explanationFor(Q)) })), async (f, d) => {
     await runHook(args(f, d), JSON.stringify(t1(sp, { permission_mode: "plan" })));
     assert.ok(!f.calls.some((c) => c.path.includes("pending-rewrite")));
+  });
+});
+
+test("Cannot answer memo: plan mode with a plan file and a block reads it like any explanation", async () => {
+  const e = planEnv("# Plan\n" + blockFor(Q));
+  await withServer(rewriteHandler(memoOf({})), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    assert.ok(f.calls.some((c) => c.path.includes("pending-rewrite")));
   });
 });
 

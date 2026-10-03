@@ -248,3 +248,21 @@ test("read: a corrupt plans-read.json is treated as empty", async () => {
   const { PlanReadStore } = await import("../../src/serve/plan-read.js");
   assert.equal(new PlanReadStore(dataDir, dataDir).isRead("a.md", "x"), false);
 });
+
+test("plan with explanation blocks: markdown, lines, sections ignore them", async () => {
+  const { dir, get } = await env();
+  const block = "<!-- ukagai-explain -->\n---\nukagai: 1\nquestion: Q?\n---\n## Why this decision is needed now\nx\n## Options\n<!-- /ukagai-explain -->\n";
+  const plain = "# Plan\n\n## Steps\n\n1. a\n\n## Scope and reversibility\n\nReversibility: reversible\n";
+  writeFileSync(join(dir, "with.md"), "# Plan\n\n## Steps\n\n1. a\n\n" + block + "## Scope and reversibility\n\nReversibility: reversible\n");
+  writeFileSync(join(dir, "plain.md"), plain);
+  const withB = await (await get("/api/plans/with.md")).json();
+  const plainB = await (await get("/api/plans/plain.md")).json();
+  assert.equal(withB.markdown, plain);
+  assert.deepEqual(withB.sections, plainB.sections);
+  assert.deepEqual(withB.sections.map((s: { heading: string }) => s.heading), ["Steps", "Scope and reversibility"]);
+  const { plans: list } = (await (await get("/api/plans")).json()) as { plans: { name: string; lines: number; sections: number }[] };
+  const w = list.find((x) => x.name === "with.md")!;
+  const p = list.find((x) => x.name === "plain.md")!;
+  assert.equal(w.lines, p.lines);
+  assert.equal(w.sections, p.sections);
+});

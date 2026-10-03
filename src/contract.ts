@@ -460,10 +460,18 @@ export function isAllowedTranscriptPath(p: string, home: string): boolean {
   return isUnder(p, join(home, ".claude", "projects")) || isUnder(p, join(home, ".codex", "sessions"));
 }
 
+/** `explanation.path` of a plan-mode explanation is the plan file path plus this suffix */
+export const PLAN_BLOCK_SUFFIX = "#ukagai-explain";
+
 export function isAllowedExplanationPath(p: string, scratchpadDir: string | undefined, home: string, dataDir?: string): boolean {
   if (scratchpadDir && isUnder(p, join(scratchpadDir, "ukagai"))) return true;
   // The hook falls back to <data-dir>/explain/<session_id>/ (always so for Codex, which has no scratchpad)
   if (dataDir && isUnder(p, join(dataDir, "explain"))) return true;
+  // Plan mode: the explanation is a block inside the plan file (`<plan file>#ukagai-explain`); the plans directory is configurable, so any *.md under home
+  if (p.endsWith(PLAN_BLOCK_SUFFIX)) {
+    const file = p.slice(0, -PLAN_BLOCK_SUFFIX.length);
+    return file.endsWith(".md") && isUnder(file, home);
+  }
   return isUnder(p, join(home, ".ukagai", "explain"));
 }
 
@@ -535,3 +543,34 @@ export type PlanRemovedEvent = z.infer<typeof PlanRemovedEvent>;
 /** POST /api/plans/:name/read */
 export const PlanReadRequest = z.object({ mtime: z.string().min(1) });
 export type PlanReadRequest = z.infer<typeof PlanReadRequest>;
+
+// ---- plan-mode explanation blocks (inside the plan file) ----
+
+export const EXPLAIN_BLOCK_OPEN = "<!-- ukagai-explain -->";
+export const EXPLAIN_BLOCK_CLOSE = "<!-- /ukagai-explain -->";
+
+/** One terminated block on its own lines; the body may not contain another opening marker, so an unterminated block is never matched */
+function explainBlockRe(): RegExp {
+  return /^[ \t]*<!-- ukagai-explain -->[ \t]*\r?\n((?:(?!<!-- ukagai-explain -->)[\s\S])*?)^[ \t]*<!-- \/ukagai-explain -->[ \t]*(?:\r?\n|$)/gm;
+}
+
+/** The text between the markers of every terminated block, trimmed */
+export function extractExplainBlocks(markdown: string): { question: string | undefined; body: string }[] {
+  const out: { question: string | undefined; body: string }[] = [];
+  for (const m of markdown.matchAll(explainBlockRe())) {
+    const body = m[1]!.trim();
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(body);
+    let question: string | undefined;
+    if (fm) {
+      const q = /^question:[ \t]*(.*?)[ \t]*$/m.exec(fm[1]!);
+      if (q) question = q[1]!.replace(/^(["'])(.*)\1$/, "$2");
+    }
+    out.push({ question, body });
+  }
+  return out;
+}
+
+/** The plan without its ukagai-explain blocks; everything outside the blocks stays byte-identical */
+export function stripExplainBlocks(markdown: string): string {
+  return markdown.includes(EXPLAIN_BLOCK_OPEN) ? markdown.replace(explainBlockRe(), "") : markdown;
+}
