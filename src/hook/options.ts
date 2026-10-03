@@ -13,6 +13,8 @@ export interface HookOptions {
   server: string;
   dataDir: string;
   pollTimeoutMs: number;
+  /** Consecutive `wait` failures are retried for this long before the hook hands over to the native UI */
+  retryWindowMs: number;
   /** Variant of the deny reason (docs/spec/explain.md section 7) */
   denyTemplate: DenyTemplate;
 }
@@ -25,6 +27,7 @@ export function parseArgs(argv: string[]): HookOptions {
     server: "http://127.0.0.1:4818",
     dataDir: join(homedir(), ".ukagai"),
     pollTimeoutMs: POLL_TIMEOUT_MS,
+    retryWindowMs: 120_000,
     denyTemplate: "A",
   };
   for (let i = 0; i < argv.length; i++) {
@@ -44,6 +47,9 @@ export function parseArgs(argv: string[]): HookOptions {
     } else if (a === "--poll-timeout-ms") {
       const n = Number(next());
       if (Number.isFinite(n) && n > 0) opts.pollTimeoutMs = n;
+    } else if (a === "--retry-window-ms") {
+      const n = Number(next());
+      if (Number.isFinite(n) && n >= 0) opts.retryWindowMs = n;
     } else if (a === "--deny-template") {
       const v = next();
       if (v === "A" || v === "B") opts.denyTemplate = v;

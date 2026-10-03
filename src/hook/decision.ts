@@ -28,12 +28,21 @@ import {
 } from "./explain.js";
 import type { HookOptions } from "./options.js";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { hookLog } from "./log.js";
 import { readConfig } from "../settings/config.js";
 
 type Out = Record<string, unknown>;
 
 /** Upper bound for waiting on cancel after a signal */
 const CANCEL_TIMEOUT_MS = 300;
+
+/** Retry backoff for a failed wait: 1 s, 2 s, 4 s ... capped at 30 s */
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 30_000;
+/** Statuses that will not get better by retrying: wrong token, decision missing or already closed */
+const FINAL_STATUSES = new Set([401, 404, 410]);
+const ACK_RETRY_DELAY_MS = 1000;
 
 const NO_HAS = { mermaid: false, table: false, diff: false };
 
@@ -101,6 +110,12 @@ export async function handleDecision(
     agent_id: input.agent_id,
     agent_type: input.agent_type,
   };
+  const lg = (event: string, extra: Record<string, string | number | undefined> = {}): void =>
+    hookLog(event, { session_id: input.session_id, elapsed_s: Math.round((Date.now() - startedAt) / 100) / 10, ...extra });
+  const failMsg = (): Record<string, string | number | undefined> => ({
+    status: client.lastFailure?.status,
+    message: client.lastFailure?.message,
+  });
   const base = { tool_use_id: input.tool_use_id, kind, session, request: toolInput } as CreateDecisionRequest;
 
   let explanation: Explanation;
@@ -118,7 +133,10 @@ export async function handleDecision(
       let multiGuarded = false;
       if (parsed.data.questions.length > 1) {
         const prior = await client.listDeniedExplain(input.session_id);
-        if (!prior) return null;
+        if (!prior) {
+          lg("list_denied_explain_failed", failMsg());
+          return null;
+        }
         const t = Date.now();
         multiGuarded = prior.some(
           (d) =>
@@ -130,7 +148,10 @@ export async function handleDecision(
         );
         if (!multiGuarded) {
           const reg = await client.createDecision({ ...base, status: "denied_explain", missing: ["multi"] });
-          if (!reg) return null;
+          if (!reg) {
+            lg("create_decision_failed", failMsg());
+            return null;
+          }
           return deny(multiDenyReason(parsed.data.questions.length));
         }
       }
@@ -147,7 +168,11 @@ export async function handleDecision(
       const memo = await client.getPendingRewrite(input.session_id);
       const rewriteIssues: RewriteIssue[] = found ? checkRewrite(memo, found.markdown, q0.question, labels) : [];
       const denied = await client.listDeniedExplain(input.session_id);
-      if (!denied) return null; // server absent: skip the safeguard and fall back to the normal UI
+      if (!denied) {
+        // server absent: skip the safeguard and fall back to the normal UI
+        lg("list_denied_explain_failed", failMsg());
+        return null;
+      }
       const now = Date.now();
       const linked = denied
         .filter(
@@ -191,7 +216,10 @@ export async function handleDecision(
           blocker: found ? parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields["type"] === "blocker" : false,
         });
         const reg = await client.createDecision({ ...base, status: "denied_explain", missing: codes });
-        if (!reg) return null;
+        if (!reg) {
+          lg("create_decision_failed", failMsg());
+          return null;
+        }
         return deny(reason);
       }
     }
@@ -201,7 +229,10 @@ export async function handleDecision(
     const plan = parsed.data.plan;
     const v: Validation = validatePlan(plan);
     const denied = await client.listDeniedExplain(input.session_id);
-    if (!denied) return null;
+    if (!denied) {
+      lg("list_denied_explain_failed", failMsg());
+      return null;
+    }
     const prior = denied
       .filter((d) => d.status === "denied_explain" && d.kind === "approve_plan")
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -219,7 +250,10 @@ export async function handleDecision(
     } else {
       const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((c) => MISSING_LABELS[c]) });
       const reg = await client.createDecision({ ...base, status: "denied_explain", missing: v.missing });
-      if (!reg) return null;
+      if (!reg) {
+        lg("create_decision_failed", failMsg());
+        return null;
+      }
       return deny(reason);
     }
   }
@@ -228,7 +262,10 @@ export async function handleDecision(
     ...base,
     explanation,
   });
-  if (!created) return null;
+  if (!created) {
+    lg("create_decision_failed", failMsg());
+    return null;
+  }
   // The explanation got through: the human's "Cannot answer" has been answered with a new one
   if (kind === "answer_question" && input.permission_mode !== "plan") await client.consumeRewrite(input.session_id);
   if (usedPath) {
@@ -245,24 +282,66 @@ export async function handleDecision(
   const onSignal = () => {
     if (cancelling) return;
     cancelling = true;
+    lg("signal_cancel", { decision_id: created.id });
     void client.cancel(created.id, CANCEL_TIMEOUT_MS).finally(() => process.exit(0));
   };
   for (const s of signals) process.on(s, onSignal);
   try {
     // Long-poll. Step down on our own when less than the poll timeout + 5 seconds remain
     const marginSec = opts.pollTimeoutMs / 1000 + 5;
+    // Consecutive wait failures are retried until retryWindowMs has passed since the first of them
+    let failStreakStart: number | undefined;
+    let failCount = 0;
     for (;;) {
       const remainingSec = opts.budgetSec - (Date.now() - startedAt) / 1000;
       if (remainingSec < marginSec) {
+        lg("fallback_budget", { decision_id: created.id });
         await client.answerFallback(created.id);
         return null;
       }
       const r = await client.wait(created.id, opts.pollTimeoutMs);
-      if (r.kind === "timeout") continue;
-      if (r.kind === "error") return null;
+      if (r.kind === "timeout") {
+        failStreakStart = undefined;
+        failCount = 0;
+        continue;
+      }
+      if (r.kind === "error") {
+        const now = Date.now();
+        failStreakStart ??= now;
+        failCount++;
+        const windowLeft = opts.retryWindowMs - (now - failStreakStart);
+        const final = r.status !== undefined && FINAL_STATUSES.has(r.status);
+        if (final || windowLeft <= 0) {
+          lg("wait_error_final", {
+            decision_id: created.id,
+            status: r.status,
+            message: final ? r.message : `${r.message} (retry window exhausted after ${failCount} failures)`,
+          });
+          return null;
+        }
+        const delay = Math.min(RETRY_BASE_MS * 2 ** (failCount - 1), RETRY_MAX_MS, windowLeft);
+        lg("wait_retry", { decision_id: created.id, status: r.status, message: r.message, retry_in_ms: delay, failures: failCount });
+        await sleep(delay);
+        continue;
+      }
+      failStreakStart = undefined;
+      failCount = 0;
       const out = buildOutput(kind, toolInput, r.response);
-      if (!out) return null;
-      if (!(await client.ack(created.id))) return null;
+      if (!out) {
+        lg("no_answer_output", { decision_id: created.id, message: `via=${r.response.via}` });
+        return null;
+      }
+      // The human's answer is already submitted: one retry before giving up on the ack
+      let acked = await client.ack(created.id);
+      if (!acked) {
+        lg("ack_retry", { decision_id: created.id, ...failMsg() });
+        await sleep(ACK_RETRY_DELAY_MS);
+        acked = await client.ack(created.id);
+      }
+      if (!acked) {
+        lg("ack_failed", { decision_id: created.id, ...failMsg() });
+        return null;
+      }
       return out;
     }
   } finally {

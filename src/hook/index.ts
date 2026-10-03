@@ -2,6 +2,7 @@ import { PreToolUseInput } from "../contract.js";
 import { Client } from "./client.js";
 import { observeDecisionTool, observedEvent, permissionRequest, sessionContext, stopDecision } from "./context-hooks.js";
 import { handleDecision } from "./decision.js";
+import { hookLog, initHookLog } from "./log.js";
 import { parseArgs } from "./options.js";
 
 /** Overall limit of the Stop hook */
@@ -22,13 +23,16 @@ function write(out: Record<string, unknown> | null | undefined): void {
 export async function run(argv: string[]): Promise<number> {
   process.stdout.on("error", () => {});
   const startedAt = Date.now();
+  let sessionId: string | undefined;
   try {
     // Kill switch: a global hook can be silenced for a test session
     if (process.env["UKAGAI_DISABLE"] === "1") return 0;
     const opts = parseArgs(argv);
+    initHookLog(opts.dataDir);
     const raw: unknown = JSON.parse(await readStdin());
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return 0;
     const input = raw as Record<string, unknown>;
+    if (typeof input["session_id"] === "string") sessionId = input["session_id"];
     const ev = input["hook_event_name"];
     const tool = input["tool_name"];
     const client = new Client(opts.server, opts.dataDir);
@@ -51,6 +55,11 @@ export async function run(argv: string[]): Promise<number> {
       await observedEvent(input, client);
     }
   } catch (err) {
+    hookLog("hook_exception", {
+      session_id: sessionId,
+      elapsed_s: Math.round((Date.now() - startedAt) / 100) / 10,
+      message: err instanceof Error ? err.message : String(err),
+    });
     try {
       process.stderr.write(`ukagai hook: ${err instanceof Error ? err.message : String(err)}\n`);
     } catch {
