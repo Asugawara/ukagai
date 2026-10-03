@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { configPath, readConfig } from "../settings/config.js";
-import { HOOK_EVENTS } from "../settings/hooks-spec.js";
+import { CHECKPOINT_FLAG, HOOK_EVENTS } from "../settings/hooks-spec.js";
 import { findManaged, readSettings } from "../settings/merge.js";
 import { status as codexStatus } from "../install/codex.js";
 import { parseTarget } from "../settings/target.js";
@@ -49,6 +49,11 @@ export async function run(argv: string[]): Promise<number> {
       const args = h["args"];
       cli = Array.isArray(args) && typeof args[0] === "string" ? args[0] : undefined;
     }
+  }
+  if (t.claude) {
+    const c = findManaged(settings, "PreToolUse", (h) => Array.isArray(h["args"]) && h["args"].includes(CHECKPOINT_FLAG));
+    const observing = Array.isArray(findManaged(settings, "PreToolUse")?.["args"]) && (findManaged(settings, "PreToolUse")!["args"] as unknown[]).includes("--observe");
+    add(c !== undefined || observing, "hook PreToolUse (checkpoint)", c ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
   }
   if (node !== undefined) add(await exists(node), "node exists", node);
   if (cli !== undefined) add(await exists(cli), "cli exists", cli);

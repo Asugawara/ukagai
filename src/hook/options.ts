@@ -12,6 +12,8 @@ export interface HookOptions {
   /** Time budget of the hook (seconds) */
   budgetSec: number;
   observe: boolean;
+  /** Fast path: hand the session's checkpoint instruction to the agent at a tool call (--checkpoint) */
+  checkpoint: boolean;
   /** Do not auto-start the server or open the GUI on SessionStart */
   noAutostart: boolean;
   server: string;
@@ -28,6 +30,7 @@ export function parseArgs(argv: string[]): HookOptions {
     agent: "claude",
     budgetSec: 590,
     observe: false,
+    checkpoint: false,
     noAutostart: false,
     server: "http://127.0.0.1:4818",
     dataDir: join(homedir(), ".ukagai"),
@@ -39,6 +42,7 @@ export function parseArgs(argv: string[]): HookOptions {
     const a = argv[i];
     const next = (): string | undefined => argv[++i];
     if (a === "--observe") opts.observe = true;
+    else if (a === "--checkpoint") opts.checkpoint = true;
     else if (a === "--no-autostart") opts.noAutostart = true;
     else if (a === "--agent") {
       const v = next();

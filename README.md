@@ -52,6 +52,8 @@ What Codex covers: `request_user_input` in Plan mode, questions written in prose
 
 **What the agent does.** When the agent calls `AskUserQuestion` or `ExitPlanMode`, the `PreToolUse` hook first denies the call once and asks the agent to write an explanation file (the `ukagai-explain` skill teaches the format). On the retry, the hook registers the decision with the server, waits for your answer in the GUI / TUI, and injects it back as the tool's result. The hook waits in one-hour legs: at the end of a leg it asks the agent to call the tool again and re-attaches to the same open question, so the question never falls back to the terminal while the server is up. If the server is unreachable, the hook prints nothing and Claude Code falls back to its normal prompt (a failed wait is retried for up to 120 seconds first); every abnormal exit (and each retry) is recorded as one JSON line in `<data-dir>/hook.log` (ids, status and error text only, never the question or answer; rotated at 1 MB; the last 3 lines are shown by `doctor`).
 
+**Progress checkpoints.** When Claude Code writes a session recap, the server turns it into a non-blocking "Progress check" in the GUI / TUI; if you answer *Give an instruction…* or *Stop here*, a second, cheap `PreToolUse` hook (`hook --checkpoint`, matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite`, 3 s) hands it to the agent once at its next tool call (as context, or as a deny that asks it to write a short status and end the turn); with nothing pending it is a single 404 and prints nothing.
+
 Check the setup any time with `node dist/cli.js doctor`.
 
 ## Development

@@ -4,6 +4,9 @@ export const MANAGED_FLAG = "--managed-by";
 export const MANAGED_VALUE = "ukagai";
 export const STATUS_MESSAGE = "ukagai: waiting for an answer in the GUI";
 export const DECISION_MATCHER = "AskUserQuestion|ExitPlanMode";
+/** Tools that carry a checkpoint instruction to the agent (never the decision tools) */
+export const CHECKPOINT_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite";
+export const CHECKPOINT_FLAG = "--checkpoint";
 
 export interface HookCommand {
   type: "command";
@@ -76,7 +79,11 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
   const post = mk(opts.observe ? ["--observe"] : [], 5, { async: true });
 
   return {
-    PreToolUse: group(pre, DECISION_MATCHER),
+    PreToolUse: [
+      ...group(pre, DECISION_MATCHER),
+      // observe mode only watches: it must not steer the agent
+      ...(opts.observe ? [] : group(mk([CHECKPOINT_FLAG], 3), CHECKPOINT_MATCHER)),
+    ],
     PermissionRequest: group(mk([], 5), "Write|Edit"),
     SessionStart: group(mk(opts.autostart === false ? ["--no-autostart"] : [], 5)),
     SubagentStart: group(mk([], 5)),

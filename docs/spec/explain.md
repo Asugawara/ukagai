@@ -474,3 +474,15 @@ The loop guard of section 5 does **not** apply while the session has a memo: a s
 - Recency can also pick up a file meant for another question (when exactly one exists within 10 minutes it is attached with `match: recency`).
 - Heading matching prefers an exact match, but without one it becomes a partial match. "Diagram" is a partial match, so it can hit an earlier heading such as "Diagram notes" and hide the real "Diagram" section.
 - The `after_deny` of ExitPlanMode has no time window (it holds whenever the session has a denied_explain) and can drift from the server's `first_denied_at` (120-second window).
+
+## 16. Checkpoint instruction (`hook --checkpoint`)
+
+Not part of the explanation flow: a second `PreToolUse` group (matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite`, `timeout: 3`, sync, no statusMessage; omitted with `install --observe`). The hook reads stdin, calls `GET /api/sessions/:id/instruction` once (700 ms timeout) and exits 0 in every case. No explanation logic, no observe POST, nothing logged on 404.
+
+| Server reply | Hook output |
+|---|---|
+| 404, closed port, timeout, bad body | nothing |
+| `instruct` | `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"[ukagai] The human read your progress recap and says: <text>\nFollow this before continuing; do not ask for confirmation of this message."}}` — the tool runs |
+| `stop` | `permissionDecision: "deny"`, reason `[ukagai] The human read your progress recap and asked you to stop. Do not run more tools: write a short status (done / in progress / next) and end your turn.` plus `\nThe human adds: <text>` when the human wrote one |
+
+The server consumes the instruction on the GET, so it is delivered once. Codex is unchanged. `doctor` lists the group as `hook PreToolUse (checkpoint)`.
