@@ -28,6 +28,7 @@ import {
 } from "./explain.js";
 import type { HookOptions } from "./options.js";
 import { join } from "node:path";
+import { readConfig } from "../settings/config.js";
 
 type Out = Record<string, unknown>;
 
@@ -135,9 +136,15 @@ export async function handleDecision(
       }
       const found = await findExplanation(dir, q0.question);
       const labels = q0.options.map((o) => o.label);
-      const v = found ? validateExplanation(found.markdown, "answer_question", labels) : null;
+      const lang = (await readConfig(opts.dataDir)).lang;
+      const v = found
+        ? validateExplanation(found.markdown, "answer_question", labels, lang, {
+            question: q0.question,
+            descriptions: q0.options.map((o) => o.description ?? ""),
+          })
+        : null;
       // The human's last "Cannot answer" (null when none or the server is unreachable: ignored)
-      const memo = found ? await client.getPendingRewrite(input.session_id) : null;
+      const memo = await client.getPendingRewrite(input.session_id);
       const rewriteIssues: RewriteIssue[] = found ? checkRewrite(memo, found.markdown, q0.question, labels) : [];
       const denied = await client.listDeniedExplain(input.session_id);
       if (!denied) return null; // server absent: skip the safeguard and fall back to the normal UI
@@ -167,7 +174,8 @@ export async function handleDecision(
           attached_via: linked.length > 0 ? "after_deny" : "first_call",
         };
         usedPath = found.path;
-      } else if (linked.length > 0 || multiGuarded) {
+      } else if ((linked.length > 0 && !memo) || multiGuarded) {
+        // With a "Cannot answer" memo the loop guard does not apply: never hand the human, right after they said they could not read it, an explanation that still fails
         explanation = noExplanation("loop_guard");
       } else {
         const own = v ? v.missing : ["file" as const];
@@ -176,7 +184,7 @@ export async function handleDecision(
           path: join(dir, "explain.md"),
           question: q0.question,
           missing: [
-            ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels)) : MISSING_LABELS[c])),
+            ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0) : MISSING_LABELS[c])),
             ...rewriteIssues.map((i) => i.text),
           ],
           codes,

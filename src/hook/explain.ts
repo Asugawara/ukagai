@@ -25,9 +25,9 @@ export const SECTION = {
 
 /** Fixed option labels for blockers (suffix "(Recommended)" allowed on the first). */
 export const BLOCKER_LABELS = {
-  done: ["Done. Continue", "対応した。続けて"],
-  skip: ["Skip this step and continue", "この手順は飛ばして続けて"],
-  stop: ["Stop here", "ここで中断"],
+  done: ["Done. Continue", "対応した。続けて", "完了。続けて"],
+  skip: ["Skip this step and continue", "この手順は飛ばして続けて", "この手順を飛ばして続けて"],
+  stop: ["Stop here", "ここで中断", "ここで止める"],
 } as const;
 
 /** Table column detection (header cell text). The first column is always the option label. */
@@ -44,6 +44,7 @@ export const UNDO_WORDS =
 export type MissingCode =
   | "file"
   | "front_matter"
+  | "language"
   | "question"
   | "type"
   | "title"
@@ -85,6 +86,8 @@ export interface Validation {
 export const MISSING_LABELS: Record<MissingCode, string> = {
   file: "the explanation file itself",
   front_matter: "front matter (`ukagai: 1`)",
+  language:
+    "the configured language is Japanese: write the title, the explanation and the AskUserQuestion question / labels / descriptions in Japanese (code and proper nouns may stay)",
   question: "`question`",
   type: "`type` (decision / blocker)",
   title: "`title` (the decision for the human, in one sentence)",
@@ -475,14 +478,21 @@ export function parseFootnotes(markdown: string): Footnotes {
 export const COINED_ALLOW = new Set(
   (
     "CI CD CLI API GUI TUI SSE URL URI HTTP HTTPS JSON YAML TOML HTML CSS JS TS PR OSS DB UI UX OK NG ID CPU GPU RAM GB MB KB TB MS TTY ANSI SQL SSH TLS SSL DNS IP TCP UDP GCP AWS GCS S3 IAM VM OS PID ENV NPM PNPM CDN SVG PNG JPG PDF CSV UTF IDE LSP MCP LLM AI QA ADR README TODO FAQ EOF CRUD REST RPC GRPC JWT SDK ETA TBD WIP NFKC SGR ESC CJK IME UTC ISO RFC HEAD " +
-    "SHA RSA AES HMAC GPT IPV MD5 MP3 MP4 EC2 K8S P50 P90 P95 P99"
+    "SHA RSA AES HMAC GPT IPV MD5 MP3 MP4 EC2 K8S P50 P90 P95 P99 " +
+    "ARM64 ARM32 X86 X64 ES5 ES6 ES7 E2E W3C X11 CO2 H2O V8 R2 U2 Z3 A100 H100 H264 H265 AV1 VP9 DB2 IE11 PS5 PS4 SOC2 SAML2 PCI MPEG D3 BM25 B2B B2C C2C P2P I18N L10N A11Y OIDC " +
+    "M1 M2 M3 M4 L1 L2 L3 L4 Q1 Q2 Q3 Q4 H1 H2 T1 T2 T3 " +
+    "C4 TS5 PG16 S3A F-16 B-52"
   ).split(" "),
 );
 
 /** A short code: 1-4 letters, optional `-`, 1-4 letters / digits, with a digit or `-` in it (`W-T2`, `FT4`, `P-GH`, `TM28`) */
-export const COINED_TOKEN = /\b[A-Z]{1,4}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
+export const COINED_TOKEN = /\b[A-Z]{1,4}\d{0,3}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
 
-const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Tier", "Day", "Week", "Round", "Batch", "Lane"];
+/** Well-known code shapes blanked out before scanning: fiscal years, CVE ids, cloud regions, PCI-DSS, elliptic curves (`P-256`), MPEG-4, PM2.5 */
+export const COINED_SKIP =
+  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b/g;
+
+const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Round", "Batch", "Lane"];
 const anyCase = (w: string): string => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
 /** A process word plus a number / letter: `Phase 2`, `Gate B`, `Step 3a` (the keyword in any case; the id is digits or capitals so that "step by step" is not hit) */
 export const COINED_PHASE_EN = new RegExp(
@@ -504,7 +514,10 @@ function coinedAllowed(token: string): boolean {
 
 /** Identifier-like tokens in a piece of text, in order of appearance (NFKC; URLs ignored) */
 export function extractCoined(text: string): string[] {
-  const s = text.normalize("NFKC").replace(/https?:\/\/\S+/g, " ");
+  const s = text
+    .normalize("NFKC")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(COINED_SKIP, (m) => " ".repeat(m.length));
   const found: { at: number; token: string }[] = [];
   for (const m of s.matchAll(COINED_TOKEN)) {
     const t = m[0];
@@ -549,10 +562,12 @@ export function findCoinedTerms(markdown: string, labels: string[] = []): string
 }
 
 /** `MISSING_LABELS.coined_term` with the tokens listed (at most 8) */
-export function coinedTermLabel(tokens: string[]): string {
+export function coinedTermLabel(tokens: string[], withRemedy = true): string {
   const shown = tokens.slice(0, 8).join(", ");
   const more = tokens.length > 8 ? ` and ${tokens.length - 8} more` : "";
-  return MISSING_LABELS.coined_term.replace("(plan codes", `(${shown}${more}; plan codes`);
+  const label = MISSING_LABELS.coined_term.replace("(plan codes", `(${shown}${more}; plan codes`);
+  // another sentence of the deny reason already says "Replace each with plain words or define it under Terms"
+  return withRemedy ? label : label.replace(/\. Say what each is.*$/, "");
 }
 
 // ---- "Cannot answer" enforcement (spec section 15) ----
@@ -654,11 +669,16 @@ export function checkRewrite(memo: PendingRewrite, markdown: string, question: s
 
 // ---- validation ----
 
+/** A Japanese character (hiragana, katakana or han) */
+const HAS_JAPANESE = /[\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Han}]/u;
+
 /** spec section 4. Plans (ExitPlanMode) are delegated to validatePlan */
 export function validateExplanation(
   markdown: string,
   kind: "answer_question" | "approve_plan" = "answer_question",
   labels?: string[],
+  lang: "en" | "ja" = "en",
+  ask?: { question?: string; descriptions?: string[] },
 ): Validation {
   if (kind === "approve_plan") return validatePlan(markdown);
   const all = toLines(markdown);
@@ -670,6 +690,18 @@ export function validateExplanation(
   const f = fm.fields;
 
   if (!fm.present || f["ukagai"] !== "1") missing.push("front_matter");
+  if (lang === "ja") {
+    const whySec = findSection(headings, lines.length, f["type"] === "blocker" ? SECTION.blockerWhy : SECTION.why);
+    const prose = [f["title"] ?? "", whySec ? sectionText(lines, inFence, whySec) : ""].join("\n");
+    const descs = (ask?.descriptions ?? []).filter((d) => d.trim() !== "");
+    if (
+      !HAS_JAPANESE.test(prose) ||
+      (ask?.question !== undefined && !HAS_JAPANESE.test(ask.question)) ||
+      (descs.length > 0 && !descs.some((d) => HAS_JAPANESE.test(d)))
+    ) {
+      missing.push("language");
+    }
+  }
   if (fm.present) {
     if (!f["question"]) missing.push("question");
     if (f["type"] !== undefined && !TYPES.includes(f["type"])) missing.push("type");

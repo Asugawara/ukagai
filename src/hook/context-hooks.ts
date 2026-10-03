@@ -25,7 +25,7 @@ export function isEscapedQuestion(text: string | undefined): boolean {
 export function contextText(dir: string, lang: Lang = "en"): string {
   const language =
     lang === "ja"
-      ? "Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese."
+      ? "Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese. Also write the AskUserQuestion question, option labels and descriptions in Japanese (code, proper nouns and an option that is itself an English sentence excepted): the recommended label ends with (推奨), and the blocker labels are 完了。続けて / この手順を飛ばして続けて / ここで止める."
       : "Write the explanation file in English.";
   return [
     "Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.",
