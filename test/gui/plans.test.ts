@@ -334,8 +334,10 @@ gui("upgrade in place: the approval for the shown plan keeps the sections' state
   assert.deepEqual(posts().filter((u) => u.includes("/answer")), []);
   key("y");
   await waitStatus(id, "answer_submitted").catch(() => waitStatus(id, "answered"));
-  await waitFor("plan is read", `window.__posts.some((u) => u.endsWith("/api/plans/up.md/read"))`);
-  assert.equal(await planRead("up.md"), true);
+  // The server marks the plan read when the approval resolves and the GUI also POSTs read unless the SSE echo
+  // (read: true) arrives first, so wait on the server state, not on the GUI's request.
+  for (let i = 0; i < 50 && !(await planRead("up.md")); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(await planRead("up.md"), true, "plan is read");
   await waitFor("idle", IDLE);
 });
 
