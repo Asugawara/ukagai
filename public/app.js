@@ -228,6 +228,9 @@ function dropExternalImages(container) {
 const plainMd = (s) => s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
 const NONE_REASON_KEYS = { loop_guard: "none_loop_guard", plan_mode: "none_plan_mode", not_required: "none_not_required" };
 
+// A title with its backticked spans in monospace (only for approvals; elsewhere the text stays as written)
+const codeSpans = (text, cls, on) => (on ? text.split(/(`[^`]+`)/).filter(Boolean) : [text]).map((p) => (/^`[^`]+`$/.test(p) && on ? el("code", { class: cls, text: p.slice(1, -1) }) : p));
+
 const hasExplanation = (d) => !!d.explanation && d.explanation.attached_via !== "none";
 
 function cwdTail(d) {
@@ -406,7 +409,7 @@ function renderHead(d) {
   head.append(
     el("div", { class: "hd-top" },
       blocker ? el("span", { class: "blocker-band", text: t("blocker_band") }) : null,
-      el("div", { class: "v2-title", text: title, title }),
+      el("div", { class: "v2-title", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d))),
       metaBox(d)),
     el("div", { class: "hd-line2" }, line2 ?? null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
   head.onclick = (e) => {
@@ -1020,7 +1023,7 @@ function renderRightBody(d) {
         const cannot = dr.cannot;
         // One quiet row of two underlined text buttons: "None of these…" (the options are wrong) and "Can't answer this…" (the explanation is unreadable)
         // With no options (a prose question) only free text is left: no None of these / Can't answer
-        if (items.length) cardsBox.append(el("div", { class: "escape-row" },
+        if (hasOptions(d)) cardsBox.append(el("div", { class: "escape-row" },
           el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
             el("span", { text: t("none_of_these") })),
           el("div", { class: "cannot-card" + (cannot ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openCannot(d); } },
@@ -1120,14 +1123,13 @@ function renderRightBody(d) {
     if (single) {
       // `c` (copy the command to run, blockers) and `y` (copy a badge) are one hint
       const copyKey = v2?.todoBox?.querySelector("pre") ? "c" : d.explanation && hasExplanation(d) ? "y" : "";
-      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", copyKey, "n", "x"].filter(Boolean);
+      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", copyKey, ...(hasOptions(d) ? ["n", "x"] : [])].filter(Boolean);
       const extraHints = [
         v2?.terms.length ? `? ${t("hint_terms")} · ` : "",
         modelFor(d).fnCount ? `e ${t("hint_evidence")} · ` : "",
         v2?.hasExtra ? `v ${t("hint_compare")} · ` : "",
         copyKey ? `${copyKey} ${t("hint_copy")} · ` : "",
-        `n ${t("hint_none")} · `,
-        `${t("hint_cannot")} · `,
+        hasOptions(d) ? `n ${t("hint_none")} · ${t("hint_cannot")} · ` : "",
       ].join("");
       const hs = hasHistoryHint(d);
       // The full line (one line from 900px up), and a short one that CSS swaps in below 900px
@@ -1235,7 +1237,8 @@ function renderRightBody(d) {
 }
 
 // "None of these…": open the type picker under the card (the answer is `None of these — <type>: <note>`)
-const hasOptions = (d) => (d.request.questions?.[0]?.options?.length ?? 0) > 0;
+// Neither a free-text-only question nor an approval (Allow / Deny) has the None of these / Can't answer escapes
+const hasOptions = (d) => (d.request.questions?.[0]?.options?.length ?? 0) > 0 && !isApproval(d);
 function openNone(d) {
   if (!hasOptions(d)) return;
   const dr = draftOf(d);
@@ -1717,7 +1720,7 @@ const isKnown = (sec, names) => names.map(normHeading).includes(sec.norm);
 const KNOWN_HEADS = [
   [SECTION.recommendation, "sec_recommendation"], [SECTION.options, "sec_options"], [SECTION.checked, "sec_checked"], [SECTION.blockerTodo, "sec_todo"],
   [SECTION.impact, "sec_impact"], [SECTION.terms, "sec_terms"], [SECTION.assumptions, "sec_assumptions"], [SECTION.against, "sec_against"],
-  [SECTION.affects, "sec_affects"], [SECTION.unknowns, "sec_unknowns"],
+  [SECTION.affects, "sec_affects"], [SECTION.unknowns, "sec_unknowns"], [SECTION.why, "sec_why"], [SECTION.blockerWhy, "sec_blocker_why"],
 ];
 // A section whose heading the GUI does not know is never dropped: it is shown as written at the end of the left column
 function keepUnknownSections(container) {
@@ -1847,6 +1850,7 @@ function buildModel(d) {
       const whySec = findSection(secs, [...SECTION.why, ...SECTION.blockerWhy], true);
       if (whySec && whySec !== optSec && whySec !== recSec) {
         const whyBox = el("div", { class: "why md" });
+        whySec.head.textContent = t(findSection([whySec], SECTION.blockerWhy, true) ? "sec_blocker_why" : "sec_why");
         for (const n of whySec.nodes) if (n.parentElement === left) whyBox.append(n);
         if (whyBox.children.length) { v2.whyBox = whyBox; enhance(whyBox, v2.ctx.opts).catch(() => {}); }
       }

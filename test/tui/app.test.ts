@@ -412,16 +412,16 @@ test("horizontal wheel (66 / 67) scrolls sideways; Home / End go to the start / 
   assert.equal(app.hscroll, 0);
 });
 
-test("column widths: decision is clamp(round(cols*0.34), 44, 58), the background gets the rest (1 column separator)", () => {
+test("column widths: decision is clamp(round(cols*0.4), 44, 60), the background gets the rest (1 column separator)", () => {
   const split = (cols: number) => {
     const { frame } = figApp(V2_MD, { cols, rows: 30 });
     return frame().split;
   };
   // split = background width + 3-column separator (" │ "); decision width = cols - split
-  assert.equal(120 - split(120), 44);
-  assert.equal(147 - split(147), 50);
-  assert.equal(200 - split(200), 58);
-  assert.equal(split(147) - 3, 94 + 0, "147 columns: decision 50 / background 94 + 3-column separator");
+  assert.equal(120 - split(120), 48);
+  assert.equal(147 - split(147), 59);
+  assert.equal(200 - split(200), 60);
+  assert.equal(split(147) - 3, 85, "147 columns: decision 59 / background 85 + 3-column separator");
 });
 
 test("long recommendation: when over half the column height it is cut at 8 rows with an expand hint, and . toggles full text / folded", () => {

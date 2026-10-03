@@ -158,16 +158,18 @@ test("render: headline, reversibility symbol, You decide, Assumptions with ☐, 
   const { text, raw } = draw(appOf());
   assert.ok(/\x1b\[1mUse .*SSE.* because the GUI only listens\./.test(raw), "headline is bold");
   assert.ok(text.includes("◐ Costly to undo"));
-  // The decision column is narrow, so the band wraps: compare with the wrapping removed
-  const flat = text.split("\n").map((l) => l.split(" │ ").at(-1)!.trim()).join(" ");
+  // The reading material is in the background column (left); the wrapping is removed to compare
+  const flat = text.split("\n").map((l) => l.split(" │ ")[0]!.trim()).join(" ");
   assert.ok(flat.includes("You decide: Whether a mobile client is planned · Who owns the proxy config"));
   assert.ok(text.includes("☐ Only the GUI consumes events") && text.includes("☐ Proxies allow long-lived HTTP"));
   assert.ok(text.includes("Against this:") && text.includes("▏ WebSocket would avoid"));
-  assert.ok(flat.includes("Affects: src/server/stream.ts · GUI · proxy · hook · docs · CI +2"));
+  assert.ok(flat.includes("Affected: src/server/stream.ts · GUI · proxy · hook · docs · CI +2"));
   assert.ok(text.includes("Effort: 1 day"));
   const lines = text.split("\n");
   const at = (s: string) => lines.findIndex((l) => l.includes(s));
-  assert.ok(at("Use SSE because") < at("You decide") && at("You decide") < at("Against this") && at("Against this") < at("Assumptions") && at("Assumptions") < at("▸ ● SSE"));
+  const leftAt = (s: string) => lines.findIndex((l) => l.split(" │ ")[0]!.includes(s));
+  assert.ok(leftAt("Recommendation") < leftAt("You decide") && leftAt("You decide") < leftAt("Against this") && leftAt("Against this") < leftAt("Assumptions") && leftAt("Assumptions") < leftAt("What I checked"));
+  assert.ok(at("Use SSE because") >= 0 && !lines.some((l) => /You decide|Against this|Assumptions/.test(l.split(" │ ").at(-1)!)), "the decision column holds none of them");
 });
 
 test("render: the other two reversibility symbols", () => {
@@ -212,7 +214,7 @@ test("render: footnote refs show as [1]; e jumps the background to the definitio
 
 test("render in ja: new strings are Japanese", () => {
   const { text } = draw(appOf(), "ja");
-  assert.ok(text.includes("あなたが決めること:") && text.includes("前提") && text.includes("これへの反論:") && text.includes("どれでもない…"));
+  assert.ok(text.includes("あなたが決めること:") && text.includes("前提") && text.includes("反論:") && text.includes("どれでもない…"));
   assert.ok(text.includes("◐ 戻すのにコストがかかる"));
 });
 
@@ -378,8 +380,8 @@ const rightOf = (app: App, lang: "en" | "ja", pick: (l: string) => boolean, rows
 test("Q6 T-1: at 120 cols (right column 44) `x` stays visible in the hint; pickers keep Esc back", () => {
   for (const lang of ["en", "ja"] as const) {
     const right = rightOf(appOf(), lang, (l) => l.includes("j/k") && l.includes("Enter"));
-    assert.match(right, lang === "en" ? /x can't/ : /x 返答不可/, right);
-    assert.ok(width(right.trimEnd()) <= 44);
+    assert.match(right, lang === "en" ? /x Can't answer/ : /x 返答不可/, right);
+    assert.ok(width(right.trimEnd()) <= 48);
     for (const k of ["x", "n"]) {
       const a = appOf();
       press(a, ch(k));
