@@ -372,27 +372,40 @@ const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
 const repoOf = (d) => WT_RE.exec(d.session.cwd)?.[1] ?? cwdTail(d);
 const worktreeOf = (d) => WT_RE.exec(d.session.cwd)?.[2];
 
-// Where the decision comes from, as one line of dim text: `ukagai ⎇ main ⧉ worktree` (no boxes; the full working directory is the tooltip)
-function whereLine(d, extra = []) {
-  const parts = [repoOf(d)];
-  if (d.context?.branch) parts.push(`⎇ ${d.context.branch}`);
-  const wt = worktreeOf(d);
-  if (wt) parts.push(`⧉ ${wt}`);
-  const box = el("span", { class: "where", title: tildePath(d.session.cwd) }, parts.join(" "));
-  for (const x of extra) if (x) box.append(" · ", x);
-  return box;
+// Where the decision comes from, as one line: `ukagai ⎇ main ⧉ worktree` (the full working directory is the tooltip)
+const whereText = (d) => [repoOf(d), d.context?.branch ? `⎇ ${d.context.branch}` : "", worktreeOf(d) ? `⧉ ${worktreeOf(d)}` : ""].filter(Boolean).join(" ");
+
+// Drawer row: the repo first and bold, the rest dim
+function whereLine(d) {
+  const rest = whereText(d).slice(repoOf(d).length);
+  return el("div", { class: "where", title: tildePath(d.session.cwd) }, el("b", { text: repoOf(d) }), rest);
 }
+
+// The first element of the header: one text node, headline size, ellipsis from the end (the repo is the last thing to be cut)
+const originEl = (d) => el("div", { class: "origin", title: tildePath(d.session.cwd), text: whereText(d) });
 
 function metaBox(d) {
   const box = el("div", { class: "hd-meta" });
   const scope = scopeOf(d);
-  box.append(whereLine(d, [scope ? el("span", { text: scope }) : null, el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) })]));
+  const bits = [scope ? el("span", { text: scope }) : null, el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) })].filter(Boolean);
+  const line = el("span", { class: "where" });
+  bits.forEach((b, i) => line.append(i ? " · " : "", b));
+  box.append(line);
   // The only box in the header is the reversibility mark, and only when it is not "reversible"
   const rev = reversibilityOf(d);
   if (rev === "irreversible") box.append(el("span", { class: "badge irreversible", text: t("irreversible") }));
   else if (rev === "costly") box.append(el("span", { class: "badge costly", text: t("costly") }));
   else if (rev === "reversible") box.append(el("span", { class: "rev", text: t("reversible") }));
   return box;
+}
+
+// The title stays on row 1 after the origin when it fits; otherwise it becomes the first dim line of row 2 (measured once per render)
+function fitTitle(head) {
+  const title = head.querySelector(".hd-top .v2-title");
+  if (!title || title.scrollWidth <= title.clientWidth) return;
+  const sub = head.querySelector(".hd-sub");
+  sub.append(title);
+  sub.hidden = false;
 }
 
 // The header (full width, above both columns). Row 1: title + chips, reversibility, scope, pending pill. Row 2: the headline (the first
@@ -415,9 +428,11 @@ function renderHead(d) {
   head.classList.toggle("blocker", blocker);
   head.append(
     el("div", { class: "hd-top" },
+      originEl(d),
       blocker ? el("span", { class: "blocker-band", text: t("blocker_band") }) : null,
       el("div", { class: "v2-title", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d))),
       metaBox(d)),
+    el("div", { class: "hd-sub", hidden: true }),
     el("div", { class: "hd-line2" }, line2 ?? null, d.kind === "approve_plan" ? planMetaLine(d) : null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
   head.onclick = (e) => {
     if (e.target.closest(".hd-goal")) openHistory(d);
@@ -429,6 +444,7 @@ function renderHead(d) {
   loadHistory(d);
   head.classList.toggle("expanded", !!dr.expanded);
   placePending();
+  fitTitle(head);
 }
 
 // ---- Session history: the Goal row (header row 3) and the panel (`s`) ----
@@ -633,12 +649,15 @@ function renderPlanHead(pd) {
   const cap = t("plan_kind").replace(/^./, (c) => c.toUpperCase());
   head.append(
     el("div", { class: "hd-top" },
+      el("div", { class: "origin dim", title: "plans/", text: "plans/" }),
       el("div", { class: "v2-title", title: pd.title, text: pd.title }),
       el("div", { class: "hd-meta" })),
+    el("div", { class: "hd-sub", hidden: true }),
     el("div", { class: "hd-line2" },
       el("div", { class: "headline plain" }, `${cap} · `, el("span", { class: "age", "data-created": pd.mtime, "data-tpl": "plan_updated_ago", text: t("plan_updated_ago", { age: ageText(pd.mtime) }) })),
       planMetaLine(pd)));
   placePending();
+  fitTitle(head);
 }
 
 // Right column of a plan: the contents (long plans) and one text action, `Done reading`

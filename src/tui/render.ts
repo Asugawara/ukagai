@@ -148,15 +148,18 @@ function affectsText(m: ScreenModel): string {
 }
 
 function metaLine(m: ScreenModel, now: number, cols: number, lang: Lang): string {
-  const parts = [chipsText(m.chips), `${DIM}${m.cwd}${RESET}`];
+  // The origin comes first: `repo ⎇ branch ⧉ worktree` in bold accent colour, whatever else is dropped
+  const origin = `${BOLD}${CYAN}${m.chips.map((c) => c.text.replace(/^◈ /, "")).join(" ")}${RESET}`;
+  const parts = [origin, `${DIM}${m.cwd}${RESET}`];
+  if (m.blocker) parts.splice(1, 0, `${BADGE_BLOCKER} ${t(lang, "waiting_for_you")} ${RESET}`);
   if (m.reversibility === "irreversible") parts.push(`${BADGE_IRREVERSIBLE} ${t(lang, "irreversible")} ${RESET}`);
   else if (m.reversibility === "costly") parts.push(`${BADGE_COSTLY} ${t(lang, "costly")} ${RESET}`);
   else if (m.reversibility === "reversible") parts.push(`${GREEN}${t(lang, "reversible")}${RESET}`);
   if (m.scope) parts.push(`${DIM}${m.scope}${RESET}`);
   parts.push(`${DIM}${elapsed(m.createdAt, now, lang)}${RESET}`);
   const line = parts.join("  ");
-  // When it does not fit, drop the cwd (keep chips and reversibility)
-  return width(line) <= cols ? line : parts.filter((_, i) => i !== 1).join("  ");
+  // When it does not fit, drop the cwd (keep the origin and reversibility)
+  return width(line) <= cols ? line : truncate(parts.filter((_, i) => i !== (m.blocker ? 2 : 1)).join("  "), cols);
 }
 
 /** Backticked spans in bold cyan (the command of an approval) */
@@ -630,8 +633,8 @@ export function renderFrame(v: View, size: Size): Frame {
   }
 
   const head = m.readonly
-    ? [truncate(`${BOLD}${m.title}${RESET}`, cols), truncate(planFileMeta(m, v.now, v.lang), cols), `${DIM}${"─".repeat(cols)}${RESET}`]
-    : [...(m.blocker ? [`${BADGE_BLOCKER} ${t(v.lang, "waiting_for_you")} ${RESET}`] : []), metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
+    ? [truncate(`${BOLD}${CYAN}plans/${RESET}  ${planFileMeta(m, v.now, v.lang)}`, cols), truncate(`${BOLD}${m.title}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
+    : [metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
   const bodyRows = Math.max(1, rows - head.length - 1);
 
   if (cols >= WIDE_COLS) {

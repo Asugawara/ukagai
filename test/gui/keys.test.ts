@@ -81,7 +81,7 @@ async function api(path: string, body?: unknown) {
 }
 
 type Opt = { label: string; description?: string };
-type Seed = { reversibility?: string; scope?: string; title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string; noneReason?: string; jaSeed?: boolean; header?: string; question?: string };
+type Seed = { reversibility?: string; scope?: string; title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string; noneReason?: string; jaSeed?: boolean; header?: string; question?: string; cwd?: string };
 
 /** Seed a decision. Defaults to a single-select with a v2 explanation (A / B(Recommended) / C) */
 async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }> {
@@ -94,7 +94,7 @@ async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }
   const body: Record<string, unknown> = {
     tool_use_id: `toolu_gui_${process.pid}_${n}`,
     kind: "answer_question",
-    session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: s.cwd ?? ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
     request: { questions: [{ question, header: s.header ?? "Check", options, multiSelect: s.multiSelect ?? false }] },
   };
   if (s.noneReason) {
@@ -876,10 +876,10 @@ gui("layers: the header has the title, the headline and the chips; the right col
   assert.equal(q1("#head .v2-title").startsWith("Rich check"), true);
   // header: row 1 = title + meta (chips, reversibility, scope), row 2 = the headline
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(rows, ["hd-top", "hd-line2", "hd-cond"]); // X1: the condition sentence is row 3
+  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2", "hd-cond"]); // X1: the condition sentence is row 3
   const top = ev<string[]>(`JSON.stringify([...document.querySelector("#head .hd-top").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(top.slice(0, 2), ["v2-title", "hd-meta"]);
-  assert.equal(q1("#head .hd-meta .where").startsWith("fix-gui-header ⎇ ") || q1("#head .hd-meta .where").length > 0, true); // one line of dim text: repo ⎇ branch ⧉ worktree · scope · age
+  assert.deepEqual(top.slice(0, 3), ["origin", "v2-title", "hd-meta"]);
+  assert.equal(q1("#head .hd-meta .where").length > 0, true); // one line of dim text: scope · age
   assert.equal(count("#head .chip, #head .pill"), 0);
   assert.equal(count("#head .hd-line2 .headline"), 1);
   assert.equal(ev<boolean>(`document.querySelector("#head").getBoundingClientRect().height < 4 * 30 + 24`), true); // 2-4 lines (title, headline, condition, goal)
@@ -1651,7 +1651,7 @@ gui("X1: the condition sentence is header row 3 (dim, `Otherwise: …`), the Goa
   await seedRich();
   await reopen(RICH_READY);
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]).filter((c) => c !== "hd-goal"))`);
-  assert.deepEqual(rows, ["hd-top", "hd-line2", "hd-cond"]);
+  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2", "hd-cond"]);
   assert.equal(q1("#head .hd-cond"), "Otherwise: Another option is right if the team already runs a database server.");
   // the headline is one step larger than the title, the title is dimmer
   assert.ok(ev<number>(`parseFloat(getComputedStyle(document.querySelector("#head .headline")).fontSize)`) > ev<number>(`parseFloat(getComputedStyle(document.querySelector("#head .v2-title")).fontSize)`));
@@ -1763,4 +1763,65 @@ gui("Y3 M-5: at 1000x700 (ja) three cards, the one-row free-text card and the hi
     ev(`document.documentElement.dataset.lang = "en", "ok"`);
     ab("set", "viewport", "1440", "900");
   }
+});
+
+// ---- G1: where the question comes from — repo and branch first, big, top-left ----
+
+const firstText = () => ev<string>(`"t:" + document.querySelector("#head .hd-top").firstChild.textContent`).slice(2);
+const fontPx = (sel: string) => ev<string>(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).fontSize`);
+
+gui("G1: row 1 of the header starts with the origin at the headline size; the title falls to row 2 when it does not fit", async () => {
+  ab("set", "viewport", "1440", "900");
+  try {
+    await seedRich();
+    await reopen(RICH_READY);
+    const origin = ev<string>(`"t:" + document.querySelector("#head .origin").textContent`).slice(2);
+    assert.match(origin, /^\S+( ⎇ \S+)?( ⧉ \S+)?$/);
+    assert.equal(firstText(), origin); // the first text node of row 1
+    assert.equal(ev<boolean>(`document.querySelector("#head .hd-top").firstElementChild.classList.contains("origin")`), true);
+    assert.equal(fontPx("#head .origin"), fontPx("#head .headline"));
+    assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .origin")).fontWeight`), 400 as unknown as string);
+    assert.equal(count("#head .hd-top .v2-title"), 1); // it fits at 1440
+    ab("screenshot", join(SHOTS, "G1-header-origin.png"));
+
+    await cancelAll();
+    ab("set", "viewport", "1000", "700");
+    const long = "A title that is deliberately sixty characters long, yes!!!!";
+    await seedRich({ title: long.padEnd(60, "!"), cwd: "/Users/dev/.herdr/worktrees/a-repository-with-a-long-name/fix-a-very-long-worktree-name-for-the-header" });
+    await reopen(RICH_READY);
+    assert.equal(ev<boolean>(`(() => { const o = document.querySelector("#head .origin"); return o.scrollHeight <= o.clientHeight + 1 && o.getBoundingClientRect().height < 40; })()`), true); // one line
+    assert.equal(count("#head .hd-top .v2-title"), 0);
+    assert.equal(count("#head .hd-sub .v2-title"), 1);
+    assert.equal(ev<boolean>(`document.querySelector("#head .hd-sub").hidden`), false);
+    assert.equal(fontPx("#head .origin"), fontPx("#head .headline"));
+    ab("screenshot", join(SHOTS, "G1-header-origin-1000.png"));
+  } finally {
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval screens have the origin too", async () => {
+  await cancelAll();
+  await seedQuestion();
+  await seedQuestion();
+  await reopen();
+  press("b");
+  await sleep(300);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("#drawer .row .where")].every(w => w.firstChild.tagName === "B" && getComputedStyle(w.firstChild).fontWeight >= 600)`), true);
+  press("Escape");
+  await cancelAll();
+  await seedBlocker();
+  await reopen();
+  assert.equal(ev<boolean>(`document.querySelector("#head .hd-top").firstElementChild.classList.contains("origin")`), true);
+  assert.equal(firstText(), q1("#head .origin"));
+  await cancelAll();
+  const n = ++seq;
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_gui_${process.pid}_${n}`, kind: "approve_plan",
+    session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan: "# A plan\n\nStep 1\n", planFilePath: "/tmp/plan.md" },
+  });
+  assert.ok(d.id);
+  await reopen("document.querySelector('#decision .btn')");
+  assert.equal(firstText(), q1("#head .origin"));
 });
