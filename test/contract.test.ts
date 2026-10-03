@@ -186,3 +186,15 @@ test("realFileUnder: a regular file under the root (realpath), not a directory, 
   assert.equal(realFileUnder(root, join(root, "link.md")), null);
   assert.equal(realFileUnder(root, join(out, "o.md")), null);
 });
+
+test("AnswerRequest: checkpoint shape needs text for instruct and stays exclusive", () => {
+  assert.ok(AnswerRequest.safeParse({ kind: "continue" }).success);
+  assert.ok(AnswerRequest.safeParse({ kind: "stop" }).success);
+  assert.ok(AnswerRequest.safeParse({ kind: "stop", text: "wrap up" }).success);
+  assert.ok(AnswerRequest.safeParse({ kind: "instruct", text: "do X" }).success);
+  assert.ok(AnswerRequest.safeParse({ kind: "continue", via: "gui", decided_at: "2026-10-04T00:00:00Z" }).success);
+  assert.ok(!AnswerRequest.safeParse({ kind: "instruct" }).success);
+  assert.ok(!AnswerRequest.safeParse({ kind: "instruct", text: " " }).success);
+  assert.ok(!AnswerRequest.safeParse({ kind: "continue", approve: true }).success);
+  assert.ok(!AnswerRequest.safeParse({ kind: "other" }).success);
+});

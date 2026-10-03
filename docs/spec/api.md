@@ -19,6 +19,7 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/decisions/:id` | GUI | Detail |
 | `POST /api/events` | hook (observation) | Raw JSON of an observation hook. The `--observe` timestamps, `escaped_question` from Stop, consumption of PermissionRequest |
 | `GET /api/sessions` | GUI | State per session |
+| `GET /api/sessions/:id/instruction` | hook | The human's reply to a progress checkpoint (`instruct` / `stop`), consumed on read, or 404. See "Progress checkpoints" |
 | `GET /api/sessions/:id/pending-mode-switch` | hook | Read the unconsumed "approve and switch to auto" record |
 | `POST /api/sessions/:id/pending-mode-switch/consume` | hook | Delete the record above |
 | `GET /api/sessions/:id/pending-rewrite` | hook | The session's last "Cannot answer" memo, or `null` |
@@ -148,6 +149,8 @@ The request is one of the following 4 shapes (`AnswerRequest`. Mixed keys give 4
 { "fallback": true }
 ```
 
+A progress checkpoint (`kind: "checkpoint"`) takes a fifth shape, `{ "kind": "continue" | "instruct" | "stop", "text"?: string }` (`text` is required and non-blank for `instruct`; `via` / `decided_at` may be sent and are ignored). It answers only checkpoints and the 4 shapes above never fit one (400).
+
 - The values of `answers` are strings only. For `multiSelect`, it is one string of the labels joined with `MULTI_SELECT_SEPARATOR` (tentatively `", "`).
 - `approve: false` requires `reason` as a non-empty string.
 - `set_mode_auto` is allowed only with `approve: true`.
@@ -202,12 +205,13 @@ The same API is used when the GUI sends "opened the session list panel" as a sup
     "state": "waiting_decision",
     "last_event_at": "2026-10-02T03:09:12.000Z",
     "title": "A/B choice",
-    "cwd": "/Users/user/dev/ukagai"
+    "cwd": "/Users/user/dev/ukagai",
+    "transcript_path": "/Users/user/.claude/projects/-Users-user-dev-ukagai/00000000-0000-4000-8000-000000000001.jsonl"
   }
 ]
 ```
 
-`state` is `working` / `waiting_decision` / `idle` / `ended`.
+`state` is `working` / `waiting_decision` / `idle` / `ended`. `transcript_path` comes from the hook events (absent before the first event and for Codex `--ephemeral`).
 
 ### GET /api/sessions/:id/pending-mode-switch / POST .../consume
 
@@ -243,7 +247,7 @@ null
     "agent": { "count": 3, "median_ms": 18000, "mean_ms": 19000 },
     "baseline": { "count": 12, "median_ms": 40000, "mean_ms": 52000 }
   },
-  "c": { "session_panel_opens": 14 },
+  "c": { "session_panel_opens": 14, "checkpoints": { "created": 4, "answered": 2, "delivered": 1 } },
   "d": { "first_call": 6, "after_deny": 3, "none": 1, "total": 10, "attach_rate": 0.9 }
 }
 ```
@@ -252,6 +256,7 @@ null
 - `a.handoffs` is the sum of `Decision.handoffs`, `a.reattached` the number of re-attaches (the sum of `previous_tool_use_ids` lengths). Neither is part of `total`.
 - (b) `human` = `created_at → decided_at`, `agent` = `first_denied_at → created_at`, `baseline` = values taken with `--observe`.
 - (d) Decisions with `plan_mode` are excluded from `total`.
+- `c.checkpoints`: `created` = checkpoint decisions, `answered` = those in `answered`, `delivered` = those whose instruction was read by the hook (`response.delivered_at`). Checkpoints are excluded from `a` (including `total`), `b` and `d`.
 
 ### GET /api/plans / GET /api/plans/:name
 
@@ -299,6 +304,16 @@ AskUserQuestion is not available inside subagents, so no decision arises there (
 ### GET /
 
 Serves `public/index.html`. The server injects the `?v=` version into the asset URLs, and also injects `<html lang="…" data-lang="…">` into index.html, with `lang` taken from the same config as `GET /api/config`.
+
+## Progress checkpoints
+
+Claude Code writes a "session recap" into the session transcript when the human has been away: a JSONL line `{"type":"system","subtype":"away_summary","content":"…","timestamp":"…"}`. No hook sees it, so the server watches for it and turns it into a **non-blocking** decision the human may answer; the agent never waits.
+
+- **Decision.** `kind: "checkpoint"`, `request: { recap, recap_at }` (`recap_at` = the line's `timestamp`). `tool_use_id` = `checkpoint:<session_id>:<recap_at>`, `fingerprint` = sha256 of `recap_at`. No `lease_until`, no `explanation` (the GUI / TUI treat it as `none_reason: "not_required"`), `context` is `{}`. Creating one emits `decision.created` and does **not** change the session state (the session keeps working / idle). `POST /api/decisions` (Bearer) accepts it too (the `request` must be `{ recap, recap_at }`, no `status`), which is how tests and the UI harness seed one.
+- **Watcher** (`src/serve/recap-watch.ts`). For every session whose `last_event_at` is within 6 h, whose state is not `ended` and whose `transcript_path` is under `~/.claude/projects` (checked with `isAllowedTranscriptPath`), the server keeps a byte offset into the transcript. Every 5 s (`recapPollMs`) and on each hook event of that session it reads from the offset to the end, consumes complete lines only, parses just the lines containing `"away_summary"` and creates a checkpoint for each. The offset starts at the end of the file the first time a session is seen (old recaps are never replayed, also after a server restart); a file larger than 256 MB is skipped; a file that shrank resets to its end. A `UserPromptSubmit` scan advances the offset without creating anything (a recap older than the human's prompt is stale).
+- **Lifecycle.** `pending` → `answered` (the human; there is no hook ack, so `response.delivered_at` means the instruction was read) or `cancelled` with `status_reason`: `superseded` (a newer recap or checkpoint of the session), `new_prompt` (the session's next `UserPromptSubmit`), `session_end`, `expired` (pending for 12 h, `CHECKPOINT_TTL_MS`, swept with the lease monitor). The `pending → answered` step is made by the store directly (the transition table above is for blocking decisions). Checkpoints are ignored by `GET /api/sessions/:id/open`.
+- **Answer.** `POST /api/decisions/:id/answer` with `{ kind, text? }` → `response: { via: "gui", kind, text?, decided_at }` (`CheckpointResponse`). 409 if the checkpoint is not `pending`. `continue` makes no instruction. `instruct` / `stop` queue an **instruction** `{ decision_id, kind, text, created_at }` for the session (one per session, a newer one replaces an undelivered older one; `text` is `""` for a bare `stop`). It survives a restart (rebuilt from the undelivered answered checkpoints, at most 12 h old) and is dropped at `SessionEnd`.
+- **`GET /api/sessions/:id/instruction`** (Bearer; the hook, before each matching tool call). 200 `{ "instruction": { … } }` and consumes it: the decision's `response.delivered_at` is set and `decision.updated` is emitted. 404 `{ "error": "no instruction" }` when there is none (the common case).
 
 ## State transitions
 

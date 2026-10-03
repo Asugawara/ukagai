@@ -3,6 +3,9 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CANCEL_WINDOW_MS,
+  CHECKPOINT_TTL_MS,
+  checkpointFingerprint,
+  checkpointToolUseId,
   DENY_LINK_WINDOW_MS,
   HANDOFF_GRACE_MS,
   MODE_SWITCH_TTL_MS,
@@ -16,6 +19,7 @@ import {
   type DecisionResponse,
   type DecisionStatus,
   type EventInput,
+  type Instruction,
   type Metrics,
   type PendingModeSwitch,
   type PendingRewrite,
@@ -50,7 +54,8 @@ export type AnswerPatch =
   | { kind: "answers"; answers: Record<string, string> }
   | { kind: "approve"; set_mode_auto?: boolean }
   | { kind: "reject"; reason: string }
-  | { kind: "fallback" };
+  | { kind: "fallback" }
+  | { kind: "checkpoint"; answer: "continue" | "instruct" | "stop"; text?: string };
 
 export const SESSION_PANEL_OPEN_EVENT = "ukagai.session_panel_open";
 
@@ -59,6 +64,7 @@ const CLOSED: readonly DecisionStatus[] = ["answered", "hook_disconnected", "ans
 const EVENT_KEYS = [
   "session_id",
   "cwd",
+  "transcript_path",
   "hook_event_name",
   "tool_name",
   "tool_use_id",
@@ -95,6 +101,10 @@ export class Store {
   private rewrites = new Map<string, NonNullable<PendingRewrite>>();
   private expiredAt = new Map<string, number>();
   private waiters = new Map<string, Set<() => void>>();
+  /** Answered checkpoints whose text has not reached the agent yet: one per session, newest wins */
+  private instructions = new Map<string, Instruction>();
+  /** Called after each live hook event of a session (the recap watcher reads that session's transcript now) */
+  onSessionEvent: ((sessionId: string, hookEvent: string) => void) | undefined;
   private monitor: NodeJS.Timeout | undefined;
 
   // Aggregates rebuilt from events
@@ -134,8 +144,9 @@ export class Store {
     // If no hook comes back, the lease expires and checkLeases moves it to hook_disconnected / answer_lost as usual.
     const lease = new Date(Date.now() + this.opts.leaseGraceMs).toISOString();
     for (const d of this.decisions.values()) {
-      if (LIVE.includes(d.status)) d.lease_until = lease;
+      if (LIVE.includes(d.status) && d.kind !== "checkpoint") d.lease_until = lease;
     }
+    this.restoreInstructions();
     if (existsSync(this.eventsFile)) {
       for (const line of readFileSync(this.eventsFile, "utf8").split("\n")) {
         if (!line.trim()) continue;
@@ -145,6 +156,19 @@ export class Store {
           // Skip malformed lines
         }
       }
+    }
+  }
+
+  /** The newest undelivered instruction of each session (at most CHECKPOINT_TTL_MS old) is still waiting after a restart */
+  private restoreInstructions(): void {
+    const now = Date.now();
+    for (const d of this.decisions.values()) {
+      const r = d.response;
+      if (d.kind !== "checkpoint" || d.status !== "answered" || !r || r.delivered_at || (r.kind !== "instruct" && r.kind !== "stop")) continue;
+      if (now - Date.parse(r.decided_at) > CHECKPOINT_TTL_MS) continue;
+      const cur = this.instructions.get(d.session.session_id);
+      if (cur && cur.created_at >= r.decided_at) continue;
+      this.instructions.set(d.session.session_id, { decision_id: d.id, kind: r.kind, text: r.text ?? "", created_at: r.decided_at });
     }
   }
 
@@ -196,6 +220,8 @@ export class Store {
       return { decision: existing, created: false };
     }
 
+    if (req.kind === "checkpoint") return this.insertCheckpoint(req);
+
     const denied = req.status === "denied_explain";
     const fingerprint = decisionFingerprint(req.kind, req.request as Record<string, unknown>);
     const now = Date.now();
@@ -235,11 +261,72 @@ export class Store {
     return { decision, created: true };
   }
 
+  /** A progress recap seen in the session's transcript: supersedes the session's pending checkpoint and never changes the session state */
+  createCheckpoint(session: SessionSummary, recap: string, recapAt: string): { decision: Decision; created: boolean } {
+    const ds: CreateDecisionRequest["session"] = { session_id: session.session_id, cwd: session.cwd, transcript_path: session.transcript_path ?? "" };
+    if (session.title) ds.title = session.title;
+    return this.insertCheckpoint({
+      tool_use_id: checkpointToolUseId(session.session_id, recapAt),
+      kind: "checkpoint",
+      session: ds,
+      request: { recap, recap_at: recapAt },
+    });
+  }
+
+  private insertCheckpoint(req: CreateDecisionRequest): { decision: Decision; created: boolean } {
+    const existing = this.findByToolUse(req.tool_use_id);
+    if (existing) return { decision: existing, created: false };
+    const request = req.request as { recap: string; recap_at: string };
+    const sid = req.session.session_id;
+    for (const d of this.decisions.values()) {
+      if (d.kind === "checkpoint" && d.session.session_id === sid && d.status === "pending") this.closeCheckpoint(d, "superseded");
+    }
+    const decision: Decision = {
+      id: randomUUID(),
+      kind: "checkpoint",
+      tool_use_id: req.tool_use_id,
+      session: { ...req.session },
+      request,
+      context: {},
+      status: "pending",
+      created_at: new Date().toISOString(),
+      fingerprint: checkpointFingerprint(request.recap_at),
+    };
+    this.decisions.set(decision.id, decision);
+    this.byToolUse.set(decision.tool_use_id, decision.id);
+    this.persist(decision);
+    this.emit("decision.created", decision);
+    this.touchSession(sid, { cwd: req.session.cwd, title: req.session.title, transcript_path: req.session.transcript_path });
+    return { decision, created: true };
+  }
+
+  /** pending checkpoint -> cancelled (no lease, no waiter) */
+  private closeCheckpoint(d: Decision, reason: string): void {
+    this.transition(d, "cancelled");
+    d.status_reason = reason;
+    this.persist(d);
+    this.emit("decision.updated", d);
+  }
+
+  /** The instruction waiting for the session's agent, or undefined. Consuming it marks the checkpoint delivered */
+  consumeInstruction(sessionId: string): Instruction | undefined {
+    const ins = this.instructions.get(sessionId);
+    if (!ins) return undefined;
+    this.instructions.delete(sessionId);
+    const d = this.decisions.get(ins.decision_id);
+    if (d?.response && !d.response.delivered_at) {
+      d.response = { ...d.response, delivered_at: new Date().toISOString() };
+      this.persist(d);
+      this.emit("decision.updated", d);
+    }
+    return ins;
+  }
+
   /** The newest decision of the session and agent that is still open (pending, or its hook went away) and asks the same thing */
   findOpen(sessionId: string, agentId: string | undefined, fingerprint: string): Decision | undefined {
     let best: Decision | undefined;
     for (const d of this.decisions.values()) {
-      if (d.session.session_id !== sessionId || (d.session.agent_id ?? "") !== (agentId ?? "") || d.fingerprint !== fingerprint) continue;
+      if (d.kind === "checkpoint" || d.session.session_id !== sessionId || (d.session.agent_id ?? "") !== (agentId ?? "") || d.fingerprint !== fingerprint) continue;
       if (d.status !== "pending" && d.status !== "hook_disconnected") continue;
       if (!best || d.created_at > best.created_at) best = d;
     }
@@ -301,6 +388,8 @@ export class Store {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
     const decided_at = new Date().toISOString();
+    if ((patch.kind === "checkpoint") !== (d.kind === "checkpoint")) throw new HttpError(400, `this answer does not fit kind ${d.kind}`);
+    if (patch.kind === "checkpoint") return this.answerCheckpoint(d, patch, decided_at);
     const needsKind = patch.kind === "answers" ? "answer_question" : patch.kind === "fallback" ? undefined : "approve_plan";
     if (needsKind && d.kind !== needsKind) throw new HttpError(400, `this answer does not fit kind ${d.kind}`);
 
@@ -331,6 +420,21 @@ export class Store {
     if (patch.kind === "answers") this.rememberCannotAnswer(d, patch.answers);
     this.emit("decision.updated", d);
     this.notify(d.id);
+    return d;
+  }
+
+  /** pending -> answered directly: nobody waits for a checkpoint, so there is no hook ack. instruct / stop queue an instruction */
+  private answerCheckpoint(d: Decision, patch: { answer: "continue" | "instruct" | "stop"; text?: string }, decidedAt: string): Decision {
+    if (d.status !== "pending") throw new HttpError(409, `cannot answer a ${d.status} checkpoint`);
+    const text = patch.text?.trim() ? patch.text : undefined;
+    if (patch.answer === "instruct" && !text) throw new HttpError(400, "text is required for instruct");
+    d.response = { via: "gui", kind: patch.answer, ...(text !== undefined && patch.answer !== "continue" ? { text } : {}), decided_at: decidedAt };
+    this.setStatus(d, "answered");
+    this.persist(d);
+    if (patch.answer !== "continue") {
+      this.instructions.set(d.session.session_id, { decision_id: d.id, kind: patch.answer, text: d.response.text ?? "", created_at: decidedAt });
+    }
+    this.emit("decision.updated", d);
     return d;
   }
 
@@ -419,6 +523,10 @@ export class Store {
 
   checkLeases(now = Date.now()): void {
     for (const d of this.decisions.values()) {
+      if (d.kind === "checkpoint") {
+        if (d.status === "pending" && now - Date.parse(d.created_at) > CHECKPOINT_TTL_MS) this.closeCheckpoint(d, "expired");
+        continue;
+      }
       if (!LIVE.includes(d.status) || !d.lease_until || Date.parse(d.lease_until) > now) continue;
       const to: DecisionStatus = d.status === "pending" ? "hook_disconnected" : "answer_lost";
       this.setStatus(d, to);
@@ -438,7 +546,7 @@ export class Store {
 
   private touchSession(
     sessionId: string,
-    patch: { state?: SessionState; cwd?: string; title?: string },
+    patch: { state?: SessionState; cwd?: string; title?: string; transcript_path?: string },
     live = true,
     at = new Date().toISOString(),
   ): void {
@@ -451,6 +559,8 @@ export class Store {
     };
     const title = patch.title ?? cur?.title;
     if (title) next.title = title;
+    const transcript = patch.transcript_path || cur?.transcript_path;
+    if (transcript) next.transcript_path = transcript;
     this.sessions.set(sessionId, next);
     if (live) this.emit("session.updated", next);
   }
@@ -497,11 +607,22 @@ export class Store {
       Stop: "idle",
       SessionEnd: "ended",
     }[ev.hook_event_name] as SessionState | undefined;
-    this.touchSession(ev.session_id, { state, cwd: ev.cwd }, live, Number.isFinite(at) ? ev.received_at : undefined);
+    this.touchSession(ev.session_id, { state, cwd: ev.cwd, transcript_path: ev.transcript_path }, live, Number.isFinite(at) ? ev.received_at : undefined);
     if (live && (ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "Stop")) {
       this.cancelRecentlyDisconnected(ev.session_id);
     }
     if (live && ev.hook_event_name === "UserPromptSubmit") this.cancelPending(ev.session_id);
+    if (ev.hook_event_name === "SessionEnd") this.endCheckpoints(ev.session_id, live);
+    if (live) this.onSessionEvent?.(ev.session_id, ev.hook_event_name);
+  }
+
+  /** The session ended: its pending checkpoints and the instruction nobody can receive any more are dropped */
+  private endCheckpoints(sessionId: string, live: boolean): void {
+    this.instructions.delete(sessionId);
+    if (!live) return;
+    for (const d of this.decisions.values()) {
+      if (d.kind === "checkpoint" && d.session.session_id === sessionId && d.status === "pending") this.closeCheckpoint(d, "session_end");
+    }
   }
 
   /** The human spoke next in the terminal = the pending decision is no longer being waited for */
@@ -509,6 +630,7 @@ export class Store {
     for (const d of this.decisions.values()) {
       if (d.session.session_id !== sessionId || d.status !== "pending") continue;
       this.transition(d, "cancelled");
+      if (d.kind === "checkpoint") d.status_reason = "new_prompt";
       delete d.lease_until;
       this.persist(d);
       this.emit("decision.updated", d);
@@ -570,7 +692,14 @@ export class Store {
     let cannot = 0;
     let handoffs = 0;
     let reattached = 0;
+    const cp = { created: 0, answered: 0, delivered: 0 };
     for (const x of this.decisions.values()) {
+      if (x.kind === "checkpoint") {
+        cp.created++;
+        if (x.status === "answered") cp.answered++;
+        if (x.response?.delivered_at) cp.delivered++;
+        continue;
+      }
       if (x.status === "denied_explain") continue;
       handoffs += x.handoffs ?? 0;
       reattached += x.previous_tool_use_ids?.length ?? 0;
@@ -590,7 +719,7 @@ export class Store {
     return {
       a: { ...count, escaped_question: this.escapedQuestions, blocker_detected: this.blockersDetected, handoffs, reattached, cannot_answer: cannot, total, rate: total === 0 ? null : count.answered / total },
       b: { human: stat(human), agent: stat(agent), baseline: stat(this.baseline) },
-      c: { session_panel_opens: this.panelOpens },
+      c: { session_panel_opens: this.panelOpens, checkpoints: cp },
       d: { ...d, total: dTotal, attach_rate: dTotal === 0 ? null : (d.first_call + d.after_deny) / dTotal },
     };
   }
