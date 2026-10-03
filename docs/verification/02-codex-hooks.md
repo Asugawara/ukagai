@@ -56,3 +56,16 @@ CODEX_HOME=$CH codex                                                            
 - **PermissionRequest, Allow**: asked to run `curl -sI https://example.com | head -1` (network is blocked in the sandbox, so Codex escalated). The hook registered an "Approval" card (question = the model's description + the command, options Allow / Deny, `tool_name: Bash`); answering `Allow` through the API → no Codex popup, the command ran (`HTTP/2 200`). (Allow had not been tested in C1.)
 - Observed: the deny text for a missing explanation still says "skill ukagai-explain" / "AskUserQuestion" (shared with Claude); the Codex model coped but the wording should be Codex-specific later.
 - Cleanup: pane closed, server stopped, `pgrep` shows no process of the temp `CODEX_HOME` (the managed app-server daemon, the chatgpt-meetings helper and its python were killed by PID).
+
+## Plan approval through the codex-bridge (E1)
+
+Codex CLI 0.159.3, macOS, herdr pane. Temp `CODEX_HOME` (auth copied in and deleted afterwards), git-init'd trusted project, `serve --port 48191 --data-dir <tmp> --codex-home <tmp>` started **before** `codex`. `~/.codex`, `~/.ukagai`, `~/.claude` and port 4818 untouched; the user's own daemon was never connected to. No hooks installed: only the bridge was under test.
+
+1. Server first, no socket yet: it ran normally. About 30 s after `codex` started (the daemon created `app-server-control.sock`) `codex-bridge.log` showed `connected` → `attached threads:1` → `resume_failed … no rollout found` (no message sent yet).
+2. TUI: `/plan Plan briefly how to create notes.txt containing the word ok…`. The first `thread/status/changed active` made the bridge retry: `resumed`. The plan turn ended with the TUI's "Implement this plan?" popup and the bridge logged `plan_registered`: `GET /api/decisions` showed one `approve_plan`, `status: pending`, `session.agent: codex`, `session_id` = the thread id, title = the thread name, plan text as `request.plan` (this plan had no "Scope and reversibility" section, so reversibility / scope were empty).
+3. `POST /api/decisions/:id/answer {"approve":true}` → log `turn_started mode:default` → the TUI showed `› Implement the plan.`, ran `printf 'ok' > notes.txt` and finished; `notes.txt` contained `ok`. The decision went `answered` with `delivered_at` set. The terminal popup stayed open, as documented (not dismissed).
+4. Chose "3. No, stay in Plan mode" in the TUI, ran a second `/plan`, got a second decision, then pressed "1. Yes" in the TUI instead of answering in the API: the decision became `cancelled` with `status_reason: answered_elsewhere` (log `withdrawn`).
+
+Not run against the real daemon: reject with feedback, socket loss / reconnect (both covered by `test/serve/codex-bridge.test.ts` against a fake app-server).
+
+Cleanup: pane closed, `codex app-server daemon stop` (temp home), serve killed, the leftover `ChatGPT Meetings` helper killed by PID, `auth.json` deleted; `pgrep` shows nothing of the temp home or port 48191.

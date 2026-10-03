@@ -223,6 +223,8 @@ export const Decision = z.object({
   /** Only for denied_explain. The MissingCode of the deny reason (spec explain.md section 4) */
   missing: z.array(z.string()).optional(),
   status: DecisionStatus,
+  /** Why the decision was closed without an answer (`answered_elsewhere` when the codex-bridge saw the terminal move first) */
+  status_reason: z.string().optional(),
   lease_until: z.string().optional(),
   created_at: z.string(),
   response: DecisionResponse.optional(),

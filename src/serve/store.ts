@@ -282,10 +282,11 @@ export class Store {
   }
 
   /** Notification when the hook exits on SIGTERM / SIGINT / SIGHUP. pending becomes cancelled, answer_submitted becomes answer_lost */
-  cancel(id: string): Decision {
+  cancel(id: string, reason?: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
     this.transition(d, d.status === "answer_submitted" ? "answer_lost" : "cancelled");
+    if (reason) d.status_reason = reason;
     delete d.lease_until;
     this.persist(d);
     this.emit("decision.updated", d);
