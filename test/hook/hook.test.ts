@@ -770,3 +770,128 @@ test("language: with lang ja an English title / question is denied; Japanese pas
   assert.equal((await run("ja", jaMd, "どちらを選びますか?", "Option A")).out.permissionDecision, "deny");
   assert.equal((await run("en", explanationFor(Q), Q, "Option A")).out.permissionDecision, "allow");
 });
+
+// ---- wait retry and hook.log ----
+
+const readLog = (d: string) =>
+  existsSync(join(d, "hook.log"))
+    ? readFileSync(join(d, "hook.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    : [];
+
+function waitSeq(statuses: number[]): Handler {
+  let n = 0;
+  return (req, res) => {
+    if (req.method === "GET" && req.path.includes("/wait")) {
+      const st = statuses[Math.min(n++, statuses.length - 1)]!;
+      if (st === 200) return json(res, 200, { response: { via: "gui", answers: { [Q]: "B" }, decided_at: NOW() } });
+      res.writeHead(st).end();
+      return true;
+    }
+    return false;
+  };
+}
+
+test("wait: one 500 then 204 then an answer still produces allow (retry)", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(waitSeq([500, 204, 200]), async (f, d) => {
+    const r = await runHook(args(f, d, "--poll-timeout-ms", "1000"), JSON.stringify(t1(sp)));
+    assert.match(r.stdout, /"permissionDecision":"allow"/);
+    assert.equal(f.calls.filter((c) => c.path.includes("/wait")).length, 3);
+    const log = readLog(d);
+    assert.deepEqual(log.map((l) => l.event), ["wait_retry"]);
+    assert.equal(log[0].status, 500);
+  });
+});
+
+test("wait: consecutive 500s past the retry window end with empty stdout and wait_error_final", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(waitSeq([500]), async (f, d) => {
+    const r = await runHook(args(f, d, "--retry-window-ms", "2500"), JSON.stringify(t1(sp)));
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout, "");
+    assert.ok(f.calls.filter((c) => c.path.includes("/wait")).length >= 3);
+    assert.ok(r.ms >= 2400);
+    const log = readLog(d);
+    assert.equal(log.at(-1).event, "wait_error_final");
+    assert.equal(log.at(-1).status, 500);
+    assert.ok(log.some((l) => l.event === "wait_retry"));
+  });
+});
+
+test("wait: 410 is final at once (one request, no retry) and is logged", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(waitSeq([410]), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    assert.equal(r.stdout, "");
+    assert.equal(f.calls.filter((c) => c.path.includes("/wait")).length, 1);
+    const log = readLog(d);
+    assert.deepEqual(log.map((l) => [l.event, l.status]), [["wait_error_final", 410]]);
+    assert.equal(log[0].decision_id, "dec-1");
+  });
+});
+
+test("ack: one failure is retried and the answer is still delivered", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  let acks = 0;
+  const w = waitSeq([200]);
+  const h: Handler = (req, res) => {
+    if (req.path.endsWith("/ack") && acks++ === 0) {
+      res.writeHead(500).end();
+      return true;
+    }
+    return w(req, res);
+  };
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    assert.match(r.stdout, /"permissionDecision":"allow"/);
+    assert.equal(f.calls.filter((c) => c.path.endsWith("/ack")).length, 2);
+    assert.deepEqual(readLog(d).map((l) => l.event), ["ack_retry"]);
+  });
+});
+
+test("ack: two failures give no output and ack_failed is logged", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  const w = waitSeq([200]);
+  const h: Handler = (req, res) => (req.path.endsWith("/ack") ? (res.writeHead(500).end(), true) : w(req, res));
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    assert.equal(r.stdout, "");
+    assert.equal(readLog(d).at(-1).event, "ack_failed");
+  });
+});
+
+test("server killed while waiting: wait_error_final in hook.log, and no question / answer text in it", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  const f = await fakeServer((req, res) => (req.path.includes("/wait") ? (void setTimeout(() => f.close(), 0), true) : false));
+  const d = dataDirWithToken();
+  try {
+    const r = await runHook(args(f, d, "--retry-window-ms", "1500"), JSON.stringify(t1(sp)));
+    assert.equal(r.stdout, "");
+    const text = readFileSync(join(d, "hook.log"), "utf8");
+    const log = readLog(d);
+    assert.equal(log.at(-1).event, "wait_error_final");
+    assert.equal(log.at(-1).session_id, t1(sp).session_id);
+    assert.ok(!text.includes(Q));
+    assert.ok(!text.includes("Choose A or B"));
+  } finally {
+    await f.close();
+  }
+});
+
+test("hook.log rotates to hook.log.1 past 1 MB and never throws without a data dir", async () => {
+  const { hookLog, initHookLog } = await import("../../src/hook/log.js");
+  const d = tmpDir();
+  writeFile(join(d, "hook.log"), "x".repeat(1024 * 1024 + 1));
+  initHookLog(d);
+  hookLog("t", { message: "m" });
+  assert.ok(existsSync(join(d, "hook.log.1")));
+  assert.equal(readLog(d).length, 1);
+  initHookLog(join(d, "missing", "dir"));
+  hookLog("t", {});
+});

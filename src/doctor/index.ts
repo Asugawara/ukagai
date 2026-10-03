@@ -61,6 +61,13 @@ export async function run(argv: string[]): Promise<number> {
   }
   add(true, "gui-opened", opened);
 
+  try {
+    const lines = (await readFile(join(t.dataDir, "hook.log"), "utf8")).trimEnd().split("\n").slice(-3);
+    lines.forEach((l, i) => add(true, i === 0 ? "hook.log (last 3)" : "", l));
+  } catch {
+    // no log yet
+  }
+
   const w = Math.max(...rows.map((r) => r[1].length));
   for (const [ok, name, note] of rows) {
     process.stdout.write(`${ok ? "○" : "×"}  ${name.padEnd(w)}  ${note}\n`.replace(/\s+\n$/, "\n"));

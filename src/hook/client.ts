@@ -9,10 +9,18 @@ const CREATE_TIMEOUT_MS = 3000;
 export type WaitResult =
   | { kind: "answer"; response: DecisionResponse }
   | { kind: "timeout" }
-  | { kind: "error" };
+  | { kind: "error"; status?: number; message: string };
+
+/** Why the last request did not succeed: an HTTP status, or the exception text */
+export interface Failure {
+  status?: number;
+  message: string;
+}
 
 export class Client {
   private token: string | null | undefined;
+  /** Failure of the most recent request (undefined when it got a response). For hook.log */
+  lastFailure: Failure | undefined;
 
   constructor(
     private readonly server: string,
@@ -37,8 +45,12 @@ export class Client {
     body: unknown,
     timeoutMs: number,
   ): Promise<{ status: number; text: string } | null> {
+    this.lastFailure = undefined;
     const token = await this.getToken();
-    if (!token) return null;
+    if (!token) {
+      this.lastFailure = { message: "no token" };
+      return null;
+    }
     try {
       const res = await fetch(this.server + path, {
         method,
@@ -49,8 +61,12 @@ export class Client {
         body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
         signal: AbortSignal.timeout(timeoutMs),
       });
-      return { status: res.status, text: await res.text() };
-    } catch {
+      const text = await res.text();
+      if (res.status < 200 || res.status >= 300) this.lastFailure = { status: res.status, message: `HTTP ${res.status}` };
+      return { status: res.status, text };
+    } catch (err) {
+      const cause = err instanceof Error && err.cause instanceof Error ? `: ${err.cause.message}` : "";
+      this.lastFailure = { message: `${err instanceof Error ? err.message : String(err)}${cause}` };
       return null;
     }
   }
@@ -90,11 +106,13 @@ export class Client {
       undefined,
       pollTimeoutMs + 5000,
     );
-    if (!r) return { kind: "error" };
+    if (!r) return { kind: "error", ...this.lastFailure, message: this.lastFailure?.message ?? "request failed" };
     if (r.status === 204) return { kind: "timeout" };
-    if (r.status !== 200) return { kind: "error" };
+    if (r.status !== 200) return { kind: "error", status: r.status, message: `HTTP ${r.status}` };
     const parsed = WaitResponse.safeParse(Client.json(r.text));
-    return parsed.success ? { kind: "answer", response: parsed.data.response } : { kind: "error" };
+    return parsed.success
+      ? { kind: "answer", response: parsed.data.response }
+      : { kind: "error", status: 200, message: "unparseable wait response" };
   }
 
   async ack(id: string): Promise<boolean> {
