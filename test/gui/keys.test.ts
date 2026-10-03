@@ -296,8 +296,9 @@ gui("free text: i focuses the field, Esc leaves it and keeps the value, i then E
 
 gui("j works even when a button has focus", async () => {
   await seedQuestion();
+  await seedQuestion();
   await reopen();
-  assert.equal(ev(`document.getElementById("submit").focus(), document.activeElement.id`), "submit");
+  assert.equal(ev(`document.getElementById("pending-btn").focus(), document.activeElement.id`), "pending-btn");
   press("j");
   assert.deepEqual(view(), { cursor: 2, checked: 2 });
 });
@@ -374,7 +375,7 @@ gui("arrows: ← / → switch pending decisions (plan); buttons move with ↑ / 
   const p = await seedPlan();
   assert.ok(q.id && p.id);
   await reopen();
-  const isPlan = () => ev<boolean>(`!!document.querySelector("#decision #submit") === false`);
+  const isPlan = () => ev<boolean>(`!!document.querySelector("#decision .btn.danger")`);
   assert.equal(isPlan(), false);
   press("ArrowRight");
   assert.equal(isPlan(), true);
@@ -467,7 +468,7 @@ gui("a long headline folds at 2 lines with a Show all button, the cards and Answ
   const inView = (sel: string) => { const r = rect(sel); return r.top >= 0 && r.bottom <= vh; };
   const folded = `document.querySelector("#head .headline").scrollHeight > document.querySelector("#head .headline").clientHeight + 1`;
   assert.equal(inView("#decision .opt:last-of-type"), true);
-  assert.equal(inView("#submit"), true);
+  assert.equal(inView("#decision .hint"), true);
   assert.equal(ev<boolean>(folded), true); // folded at 2 lines
   assert.equal(ev<number>(`document.querySelector("#head .headline").getBoundingClientRect().height`) < 2 * 1.5 * 15 + 2, true);
   assert.equal(ev<boolean>(`document.querySelector("#head .more-chip").hidden`), false);
@@ -478,7 +479,7 @@ gui("a long headline folds at 2 lines with a Show all button, the cards and Answ
   assert.equal(ev<boolean>(`!(${folded})`), true); // full text visible
   assert.equal(ev<boolean>(`document.querySelector("#head .headline").textContent.includes("and that is all.")`), true);
   assert.equal(q1("#head .more-chip"), "Collapse");
-  assert.equal(inView("#submit"), true);
+  assert.equal(inView("#decision .hint"), true);
   press(".");
   assert.equal(ev<boolean>(folded), true); // . again folds it
   assert.equal(q1("#head .more-chip"), "Show all");
@@ -597,7 +598,7 @@ gui("long inline code wraps at the column width and --port is not split", async 
   assert.equal(r.port, "--port");
 });
 
-gui("cancelling a decision that is not shown gives a red toast (at most 3, above the submit button)", async () => {
+gui("cancelling a decision that is not shown gives a red toast (at most 3, above the actions row)", async () => {
   await seedQuestion({ title: "Shown decision" });
   const others = [await seedQuestion({ title: "Background decision 1" }), await seedQuestion({ title: "Background decision 2" }), await seedQuestion({ title: "Background decision 3" }), await seedQuestion({ title: "Background decision 4" })];
   await reopen();
@@ -605,8 +606,8 @@ gui("cancelling a decision that is not shown gives a red toast (at most 3, above
   await waitFor("toast", `document.querySelectorAll(".toast.lost").length === 3`);
   const text = ev<string>(`document.querySelector(".toast.lost").textContent`);
   assert.ok(text.includes("was cancelled") && !text.includes("did not reach"), text); // cancel of an unanswered decision
-  const r = ev<{ t: number; b: number }>(`JSON.stringify((() => { const t = document.querySelector(".toasts").getBoundingClientRect(), s = document.getElementById("submit").getBoundingClientRect(); return { t: t.bottom, b: s.top }; })())`);
-  assert.ok(r.t <= r.b, `toasts do not overlap the submit button: ${JSON.stringify(r)}`);
+  const r = ev<{ t: number; b: number }>(`JSON.stringify((() => { const t = document.querySelector(".toasts").getBoundingClientRect(), s = document.querySelector("#decision .actions").getBoundingClientRect(); return { t: t.bottom, b: s.top }; })())`);
+  assert.ok(r.t <= r.b, `toasts do not overlap the actions row: ${JSON.stringify(r)}`);
 });
 
 gui("plan: the heading is plain text and \"Scope and reversibility\" is in the right column (absent when missing)", async () => {
@@ -786,10 +787,10 @@ gui("ja: main UI strings are Japanese after data-lang is set to ja", async () =>
   await seedQuestion();
   await seedQuestion();
   await reopen();
-  assert.equal(ev<string>(`document.getElementById("submit").textContent`).startsWith("Answer"), true);
+  assert.equal(ev<string>(`document.querySelector("#decision .hint-full").textContent`).includes("Send"), true);
   assert.equal(ev<string>(`document.getElementById("pending-btn").textContent`).startsWith("Pending"), true);
   try {
-    await setLang("ja", `document.getElementById("submit")?.textContent.startsWith("回答する")`);
+    await setLang("ja", `document.querySelector("#decision .hint-full")?.textContent.includes("送信")`);
     assert.equal(ev<boolean>(`document.getElementById("pending-btn").textContent.startsWith("保留")`), true);
     assert.equal(ev<boolean>(`document.getElementById("drawer").getAttribute("aria-label") === "保留一覧"`), true);
     assert.equal(ev<boolean>(`document.querySelector("#decision .rec-badge").textContent === "★ 推奨"`), true);
@@ -937,11 +938,11 @@ gui("reversibility shape: ↺ / ◐ / ■ in the badge, with the scope next to i
 gui("weight: on an irreversible decision Enter needs a second press within 3 seconds", async () => {
   const { id } = await seedRich({ reversibility: "irreversible", scope: "machine" });
   await reopen(RICH_READY);
-  const bar = () => ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`);
+  const bar = () => ev<boolean>(`!!document.querySelector("#decision .confirm-inline:not([hidden])")`);
   assert.equal(bar(), false);
   press("Enter");
   assert.equal(bar(), true);
-  assert.equal(q1("#decision .confirm-bar"), "Press Enter again to confirm (3s)");
+  assert.equal(q1("#decision .confirm-inline:not([hidden])"), "Click again to send (3s)");
   assert.equal((await api(`/api/decisions/${id}`)).status, "pending"); // one Enter does not send
   await sleep(3400);
   assert.equal(bar(), false); // released after 3 seconds
@@ -955,7 +956,7 @@ gui("weight: on an irreversible decision Enter needs a second press within 3 sec
 gui("weight: a risk cell that says it cannot be undone makes that option's Enter a double press", async () => {
   const { id } = await seedRich();
   await reopen(RICH_READY);
-  const bar = () => ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`);
+  const bar = () => ev<boolean>(`!!document.querySelector("#decision .confirm-inline:not([hidden])")`);
   press("j"); // Postgres: "The migration cannot be undone"
   press("Enter");
   assert.equal(bar(), true);
@@ -1182,7 +1183,7 @@ gui("ja: the shape, You decide, Against, None of these and the confirmation foll
     assert.equal(q1("#background .against-cap"), "反論:");
     assert.equal(q1("#decision .none-card").startsWith("どれでもない…"), true);
     press("Enter");
-    assert.equal(q1("#decision .confirm-bar"), "もう一度 Enter で確定(3 秒)");
+    assert.equal(q1("#decision .confirm-inline:not([hidden])"), "もう一度クリックで送信(3 秒)");
     press("n");
     assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .none-type")].map(e => e.textContent))`), ["選択肢が足りない", "前提が違う", "証拠が足りない", "あとで聞いて"]);
   } finally {
@@ -1197,14 +1198,14 @@ const rectIn = (sel: string) => ev<{ top: number; bottom: number; left: number; 
 );
 const visible = (sel: string) => { const r = rectIn(sel); return r.top >= 0 && r.bottom <= r.vh && r.left >= 0 && r.right <= r.vw; };
 
-gui("Q5-01: the cursor card and the Answer button are in the viewport at 1440x900, 1280x800 and 1000x700", async () => {
+gui("Q5-01: the cursor card and the hint line are in the viewport at 1440x900, 1280x800 and 1000x700", async () => {
   await seedRich();
   try {
     for (const [w, h] of [["1440", "900"], ["1280", "800"], ["1000", "700"]]) {
       ab("set", "viewport", w, h);
       await reopen(RICH_READY);
       assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: cursor card ${JSON.stringify(rectIn("#decision .opt.cursor"))}`);
-      assert.equal(visible("#submit"), true, `${w}x${h}: submit ${JSON.stringify(rectIn("#submit"))}`);
+      assert.equal(visible("#decision .hint"), true, `${w}x${h}: hint ${JSON.stringify(rectIn("#decision .hint"))}`);
       // moving to the last card (free text) and back keeps the cursor card in view; the cards area is what scrolls
       press("G");
       assert.equal(visible("#decision .opt.cursor"), true, `${w}x${h}: last card`);
@@ -1295,7 +1296,7 @@ gui("Q5-08: None of these needs no second Enter even on an irreversible decision
   const { id } = await seedRich({ reversibility: "irreversible", scope: "machine" });
   await reopen(RICH_READY);
   press("Enter");
-  assert.equal(ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`), true); // a card answer still asks
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .confirm-inline:not([hidden])")`), true); // a card answer still asks
   press("j"); // moving releases the confirmation
   press("n", "Enter");
   const d = await waitStatus(id, "answer_submitted", 1500); // sent at once, no second Enter
@@ -1311,4 +1312,187 @@ gui("Q5-11: a section with an unknown H2 heading is shown (with its heading) at 
   assert.equal(q1("#background").includes("A sketch of the call"), true);
   assert.equal(ev<boolean>(`!!document.querySelector("#background").textContent.includes("const x = read();")`), true);
   assert.equal(heads.at(-1), "What it looks like"); // at the end of the left column
+});
+
+// ---- Can't answer this (U1) ----
+
+const COINED_MD = readFileSync(new URL("./fixtures/coined.md", import.meta.url), "utf8");
+const coinedSeed = () => seedQuestion({ markdown: COINED_MD.replace("__QUESTION__", "Publish, hold or skip?").replace("__TITLE__", "ship the image?"), title: "P-GH: ship the image?" });
+const undefTexts = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background .term-undef")].map(e => e.textContent))`);
+const answerOf = (d: any) => Object.values(d.response.answers)[0];
+
+gui("Can't answer: suspicious identifiers are red in the text, x opens the panel on Undefined terms with all of them ticked, one unticked goes out at once", async () => {
+  const { id } = await coinedSeed();
+  await reopen();
+  assert.deepEqual([...new Set(undefTexts())].sort(), ["FT4", "G-T2", "P-GH", "TM28", "W-T2"]); // GHCR is defined under Terms
+  assert.equal(ev(`document.querySelector("#background .term-undef").title`), "Not defined under Terms");
+  assert.equal(count("#background .term-undef"), 5);
+  assert.equal(q1("#decision .cannot-card"), "Can't answer this…");
+  assert.equal(count("#decision .cannot-panel"), 0);
+  press("x");
+  assert.equal(count("#decision .cannot-panel"), 1);
+  assert.equal(q1("#decision .cannot-reason.cursor"), "Undefined terms");
+  assert.equal(count("#decision .cannot-term.on"), 5);
+  press("j", "j"); // second term row (the title is scanned first: P-GH, W-T2, ...)
+  press("Space");
+  assert.equal(count("#decision .cannot-term.on"), 4);
+  const unticked = ev<string>(`document.querySelector("#decision .cannot-term:not(.on)").dataset.term`);
+  const left = ["P-GH", "W-T2", "FT4", "G-T2", "TM28"].filter((x) => x !== unticked);
+  const t0 = Date.now();
+  press("Enter");
+  const d = await waitStatus(id, "answer_submitted", 300);
+  assert.ok(Date.now() - t0 < 3000);
+  assert.equal(answerOf(d), `Cannot answer — Undefined terms: ${left.join(", ")}`);
+});
+
+gui("Can't answer: no suspicious identifier -> default Unclear, i adds a note", async () => {
+  const { id } = await seedQuestion();
+  await reopen();
+  assert.equal(count("#background .term-undef"), 0);
+  press("x");
+  assert.equal(q1("#decision .cannot-reason.cursor"), "Explanation unclear");
+  press("i");
+  ab("keyboard", "type", "what is the gate");
+  press("Enter");
+  const d = await waitStatus(id, "answer_submitted", 1500);
+  assert.equal(answerOf(d), "Cannot answer — Unclear: what is the gate");
+  await cancelAll();
+  const b = await seedQuestion();
+  await reopen();
+  press("x", "j", "Enter"); // Too much at once, no note
+  assert.equal(answerOf(await waitStatus(b.id, "answer_submitted", 1500)), "Cannot answer — Too much at once");
+});
+
+gui("Can't answer: with every term unticked Undefined terms cannot be sent; i adds a term; clicking a red word ticks it", async () => {
+  const { id } = await coinedSeed();
+  await reopen();
+  press("x");
+  for (let k = 0; k < 5; k++) press("j", "Space");
+  assert.equal(count("#decision .cannot-term.on"), 0);
+  assert.equal(q1("#decision .cannot-need"), "Keep at least one term ticked");
+  press("k", "k", "k", "k", "k", "Enter"); // back on the reason row: Enter sends nothing
+  await sleep(400);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  press("i");
+  ab("keyboard", "type", "SLO");
+  press("Enter");
+  assert.equal(count("#decision .cannot-term"), 6);
+  assert.equal(count("#decision .cannot-need"), 0);
+  press("Escape"); // leave the field
+  press("Escape"); // close the panel
+  assert.equal(count("#decision .cannot-panel"), 0);
+  ev(`document.querySelector("#background .term-undef[data-undef='TM28']").click(), "ok"`);
+  assert.equal(count("#decision .cannot-panel"), 1);
+  assert.equal(ev(`document.querySelector("#decision .cannot-term[data-term='TM28']").classList.contains("on")`), true);
+});
+
+gui("Can't answer: the plan screen has no x and no button", async () => {
+  await seedPlan();
+  await reopen("document.querySelector('#decision .btn')");
+  press("x");
+  assert.equal(count("#decision .cannot-card"), 0);
+  assert.equal(count("#decision .cannot-panel"), 0);
+});
+
+gui("Can't answer: the hint line mentions x and stays on one line at 1000x700", async () => {
+  await coinedSeed();
+  await reopen();
+  ab("set", "viewport", "1000", "700");
+  try {
+    assert.equal(q1("#decision .hint .hint-short").includes("x"), true);
+    const lines = ev<number>(`(() => { const h = document.querySelector("#decision .hint"); return Math.round(h.getBoundingClientRect().height / parseFloat(getComputedStyle(h).lineHeight)); })()`);
+    assert.equal(lines, 1);
+  } finally { ab("set", "viewport", "1440", "900"); }
+});
+
+// ---- One click (V1): selecting = sending ----
+
+
+gui("one click: there is no Answer button on a single select (and no #submit)", async () => {
+  await seedQuestion();
+  await reopen();
+  assert.equal(count("#decision button.answer"), 0);
+  assert.equal(count("#decision #submit"), 0);
+  assert.equal(count("#decision .cardkey"), 3);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .cardkey")].map(e => e.textContent))`), ["1", "2", "3"]);
+});
+
+gui("one click: clicking a card sends it at once (< 400 ms) (the cursor card and any other)", async () => {
+  const { id } = await seedQuestion();
+  await reopen();
+  ab("click", "#decision .opt:nth-of-type(3)"); // C
+  const t0 = Date.now();
+  const d = await waitStatus(id, "answer_submitted", 400);
+  assert.ok(Date.now() - t0 < 400);
+  assert.equal(answerOf(d), "C");
+});
+
+gui("one click: the digit key 2 sends the second card and leaves the cursor where it was", async () => {
+  const { id } = await seedQuestion();
+  await reopen();
+  press("2");
+  const d = await waitStatus(id, "answer_submitted", 1500);
+  assert.equal(answerOf(d), "B (Recommended)");
+});
+
+gui("one click: an irreversible decision needs two clicks within 3 seconds; after 3 seconds it is released; another card starts over", async () => {
+  const { id } = await seedQuestion({ reversibility: "irreversible" });
+  await reopen();
+  const bar = () => ev<string>(`"t:" + [...document.querySelectorAll("#decision .confirm-inline:not([hidden])")].map(e => e.closest(".opt").querySelector(".cardkey").textContent).join(",")`).slice(2);
+  ab("click", "#decision .opt:nth-of-type(1)");
+  assert.equal(bar(), "1");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  await sleep(3400);
+  assert.equal(bar(), ""); // released
+  ab("click", "#decision .opt:nth-of-type(1)");
+  ab("click", "#decision .opt:nth-of-type(2)"); // another card: starts over, nothing sent
+  assert.equal(bar(), "2");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  ab("click", "#decision .opt:nth-of-type(2)");
+  assert.equal(answerOf(await waitStatus(id, "answer_submitted", 1500)), "B (Recommended)");
+});
+
+gui("one click: 1-4 do nothing while the free-text field has focus (the digit is typed)", async () => {
+  const { id } = await seedQuestion();
+  await reopen();
+  press("i");
+  ab("keyboard", "type", "1");
+  await sleep(400);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  assert.equal(String(ev(`document.querySelector(".free-text").value`)), "1");
+  press("Enter"); // Enter in the field sends the text
+  assert.equal(answerOf(await waitStatus(id, "answer_submitted", 1500)), "1");
+});
+
+gui("one click: Enter in an empty free-text field sends nothing", async () => {
+  const { id } = await seedQuestion();
+  await reopen();
+  press("i", "Enter");
+  await sleep(400);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+});
+
+gui("one click: a Can't answer / None of these reason row sends when clicked", async () => {
+  const { id } = await coinedSeed();
+  await reopen();
+  press("x");
+  ab("click", "#decision .cannot-reason[data-reason='Unclear']");
+  assert.equal(answerOf(await waitStatus(id, "answer_submitted", 1500)), "Cannot answer — Unclear");
+  await cancelAll();
+  const b = await seedQuestion();
+  await reopen();
+  press("n");
+  ab("click", "#decision .none-type[data-type='Wrong premise']");
+  assert.equal(answerOf(await waitStatus(b.id, "answer_submitted", 1500)), "None of these — Wrong premise");
+});
+
+gui("one click: the blocker's Stop here needs two clicks, Done sends at once", async () => {
+  const b = await seedBlocker();
+  await reopen();
+  const stop = b.labels.length - 1;
+  ab("click", `#decision .opt:nth-of-type(${stop + 1})`);
+  assert.equal(count("#decision .confirm-inline:not([hidden])"), 1);
+  assert.equal((await api(`/api/decisions/${b.id}`)).status, "pending");
+  ab("click", `#decision .opt:nth-of-type(${stop + 1})`);
+  assert.equal(answerOf(await waitStatus(b.id, "answer_submitted", 1500)), b.labels[stop]);
 });

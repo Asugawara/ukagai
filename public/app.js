@@ -38,6 +38,55 @@ const UNDO_BAD_WORDS =
 const UNDO_WORDS =
   /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i;
 const hasBad = (s) => UNDO_BAD_WORDS.test(s ?? "");
+
+// <coined> Suspicious identifiers (U1). Same rules as the coined-terms section of src/hook/explain.ts (COINED_ALLOW / COINED_TOKEN /
+// COINED_PHASE_* / extractCoined / termDefines); test/gui/cannot.test.ts runs this block next to explain.ts and compares the results.
+const COINED_ALLOW_WORDS =
+  "CI CD CLI API GUI TUI SSE URL URI HTTP HTTPS JSON YAML TOML HTML CSS JS TS PR OSS DB UI UX OK NG ID CPU GPU RAM GB MB KB TB MS TTY ANSI SQL SSH TLS SSL DNS IP TCP UDP GCP AWS GCS S3 IAM VM OS PID ENV NPM PNPM CDN SVG PNG JPG PDF CSV UTF IDE LSP MCP LLM AI QA ADR README TODO FAQ EOF CRUD REST RPC GRPC JWT SDK ETA TBD WIP NFKC SGR ESC CJK IME UTC ISO RFC HEAD SHA RSA AES HMAC GPT IPV MD5 MP3 MP4 EC2 K8S P50 P90 P95 P99";
+const COINED_ALLOW = new Set(COINED_ALLOW_WORDS.split(" "));
+const COINED_TOKEN = /\b[A-Z]{1,4}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
+const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Tier", "Day", "Week", "Round", "Batch", "Lane"];
+const anyCase = (w) => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
+const COINED_PHASE_EN = new RegExp(
+  `\\b(?:${PHASE_WORDS.map(anyCase).join("|")})\\s?(\\d{1,3}[A-Za-z]?|[A-Z][A-Z0-9]{0,2})(?![A-Za-z0-9]|-[A-Z0-9])`,
+  "g",
+);
+const COINED_PHASE_JA = /(?:フェーズ|ステップ|段階|工程|ゲート|トラック|ラウンド|第)\s?([0-9A-Z]{1,3})(?![A-Za-z0-9]|-[A-Z0-9])/g;
+const TERM_POINTER = /plan\s*の行|the plan item|see plan|計画の項目/gi;
+const TERM_MIN_CHARS = 12;
+
+function coinedAllowed(token) {
+  if (COINED_ALLOW.has(token)) return true;
+  const prefix = /^[A-Z]+/.exec(token)?.[0] ?? "";
+  return prefix.length >= 3 && COINED_ALLOW.has(prefix);
+}
+
+function extractCoined(text) {
+  const s = text.normalize("NFKC").replace(/https?:\/\/\S+/g, " ");
+  const found = [];
+  for (const m of s.matchAll(COINED_TOKEN)) {
+    const t = m[0];
+    if (coinedAllowed(t)) continue;
+    if (/v\d[\w.]*-$/i.test(s.slice(Math.max(0, m.index - 24), m.index))) continue; // part of a version such as v0.2.0-DT1
+    found.push({ at: m.index, token: t });
+  }
+  for (const re of [COINED_PHASE_EN, COINED_PHASE_JA]) {
+    for (const m of s.matchAll(re)) {
+      if (COINED_ALLOW.has(m[1].toUpperCase())) continue;
+      found.push({ at: m.index, token: m[0] });
+    }
+  }
+  const out = [];
+  for (const f of found.sort((a, b) => a.at - b.at)) if (!out.includes(f.token)) out.push(f.token);
+  return out;
+}
+
+// A Terms definition that says something: at least 12 characters once pointers such as "plan の行" are removed
+function termDefines(definition) {
+  const rest = definition.normalize("NFKC").replace(TERM_POINTER, "").replace(/^[\s\p{P}\p{S}]+/u, "").trim();
+  return [...rest].length >= TERM_MIN_CHARS;
+}
+// </coined>
 // Option colors: --opt-0..3 in app.css; the recommended option uses the accent
 const optColor = (i, recommended) => (recommended ? "var(--accent)" : `var(--opt-${i % 4})`);
 // A weighty answer needs Enter twice within this time; everything else is POSTed at once
@@ -49,7 +98,11 @@ const NONE_TYPES = [
   ["Ask me later", "none_later"],
 ];
 const NONE_PREFIX = "None of these"; // the answer is `None of these — <type>: <text>`
+// "Can't answer this…": the answer is `Cannot answer — <reason>: <detail>` (reason names are always English)
+const CANNOT_PREFIX = "Cannot answer";
+const CANNOT_REASONS = [["Undefined terms", "cannot_terms"], ["Unclear", "cannot_unclear"], ["Too much at once", "cannot_much"]];
 
+let selecting = false; // setCursor clicks the radio itself: that click is not a send
 const decisions = new Map();
 const drafts = new Map(); // id -> { sel: Map<qIndex, Set<label>>, free: Map<qIndex, {on, text}>, rejecting, reason }
 let shownId = null;
@@ -485,6 +538,7 @@ window.addEventListener("resize", () => {
 function syncConfirm(dr) {
   const bar = document.querySelector("#decision .confirm-bar");
   if (bar) bar.hidden = !dr.confirmKey;
+  for (const e of document.querySelectorAll("#decision .confirm-inline")) e.hidden = e.dataset.key !== dr.confirmKey;
   document.querySelector("#decision .btn.primary")?.classList.toggle("confirming", !!dr.confirmKey);
 }
 function clearConfirm(dr) {
@@ -612,7 +666,7 @@ function openCompare(v2, ui) {
       const col = c.cols.find((x) => x.name === name);
       const td = el("td", { class: "cmp-c" + (c.recommended ? " is-rec" : ""), "data-i": String(i) });
       if (col?.cell) td.append(inlineClone(col.cell)); else td.append("—");
-      decorate(td, { terms: v2.terms }, { risk: COLUMN_RISK.test(name) });
+      decorate(td, { terms: v2.terms, undef: v2.undef }, { risk: COLUMN_RISK.test(name) });
       tr.append(td);
     });
     body.append(tr);
@@ -640,7 +694,8 @@ function overlayKey(ev) {
     closeOverlay();
     ui.setCursor(sel, true);
     if (ui.multi) return;
-    if (!ui.submit.disabled) ui.submit.click();
+    if (!ui.needSubmit) ui.sendCard(sel);
+    else if (!ui.submit.disabled) ui.submit.click();
     return;
   }
   syncCompare();
@@ -699,6 +754,7 @@ function renderRightBody(d) {
     const cards = []; // { input, card } when there is one question (for the arrow keys)
     let freeTextEl = null;
     let noneNote = null;
+    let cannotNote = null;
     const qsBox = el("div", { class: "qs" });
     root.classList.toggle("split", single); // one question: the top part stays, only the cards scroll
     qs.forEach((q, qi) => {
@@ -749,20 +805,64 @@ function renderRightBody(d) {
         const descs = it.lines.map((l) => {
           const dd = el("div", { class: (l.muted ? "desc muted" : "desc") + (l.extra ? " extra" : "") + " clampable" },
             l.extra ? el("b", { class: "xcol", text: `${l.extra}: ` }) : null, l.cell ? inlineClone(l.cell) : l.text);
-          if (v2) decorate(dd, { terms: v2.terms }, { risk: !!l.muted });
+          if (v2) decorate(dd, { terms: v2.terms, undef: v2.undef }, { risk: !!l.muted });
           return dd;
         });
-        const card = el("label", { class: "opt" + (it.badge ? " recommended" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null }, input,
-          el("span", { class: "grow" }, lab, ...descs));
-        if (single) { const idx = cards.length; cards.push({ input, card, risk: it.risk ?? "" }); card.addEventListener("click", () => ui?.setCursor(idx, false)); }
+        const idx = cards.length;
+        const oneClick = single && !q.multiSelect; // selecting = sending: no Answer button, a click sends (the digit key too)
+        const card = el("label", { class: "opt" + (it.badge ? " recommended" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null },
+          oneClick && idx < 4 ? el("span", { class: "cardkey", text: String(idx + 1) }) : null, input,
+          el("span", { class: "grow" }, lab, ...descs,
+            oneClick ? el("div", { class: "confirm-inline", "data-key": `card:${idx}`, hidden: dr.confirmKey !== `card:${idx}`, text: t("confirm_again") }) : null));
+        if (single) {
+          cards.push({ input, card, risk: it.risk ?? "", value: it.value });
+          card.addEventListener("click", (ev) => {
+            if (!oneClick) { ui?.setCursor(idx, false); return; }
+            if (selecting) return; // setCursor's own radio click: let it check the radio
+            ev.preventDefault(); // the label must not forward a second click to the radio
+            if (closed || !ui) return;
+            ui.setCursor(idx, true);
+            ui.sendCard(idx);
+          });
+        }
         cardsBox.append(card);
       }
       if (single) {
         const none = dr.none;
-        cardsBox.append(el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
-          el("span", { text: t("none_of_these") })));
+        const cannot = dr.cannot;
+        // One quiet row of two underlined text buttons: "None of these…" (the options are wrong) and "Can't answer this…" (the explanation is unreadable)
+        cardsBox.append(el("div", { class: "escape-row" },
+          el("div", { class: "none-card" + (none ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openNone(d); } },
+            el("span", { text: t("none_of_these") })),
+          el("div", { class: "cannot-card" + (cannot ? " open" : ""), role: "button", tabindex: "-1", onclick: () => { if (!closed) openCannot(d); } },
+            el("span", { text: t("cannot_answer") }))));
+        if (cannot && !closed) {
+          const rows = cannotRows(cannot);
+          const panel = el("div", { class: "esc-panel cannot-panel" });
+          rows.forEach((row, k) => {
+            const cls = (k === cannot.cur ? " cursor" : "");
+            if (row.kind === "term") {
+              const x = cannot.terms[row.i];
+              panel.append(el("div", { class: "cannot-term" + cls + (x.on ? " on" : ""), "data-term": x.t,
+                onclick: () => { x.on = !x.on; cannot.cur = k; renderRight(d); } }, el("span", { text: `${x.on ? "☑" : "☐"} ${x.t}` })));
+            } else {
+              panel.append(el("div", { class: "cannot-reason" + cls, "data-reason": CANNOT_REASONS[row.r][0],
+                onclick: () => { cannot.cur = k; if (cannotValue(cannot) == null) renderRight(d); else ui?.submitCannot(); } }, el("span", { text: t(CANNOT_REASONS[row.r][1]) })));
+            }
+          });
+          const reason = reasonOf(cannot);
+          cannotNote = el("input", {
+            type: "text", class: "cannot-note", placeholder: t(reason === 0 ? "cannot_terms_hint" : "cannot_detail_hint"),
+            value: reason === 0 ? cannot.add : cannot.note,
+            oninput: (ev) => { if (reasonOf(cannot) === 0) cannot.add = ev.target.value; else cannot.note = ev.target.value; },
+          });
+          const valid = cannotValue(cannot) != null;
+          panel.append(cannotNote);
+          if (!valid) panel.append(el("div", { class: "cannot-need", text: t("cannot_need_term") }));
+          cardsBox.append(panel);
+        }
         if (none && !closed) {
-          const panel = el("div", { class: "none-panel" });
+          const panel = el("div", { class: "esc-panel none-panel" });
           NONE_TYPES.forEach(([type, key], k) => panel.append(el("div", {
             class: "none-type" + (k === none.cursor ? " cursor" : ""), "data-type": type,
             onclick: () => { none.cursor = k; syncNone(); ui?.submitNone(); },
@@ -794,7 +894,7 @@ function renderRightBody(d) {
       });
       const freeCard = el("label", { class: "opt free" }, freeInput,
         el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("free_text") })), freeText));
-      if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
+      if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard, free: true }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
       cardsBox.append(freeCard);
       qsBox.append(box);
     });
@@ -820,30 +920,35 @@ function renderRightBody(d) {
       });
       return { answers, weighty };
     };
-    const submit = el("button", {
+    // Single select with one question has no Answer button (selecting = sending). Multi select and several questions keep one
+    const needSubmit = !single || !!qs[0].multiSelect;
+    const submit = needSubmit ? el("button", {
       class: "btn primary", type: "button", id: "submit", disabled: closed || !complete(),
       onclick: () => { const { answers, weighty } = collect(); attempt(d, dr, "submit", { answers }, weighty); },
-    }, el("span", { text: t("answer") }));
-    function updateSubmit() { submit.disabled = closed || !complete(); }
-    const actions = el("div", { class: "actions" }, confirmBar(dr), submit);
+    }, el("span", { text: t("answer") })) : null;
+    function updateSubmit() { if (submit) submit.disabled = closed || !complete(); }
+    const actions = el("div", { class: "actions" }, needSubmit ? confirmBar(dr) : null, submit);
     if (single) {
-      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", d.explanation && hasExplanation(d) ? "y" : "", "n"].filter(Boolean);
+      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", d.explanation && hasExplanation(d) ? "y" : "", "n", "x"].filter(Boolean);
       const extraHints = [
         v2?.terms.length ? `? ${t("hint_terms")} · ` : "",
         modelFor(d).fnCount ? `e ${t("hint_evidence")} · ` : "",
         v2?.hasExtra ? `v ${t("hint_compare")} · ` : "",
         d.explanation && hasExplanation(d) ? `y ${t("hint_copy_badge")} · ` : "",
         `n ${t("hint_none")} · `,
+        `${t("hint_cannot")} · `,
       ].join("");
       // The full line, and a short one that CSS swaps in below 1100px / 800px so that the hint stays on one line
-      const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}Enter ${t("hint_answer")} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}←→ ${t("hint_next")} · Esc ${t("hint_back")}`;
-      const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}Enter ${t("hint_short_answer")} · ${letters.join(" ")} ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
+      const sendFull = needSubmit ? `Enter ${t("hint_answer")}` : t("hint_send");
+      const sendShort = needSubmit ? `Enter ${t("hint_short_answer")}` : t("hint_short_send");
+      const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}${sendFull} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}←→ ${t("hint_next")} · Esc ${t("hint_back")}`;
+      const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}${sendShort} · ${letters.join(" ")} ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
       actions.append(el("div", { class: "hint" }, el("span", { class: "hint-full", text: full }), el("span", { class: "hint-short", text: short }), " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
     ui = {
-      kind: "question", cards, multi, submit, closed, single, v2, freeText: freeTextEl, noneNote,
+      kind: "question", cards, multi, submit, needSubmit, optCount: Math.max(0, cards.length - 1), closed, single, v2, freeText: freeTextEl, noneNote, cannotNote,
       copy: v2?.todoBox?.querySelector("pre") ? () => copyCode(v2.todoBox.querySelector("pre")) : null,
       setCursor(i, select) {
         if (!cards.length) return;
@@ -853,10 +958,32 @@ function renderRightBody(d) {
         cards.forEach((c, k) => c.card.classList.toggle("cursor", k === i));
         revealCard(cards[i].card);
         updateMore(dr);
-        if (select && !multi && !closed) cards[i].input.click();
+        if (select && !multi && !closed) { selecting = true; cards[i].input.click(); selecting = false; }
       },
       get cursor() { return dr.cursor ?? 0; },
       toggleExpand: () => toggleExpand(dr),
+      // Send card idx (an option, or the free text) at once; weighty ones (irreversible, a risk that cannot be undone, Stop here) need a second send within 3 seconds
+      sendCard(idx) {
+        if (closed) return;
+        const c = cards[idx];
+        if (!c) return;
+        let answer;
+        let weighty = reversibilityOf(d) === "irreversible";
+        if (c.free) {
+          answer = dr.free.get(0).text.trim();
+          if (!answer) return;
+        } else {
+          answer = c.value;
+          if (hasBad(c.risk)) weighty = true;
+          if (isBlocker(d) && BLOCKER_LABELS.stop.some((n) => sameLabel(answer, n))) weighty = true;
+        }
+        attempt(d, dr, `card:${idx}`, { answers: { [qs[0].question]: answer } }, weighty);
+      },
+      submitCannot() {
+        const value = dr.cannot ? cannotValue(dr.cannot) : null;
+        if (value == null) return;
+        attempt(d, dr, "cannot", { answers: { [qs[0].question]: value } }, false); // nothing irreversible is chosen: no Enter twice
+      },
       submitNone() {
         if (!dr.none) return;
         const [type] = NONE_TYPES[dr.none.cursor];
@@ -915,7 +1042,46 @@ function renderRightBody(d) {
 function openNone(d) {
   const dr = draftOf(d);
   dr.none = { cursor: 0, note: "" };
+  dr.cannot = null;
   renderRight(d);
+}
+
+// "Can't answer this…": reasons with the suspicious identifiers ticked under "Undefined terms" in one list (the cursor walks reasons and terms).
+// The answer is `Cannot answer — <reason>: <detail>`; `tick` (a clicked identifier) is ticked, and added when the scan did not find it
+function openCannot(d, tick) {
+  if (!d || d.status !== "pending" || d.kind !== "answer_question" || d.request.questions.length !== 1) return;
+  const dr = draftOf(d);
+  dr.none = null;
+  if (!dr.cannot) {
+    const terms = (modelFor(d).v2?.undef ?? []).map((x) => ({ t: x, on: true }));
+    dr.cannot = { cur: terms.length ? 0 : 1, terms, note: "", add: "" };
+  }
+  const c = dr.cannot;
+  if (tick) {
+    const x = c.terms.find((y) => y.t === tick);
+    if (x) x.on = true; else c.terms.push({ t: tick, on: true });
+    c.cur = 0;
+  }
+  renderRight(d);
+  document.querySelector("#decision .cannot-panel")?.scrollIntoView({ block: "nearest" });
+}
+function closeCannot(d) {
+  draftOf(d).cannot = null;
+  renderRight(d);
+}
+// Rows of the panel: "Undefined terms", its terms, "Unclear", "Too much at once"
+const cannotRows = (c) => [{ kind: "reason", r: 0 }, ...c.terms.map((_, i) => ({ kind: "term", i })), { kind: "reason", r: 1 }, { kind: "reason", r: 2 }];
+const reasonOf = (c) => { const row = cannotRows(c)[c.cur]; return row.kind === "term" ? 0 : row.r; };
+// The answer value for the row under the cursor; null when it cannot be sent (Undefined terms needs at least one tick)
+function cannotValue(c) {
+  const r = reasonOf(c);
+  const name = CANNOT_REASONS[r][0];
+  if (r === 0) {
+    const ticked = c.terms.filter((x) => x.on).map((x) => x.t);
+    return ticked.length ? `${CANNOT_PREFIX} — ${name}: ${ticked.join(", ")}` : null;
+  }
+  const note = c.note.trim();
+  return `${CANNOT_PREFIX} — ${name}${note ? `: ${note}` : ""}`;
 }
 function closeNone(d) {
   draftOf(d).none = null;
@@ -1128,7 +1294,7 @@ function softHyphens(root) {
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const escAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const SKIP_RICH = "pre, .term, .optref, .fn, .fn-n, button, .risk-bad, .risk-undo, .num, .cbadge";
+const SKIP_RICH = "pre, .term, .term-undef, .optref, .fn, .fn-n, button, .risk-bad, .risk-undo, .num, .cbadge";
 
 // Wrap every match of the global regex `re` in text nodes under root; make(m) returns the node to put in, or null to leave the text
 function wrapText(root, re, make, skip = SKIP_RICH) {
@@ -1168,6 +1334,13 @@ function termMarks(root, terms) {
   });
 }
 
+// Suspicious identifiers (not defined under Terms): every occurrence gets a dotted red underline; a click opens "Can't answer" with it ticked
+function undefMarks(root, tokens) {
+  const sorted = [...tokens].sort((a, b) => b.length - a.length);
+  const re = new RegExp(sorted.map(wordEdge).join("|"), "g");
+  wrapText(root, re, (m) => el("span", { class: "term-undef", title: t("term_undefined_tip"), "data-undef": m[0], text: m[0] }));
+}
+
 // Option labels: a <strong> / <code> that is exactly a label (any length); plain text for labels of 3+ characters
 function optMarks(root, opts) {
   for (const e of root.querySelectorAll("strong, code")) {
@@ -1199,6 +1372,7 @@ function numMarks(root) {
 // ctx = { terms: [{term, def}], opts: [{label, color}] }
 function decorate(root, ctx, o = {}) {
   if (ctx?.opts?.length) optMarks(root, ctx.opts);
+  if (ctx?.undef?.length) undefMarks(root, ctx.undef); // before termMarks: a Terms entry too short to define anything stays red
   if (ctx?.terms?.length) termMarks(root, ctx.terms);
   if (o.risk) riskMarks(root);
   if (o.num) numMarks(root);
@@ -1427,7 +1601,19 @@ function buildModel(d) {
         if (!sec) continue;
         for (const n of sec.nodes) if (n.parentElement === left) n.remove();
       }
-      v2.ctx = { terms: v2.terms, opts: v2.cards.map((c) => ({ label: c.label, color: c.color })) };
+      // What the scan covers: the title and the body outside code fences; exempt: the question, the recommended label and the option labels
+      let fence = false;
+      const scanned = [];
+      for (const line of body.split("\n")) {
+        if (/^\s*(```|~~~)/.test(line)) { fence = !fence; continue; }
+        if (!fence) scanned.push(line);
+      }
+      v2.coinedSrc = {
+        text: [fm.title ?? "", ...scanned].join("\n"),
+        exempt: [fm.question, fm.recommended, ...qs[0].options.map((o) => o.label), ...v2.cards.map((c) => c.label)].filter(Boolean),
+      };
+      v2.undef = coinedTerms(v2);
+      v2.ctx = { terms: v2.terms, undef: v2.undef, opts: v2.cards.map((c) => ({ label: c.label, color: c.color })) };
       const todoSec = (fm.type === "blocker" || d.explanation.type === "blocker") ? findSection(secs, SECTION.blockerTodo) : undefined;
       if (todoSec && todoSec !== optSec) {
         const todoBox = el("div", { class: "md" });
@@ -1472,6 +1658,16 @@ function buildModel(d) {
   localizeHeads(left);
   enhance(left, m.v2?.ctx.opts ?? []).catch(() => {});
   return m;
+}
+
+// Identifiers in the explanation that nothing under Terms defines (same rule as findCoinedTerms in src/hook/explain.ts)
+function coinedTerms(v2) {
+  const src = v2.coinedSrc;
+  if (!src) return [];
+  const exempt = new Set();
+  for (const x of src.exempt) for (const k of extractCoined(x)) exempt.add(k);
+  for (const d of v2.terms) if (termDefines(d.def)) for (const k of extractCoined(d.term)) exempt.add(k);
+  return extractCoined(src.text).filter((k) => !exempt.has(k));
 }
 
 // Map a table (first column = label) onto options. null when no row matches
@@ -1689,6 +1885,12 @@ function cancelReject() {
   renderRight(d);
 }
 
+// A suspicious identifier in the text opens "Can't answer" with it ticked
+document.addEventListener("click", (e) => {
+  const x = e.target instanceof Element ? e.target.closest(".term-undef") : null;
+  if (x && ui?.kind === "question" && !ui.closed) openCannot(decisions.get(shownId), x.dataset.undef);
+});
+
 document.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const t = ev.target;
@@ -1718,6 +1920,43 @@ document.addEventListener("keydown", (ev) => {
   if (ui.kind === "question") {
     const n = ui.cards.length;
     const dr = draftOf(decisions.get(shownId));
+    if (dr.cannot) {
+      // The "Can't answer this" panel
+      const d = decisions.get(shownId);
+      const c = dr.cannot;
+      const rows = cannotRows(c);
+      const move = (step) => { c.cur = clamp(c.cur + step, rows.length); renderRight(d); document.querySelector("#decision .cannot-panel .cursor")?.scrollIntoView({ block: "nearest" }); };
+      if (typing && t === ui.cannotNote) {
+        if (key === "Enter") {
+          ev.preventDefault();
+          const word = t.value.trim();
+          if (reasonOf(c) === 0 && word) { // one more term
+            const x = c.terms.find((y) => y.t === word);
+            if (x) x.on = true; else c.terms.push({ t: word, on: true });
+            c.add = "";
+            renderRight(d);
+            ui.cannotNote?.focus();
+          } else ui.submitCannot();
+        }
+        else if (key === "Escape") { ev.preventDefault(); t.blur(); }
+        else if (key === "ArrowUp" || key === "ArrowDown") { ev.preventDefault(); t.blur(); move(key === "ArrowDown" ? 1 : -1); }
+        return;
+      }
+      if (key === "Enter" && isBtn) return;
+      if (key === " " && isBtn) return;
+      if (key === "ArrowDown" || key === "j") { ev.preventDefault(); move(1); }
+      else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); move(-1); }
+      else if (key === " ") {
+        ev.preventDefault();
+        const row = rows[c.cur];
+        if (row.kind === "term") { c.terms[row.i].on = !c.terms[row.i].on; renderRight(d); }
+      }
+      else if (key === "Enter") { ev.preventDefault(); ui.submitCannot(); }
+      else if (key === "i") { ev.preventDefault(); ui.cannotNote?.focus(); }
+      else if (key === "n") { ev.preventDefault(); openNone(d); }
+      else if (key === "Escape" || key === "x") { ev.preventDefault(); closeCannot(d); }
+      return;
+    }
     if (dr.none) {
       // The "None of these" type picker
       const move = (step) => { dr.none.cursor = clamp(dr.none.cursor + step, NONE_TYPES.length); syncNone(); };
@@ -1733,11 +1972,16 @@ document.addEventListener("keydown", (ev) => {
       else if (key === "Enter") { ev.preventDefault(); ui.submitNone(); }
       else if (key === "i") { ev.preventDefault(); ui.noneNote?.focus(); }
       else if (key === "Escape" || key === "n") { ev.preventDefault(); closeNone(decisions.get(shownId)); }
+      else if (key === "x") { ev.preventDefault(); openCannot(decisions.get(shownId)); }
       else if (typing) return;
       return;
     }
     if (typing) {
-      if (key === "Enter") { ev.preventDefault(); if (!ui.submit.disabled) ui.submit.click(); }
+      if (key === "Enter") {
+        ev.preventDefault();
+        if (ui.needSubmit) { if (!ui.submit.disabled) ui.submit.click(); }
+        else if (t === ui.freeText) ui.sendCard(n - 1); // empty: nothing is sent
+      }
       else if (key === "Escape") { ev.preventDefault(); t.blur(); }
       else if (n && (key === "ArrowUp" || key === "ArrowDown")) {
         ev.preventDefault();
@@ -1746,7 +1990,7 @@ document.addEventListener("keydown", (ev) => {
       }
       return;
     }
-    if (key === "Enter" && isBtn && t !== ui.submit) return; // leave it to the button's default action
+    if (key === "Enter" && isBtn && (!ui.submit || t !== ui.submit)) return; // leave it to the button's default action
     if (key === " " && isBtn) return;
     if (t instanceof HTMLInputElement) t.blur(); // avoid doubling with the native selection
     const onFree = n > 0 && ui.cursor === n - 1;
@@ -1786,6 +2030,10 @@ document.addEventListener("keydown", (ev) => {
       if (!ui.single) return;
       ev.preventDefault();
       openNone(decisions.get(shownId));
+    } else if (key === "x") {
+      if (!ui.single) return;
+      ev.preventDefault();
+      openCannot(decisions.get(shownId));
     } else if (key === "i") {
       if (!ui.freeText) return;
       ev.preventDefault();
@@ -1795,9 +2043,14 @@ document.addEventListener("keydown", (ev) => {
       if (!ui.multi) return;
       ev.preventDefault();
       ui.cards[ui.cursor].input.click();
+    } else if (/^[1-4]$/.test(key)) {
+      if (ui.needSubmit || Number(key) > ui.optCount) return;
+      ev.preventDefault();
+      ui.sendCard(Number(key) - 1); // straight to that card, the cursor stays
     } else if (key === "Enter") {
       ev.preventDefault();
       if (onFree && ui.freeText.value.trim() === "") ui.freeText.focus();
+      else if (!ui.needSubmit) ui.sendCard(ui.cursor);
       else if (!ui.submit.disabled) ui.submit.click();
     }
     return;
