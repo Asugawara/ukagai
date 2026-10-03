@@ -1,6 +1,7 @@
 import { PreToolUseInput } from "../contract.js";
 import { Client } from "./client.js";
 import { observeDecisionTool, observedEvent, permissionRequest, sessionContext, stopDecision } from "./context-hooks.js";
+import { codexInput, codexPreToolUse, codexStop } from "./codex.js";
 import { handleDecision } from "./decision.js";
 import { hookLog, initHookLog } from "./log.js";
 import { parseArgs } from "./options.js";
@@ -31,6 +32,7 @@ export async function run(argv: string[]): Promise<number> {
     initHookLog(opts.dataDir);
     const raw: unknown = JSON.parse(await readStdin());
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return 0;
+    if (opts.agent === "codex") return await runCodex(codexInput(raw as Record<string, unknown>), opts, startedAt);
     const input = raw as Record<string, unknown>;
     if (typeof input["session_id"] === "string") sessionId = input["session_id"];
     const ev = input["hook_event_name"];
@@ -65,6 +67,22 @@ export async function run(argv: string[]): Promise<number> {
     } catch {
       // nothing to do
     }
+  }
+  return 0;
+}
+
+/** Codex events. Same dispatch as Claude, with the Codex-specific tool and Stop handling */
+async function runCodex(input: Record<string, unknown>, opts: ReturnType<typeof parseArgs>, startedAt: number): Promise<number> {
+  const ev = input["hook_event_name"];
+  const client = new Client(opts.server, opts.dataDir);
+  if (ev === "PreToolUse") {
+    if (input["tool_name"] === "request_user_input" && !opts.observe) write(await codexPreToolUse(input, opts, client, startedAt));
+  } else if (ev === "SessionStart") {
+    write(await sessionContext(input, opts));
+  } else if (ev === "Stop") {
+    write(await codexStop(input, opts, client, startedAt));
+  } else {
+    await observedEvent(input, client);
   }
   return 0;
 }

@@ -98,6 +98,8 @@ export async function handleDecision(
   opts: HookOptions,
   client: Client,
   startedAt: number,
+  /** Maps the human's answer to stdout. Claude: allow + updatedInput; Codex: deny carrying the answer */
+  build: typeof buildOutput = buildOutput,
 ): Promise<Out | null> {
   const kind = input.tool_name === "ExitPlanMode" ? "approve_plan" : "answer_question";
   const toolInput = input.tool_input;
@@ -109,6 +111,7 @@ export async function handleDecision(
     permission_mode: input.permission_mode,
     agent_id: input.agent_id,
     agent_type: input.agent_type,
+    agent: input.agent,
   };
   const lg = (event: string, extra: Record<string, string | number | undefined> = {}): void =>
     hookLog(event, { session_id: input.session_id, elapsed_s: Math.round((Date.now() - startedAt) / 100) / 10, ...extra });
@@ -326,7 +329,7 @@ export async function handleDecision(
       }
       failStreakStart = undefined;
       failCount = 0;
-      const out = buildOutput(kind, toolInput, r.response);
+      const out = build(kind, toolInput, r.response);
       if (!out) {
         lg("no_answer_output", { decision_id: created.id, message: `via=${r.response.via}` });
         return null;

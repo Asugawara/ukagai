@@ -183,7 +183,8 @@ export async function collectContext(session: DecisionSession, opts: CollectOpti
   const home = opts.home ?? homedir();
   const [git, transcript] = await Promise.all([
     collectGit(session.cwd).catch((): Context => ({})),
-    collectTranscript(session, home).catch((): Context => ({})),
+    // Codex rollout format not examined yet: git context only
+    session.agent === "codex" ? ({} as Context) : collectTranscript(session, home).catch((): Context => ({})),
   ]);
   return { ...git, ...transcript };
 }

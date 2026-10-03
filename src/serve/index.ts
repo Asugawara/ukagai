@@ -52,6 +52,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     hub,
     token,
     home,
+    dataDir,
     lang,
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
