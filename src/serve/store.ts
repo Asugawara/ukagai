@@ -40,8 +40,10 @@ export type StoreOptions = {
   /** Lease after a hand-off: how long the agent has to call the tool again (default HANDOFF_GRACE_MS) */
   handoffGraceMs?: number;
   broadcast?: (event: SseEventName, data: unknown) => void;
-  /** An approve_plan decision left `pending` (answered, cancelled, expired, answered in the terminal) */
-  onPlanDecisionClosed?: (d: Decision) => void;
+  /** Runs on every status change, after the status is set and before `decision.updated` is emitted (read marks of a closed plan go out first) */
+  onTransition?: (d: Decision, from: DecisionStatus, to: DecisionStatus) => void;
+  /** Basename of the plan file a path points at inside the plans directory, or null (resolved once when an approve_plan decision is created) */
+  planNameOf?: (filePath: string) => string | null;
 };
 
 export type AnswerPatch =
@@ -154,10 +156,12 @@ export class Store {
     this.opts.broadcast?.(event, data);
   }
 
-  private planClosed(d: Decision): void {
-    if (d.kind !== "approve_plan") return;
+  /** The one place a status changes. `onTransition` runs before the caller emits */
+  private setStatus(d: Decision, to: DecisionStatus): void {
+    const from = d.status;
+    d.status = to;
     try {
-      this.opts.onPlanDecisionClosed?.(d);
+      this.opts.onTransition?.(d, from, to);
     } catch {
       // Read marks are a convenience
     }
@@ -194,11 +198,6 @@ export class Store {
 
     const denied = req.status === "denied_explain";
     const fingerprint = decisionFingerprint(req.kind, req.request as Record<string, unknown>);
-    // An old hook build that registers again after a hand-off lands on the open decision instead of a second one
-    if (!denied) {
-      const open = this.findOpen(req.session.session_id, fingerprint);
-      if (open) return { decision: this.reattach(open, req.tool_use_id), created: false };
-    }
     const now = Date.now();
     const session = { ...req.session };
     if (!session.title && context.ai_title) session.title = context.ai_title;
@@ -214,6 +213,11 @@ export class Store {
       fingerprint,
       handoffs: 0,
     };
+    const planFilePath = req.kind === "approve_plan" ? (req.request as { planFilePath?: unknown }).planFilePath : undefined;
+    if (typeof planFilePath === "string" && planFilePath !== "") {
+      const planName = this.opts.planNameOf?.(planFilePath);
+      if (planName) decision.plan_name = planName;
+    }
     if (req.explanation) decision.explanation = req.explanation;
     if (denied && req.missing) decision.missing = req.missing;
     if (!denied) {
@@ -231,11 +235,11 @@ export class Store {
     return { decision, created: true };
   }
 
-  /** The newest decision of the session that is still open (pending, or its hook went away) and asks the same thing */
-  findOpen(sessionId: string, fingerprint: string): Decision | undefined {
+  /** The newest decision of the session and agent that is still open (pending, or its hook went away) and asks the same thing */
+  findOpen(sessionId: string, agentId: string | undefined, fingerprint: string): Decision | undefined {
     let best: Decision | undefined;
     for (const d of this.decisions.values()) {
-      if (d.session.session_id !== sessionId || d.fingerprint !== fingerprint) continue;
+      if (d.session.session_id !== sessionId || (d.session.agent_id ?? "") !== (agentId ?? "") || d.fingerprint !== fingerprint) continue;
       if (d.status !== "pending" && d.status !== "hook_disconnected") continue;
       if (!best || d.created_at > best.created_at) best = d;
     }
@@ -253,7 +257,6 @@ export class Store {
       d.tool_use_id = toolUseId;
       this.byToolUse.set(toolUseId, d.id);
     }
-    delete d.handoff_at;
     d.lease_until = new Date(Date.now() + this.opts.leaseGraceMs).toISOString();
     this.persist(d);
     this.emit("decision.updated", d);
@@ -261,17 +264,14 @@ export class Store {
     return d;
   }
 
-  /** The hook's budget for this leg ended: the decision stays pending and waits for the agent's next call */
+  /** The hook's budget for this leg ended: the decision stays pending and waits for the agent's next call. Memory and SSE only: the re-attach that follows persists the record, and a restart re-arms the lease */
   handoff(id: string, sessionId: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
     if (d.session.session_id !== sessionId) throw new HttpError(403, "decision belongs to another session");
     if (d.status !== "pending") throw new HttpError(409, `cannot hand off a ${d.status} decision`);
-    const now = Date.now();
-    d.handoff_at = new Date(now).toISOString();
     d.handoffs = (d.handoffs ?? 0) + 1;
-    d.lease_until = new Date(now + (this.opts.handoffGraceMs ?? HANDOFF_GRACE_MS)).toISOString();
-    this.persist(d);
+    d.lease_until = new Date(Date.now() + (this.opts.handoffGraceMs ?? HANDOFF_GRACE_MS)).toISOString();
     this.emit("decision.updated", d);
     return d;
   }
@@ -294,7 +294,7 @@ export class Store {
     if (!canTransition(d.status, to)) {
       throw new HttpError(409, `cannot transition ${d.status} -> ${to}`);
     }
-    d.status = to;
+    this.setStatus(d, to);
   }
 
   submitAnswer(id: string, patch: AnswerPatch): Decision {
@@ -322,7 +322,6 @@ export class Store {
         to = "fallback";
         break;
     }
-    const wasPending = d.status === "pending";
     this.transition(d, to);
     d.response = response;
     this.persist(d);
@@ -332,7 +331,6 @@ export class Store {
     if (patch.kind === "answers") this.rememberCannotAnswer(d, patch.answers);
     this.emit("decision.updated", d);
     this.notify(d.id);
-    if (wasPending) this.planClosed(d);
     return d;
   }
 
@@ -356,14 +354,12 @@ export class Store {
   cancel(id: string, reason?: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
-    const wasPending = d.status === "pending";
     this.transition(d, d.status === "answer_submitted" ? "answer_lost" : "cancelled");
     if (reason) d.status_reason = reason;
     delete d.lease_until;
     this.persist(d);
     this.emit("decision.updated", d);
     this.notify(d.id);
-    if (wasPending) this.planClosed(d);
     return d;
   }
 
@@ -425,12 +421,11 @@ export class Store {
     for (const d of this.decisions.values()) {
       if (!LIVE.includes(d.status) || !d.lease_until || Date.parse(d.lease_until) > now) continue;
       const to: DecisionStatus = d.status === "pending" ? "hook_disconnected" : "answer_lost";
-      d.status = to;
+      this.setStatus(d, to);
       this.persist(d);
       if (to === "hook_disconnected") this.expiredAt.set(d.id, now);
       this.emit("decision.updated", d);
       this.notify(d.id);
-      if (to === "hook_disconnected") this.planClosed(d);
     }
   }
 
@@ -518,7 +513,6 @@ export class Store {
       this.persist(d);
       this.emit("decision.updated", d);
       this.notify(d.id);
-      this.planClosed(d);
     }
   }
 
@@ -528,7 +522,7 @@ export class Store {
       if (d.session.session_id !== sessionId || d.status !== "hook_disconnected") continue;
       const expired = this.expiredAt.get(d.id);
       if (expired === undefined || now - expired > CANCEL_WINDOW_MS) continue;
-      d.status = "cancelled";
+      this.setStatus(d, "cancelled");
       this.persist(d);
       this.emit("decision.updated", d);
     }

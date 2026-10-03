@@ -3,7 +3,6 @@ import {
   DENY_LINK_WINDOW_MS,
   decisionFingerprint,
   ExitPlanModeInput,
-  extractExplainBlocks,
   PLAN_BLOCK_SUFFIX,
   stripExplainBlocks,
   type CreateDecisionRequest,
@@ -28,15 +27,15 @@ import {
   findCoinedTerms,
   parseFrontMatter,
   parsePlanImpact,
+  toLines,
   validateExplanation,
   validatePlan,
   type Validation,
 } from "./explain.js";
 import type { HookOptions } from "./options.js";
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { blockFor, findPlanFile } from "./plan-file.js";
+import { findPlanFile, readBlockFor } from "./plan-file.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hookLog } from "./log.js";
 import { readConfig } from "../settings/config.js";
@@ -101,6 +100,178 @@ export function buildOutput(
   return null;
 }
 
+type Kind = "answer_question" | "approve_plan";
+type Parsed = { question: AskUserQuestionInput } | { plan: string };
+type Log = (event: string, extra?: Record<string, string | number | undefined>) => void;
+type Ctx = {
+  input: PreToolUseInput;
+  opts: HookOptions;
+  client: Client;
+  kind: Kind;
+  base: CreateDecisionRequest;
+  lg: Log;
+  failMsg: () => Record<string, string | number | undefined>;
+};
+/** Either an explanation to register, or the hook's final output (a deny, or null to fall back to the normal UI) */
+type Explained = { explanation: Explanation; usedPath?: string } | { out: Out | null };
+
+/** Record a deny that carries no explanation, then answer with it. Null (fall back) when the server cannot record it */
+async function denyAndRecord(c: Ctx, reason: string, missing: string[]): Promise<Out | null> {
+  const reg = await c.client.createDecision({ ...c.base, status: "denied_explain", missing });
+  if (!reg) {
+    c.lg("create_decision_failed", c.failMsg());
+    return null;
+  }
+  return deny(reason);
+}
+
+const sameAgent = (d: Decision, agentId: string | undefined): boolean => (d.session.agent_id ?? "") === (agentId ?? "");
+
+async function explainQuestion(c: Ctx, data: AskUserQuestionInput): Promise<Explained> {
+  const { input, opts, client, lg, failMsg } = c;
+  const q0 = data.questions[0]!;
+  // Plan mode (Claude): the plan file is the only writable file, so the explanation is a block inside it. Without a findable plan file (Codex, a reworded reminder) there is none
+  const planHit =
+    input.permission_mode === "plan" && (input.agent ?? opts.agent) !== "codex"
+      ? await findPlanFile(input.transcript_path, homedir(), q0.question)
+      : null;
+  if (input.permission_mode === "plan" && !planHit) return { explanation: noExplanation("plan_mode") };
+  const planFile = planHit?.file;
+  const dir = explainDir(input.scratchpad_dir, opts.dataDir, input.session_id);
+  // The human's last "Cannot answer" (null when none or the server is unreachable: ignored)
+  const [{ lang }, memo, denied] = await Promise.all([
+    readConfig(opts.dataDir),
+    client.getPendingRewrite(input.session_id),
+    client.listDeniedExplain(input.session_id),
+  ]);
+  if (!denied) {
+    // server absent: skip the safeguard and fall back to the normal UI
+    lg("list_denied_explain_failed", failMsg());
+    return { out: null };
+  }
+  const now = Date.now();
+  // One decision = one question = one explanation. Multiple questions are denied before looking for an explanation (counted per session + agent, ignoring the question text)
+  const multiGuarded =
+    data.questions.length > 1 &&
+    denied.some(
+      (d) =>
+        d.status === "denied_explain" &&
+        d.kind === "answer_question" &&
+        sameAgent(d, input.agent_id) &&
+        questionCount(d) > 1 &&
+        now - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
+    );
+  if (data.questions.length > 1 && !multiGuarded) {
+    return { out: await denyAndRecord(c, multiDenyReason(data.questions.length, input.agent), ["multi"]) };
+  }
+  let found: FoundExplanation | null;
+  if (planHit) {
+    const block = planHit.block ?? (await readBlockFor(planHit.file, q0.question));
+    found = block ? { path: planHit.file + PLAN_BLOCK_SUFFIX, markdown: block.body, match: "question" } : null;
+  } else {
+    found = await findExplanation(dir, q0.question);
+  }
+  const labels = q0.options.map((o) => o.label);
+  const v = found
+    ? validateExplanation(found.markdown, "answer_question", labels, lang, {
+        question: q0.question,
+        descriptions: q0.options.map((o) => o.description ?? ""),
+      })
+    : null;
+  const rewriteIssues: RewriteIssue[] = found ? checkRewrite(memo, found.markdown, q0.question, labels) : [];
+  const linked = denied.filter(
+    (d) =>
+      d.status === "denied_explain" &&
+      d.kind === "answer_question" &&
+      sameAgent(d, input.agent_id) &&
+      firstQuestion(d) === q0.question &&
+      now - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
+  );
+  if (found && v?.valid && rewriteIssues.length === 0) {
+    const fm = parseFrontMatter(toLines(found.markdown)).fields;
+    const explanation: Explanation = {
+      path: found.path,
+      type: fm["type"] === "blocker" || fm["type"] === "decision" ? fm["type"] : undefined,
+      title: fm["title"] || q0.question,
+      question: fm["question"],
+      reversibility: fm["reversibility"] as Explanation["reversibility"],
+      scope: fm["scope"] as Explanation["scope"],
+      markdown: found.markdown,
+      has: v.has,
+      match: found.match,
+      attached_via: linked.length > 0 ? "after_deny" : "first_call",
+    };
+    // The hook never edits a plan file: no rename for a plan-mode block
+    return { explanation, usedPath: planFile ? undefined : found.path };
+  }
+  if ((linked.length > 0 && !memo) || multiGuarded) {
+    // With a "Cannot answer" memo the loop guard does not apply: never hand the human, right after they said they could not read it, an explanation that still fails
+    return { explanation: noExplanation("loop_guard") };
+  }
+  const own = v ? v.missing : ["file" as const];
+  const codes = [...own, ...rewriteIssues.map((i) => i.code).filter((c) => !own.includes(c))];
+  const reason = denyReason(opts.denyTemplate, {
+    ...(planFile ? { planFile } : { path: join(dir, "explain.md") }),
+    question: q0.question,
+    missing: [
+      ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0) : MISSING_LABELS[c])),
+      ...rewriteIssues.map((i) => i.text),
+    ],
+    codes,
+    agent: input.agent,
+    blocker: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "blocker" : false,
+  });
+  return { out: await denyAndRecord(c, reason, codes) };
+}
+
+async function explainPlan(c: Ctx, plan: string): Promise<Explained> {
+  const { input, opts, client, lg, failMsg } = c;
+  const v: Validation = validatePlan(plan);
+  const denied = await client.listDeniedExplain(input.session_id);
+  if (!denied) {
+    lg("list_denied_explain_failed", failMsg());
+    return { out: null };
+  }
+  const prior = denied.filter((d) => d.status === "denied_explain" && d.kind === "approve_plan");
+  if (v.valid) {
+    return {
+      explanation: {
+        path: "",
+        ...parsePlanImpact(plan),
+        markdown: plan,
+        has: v.has,
+        match: "question",
+        attached_via: prior.length > 0 ? "after_deny" : "first_call",
+      },
+    };
+  }
+  if (prior.length > 0) return { explanation: noExplanation("loop_guard") };
+  const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => MISSING_LABELS[m]), agent: input.agent });
+  return { out: await denyAndRecord(c, reason, v.missing) };
+}
+
+/** First sight of a question: validate its explanation (deny when it is missing or unfit) and register the decision */
+async function registerFresh(c: Ctx, parsed: Parsed): Promise<Pick<Decision, "id"> | { out: Out | null }> {
+  const { input, client, kind, base, lg, failMsg } = c;
+  const r = "question" in parsed ? await explainQuestion(c, parsed.question) : await explainPlan(c, parsed.plan);
+  if ("out" in r) return r;
+  const created = await client.createDecision({ ...base, explanation: r.explanation });
+  if (!created) {
+    lg("create_decision_failed", failMsg());
+    return { out: null };
+  }
+  // The explanation got through: the human's "Cannot answer" has been answered with a new one
+  if (kind === "answer_question" && r.explanation.none_reason !== "plan_mode") await client.consumeRewrite(input.session_id);
+  if (r.usedPath) {
+    try {
+      await markUsed(r.usedPath);
+    } catch {
+      // a failed rename does not affect the decision
+    }
+  }
+  return created;
+}
+
 /** PreToolUse × AskUserQuestion / ExitPlanMode. Returns the JSON for stdout, or null for no output. The caller swallows exceptions */
 export async function handleDecision(
   input: PreToolUseInput,
@@ -134,193 +305,28 @@ export async function handleDecision(
   const base = { tool_use_id: input.tool_use_id, kind, session, request: regInput } as CreateDecisionRequest;
 
   // Input that is not a well-formed question / plan is never ours to handle
-  const inputOk = kind === "answer_question" ? AskUserQuestionInput.safeParse(toolInput).success : ExitPlanModeInput.safeParse(toolInput).success;
-  if (!inputOk) return null;
+  let parsed: Parsed;
+  if (kind === "answer_question") {
+    const r = AskUserQuestionInput.safeParse(toolInput);
+    if (!r.success) return null;
+    parsed = { question: r.data };
+  } else {
+    const r = ExitPlanModeInput.safeParse(regInput);
+    if (!r.success) return null;
+    parsed = { plan: r.data.plan };
+  }
 
   // A question that is still open in ukagai (the previous leg handed off, or the hook died) is re-attached, never registered again
-  const open = await client.findOpen(input.session_id, decisionFingerprint(kind, regInput), input.tool_use_id);
-  let created: Pick<Decision, "id"> | null;
+  const open = await client.findOpen(input.session_id, input.agent_id, decisionFingerprint(kind, regInput), input.tool_use_id);
+  let created: Pick<Decision, "id">;
   if (open) {
     created = { id: open.id };
     lg("reattach", { decision_id: open.id, handoffs: open.handoffs ?? 0 });
   } else {
-    let explanation: Explanation;
-    let usedPath: string | undefined;
-
-    if (kind === "answer_question") {
-      const parsed = AskUserQuestionInput.safeParse(toolInput);
-      if (!parsed.success) return null;
-      const q0 = parsed.data.questions[0]!;
-      // Plan mode (Claude): the plan file is the only writable file, so the explanation is a block inside it. Without a findable plan file (Codex, a reworded reminder) there is none
-      const planFile =
-        input.permission_mode === "plan" && (input.agent ?? opts.agent) !== "codex"
-          ? await findPlanFile(input.transcript_path, homedir(), q0.question)
-          : null;
-      if (input.permission_mode === "plan" && !planFile) {
-        explanation = noExplanation("plan_mode");
-      } else {
-        const dir = explainDir(input.scratchpad_dir, opts.dataDir, input.session_id);
-        // One decision = one question = one explanation. Multiple questions are denied before looking for an explanation (counted per session + agent, ignoring the question text)
-        let multiGuarded = false;
-        if (parsed.data.questions.length > 1) {
-          const prior = await client.listDeniedExplain(input.session_id);
-          if (!prior) {
-            lg("list_denied_explain_failed", failMsg());
-            return null;
-          }
-          const t = Date.now();
-          multiGuarded = prior.some(
-            (d) =>
-              d.status === "denied_explain" &&
-              d.kind === "answer_question" &&
-              (d.session.agent_id ?? "") === (input.agent_id ?? "") &&
-              questionCount(d) > 1 &&
-              t - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
-          );
-          if (!multiGuarded) {
-            const reg = await client.createDecision({ ...base, status: "denied_explain", missing: ["multi"] });
-            if (!reg) {
-              lg("create_decision_failed", failMsg());
-              return null;
-            }
-            return deny(multiDenyReason(parsed.data.questions.length, input.agent));
-          }
-        }
-        let found: FoundExplanation | null;
-        if (planFile) {
-          let block: ReturnType<typeof blockFor>;
-          try {
-            block = blockFor(extractExplainBlocks(await readFile(planFile, "utf8")), q0.question);
-          } catch {
-            block = undefined;
-          }
-          found = block ? { path: planFile + PLAN_BLOCK_SUFFIX, markdown: block.body, match: "question" } : null;
-        } else {
-          found = await findExplanation(dir, q0.question);
-        }
-        const labels = q0.options.map((o) => o.label);
-        const lang = (await readConfig(opts.dataDir)).lang;
-        const v = found
-          ? validateExplanation(found.markdown, "answer_question", labels, lang, {
-              question: q0.question,
-              descriptions: q0.options.map((o) => o.description ?? ""),
-            })
-          : null;
-        // The human's last "Cannot answer" (null when none or the server is unreachable: ignored)
-        const memo = await client.getPendingRewrite(input.session_id);
-        const rewriteIssues: RewriteIssue[] = found ? checkRewrite(memo, found.markdown, q0.question, labels) : [];
-        const denied = await client.listDeniedExplain(input.session_id);
-        if (!denied) {
-          // server absent: skip the safeguard and fall back to the normal UI
-          lg("list_denied_explain_failed", failMsg());
-          return null;
-        }
-        const now = Date.now();
-        const linked = denied
-          .filter(
-            (d) =>
-              d.status === "denied_explain" &&
-              d.kind === "answer_question" &&
-              (d.session.agent_id ?? "") === (input.agent_id ?? "") &&
-              firstQuestion(d) === q0.question &&
-              now - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
-          )
-          .sort((a, b) => a.created_at.localeCompare(b.created_at));
-        if (found && v?.valid && rewriteIssues.length === 0) {
-          const fm = parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields;
-          explanation = {
-            path: found.path,
-            type: fm["type"] === "blocker" || fm["type"] === "decision" ? fm["type"] : undefined,
-            title: fm["title"] || q0.question,
-            question: fm["question"],
-            reversibility: fm["reversibility"] as Explanation["reversibility"],
-            scope: fm["scope"] as Explanation["scope"],
-            markdown: found.markdown,
-            has: v.has,
-            match: found.match,
-            attached_via: linked.length > 0 ? "after_deny" : "first_call",
-          };
-          // The hook never edits a plan file: no rename for a plan-mode block
-          if (!planFile) usedPath = found.path;
-        } else if ((linked.length > 0 && !memo) || multiGuarded) {
-          // With a "Cannot answer" memo the loop guard does not apply: never hand the human, right after they said they could not read it, an explanation that still fails
-          explanation = noExplanation("loop_guard");
-        } else {
-          const own = v ? v.missing : ["file" as const];
-          const codes = [...own, ...rewriteIssues.map((i) => i.code).filter((c) => !own.includes(c))];
-          const reason = denyReason(opts.denyTemplate, {
-            ...(planFile ? { planFile } : { path: join(dir, "explain.md") }),
-            question: q0.question,
-            missing: [
-              ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0) : MISSING_LABELS[c])),
-              ...rewriteIssues.map((i) => i.text),
-            ],
-            codes,
-            agent: input.agent,
-            blocker: found ? parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields["type"] === "blocker" : false,
-          });
-          const reg = await client.createDecision({ ...base, status: "denied_explain", missing: codes });
-          if (!reg) {
-            lg("create_decision_failed", failMsg());
-            return null;
-          }
-          return deny(reason);
-        }
-      }
-    } else {
-      const parsed = ExitPlanModeInput.safeParse(regInput);
-      if (!parsed.success) return null;
-      const plan = parsed.data.plan;
-      const v: Validation = validatePlan(plan);
-      const denied = await client.listDeniedExplain(input.session_id);
-      if (!denied) {
-        lg("list_denied_explain_failed", failMsg());
-        return null;
-      }
-      const prior = denied
-        .filter((d) => d.status === "denied_explain" && d.kind === "approve_plan")
-        .sort((a, b) => a.created_at.localeCompare(b.created_at));
-      if (v.valid) {
-        explanation = {
-          path: "",
-          ...parsePlanImpact(plan),
-          markdown: plan,
-          has: v.has,
-          match: "question",
-          attached_via: prior.length > 0 ? "after_deny" : "first_call",
-        };
-      } else if (prior.length > 0) {
-        explanation = noExplanation("loop_guard");
-      } else {
-        const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((c) => MISSING_LABELS[c]), agent: input.agent });
-        const reg = await client.createDecision({ ...base, status: "denied_explain", missing: v.missing });
-        if (!reg) {
-          lg("create_decision_failed", failMsg());
-          return null;
-        }
-        return deny(reason);
-      }
-    }
-
-    created = await client.createDecision({
-      ...base,
-      explanation,
-    });
-    if (!created) {
-      lg("create_decision_failed", failMsg());
-      return null;
-    }
-    // The explanation got through: the human's "Cannot answer" has been answered with a new one
-    if (kind === "answer_question" && explanation.none_reason !== "plan_mode") await client.consumeRewrite(input.session_id);
-    if (usedPath) {
-      try {
-        await markUsed(usedPath);
-      } catch {
-        // a failed rename does not affect the decision
-      }
-    }
+    const fresh = await registerFresh({ input, opts, client, kind, base, lg, failMsg }, parsed);
+    if ("out" in fresh) return fresh.out;
+    created = fresh;
   }
-
 
   // Termination signal from Esc / ctrl+c: tell the server to cancel once, print nothing, and exit
   const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;

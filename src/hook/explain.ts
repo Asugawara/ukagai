@@ -1039,6 +1039,11 @@ function forAgent(text: string, agent: string | undefined): string {
     .replace(/AskUserQuestion/g, "request_user_input");
 }
 
+/** Every deny the hook sends starts with this, so the agent does not read a validation round as an error */
+function tagged(text: string): string {
+  return `[ukagai, not a failure] ${text}`;
+}
+
 /** The deny at the end of a hook leg: the question stays open in ukagai, the agent is asked to call the tool again */
 export function handoffReason(kind: "answer_question" | "approve_plan", agent: string | undefined): string {
   const call =
@@ -1046,36 +1051,36 @@ export function handoffReason(kind: "answer_question" | "approve_plan", agent: s
       ? "Call ExitPlanMode again now with the same plan"
       : "Call AskUserQuestion again now with exactly the same question and options";
   return forAgent(
-    `[ukagai, not a failure] The human has not answered yet; the question stays open in ukagai. ${call} to keep waiting for the answer. Do not ask in prose and do not change the question.`,
+    tagged(`The human has not answered yet; the question stays open in ukagai. ${call} to keep waiting for the answer. Do not ask in prose and do not change the question.`),
     agent,
   );
 }
 
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
-  return forAgent(composeRaw(template, p, missingText, withTail), p.agent);
+  return forAgent(tagged(composeRaw(template, p, missingText, withTail)), p.agent);
 }
 
 function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
   if (p.planFile !== undefined) {
     const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
     return template === "A"
-      ? `[ukagai, not a failure] First read skill ukagai-explain (if you have not). In plan mode the explanation goes into your plan file, not a separate file: append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: verbatim, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question. Missing: ${missingText}.` +
+      ? `First read skill ukagai-explain (if you have not). In plan mode the explanation goes into your plan file, not a separate file: append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: verbatim, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question. Missing: ${missingText}.` +
           tpl
-      : `[ukagai, not a failure] Could you first read skill ukagai-explain (if you have not)? In plan mode the explanation goes into your plan file, not a separate file. Could you append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: identical to the question text, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question? Missing: ${missingText}.` +
+      : `Could you first read skill ukagai-explain (if you have not)? In plan mode the explanation goes into your plan file, not a separate file. Could you append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: identical to the question text, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question? Missing: ${missingText}.` +
           tpl;
   }
   const isPlan = p.path === undefined || p.question === undefined;
   if (isPlan) {
     return template === "A"
-      ? `[ukagai, not a failure] The plan (ExitPlanMode) is incomplete. Missing: ${missingText}.` +
+      ? `The plan (ExitPlanMode) is incomplete. Missing: ${missingText}.` +
           (withTail ? "\nFix the plan text following skill ukagai-explain, then call ExitPlanMode again with the same plan." : "")
-      : `[ukagai, not a failure] This plan does not meet the requirements yet. Missing: ${missingText}.` +
+      : `This plan does not meet the requirements yet. Missing: ${missingText}.` +
           (withTail ? "\nThe format is described in skill ukagai-explain. Could you fix it and call ExitPlanMode again?" : "");
   }
   const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
   if (template === "A") {
     return (
-      `[ukagai, not a failure] First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
+      `First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
       (tpl
         ? `Save to: ${p.path} (any name in the same directory). Write it in this shape; question: already holds the question text verbatim.${tpl}`
         : `Save to: ${p.path} (any name in the same directory). Put exactly this string in the front matter question: ${p.question}`) +
@@ -1083,7 +1088,7 @@ function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, 
     );
   }
   return (
-    `[ukagai, not a failure] Could you first read skill ukagai-explain (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
+    `Could you first read skill ukagai-explain (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
     (tpl
       ? `Could you write ${p.path} in this shape (any name in the same directory is fine)? question: is identical to the question text.${tpl}`
       : `Could you write ${p.path} (any name in the same directory is fine)? The front matter question: must be identical to "${p.question}".`) +
@@ -1106,8 +1111,8 @@ export function denyReason(template: DenyTemplate, p: DenyParams): string {
 /** Deny reason for two or more questions (spec section 5, step 0). No URL, at most 1000 characters */
 export function multiDenyReason(count: number, agent?: string): string {
   return forAgent(
-    `Ask one question per AskUserQuestion call (this call had ${count}). The GUI shows one question at a time, with its explanation file. ` +
-    "Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose.",
+    tagged(`Ask one question per AskUserQuestion call (this call had ${count}). The GUI shows one question at a time, with its explanation file. ` +
+    "Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose."),
     agent,
   );
 }

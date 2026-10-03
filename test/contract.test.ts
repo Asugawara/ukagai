@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   AnswerRequest,
@@ -13,7 +16,11 @@ import {
   PreToolUseDeny,
   PreToolUseInput,
   SessionStartContext,
+  TRANSCRIPT_MAX_BYTES,
   canTransition,
+  isPlanFile,
+  plansDir,
+  realFileUnder,
   isAllowedExplanationPath,
   isAllowedTranscriptPath,
 } from "../src/contract.js";
@@ -155,4 +162,27 @@ test("isAllowedExplanationPath: a plan-file block path (<plan file>#ukagai-expla
   assert.equal(isAllowedExplanationPath("/etc/p.md#ukagai-explain", undefined, home), false);
   assert.equal(isAllowedExplanationPath(`${home}/proj/p.txt#ukagai-explain`, undefined, home), false);
   assert.equal(isAllowedExplanationPath(`${home}/../etc/p.md#ukagai-explain`, undefined, home), false);
+});
+
+test("plansDir / isPlanFile / TRANSCRIPT_MAX_BYTES", () => {
+  assert.equal(plansDir("/h"), "/h/.claude/plans");
+  assert.equal(TRANSCRIPT_MAX_BYTES, 64 * 1024 * 1024);
+  assert.equal(isPlanFile("a.md"), true);
+  for (const n of ["", "a.txt", ".hidden.md", "a/b.md", "a\\b.md", "..md", "a..b.md", "a\0.md"]) assert.equal(isPlanFile(n), false, JSON.stringify(n));
+});
+
+test("realFileUnder: a regular file under the root (realpath), not a directory, a missing file, or a link out of it", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ukagai-rfu-")));
+  const out = realpathSync(mkdtempSync(join(tmpdir(), "ukagai-rfu-out-")));
+  mkdirSync(join(root, "d"));
+  writeFileSync(join(root, "d", "f.md"), "x");
+  writeFileSync(join(out, "o.md"), "x");
+  symlinkSync(join(out, "o.md"), join(root, "link.md"));
+  symlinkSync(join(root, "d", "f.md"), join(root, "in.md"));
+  assert.equal(realFileUnder(root, join(root, "d", "f.md")), join(root, "d", "f.md"));
+  assert.equal(realFileUnder(root, join(root, "in.md")), join(root, "d", "f.md"));
+  assert.equal(realFileUnder(root, join(root, "d")), null);
+  assert.equal(realFileUnder(root, join(root, "nope.md")), null);
+  assert.equal(realFileUnder(root, join(root, "link.md")), null);
+  assert.equal(realFileUnder(root, join(out, "o.md")), null);
 });

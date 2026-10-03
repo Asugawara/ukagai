@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveCodexHome } from "../serve/codex-bridge/index.js";
 import { LANGS, isLang, type Lang } from "./config.js";
 
 export interface Target {
@@ -85,7 +86,7 @@ export function parseTarget(argv: string[]): Target {
     lang,
     codex,
     claude: !codex || claude || settings !== undefined || project,
-    codexHome: codexHome ?? resolve(process.env["CODEX_HOME"] || join(homedir(), ".codex")),
+    codexHome: resolve(resolveCodexHome(codexHome)),
     hookArgs,
     handleSkill: !t.noSkill && (settings === undefined || skill),
     settingsFile: settings ?? join(base, "settings.json"),

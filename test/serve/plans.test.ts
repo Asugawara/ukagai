@@ -106,12 +106,12 @@ test("detail: unknown name 404; symlink leaving the directory 404", async () => 
   assert.equal((await get("/api/plans/link.md")).status, 404);
 });
 
-test("detail: since equal to mtime is 304, otherwise 200", async () => {
+test("detail: {name, title, mtime, markdown, read}; no sections, and `since` no longer gives a 304", async () => {
   const { get } = await seeded();
-  const mtime = "2026-10-01T00:00:00.000Z";
-  assert.equal((await get(`/api/plans/titled.md?since=${encodeURIComponent(mtime)}`)).status, 304);
-  assert.equal((await get(`/api/plans/titled.md?since=${encodeURIComponent("2026-09-30T00:00:00.000Z")}`)).status, 200);
-  assert.equal((await get("/api/plans/titled.md?since=garbage")).status, 200);
+  const r = await get(`/api/plans/titled.md?since=${encodeURIComponent("2026-10-01T00:00:00.000Z")}`);
+  assert.equal(r.status, 200);
+  const j = (await r.json()) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(j).sort(), ["markdown", "mtime", "name", "read", "title"]);
 });
 
 test("detail: over 1 MB is 413 (and stays listed)", async () => {
@@ -129,43 +129,7 @@ test("authorization is required; no write endpoints", async () => {
   assert.ok(dir);
 });
 
-// ---- sectionsOf ----
-
 import { readFileSync } from "node:fs";
-import { sectionsOf } from "../../src/serve/plans.js";
-
-test("sectionsOf: long-plan fixture has 9 H2 + 6 H3 with stable hashes", () => {
-  const md = readFileSync(new URL("../gui/fixtures/long-plan.md", import.meta.url), "utf8");
-  const a = sectionsOf(md);
-  assert.equal(a.filter((s) => s.level === 2).length, 9);
-  assert.equal(a.filter((s) => s.level === 3).length, 6);
-  assert.equal(a.length, 15);
-  assert.deepEqual(sectionsOf(md), a);
-  for (const s of a) assert.match(s.hash, /^[0-9a-f]{12}$/);
-});
-
-test("sectionsOf: changing one line changes only that section (and its H2 parent)", () => {
-  const md = "# T\n\n## A\nalpha\n\n### A1\none\n\n### A2\ntwo\n\n## B\nbeta\n";
-  const before = sectionsOf(md);
-  assert.deepEqual(before.map((s) => [s.level, s.heading]), [[2, "A"], [3, "A1"], [3, "A2"], [2, "B"]]);
-  const after = sectionsOf(md.replace("two", "TWO"));
-  assert.equal(after[0]!.hash === before[0]!.hash, false); // A contains A2
-  assert.equal(after[1]!.hash, before[1]!.hash);
-  assert.equal(after[2]!.hash === before[2]!.hash, false);
-  assert.equal(after[3]!.hash, before[3]!.hash);
-  const b = sectionsOf(md.replace("beta", "BETA"));
-  assert.deepEqual(b.slice(0, 3), before.slice(0, 3));
-  assert.notEqual(b[3]!.hash, before[3]!.hash);
-});
-
-test("sectionsOf: a ## inside a code fence is not a section; H1 and H4 are not sections but H1 ends one", () => {
-  const md = "## A\n```\n## nope\n### nope\n```\ntext\n#### deep\n# Next\nafter\n## B\n";
-  const s = sectionsOf(md);
-  assert.deepEqual(s.map((x) => x.heading), ["A", "B"]);
-  const a2 = sectionsOf(md.replace("after", "AFTER"));
-  assert.equal(a2[0]!.hash, s[0]!.hash); // "after" is under the H1, outside A
-  assert.deepEqual(sectionsOf(""), []);
-});
 
 // ---- read marks ----
 
@@ -196,9 +160,8 @@ test("read: POST marks, list / detail show read, a rewrite makes it unread, DELE
   assert.equal(r.status, 200);
   assert.deepEqual(await r.json(), { name: "a.md", read: true });
   assert.equal(await list(), true);
-  const d = (await (await e.call("GET", "/api/plans/a.md")).json()) as { read: boolean; sections: unknown[] };
+  const d = (await (await e.call("GET", "/api/plans/a.md")).json()) as { read: boolean };
   assert.equal(d.read, true);
-  assert.equal(d.sections.length, 1);
   put(e.dir, "a.md", "# A\n## S\nmore\n", "2026-10-02T00:00:00Z");
   assert.equal(await list(), false);
   await e.call("POST", "/api/plans/a.md/read", { mtime: "2026-10-02T00:00:00.000Z" });
@@ -222,7 +185,7 @@ test("read: 400 / 404 / 401", async () => {
   assert.equal((await e.call("DELETE", "/api/plans/a.md/read", undefined, false)).status, 401);
 });
 
-test("read: persists across a store reload; entries of deleted files are pruned on save", async () => {
+test("read: persists across a store reload; a removed plan is pruned at load and by the watcher", async () => {
   const e = await readEnv();
   put(e.dir, "a.md", "# A\n", "2026-10-01T00:00:00Z");
   put(e.dir, "b.md", "# B\n", "2026-10-01T00:00:00Z");
@@ -230,7 +193,17 @@ test("read: persists across a store reload; entries of deleted files are pruned 
   await e.call("POST", "/api/plans/a.md/read", { mtime: t });
   await e.call("POST", "/api/plans/b.md/read", { mtime: t });
   const file = join(e.dataDir, "plans-read.json");
-  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { "a.md": t, "b.md": t });
+  // Writes are asynchronous: wait for the file to settle
+  const settled = async (want: object) => {
+    for (let i = 0; i < 60; i++) {
+      try {
+        if (JSON.stringify(JSON.parse(readFileSync(file, "utf8"))) === JSON.stringify(want)) return;
+      } catch {}
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), want);
+  };
+  await settled({ "a.md": t, "b.md": t });
 
   const { PlanReadStore } = await import("../../src/serve/plan-read.js");
   const again = new PlanReadStore(e.dataDir, e.dir);
@@ -238,8 +211,8 @@ test("read: persists across a store reload; entries of deleted files are pruned 
   assert.equal(again.isRead("a.md", "2026-10-02T00:00:00.000Z"), false);
 
   rmSync(join(e.dir, "b.md"));
-  await e.call("DELETE", "/api/plans/a.md/read"); // any save prunes
-  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {});
+  assert.equal(new PlanReadStore(e.dataDir, e.dir).isRead("b.md", t), false); // pruned at load
+  await settled({ "a.md": t }); // and by the watcher's onRemove
 });
 
 test("read: a corrupt plans-read.json is treated as empty", async () => {
@@ -249,7 +222,7 @@ test("read: a corrupt plans-read.json is treated as empty", async () => {
   assert.equal(new PlanReadStore(dataDir, dataDir).isRead("a.md", "x"), false);
 });
 
-test("plan with explanation blocks: markdown, lines, sections ignore them", async () => {
+test("plan with explanation blocks: markdown, lines, section count ignore them", async () => {
   const { dir, get } = await env();
   const block = "<!-- ukagai-explain -->\n---\nukagai: 1\nquestion: Q?\n---\n## Why this decision is needed now\nx\n## Options\n<!-- /ukagai-explain -->\n";
   const plain = "# Plan\n\n## Steps\n\n1. a\n\n## Scope and reversibility\n\nReversibility: reversible\n";
@@ -258,8 +231,7 @@ test("plan with explanation blocks: markdown, lines, sections ignore them", asyn
   const withB = await (await get("/api/plans/with.md")).json();
   const plainB = await (await get("/api/plans/plain.md")).json();
   assert.equal(withB.markdown, plain);
-  assert.deepEqual(withB.sections, plainB.sections);
-  assert.deepEqual(withB.sections.map((s: { heading: string }) => s.heading), ["Steps", "Scope and reversibility"]);
+  assert.equal(plainB.markdown, plain);
   const { plans: list } = (await (await get("/api/plans")).json()) as { plans: { name: string; lines: number; sections: number }[] };
   const w = list.find((x) => x.name === "with.md")!;
   const p = list.find((x) => x.name === "plain.md")!;

@@ -654,8 +654,8 @@ test("Cannot answer: the pending-rewrite endpoints need the bearer token, and me
 
 // ---- hand-off and re-attach ----
 
-const open = (env: Env, fp: string, toolUseId = "tu-new", session = "sess-1") =>
-  api(env, `/api/sessions/${session}/open?${new URLSearchParams({ fingerprint: fp, tool_use_id: toolUseId })}`);
+const open = (env: Env, fp: string, toolUseId = "tu-new", session = "sess-1", agentId?: string) =>
+  api(env, `/api/sessions/${session}/open?${new URLSearchParams({ fingerprint: fp, tool_use_id: toolUseId, ...(agentId ? { agent_id: agentId } : {}) })}`);
 const FP = decisionFingerprint("answer_question", decisionBody({ home: "" } as Env, "x").request);
 
 test("fingerprint: stable across key order and option descriptions, different for a changed label or plan", () => {
@@ -688,13 +688,12 @@ test("handoff: 200 keeps pending, counts, re-arms the lease with handoffGraceMs;
   const j = (await r.json()) as any;
   assert.equal(j.status, "pending");
   assert.equal(j.handoffs, 1);
-  assert.ok(j.handoff_at);
   assert.ok(Date.parse(j.lease_until) >= before + 59_000);
   await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { "Which do you choose, A or B?": "A" } } });
   assert.equal((await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "sess-1" } })).status, 409);
 });
 
-test("open: hit on a pending decision swaps tool_use_id, keeps the old one, clears handoff_at, re-arms the lease", async () => {
+test("open: hit on a pending decision swaps tool_use_id, keeps the old one, re-arms the lease", async () => {
   const env = await setup({ handoffGraceMs: 60_000 });
   const d = await register(env, "tu-1");
   await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "sess-1" } });
@@ -704,7 +703,6 @@ test("open: hit on a pending decision swaps tool_use_id, keeps the old one, clea
   assert.equal(got.id, d.id);
   assert.equal(got.tool_use_id, "tu-2");
   assert.deepEqual(got.previous_tool_use_ids, ["tu-1"]);
-  assert.equal(got.handoff_at, undefined);
   assert.equal(got.status, "pending");
   assert.ok(Date.parse(got.lease_until) < Date.now() + 15_000);
   // both ids map to the same decision: a register with the old id returns it
@@ -743,16 +741,24 @@ test("open: miss for another fingerprint, another session, a closed decision; 40
   assert.equal((await open(env, FP)).status, 404);
 });
 
-test("create with an open same-fingerprint decision returns it (old hook builds re-attach too)", async () => {
+test("create never merges: the same fingerprint registered under a new tool_use_id is a second decision", async () => {
   const env = await setup();
   const d = await register(env, "tu-1");
   const r = await api(env, "/api/decisions", { body: decisionBody(env, "tu-2") });
-  assert.equal(r.status, 200);
-  const j = (await r.json()) as any;
-  assert.equal(j.id, d.id);
-  assert.equal(j.tool_use_id, "tu-2");
-  assert.deepEqual(j.previous_tool_use_ids, ["tu-1"]);
-  assert.equal(((await (await api(env, "/api/decisions")).json()) as any[]).length, 1);
+  assert.equal(r.status, 201);
+  assert.notEqual(((await r.json()) as any).id, d.id);
+  assert.equal(((await (await api(env, "/api/decisions")).json()) as any[]).length, 2);
+});
+
+test("open: the key includes the agent, so two subagents asking the same question do not collapse", async () => {
+  const env = await setup();
+  const a = await register(env, "tu-a", { session: { ...decisionBody(env, "x").session, agent_id: "agent-a" } });
+  const b = await register(env, "tu-b", { session: { ...decisionBody(env, "x").session, agent_id: "agent-b" } });
+  assert.notEqual(a.id, b.id);
+  assert.equal(((await (await open(env, FP, "tu-a2", "sess-1", "agent-a")).json()) as any).decision.id, a.id);
+  assert.equal(((await (await open(env, FP, "tu-b2", "sess-1", "agent-b")).json()) as any).decision.id, b.id);
+  assert.equal((await open(env, FP, "tu-c", "sess-1", "agent-c")).status, 404);
+  assert.equal((await open(env, FP, "tu-d")).status, 404);
 });
 
 test("lease expiry after a hand-off without a re-attach: hook_disconnected as usual; metrics sum handoffs", async () => {

@@ -175,6 +175,66 @@ test("an answer_question decision never marks plans", async () => {
   assert.equal(readUpdates(env, "q.md").length, 0);
 });
 
+// ---- 1b. the mark is part of the close: plan.updated goes out before decision.updated ----
+
+/** Events (from `from`) in the order they were broadcast: the plan's read mark, and the decision leaving pending */
+const closeOrder = (env: Env, name: string, id: string, from: number): string[] =>
+  env.events
+    .slice(from)
+    .filter((e) => (e.event === "plan.updated" && e.data.name === name && e.data.read === true) || (e.event === "decision.updated" && e.data.id === id && e.data.status !== "pending"))
+    .map((e) => e.event);
+
+for (const [label, finish] of [
+  ["answer", (env: Env, id: string) => call(env, `/api/decisions/${id}/answer`, { approve: true })],
+  ["cancel", (env: Env, id: string) => call(env, `/api/decisions/${id}/cancel`, {})],
+] as const) {
+  test(`order: on ${label} the read mark (plan.updated) is broadcast before decision.updated`, async () => {
+    const env = await setup();
+    writeFileSync(join(env.dir, "o.md"), "# O\n");
+    const { id } = await approval(env, join(env.dir, "o.md"));
+    const from = env.events.length;
+    assert.equal((await finish(env, id)).status, 200);
+    await until(() => closeOrder(env, "o.md", id, from).length >= 2);
+    assert.deepEqual(closeOrder(env, "o.md", id, from).slice(0, 2), ["plan.updated", "decision.updated"]);
+  });
+}
+
+test("order: on lease expiry the read mark is broadcast before decision.updated", async () => {
+  const env = await setup({ leaseGraceMs: 150 });
+  writeFileSync(join(env.dir, "x.md"), "# X\n");
+  const { id } = await approval(env, join(env.dir, "x.md"));
+  const from = env.events.length;
+  await until(() => closeOrder(env, "x.md", id, from).length >= 2);
+  assert.deepEqual(closeOrder(env, "x.md", id, from).slice(0, 2), ["plan.updated", "decision.updated"]);
+});
+
+test("order: on UserPromptSubmit the read mark is broadcast before decision.updated", async () => {
+  const env = await setup();
+  writeFileSync(join(env.dir, "u.md"), "# U\n");
+  const { id, session } = await approval(env, join(env.dir, "u.md"));
+  const from = env.events.length;
+  await call(env, "/api/events", { session_id: session, transcript_path: join(env.home, ".claude", "projects", "p", "none.jsonl"), cwd: env.home, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await until(() => closeOrder(env, "u.md", id, from).length >= 2);
+  assert.deepEqual(closeOrder(env, "u.md", id, from).slice(0, 2), ["plan.updated", "decision.updated"]);
+});
+
+test("plan_name: set at create for a plan inside the dir, absent for a path outside it, and a missing file", async () => {
+  const env = await setup();
+  writeFileSync(join(env.dir, "n.md"), "# N\n");
+  const outside = join(env.home, "elsewhere.md");
+  writeFileSync(outside, "# Out\n");
+  const inside = await approval(env, join(env.dir, "n.md"));
+  assert.equal((await call(env, `/api/decisions/${inside.id}`)).json.plan_name, "n.md");
+  const out = await approval(env, outside);
+  assert.equal((await call(env, `/api/decisions/${out.id}`)).json.plan_name, undefined);
+  const gone = await approval(env, join(env.dir, "gone.md"));
+  assert.equal((await call(env, `/api/decisions/${gone.id}`)).json.plan_name, undefined);
+  const from = env.events.length;
+  await call(env, `/api/decisions/${out.id}/answer`, { approve: true });
+  await sleep(200);
+  assert.equal(env.events.slice(from).filter((e) => e.event === "plan.updated").length, 0);
+});
+
 // ---- 2. first-run baseline ----
 
 test("no plans-read.json + 3 plans: all read on first start, file created", async () => {

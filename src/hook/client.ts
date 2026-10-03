@@ -155,9 +155,10 @@ export class Client {
     return r?.status === 200;
   }
 
-  /** The still-open decision of this session with the same fingerprint (the server swaps in the new tool_use_id). Null on a miss or any failure */
-  async findOpen(sessionId: string, fingerprint: string, toolUseId: string): Promise<Decision | null> {
+  /** The still-open decision of this session and agent with the same fingerprint (the server swaps in the new tool_use_id). Null on a miss or any failure */
+  async findOpen(sessionId: string, agentId: string | undefined, fingerprint: string, toolUseId: string): Promise<Decision | null> {
     const q = new URLSearchParams({ fingerprint, tool_use_id: toolUseId });
+    if (agentId) q.set("agent_id", agentId);
     const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/open?${q}`, undefined, SHORT_TIMEOUT_MS);
     if (!r || r.status !== 200) return null;
     const d = (Client.json(r.text) as { decision?: Decision } | undefined)?.decision;

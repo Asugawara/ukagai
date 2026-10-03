@@ -6,13 +6,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
-import { LEASE_GRACE_MS, type Decision } from "../contract.js";
+import { LEASE_GRACE_MS, plansDir } from "../contract.js";
 import { readConfig } from "../settings/config.js";
 import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
 import { PlanReadStore } from "./plan-read.js";
 import { startPlanWatcher } from "./plan-watch.js";
-import { listPlans, planNameOfPath, planSummary, plansDir } from "./plans.js";
+import { listPlans, planNameOfPath, planSummarySync } from "./plans.js";
 import { createApp } from "./routes.js";
 import { SseHub } from "./sse.js";
 import { Store } from "./store.js";
@@ -49,28 +49,26 @@ export type ServeHandle = {
 export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const dataDir = opts.dataDir ?? join(homedir(), ".ukagai");
   const home = opts.home ?? homedir();
+  const dir = plansDir(home);
   const hub = new SseHub();
-  const planRead = new PlanReadStore(dataDir, plansDir(home));
+  const planRead = new PlanReadStore(dataDir, dir);
   // First run (no plans-read.json): plans already on disk are not new
   if (!planRead.exists()) planRead.seed(await listPlans(home));
-  // A resolved approval marks its plan read at the current mtime, so it does not come back as new in the other UI
-  const markPlanRead = async (d: Decision): Promise<void> => {
-    const filePath = (d.request as { planFilePath?: unknown }).planFilePath;
-    if (typeof filePath !== "string" || filePath === "") return;
-    const dir = plansDir(home);
-    const name = await planNameOfPath(dir, filePath);
-    if (!name) return;
-    const summary = await planSummary(dir, name);
-    if (!summary) return;
-    planRead.mark(name, summary.mtime);
-    hub.broadcast("plan.updated", { ...summary, read: true });
-  };
   const store = new Store({
     dir: dataDir,
     leaseGraceMs: opts.leaseGraceMs ?? LEASE_GRACE_MS,
     handoffGraceMs: opts.handoffGraceMs,
     broadcast: (event, data) => hub.broadcast(event, data),
-    onPlanDecisionClosed: (d) => void markPlanRead(d).catch(() => {}),
+    planNameOf: (filePath) => planNameOfPath(dir, filePath),
+    // A plan decision that leaves `pending` marks its plan read at the current mtime, synchronously and before the store
+    // emits decision.updated, so the other UI never sees the closed decision with the plan still new
+    onTransition: (d, from) => {
+      if (d.kind !== "approve_plan" || from !== "pending" || !d.plan_name) return;
+      const summary = planSummarySync(dir, d.plan_name);
+      if (!summary) return;
+      planRead.mark(d.plan_name, summary.mtime);
+      hub.broadcast("plan.updated", { ...summary, read: true });
+    },
   });
   store.load();
 
@@ -106,16 +104,15 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   chmodSync(tokenFile, 0o600);
   store.startMonitor();
   const planWatcher = startPlanWatcher({
-    plansDir: plansDir(home),
+    plansDir: dir,
     pollMs: opts.planPollMs,
     debounceMs: opts.planDebounceMs,
-    // Re-read through planSummary so `read` reflects the current mark
-    onChange: (summary) => {
-      void planSummary(plansDir(home), summary.name, (n, m) => planRead.isRead(n, m))
-        .then((s) => hub.broadcast("plan.updated", s ?? { ...summary, read: false }))
-        .catch(() => {});
+    isRead: planRead.isRead,
+    onChange: (summary) => hub.broadcast("plan.updated", summary),
+    onRemove: (name) => {
+      planRead.remove(name);
+      hub.broadcast("plan.removed", { name });
     },
-    onRemove: (name) => hub.broadcast("plan.removed", { name }),
   });
   const codexBridge = opts.codexBridge
     ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, collect: (session) => collectContext(session, { home }) })
