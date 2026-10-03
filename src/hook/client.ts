@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { WaitResponse, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
+import { PendingRewrite, WaitResponse, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
 
 const SHORT_TIMEOUT_MS = 1000;
 /** Registration gets a longer timeout because the server's context collection takes up to 1.5 seconds */
@@ -138,6 +138,29 @@ export class Client {
     const r = await this.request(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/consume`,
+      undefined,
+      SHORT_TIMEOUT_MS,
+    );
+    return r !== null && r.status >= 200 && r.status < 300;
+  }
+
+  /** The session's last "Cannot answer" memo. Unreachable, an error or an unexpected body yields null (ignored) */
+  async getPendingRewrite(sessionId: string): Promise<PendingRewrite> {
+    const r = await this.request(
+      "GET",
+      `/api/sessions/${encodeURIComponent(sessionId)}/pending-rewrite`,
+      undefined,
+      SHORT_TIMEOUT_MS,
+    );
+    if (!r || r.status !== 200) return null;
+    const parsed = PendingRewrite.safeParse(Client.json(r.text));
+    return parsed.success ? parsed.data : null;
+  }
+
+  async consumeRewrite(sessionId: string): Promise<boolean> {
+    const r = await this.request(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/pending-rewrite/consume`,
       undefined,
       SHORT_TIMEOUT_MS,
     );

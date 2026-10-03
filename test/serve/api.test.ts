@@ -4,6 +4,7 @@ import { request as httpRequest } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bodyHash } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const tmpRoots: string[] = [];
@@ -569,4 +570,63 @@ test("denied_explain missing is saved and returned by list and reload; not attac
   assert.deepEqual(list.find((x) => x.id === d.id)?.missing, ["table", "recommend_cond"]);
   const real = await api(env, "/api/decisions", { body: decisionBody(env, "tu-miss2", { missing: ["x"] }) });
   assert.equal(((await real.json()) as { missing?: string[] }).missing, undefined);
+});
+
+// ---- "Cannot answer" memo ----
+
+const CANNOT_Q = "Which do you choose, A or B?";
+const MD = "---\nukagai: 1\nquestion: x\n---\n## Why this decision is needed now\nBody.\n";
+
+const registerWithExplanation = (env: Env, toolUseId: string, sessionId = "sess-1") => {
+  const b = decisionBody(env, toolUseId, {
+    explanation: { path: "", markdown: MD, has: { mermaid: false, table: false, diff: false }, match: "question", attached_via: "first_call" },
+  });
+  b.session.session_id = sessionId;
+  return api(env, "/api/decisions", { body: b }).then((r) => r.json() as Promise<{ id: string }>);
+};
+const rewrite = (env: Env, sid = "sess-1") => api(env, `/api/sessions/${sid}/pending-rewrite`).then((r) => r.json());
+
+test("Cannot answer: the answer is memoized per session, consumed once, and does not leak to other sessions", async () => {
+  const env = await setup();
+  assert.equal(await rewrite(env), null);
+  const d = await registerWithExplanation(env, "toolu_c1");
+  const a = await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { [CANNOT_Q]: "Cannot answer — Undefined terms: W-T2, FT4" } } });
+  assert.equal(a.status, 200);
+  const memo = (await rewrite(env)) as any;
+  assert.equal(memo.question, CANNOT_Q);
+  assert.equal(memo.reason, "Undefined terms");
+  assert.deepEqual(memo.terms, ["W-T2", "FT4"]);
+  assert.equal(memo.body_hash, bodyHash(MD));
+  assert.equal(typeof memo.at, "number");
+  assert.equal(await rewrite(env, "sess-other"), null);
+
+  const c1 = await api(env, "/api/sessions/sess-1/pending-rewrite/consume", { body: {} });
+  assert.deepEqual(await c1.json(), { consumed: true });
+  assert.equal(await rewrite(env), null);
+  const c2 = await api(env, "/api/sessions/sess-1/pending-rewrite/consume", { body: {} });
+  assert.deepEqual(await c2.json(), { consumed: false });
+});
+
+test("Cannot answer: a later one overwrites; a normal answer and an empty-detail Unclear are handled", async () => {
+  const env = await setup();
+  const d1 = await registerWithExplanation(env, "toolu_c2");
+  await api(env, `/api/decisions/${d1.id}/answer`, { body: { answers: { [CANNOT_Q]: "A" } } });
+  assert.equal(await rewrite(env), null);
+  const d2 = await registerWithExplanation(env, "toolu_c3");
+  await api(env, `/api/decisions/${d2.id}/answer`, { body: { answers: { [CANNOT_Q]: "Cannot answer — Unclear" } } });
+  assert.deepEqual(((await rewrite(env)) as any).terms, []);
+  assert.equal(((await rewrite(env)) as any).reason, "Unclear");
+  const d3 = await registerWithExplanation(env, "toolu_c4");
+  await api(env, `/api/decisions/${d3.id}/answer`, { body: { answers: { [CANNOT_Q]: "Cannot answer — Too much at once: two things" } } });
+  assert.equal(((await rewrite(env)) as any).reason, "Too much at once");
+});
+
+test("Cannot answer: the pending-rewrite endpoints need the bearer token, and metrics count it", async () => {
+  const env = await setup();
+  assert.equal((await api(env, "/api/sessions/sess-1/pending-rewrite", { auth: false })).status, 401);
+  const d = await registerWithExplanation(env, "toolu_c5");
+  await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { [CANNOT_Q]: "Cannot answer — Unclear" } } });
+  const m = (await (await api(env, "/api/metrics")).json()) as any;
+  assert.equal(m.a.cannot_answer, 1);
+  assert.equal(m.a.total, 0);
 });

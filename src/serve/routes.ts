@@ -265,6 +265,14 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ consumed: store.consumeModeSwitch(c.req.param("id")) });
   });
 
+  app.get("/api/sessions/:id/pending-rewrite", auth("bearer"), (c) => {
+    return c.json(store.getRewrite(c.req.param("id")));
+  });
+
+  app.post("/api/sessions/:id/pending-rewrite/consume", auth("bearer"), jsonOnly, (c) => {
+    return c.json({ consumed: store.consumeRewrite(c.req.param("id")) });
+  });
+
   // ---- metrics / stream ----
 
   app.get("/api/metrics", auth("any"), (c) => c.json(store.metrics()));

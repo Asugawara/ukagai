@@ -637,3 +637,14 @@ test("coined_term: also evaluated for a blocker; order is cell_long, coined_term
   assert.match(coinedTermLabel(["FT4", "P-GH"]), /^internal identifiers the reader cannot know \(FT4, P-GH; plan codes/);
   assert.match(coinedTermLabel(Array.from({ length: 10 }, (_, i) => `AB${i}`)), /AB7 and 2 more;/);
 });
+
+test("parseCannotAnswer: the three reasons, the terms split, and what is not a Cannot answer", async () => {
+  const { parseCannotAnswer, CANNOT_PREFIX } = await import("../../src/contract.js");
+  assert.equal(CANNOT_PREFIX, "Cannot answer — ");
+  assert.deepEqual(parseCannotAnswer("Cannot answer — Undefined terms: W-T2, FT4,  G-T2"), { reason: "Undefined terms", terms: ["W-T2", "FT4", "G-T2"], text: "W-T2, FT4,  G-T2" });
+  assert.deepEqual(parseCannotAnswer("Cannot answer — Unclear"), { reason: "Unclear", terms: [], text: "" });
+  assert.deepEqual(parseCannotAnswer("Cannot answer — Too much at once: a, b"), { reason: "Too much at once", terms: [], text: "a, b" });
+  assert.equal(parseCannotAnswer("Cannot answer — Whatever"), null);
+  assert.equal(parseCannotAnswer("None of these — Wrong premise"), null);
+  assert.equal(parseCannotAnswer("A"), null);
+});
