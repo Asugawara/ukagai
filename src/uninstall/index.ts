@@ -62,7 +62,8 @@ export async function run(argv: string[]): Promise<number> {
     }
     if (codexPlan) {
       const baks = await applyCodex(t.codexHome, codexPlan);
-      out.push(baks.length > 0 ? `codex:    removed the ukagai hooks and trust from ${codexPlan.hooksFile} / ${codexPlan.configFile}` : "codex:    no ukagai hooks are registered");
+      const changedCodex = codexPlan.hooksBefore !== codexPlan.hooksAfter || codexPlan.configBefore !== codexPlan.configAfter;
+      out.push(changedCodex ? `codex:    removed the ukagai hooks and trust from ${codexPlan.hooksFile} / ${codexPlan.configFile}` : "codex:    no ukagai hooks are registered");
       for (const b of baks) out.push(`backup:   ${b}`);
     }
     process.stdout.write(out.join("\n") + "\n");

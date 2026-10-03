@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { rm } from "node:fs/promises";
 import { editState, hookHash, readState } from "../../src/install/codex-trust.js";
 
 const CLI = resolve("src/cli.ts");
@@ -218,4 +219,97 @@ test("a path with spaces / quotes is shell-quoted in the command (the data dir h
   await ukagai(e, ["install", "--codex", "--codex-home", e.codex, "--data-dir", dd, "--lang", "en"]);
   const cmd = JSON.parse(await readFile(join(e.codex, "hooks.json"), "utf8")).hooks.Stop[0].hooks[0].command as string;
   assert.ok(cmd.includes(`'${dd.replace(/'/g, `'\\''`)}'`), cmd);
+});
+
+// ---- round trip: existing formatting survives, created files go away ----
+
+const lines = (t: string): string[] => t.replace(/\n$/, "").split("\n");
+
+test("empty CODEX_HOME: install then uninstall leaves nothing (no files, no record)", async () => {
+  const e = await setup();
+  const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
+  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  assert.ok((await readdir(e.codex)).includes(".ukagai-codex.json"));
+  const r = await ukagai(e, ["uninstall", ...args]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(await readdir(e.codex), []);
+});
+
+test("without a record uninstall does not delete a file that merely ends up empty", async () => {
+  const e = await setup();
+  const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
+  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await rm(join(e.codex, ".ukagai-codex.json"));
+  await ukagai(e, ["uninstall", ...args]);
+  assert.deepEqual((await readdir(e.codex)).filter((f) => !f.includes(".bak-")).sort(), ["config.toml", "hooks.json"]);
+});
+
+function richConfig(): string {
+  const parts = ['model = "gpt-5"', ""];
+  for (let i = 0; i < 750; i++) parts.push(`[projects."/Users/x/dev/p${i}"]`, 'trust_level = "trusted"', "");
+  for (let i = 0; i < 150; i++) parts.push(`[mcp_servers.s${i}]`, 'command = "npx"', `args = ["-y", "pkg-${i}"]`, "");
+  parts.push('[hooks.state."/home/x/.codex/hooks.json:stop:0:0"]', 'trusted_hash = "sha256:abc"');
+  return parts.join("\n"); // no trailing newline
+}
+const AWM_TAB = `{\n\t"hooks": {\n\t\t"PreToolUse": [\n\t\t\t{\n\t\t\t\t"matcher": "Bash",\n\t\t\t\t"hooks": [\n\t\t\t\t\t{\n\t\t\t\t\t\t"type": "command",\n\t\t\t\t\t\t"command": "/usr/bin/awm-hook"\n\t\t\t\t\t}\n\t\t\t\t]\n\t\t\t}\n\t\t],\n\t\t"Stop": [\n\t\t\t{\n\t\t\t\t"hooks": [\n\t\t\t\t\t{\n\t\t\t\t\t\t"type": "command",\n\t\t\t\t\t\t"command": "/usr/bin/awm-hook"\n\t\t\t\t\t}\n\t\t\t\t]\n\t\t\t}\n\t\t]\n\t}\n}`; // tab indent, no final newline
+
+test("awm-style hooks.json (tabs, no final newline) + 58 KB config.toml: install only appends, uninstall restores the bytes, 2nd install is a no-op", async () => {
+  const e = await setup();
+  const hf = join(e.codex, "hooks.json");
+  const cf = join(e.codex, "config.toml");
+  const cfg = richConfig();
+  assert.ok(cfg.length > 50_000);
+  await writeFile(hf, AWM_TAB);
+  await writeFile(cf, cfg);
+  const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
+  assert.equal((await ukagai(e, ["install", ...args, "--lang", "en", "--dry-run"])).code, 0);
+  assert.equal(await readFile(hf, "utf8"), AWM_TAB, "dry-run changes nothing");
+  assert.equal(await readFile(cf, "utf8"), cfg);
+  assert.deepEqual((await readdir(e.codex)).sort(), ["config.toml", "hooks.json"]);
+
+  const r = await ukagai(e, ["install", ...args, "--lang", "en"]);
+  assert.equal(r.code, 0, r.err);
+  const h1 = await readFile(hf, "utf8");
+  const c1 = await readFile(cf, "utf8");
+  assert.ok(!h1.endsWith("\n"), "no final newline added");
+  assert.ok(!/^ +"/m.test(h1), "no space indentation introduced");
+  // every existing line is still there in order; the only edits are a comma on the line before an appended group
+  const old = lines(AWM_TAB);
+  const now = lines(h1);
+  let j = 0;
+  const changed: string[] = [];
+  for (const l of old) {
+    while (j < now.length && now[j] !== l && now[j] !== l + ",") j++;
+    assert.ok(j < now.length, `line lost: ${l}`);
+    if (now[j] !== l) changed.push(l);
+    j++;
+  }
+  assert.ok(changed.every((l) => /^\t{2,3}[}\]]$/.test(l)), `only closing brackets gain a comma: ${changed.join("|")}`);
+  assert.equal(JSON.parse(h1).hooks.Stop.length, 2);
+  assert.ok(c1.startsWith(cfg + "\n"), "config: only a newline and the new tables are added");
+  assert.equal(readState(c1).size, 5);
+
+  const bakCount = (await readdir(e.codex)).filter((f) => f.includes(".bak-")).length;
+  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  assert.equal(await readFile(hf, "utf8"), h1);
+  assert.equal(await readFile(cf, "utf8"), c1);
+  assert.equal((await readdir(e.codex)).filter((f) => f.includes(".bak-")).length, bakCount);
+
+  const u = await ukagai(e, ["uninstall", ...args]);
+  assert.equal(u.code, 0, u.err);
+  assert.equal(await readFile(hf, "utf8"), AWM_TAB, "hooks.json back to the original bytes");
+  assert.equal(await readFile(cf, "utf8"), cfg, "config.toml back to the original bytes");
+  assert.ok(!(await readdir(e.codex)).includes(".ukagai-codex.json"));
+});
+
+test("uninstall without a usable backup still removes the added final newline (line-based)", async () => {
+  const e = await setup();
+  const cf = join(e.codex, "config.toml");
+  const cfg = 'model = "x"\n\n[tui]\na = 1';
+  await writeFile(cf, cfg);
+  const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
+  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  for (const f of await readdir(e.codex)) if (f.startsWith("config.toml.bak-")) await rm(join(e.codex, f));
+  await ukagai(e, ["uninstall", ...args]);
+  assert.equal(await readFile(cf, "utf8"), cfg);
 });
