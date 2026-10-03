@@ -17,6 +17,12 @@ export interface Target {
   dataDir: string;
   /** `--lang`; undefined when not given */
   lang: Lang | undefined;
+  /** Touch Claude Code's settings and skill (true unless `--codex` is given alone) */
+  claude: boolean;
+  /** `--codex`: also (or only) handle Codex CLI's hooks.json / config.toml */
+  codex: boolean;
+  /** Codex home: `--codex-home`, else $CODEX_HOME, else ~/.codex */
+  codexHome: string;
   /** Extra args for the hook (only when they differ from the defaults) */
   hookArgs: string[];
 }
@@ -27,6 +33,9 @@ export function parseTarget(argv: string[]): Target {
   let settings: string | undefined;
   let project = false;
   let skill = false;
+  let codex = false;
+  let claude = false;
+  let codexHome: string | undefined;
   let lang: Lang | undefined;
   const t = {
     timeout: 3600,
@@ -51,6 +60,9 @@ export function parseTarget(argv: string[]): Target {
     else if (a === "--observe") t.observe = true;
     else if (a === "--no-skill") t.noSkill = true;
     else if (a === "--skill") skill = true;
+    else if (a === "--codex") codex = true;
+    else if (a === "--claude") claude = true;
+    else if (a === "--codex-home") codexHome = resolve(val());
     else if (a === "--no-autostart") t.noAutostart = true;
     else if (a === "--timeout") {
       const n = Number(val());
@@ -71,6 +83,9 @@ export function parseTarget(argv: string[]): Target {
   return {
     ...t,
     lang,
+    codex,
+    claude: !codex || claude || settings !== undefined || project,
+    codexHome: codexHome ?? resolve(process.env["CODEX_HOME"] || join(homedir(), ".codex")),
     hookArgs,
     handleSkill: !t.noSkill && (settings === undefined || skill),
     settingsFile: settings ?? join(base, "settings.json"),

@@ -5,6 +5,7 @@ import { buildHookEntries, HOOK_EVENTS } from "../settings/hooks-spec.js";
 import { unifiedDiff } from "../settings/diff.js";
 import { LANGS, configPath, isLang, readConfig, writeConfig, type Lang } from "../settings/config.js";
 import { mergeHooks, readSettings, serialize, writeSettings } from "../settings/merge.js";
+import { CODEX_SPECS, apply as applyCodex, plan, type CodexInstallOptions } from "./codex.js";
 import { CLI_PATH, SKILL_SOURCE, parseTarget } from "../settings/target.js";
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
@@ -43,33 +44,62 @@ export async function run(argv: string[]): Promise<number> {
     return 2;
   }
   try {
+    const cx: CodexInstallOptions = {
+      home: t.codexHome,
+      node: process.execPath,
+      cli: CLI_PATH,
+      timeout: t.timeout,
+      hookArgs: t.hookArgs,
+      noAutostart: t.noAutostart,
+    };
+    const codexPlan = t.codex ? await plan(cx, "install") : undefined;
     const before = await readSettings(t.settingsFile);
     const entries = buildHookEntries({ node: process.execPath, cli: CLI_PATH, timeout: t.timeout, observe: t.observe, hookArgs: t.hookArgs, autostart: !t.noAutostart });
     const after = mergeHooks(before, entries);
     const skillDest = join(t.skillDir, "SKILL.md");
 
     if (t.dryRun) {
-      const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
-      process.stdout.write(diff === "" ? "settings: no changes\n" : diff);
-      if (t.handleSkill) process.stdout.write(`skill: ${SKILL_SOURCE} -> ${skillDest}\n`);
+      if (t.claude) {
+        const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
+        process.stdout.write(diff === "" ? "settings: no changes\n" : diff);
+        if (t.handleSkill) process.stdout.write(`skill: ${SKILL_SOURCE} -> ${skillDest}\n`);
+      }
+      if (codexPlan) {
+        for (const [file, a, b] of [
+          [codexPlan.hooksFile, codexPlan.hooksBefore, codexPlan.hooksAfter],
+          [codexPlan.configFile, codexPlan.configBefore, codexPlan.configAfter],
+        ] as const) {
+          const diff = unifiedDiff(a, b, file, `${file} (after)`);
+          process.stdout.write(diff === "" ? `codex: ${file}: no changes\n` : diff);
+        }
+      }
       process.stdout.write("(--dry-run: nothing was written)\n");
       return 0;
     }
 
     const lang = await resolveLang(t.dataDir, t.lang);
-    const bak = await writeSettings(t.settingsFile, after);
-    if (t.handleSkill) {
-      await mkdir(t.skillDir, { recursive: true });
-      await copyFile(SKILL_SOURCE, skillDest);
+    const out: string[] = [];
+    if (t.claude) {
+      const bak = await writeSettings(t.settingsFile, after);
+      if (t.handleSkill) {
+        await mkdir(t.skillDir, { recursive: true });
+        await copyFile(SKILL_SOURCE, skillDest);
+      }
+      out.push(`settings: ${t.settingsFile}`);
+      if (bak) out.push(`backup:   ${bak}`);
+      out.push(`node:     ${process.execPath}`, `cli:      ${CLI_PATH}`);
+      out.push(`timeout:  ${t.timeout}s (PreToolUse --budget ${t.timeout - 10})${t.observe ? " [observe]" : ""}`);
+      out.push(`events:   ${HOOK_EVENTS.join(", ")}`);
+      out.push(t.noAutostart ? "autostart: off (--no-autostart)" : "autostart: on");
+      out.push(t.handleSkill ? `skill:    ${skillDest}` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)");
     }
-    const out = [`settings: ${t.settingsFile}`];
-    if (bak) out.push(`backup:   ${bak}`);
-    out.push(`node:     ${process.execPath}`, `cli:      ${CLI_PATH}`);
-    out.push(`timeout:  ${t.timeout}s (PreToolUse --budget ${t.timeout - 10})${t.observe ? " [observe]" : ""}`);
-    out.push(`events:   ${HOOK_EVENTS.join(", ")}`);
+    if (codexPlan) {
+      const baks = await applyCodex(t.codexHome, codexPlan);
+      out.push(`codex:    ${codexPlan.hooksFile} (${CODEX_SPECS.map((c) => c.event).join(", ")})`);
+      out.push(`trust:    ${codexPlan.managed.size} hook(s) trusted in ${codexPlan.configFile}`);
+      for (const b of baks) out.push(`backup:   ${b}`);
+    }
     out.push(`lang:     ${lang} (${configPath(t.dataDir)})`);
-    out.push(t.noAutostart ? "autostart: off (--no-autostart)" : "autostart: on");
-    out.push(t.handleSkill ? `skill:    ${skillDest}` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)");
     process.stdout.write(out.join("\n") + "\n");
     return 0;
   } catch (err) {

@@ -31,6 +31,17 @@ claude --settings /tmp/ukagai-settings.json
 
 With `--settings` the skill is left alone; add `--skill` to place it too.
 
+### Codex CLI
+
+```sh
+node dist/cli.js install --codex --dry-run   # preview the changes to ~/.codex/hooks.json and ~/.codex/config.toml
+node dist/cli.js install --codex             # Codex only; add --claude to register Claude Code too
+```
+
+`install --codex` merges ukagai's handlers (PreToolUse `request_user_input`, PermissionRequest, Stop, SessionStart) into `$CODEX_HOME/hooks.json` (default `~/.codex`; `--codex-home <dir>` overrides) without touching other hooks, and writes the matching `[hooks.state."…"]` trust hashes into `config.toml`, so Codex does not show "Hooks need review". Only those tables are edited; both files get a `.bak-<time>` copy. `install` never touches Codex without `--codex`; `uninstall --codex` and `doctor --codex` mirror it.
+
+What Codex covers: `request_user_input` in Plan mode, questions written in prose (Default mode, caught at Stop), and approvals (shown in the GUI as an "Approval" card with Allow / Deny). The plan approval popup ("Implement this plan?") is not covered.
+
 ## Usage
 
 **GUI.** After `install`, just start `claude`: the server starts automatically and the browser opens on the first session of the day. You can also run it yourself with `node dist/cli.js serve` (http://127.0.0.1:4818). Stop it with `pkill -f "cli.js serve"`; turn off auto-start with `install --no-autostart`.
@@ -64,7 +75,7 @@ TUI diagrams are rendered with beautiful-mermaid (MIT).
 
 ## Codex CLI (experimental)
 
-The same hook can serve Codex CLI: `node dist/cli.js hook --agent codex` (default `--agent claude`). Codex PreToolUse `request_user_input` is mapped to the usual question flow (explanation file under `<data-dir>/explain/<session_id>/`), and the human's answer from the GUI comes back as a `deny` whose reason carries the answer. A prose question at Stop is registered too; if the human answers in the GUI the turn continues with the answer. Plan approval is not reachable by Codex hooks. `install --codex` does not exist yet; see `docs/verification/02-codex-hooks.md` for running it by hand.
+The same hook can serve Codex CLI: `node dist/cli.js hook --agent codex` (default `--agent claude`). Codex PreToolUse `request_user_input` is mapped to the usual question flow (explanation file under `<data-dir>/explain/<session_id>/`), and the human's answer from the GUI comes back as a `deny` whose reason carries the answer. A prose question at Stop is registered too; if the human answers in the GUI the turn continues with the answer. A PermissionRequest (approval of a command) is registered as an "Approval" question with Allow / Deny. Plan approval is not reachable by Codex hooks. Register everything with `install --codex` (see Install); `docs/verification/02-codex-hooks.md` has the real runs.
 
 ## Uninstall
 

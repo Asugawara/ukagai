@@ -1,0 +1,1 @@
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/tmp/scratchpad/codex-verify/log-proj.sh","timeout":10,"statusMessage":"proj hook"}]}]}}

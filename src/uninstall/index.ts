@@ -2,7 +2,8 @@ import { rm, rmdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { unifiedDiff } from "../settings/diff.js";
 import { readSettings, removeHooks, serialize, writeSettings } from "../settings/merge.js";
-import { parseTarget } from "../settings/target.js";
+import { apply as applyCodex, plan } from "../install/codex.js";
+import { CLI_PATH, parseTarget } from "../settings/target.js";
 
 async function exists(p: string): Promise<boolean> {
   return stat(p).then(() => true, () => false);
@@ -17,31 +18,52 @@ export async function run(argv: string[]): Promise<number> {
     return 2;
   }
   try {
-    const fileExists = await exists(t.settingsFile);
-    const before = await readSettings(t.settingsFile);
+    const fileExists = t.claude && (await exists(t.settingsFile));
+    const before = t.claude ? await readSettings(t.settingsFile) : {};
     const after = removeHooks(before);
     const changed = serialize(before) !== serialize(after);
     const skillFile = join(t.skillDir, "SKILL.md");
-    const skillExists = t.handleSkill && (await exists(skillFile));
+    const skillExists = t.claude && t.handleSkill && (await exists(skillFile));
+    const codexPlan = t.codex
+      ? await plan({ home: t.codexHome, node: process.execPath, cli: CLI_PATH, timeout: t.timeout, hookArgs: [], noAutostart: false }, "uninstall")
+      : undefined;
 
     if (t.dryRun) {
-      const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
-      process.stdout.write(diff === "" ? "settings: no changes\n" : diff);
-      if (skillExists) process.stdout.write(`skill: remove ${skillFile}\n`);
+      if (t.claude) {
+        const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
+        process.stdout.write(diff === "" ? "settings: no changes\n" : diff);
+        if (skillExists) process.stdout.write(`skill: remove ${skillFile}\n`);
+      }
+      if (codexPlan) {
+        for (const [file, a, b] of [
+          [codexPlan.hooksFile, codexPlan.hooksBefore, codexPlan.hooksAfter],
+          [codexPlan.configFile, codexPlan.configBefore, codexPlan.configAfter],
+        ] as const) {
+          const diff = unifiedDiff(a, b, file, `${file} (after)`);
+          process.stdout.write(diff === "" ? `codex: ${file}: no changes\n` : diff);
+        }
+      }
       process.stdout.write("(--dry-run: nothing was written)\n");
       return 0;
     }
 
     const out: string[] = [];
-    if (fileExists && changed) {
-      const bak = await writeSettings(t.settingsFile, after);
-      out.push(`settings: removed the ukagai hooks from ${t.settingsFile}`);
-      if (bak) out.push(`backup:   ${bak}`);
-    } else out.push("settings: no ukagai hooks are registered");
-    if (skillExists) {
-      await rm(skillFile);
-      await rmdir(t.skillDir).catch(() => undefined);
-      out.push(`skill:    removed ${skillFile}`);
+    if (t.claude) {
+      if (fileExists && changed) {
+        const bak = await writeSettings(t.settingsFile, after);
+        out.push(`settings: removed the ukagai hooks from ${t.settingsFile}`);
+        if (bak) out.push(`backup:   ${bak}`);
+      } else out.push("settings: no ukagai hooks are registered");
+      if (skillExists) {
+        await rm(skillFile);
+        await rmdir(t.skillDir).catch(() => undefined);
+        out.push(`skill:    removed ${skillFile}`);
+      }
+    }
+    if (codexPlan) {
+      const baks = await applyCodex(t.codexHome, codexPlan);
+      out.push(baks.length > 0 ? `codex:    removed the ukagai hooks and trust from ${codexPlan.hooksFile} / ${codexPlan.configFile}` : "codex:    no ukagai hooks are registered");
+      for (const b of baks) out.push(`backup:   ${b}`);
     }
     process.stdout.write(out.join("\n") + "\n");
     return 0;
