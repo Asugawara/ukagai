@@ -417,9 +417,9 @@ test("SessionStart with lang: ja in config.json adds the Japanese instruction (s
   );
   const ctx: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
   assert.ok(ctx.includes("Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese."));
+  assert.ok(ctx.includes("(推奨)") && ctx.includes("完了。続けて / この手順を飛ばして続けて / ここで止める"));
   assert.ok(!ctx.includes("Write the explanation file in English."));
   assert.equal(ctx.split("\n").length, 5);
-  assert.doesNotMatch(ctx, /[ぁ-んァ-ン一-龥]/);
 });
 
 test("contextText: en and ja differ only by the language sentence", () => {
@@ -428,10 +428,9 @@ test("contextText: en and ja differ only by the language sentence", () => {
   assert.equal(en.split("\n").length, 5);
   assert.equal(ja.split("\n").length, 5);
   assert.equal(contextText("/d"), en);
-  assert.equal(
-    ja.replace("Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese.", "Write the explanation file in English."),
-    en,
-  );
+  const sentence = /Write the explanation file in Japanese[^\n]*?ここで止める\./;
+  assert.ok(sentence.test(ja));
+  assert.equal(ja.replace(sentence, "Write the explanation file in English."), en);
 });
 
 test("SessionStart without scratchpad_dir uses data-dir/explain/<session_id>", async () => {
@@ -695,4 +694,79 @@ test("Cannot answer memo: plan mode never reads it", async () => {
     await runHook(args(f, d), JSON.stringify(t1(sp, { permission_mode: "plan" })));
     assert.ok(!f.calls.some((c) => c.path.includes("pending-rewrite")));
   });
+});
+
+// ---- V3: loop guard vs. memo, deny text, language ----
+
+const loopRecord = () => ({
+  id: "d1",
+  kind: "answer_question",
+  status: "denied_explain",
+  created_at: new Date(Date.now() - 30_000).toISOString(),
+  session: { session_id: "00000000-0000-4000-8000-000000000001", cwd: "/", transcript_path: "/" },
+  request: { questions: [{ question: Q }] },
+});
+const loopHandler = (memo: unknown): Handler => (req, res) =>
+  req.method === "GET" && req.path.startsWith("/api/decisions?")
+    ? json(res, 200, [loopRecord()])
+    : req.method === "GET" && req.path.endsWith("/pending-rewrite")
+      ? json(res, 200, memo)
+      : answerHandler({ [Q]: "A" })(req, res);
+
+test("H-1: with a Cannot answer memo the loop guard does not apply (second identical ask is still denied); without one it does", async () => {
+  const sp = tmpDir();
+  const md = withTerms("");
+  writeFile(join(sp, "ukagai", "e.md"), md);
+  const memo = memoOf({ reason: "Undefined terms", terms: ["idempotent"], question: Q });
+  await withServer(loopHandler(memo), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
+  });
+  // no memo, an undefined coined term: the guard lets it through
+  const coined = explanationFor(Q).replace("It has to be decided.", "Gate W-T2 is open.");
+  writeFile(join(sp, "ukagai", "e.md"), coined);
+  await withServer(loopHandler(null), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    assert.equal(f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions")?.body.explanation.none_reason, "loop_guard");
+  });
+});
+
+test("H-3: coined_term and the memo sentence together say \"define it under Terms\" once", async () => {
+  const md = explanationFor(Q).replace("It has to be decided.", "Gate W-T2 is open.");
+  const r = await runWithMemo(md, memoOf({ reason: "Undefined terms", terms: ["W-T2"], question: Q }));
+  const reason = reasonOf(r.out);
+  assert.match(reason, /the human said they could not understand: W-T2/);
+  assert.equal(reason.match(/define it under Terms/g)?.length, 1);
+});
+
+test("language: with lang ja an English title / question is denied; Japanese passes; en never checks", async () => {
+  const jaMd = explanationFor(Q)
+    .replace("title: Choose A or B", "title: AかBかを選ぶ")
+    .replace("It has to be decided.", "今日決める必要がある。")
+    .replace("recommended: A", "recommended: A (推奨)");
+  const input = (q: string, desc: string) => {
+    const base = t1(tmpDir());
+    base.tool_input.questions[0].question = q;
+    for (const o of base.tool_input.questions[0].options) o.description = desc;
+    return base;
+  };
+  const run = async (lang: string, md: string, q: string, desc: string) => {
+    const sp = tmpDir();
+    writeFile(join(sp, "ukagai", "e.md"), md.replace(/question: .*/, `question: ${q}`));
+    return withServer(answerHandler({ [q]: "A" }), async (f, d) => {
+      writeFile(join(d, "config.json"), JSON.stringify({ lang }));
+      const r = await runHook(args(f, d), JSON.stringify({ ...input(q, desc), scratchpad_dir: sp }));
+      return { out: JSON.parse(r.stdout).hookSpecificOutput, f };
+    });
+  };
+  const bad = await run("ja", explanationFor(Q), Q, "日本語の説明");
+  assert.equal(bad.out.permissionDecision, "deny");
+  assert.deepEqual(bad.f.calls.find((c) => c.path === "/api/decisions")?.body.missing, ["language"]);
+  assert.equal((await run("ja", jaMd, "どちらを選びますか?", "日本語の説明")).out.permissionDecision, "allow");
+  // question in English
+  assert.equal((await run("ja", jaMd, Q, "日本語の説明")).out.permissionDecision, "deny");
+  // every description in English
+  assert.equal((await run("ja", jaMd, "どちらを選びますか?", "Option A")).out.permissionDecision, "deny");
+  assert.equal((await run("en", explanationFor(Q), Q, "Option A")).out.permissionDecision, "allow");
 });

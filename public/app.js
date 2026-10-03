@@ -42,10 +42,15 @@ const hasBad = (s) => UNDO_BAD_WORDS.test(s ?? "");
 // <coined> Suspicious identifiers (U1). Same rules as the coined-terms section of src/hook/explain.ts (COINED_ALLOW / COINED_TOKEN /
 // COINED_PHASE_* / extractCoined / termDefines); test/gui/cannot.test.ts runs this block next to explain.ts and compares the results.
 const COINED_ALLOW_WORDS =
-  "CI CD CLI API GUI TUI SSE URL URI HTTP HTTPS JSON YAML TOML HTML CSS JS TS PR OSS DB UI UX OK NG ID CPU GPU RAM GB MB KB TB MS TTY ANSI SQL SSH TLS SSL DNS IP TCP UDP GCP AWS GCS S3 IAM VM OS PID ENV NPM PNPM CDN SVG PNG JPG PDF CSV UTF IDE LSP MCP LLM AI QA ADR README TODO FAQ EOF CRUD REST RPC GRPC JWT SDK ETA TBD WIP NFKC SGR ESC CJK IME UTC ISO RFC HEAD SHA RSA AES HMAC GPT IPV MD5 MP3 MP4 EC2 K8S P50 P90 P95 P99";
+  "CI CD CLI API GUI TUI SSE URL URI HTTP HTTPS JSON YAML TOML HTML CSS JS TS PR OSS DB UI UX OK NG ID CPU GPU RAM GB MB KB TB MS TTY ANSI SQL SSH TLS SSL DNS IP TCP UDP GCP AWS GCS S3 IAM VM OS PID ENV NPM PNPM CDN SVG PNG JPG PDF CSV UTF IDE LSP MCP LLM AI QA ADR README TODO FAQ EOF CRUD REST RPC GRPC JWT SDK ETA TBD WIP NFKC SGR ESC CJK IME UTC ISO RFC HEAD SHA RSA AES HMAC GPT IPV MD5 MP3 MP4 EC2 K8S P50 P90 P95 P99 " +
+  "ARM64 ARM32 X86 X64 ES5 ES6 ES7 E2E W3C X11 CO2 H2O V8 R2 U2 Z3 A100 H100 H264 H265 AV1 VP9 DB2 IE11 PS5 PS4 SOC2 SAML2 PCI MPEG D3 BM25 B2B B2C C2C P2P I18N L10N A11Y OIDC " +
+  "M1 M2 M3 M4 L1 L2 L3 L4 Q1 Q2 Q3 Q4 H1 H2 T1 T2 T3 " +
+  "C4 TS5 PG16 S3A F-16 B-52";
 const COINED_ALLOW = new Set(COINED_ALLOW_WORDS.split(" "));
-const COINED_TOKEN = /\b[A-Z]{1,4}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
-const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Tier", "Day", "Week", "Round", "Batch", "Lane"];
+const COINED_TOKEN = /\b[A-Z]{1,4}\d{0,3}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
+const COINED_SKIP =
+  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b/g;
+const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Round", "Batch", "Lane"];
 const anyCase = (w) => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
 const COINED_PHASE_EN = new RegExp(
   `\\b(?:${PHASE_WORDS.map(anyCase).join("|")})\\s?(\\d{1,3}[A-Za-z]?|[A-Z][A-Z0-9]{0,2})(?![A-Za-z0-9]|-[A-Z0-9])`,
@@ -62,7 +67,10 @@ function coinedAllowed(token) {
 }
 
 function extractCoined(text) {
-  const s = text.normalize("NFKC").replace(/https?:\/\/\S+/g, " ");
+  const s = text
+    .normalize("NFKC")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(COINED_SKIP, (m) => " ".repeat(m.length));
   const found = [];
   for (const m of s.matchAll(COINED_TOKEN)) {
     const t = m[0];
