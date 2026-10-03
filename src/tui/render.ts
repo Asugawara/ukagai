@@ -162,7 +162,7 @@ function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; sele
   const mark = o.multi ? (o.selected ? "[x]" : "[ ]") : o.selected ? "●" : "○";
   const num = !o.multi && o.index < 9 ? `${DIM}${o.index + 1}${RESET} ` : "";
   const lead = `${num}${o.cursor ? `${BOLD}▸${RESET}` : " "} ${o.selected ? CYAN : ""}${mark}${RESET} `;
-  const label = `${o.cursor ? BOLD : ""}${OPT_COLORS[o.index % 4]}${card.label}${RESET}`;
+  const label = `${o.cursor ? BOLD : ""}${OPT_COLORS[o.index % 4]}${card.fixed ? t(lang, `fixed_${card.fixed}`) : card.label}${RESET}`;
   const head = `${label}${card.recommended ? `  ${BADGE_REC} ${t(lang, "recommended_badge")} ${RESET}` : ""}`;
   const pad = " ".repeat(width(lead));
   const out = wrap(head, Math.max(8, w - width(lead))).map((l, k) => (k === 0 ? lead : pad) + l);
@@ -194,6 +194,12 @@ function recBox(text: string, w: number, o: { rows: number; full: boolean; lang:
   const top = `${DIM}┌─${RESET} ${BOLD}${title}${RESET} ${DIM}${"─".repeat(Math.max(0, w - 5 - width(title)))}┐${RESET}`;
   const bottom = `${DIM}└${"─".repeat(Math.max(0, w - 2))}┘${RESET}`;
   return [top, ...body.map((l) => `${DIM}│${RESET} ${padEnd(l, inner)} ${DIM}│${RESET}`), bottom];
+}
+
+/** Join hint parts by importance; when too wide for w, cut with … (the leading parts stay visible) */
+function fitHint(parts: string[], w: number): string {
+  const s = parts.join(" · ");
+  return width(s) <= w ? s : `${truncate(s, Math.max(1, w - 1))}…`;
 }
 
 function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
@@ -292,7 +298,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
       }
       const here = row.index === c.index;
       lines.push(`    ${cur}${here ? BOLD : DIM}${t(lang, CANNOT_REASONS[row.index]!.label)}${RESET}`);
-      if (here) lines.push(`        ${DIM}${t(lang, row.index === CANNOT_TERMS ? "cannot_terms_hint" : "cannot_detail_hint")}${RESET}`);
+      if (here) for (const x of wrap(`${DIM}${t(lang, row.index === CANNOT_TERMS ? "cannot_terms_hint" : "cannot_detail_hint")}${RESET}`, Math.max(8, w - 8))) lines.push(`        ${x}`);
     });
     const note = v.input?.kind === "note" ? `${v.input.text}▏` : c.text;
     if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
@@ -310,21 +316,22 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   if (fon) focus = [fstart, lines.length];
 
   const hint = v.cannot
-    ? t(lang, v.input?.kind === "note" ? "hint_input" : "hint_cannot_pick")
+    ? fitHint([t(lang, v.input?.kind === "note" ? "hint_input" : "hint_cannot_pick")], w)
     : v.none
-    ? t(lang, v.input?.kind === "note" ? "hint_input" : "hint_none_pick")
+    ? fitHint([t(lang, v.input?.kind === "note" ? "hint_input" : "hint_none_pick")], w)
     : typing
     ? t(lang, "hint_input")
-    : [
-        t(lang, "hint_move"),
-        ...(q.multi ? [t(lang, "hint_toggle")] : []),
-        t(lang, "hint_answer") + (m.todoCode.length ? ` ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
-        t(lang, "hint_free"),
-        ...(q.multi ? [] : [t(lang, "hint_numbers")]),
-        t(lang, "hint_none"),
-        t(lang, "hint_cannot"),
-        ...(m.footnotes.length ? [t(lang, "hint_evidence")] : []),
-      ].join(" ");
+    : fitHint(
+        [
+          t(lang, q.multi ? "hint_main_multi" : "hint_main") + (m.todoCode.length ? ` ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
+          t(lang, "hint_cannot"),
+          t(lang, "hint_none"),
+          ...(q.multi ? [] : [t(lang, "hint_numbers")]),
+          t(lang, "hint_free"),
+          ...(m.footnotes.length ? [t(lang, "hint_evidence")] : []),
+        ],
+        w,
+      );
   return { lines, focus, hint };
 }
 
@@ -432,11 +439,11 @@ function historyBody(v: View, cols: number, rows: number): string[] {
   return window([...head, ...body], rows, 0);
 }
 
-/** A simple scrollbar for the right edge (`█` marks the position in a `│` column), size rows tall */
+/** A simple scrollbar for the right edge (`█` marks the position in a `░` track, so it never reads as a box edge `│`), size rows tall */
 function scrollbar(size: number, total: number, off: number, max: number): string[] {
   const len = Math.max(1, Math.min(size, Math.round((size * size) / total)));
   const start = max > 0 ? Math.round((off / max) * (size - len)) : 0;
-  return Array.from({ length: size }, (_, i) => (i >= start && i < start + len ? "█" : `${DIM}│${RESET}`));
+  return Array.from({ length: size }, (_, i) => (i >= start && i < start + len ? "█" : `${DIM}░${RESET}`));
 }
 
 /** The `▲▼ 1-20/58` indicator on the last row */

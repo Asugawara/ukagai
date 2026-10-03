@@ -7,7 +7,7 @@ import type { Key } from "../../src/tui/keys.js";
 import { buildModel, splitHeadline } from "../../src/tui/model.js";
 import { noneAnswer } from "../../src/tui/none.js";
 import { renderFrame, type Frame } from "../../src/tui/render.js";
-import { stripAnsi } from "../../src/tui/width.js";
+import { stripAnsi, width } from "../../src/tui/width.js";
 import { Q, decision, withExplanation } from "./helpers.js";
 
 const ch = (c: string): Key => ({ name: "char", ch: c });
@@ -227,8 +227,8 @@ const heavyApp = (rev = "reversible", scope = "file"): App => {
 test("heavy option: one Enter only asks; the second Enter within 3s sends", () => {
   const app = heavyApp();
   assert.deepEqual(press(app, enter), []);
-  assert.equal(app.view(now).notice, "Press Enter again to confirm (3s)");
-  assert.deepEqual(draw(app).text.split("\n").at(-1)?.trim().startsWith("Press Enter again"), true);
+  assert.equal(app.view(now).notice, "Press the same key or Enter again (3s)");
+  assert.deepEqual(draw(app).text.split("\n").at(-1)?.trim().startsWith("Press the same key"), true);
   const eff = press(app, enter);
   assert.equal(eff.length, 1);
   assert.deepEqual((eff[0] as { body: unknown }).body, { answers: { [Q]: "WebSocket" } });
@@ -340,8 +340,8 @@ test("the new messages exist in en and ja with the same placeholders", () => {
   for (const k of ["reversible", "you_decide", "assumptions_title", "against_title", "none_of_these", "confirm_again", "hint_none", "hint_evidence"] as const) {
     assert.ok(MESSAGES.en[k] && MESSAGES.ja[k], k);
   }
-  assert.equal(MESSAGES.en.confirm_again, "Press Enter again to confirm (3s)");
-  assert.equal(MESSAGES.ja.confirm_again, "もう一度 Enter で確定(3 秒)");
+  assert.equal(MESSAGES.en.confirm_again, "Press the same key or Enter again (3s)");
+  assert.equal(MESSAGES.ja.confirm_again, "同じキーか Enter をもう一度(3 秒)");
 });
 
 // ---- Q5 fixes ----
@@ -366,4 +366,38 @@ test("render: the right-column hint is one row at the narrowest right column (en
     const hint = text.split("\n").find((l) => l.includes("j/k") && l.includes("Enter"));
     assert.ok(hint, lang);
   }
+});
+
+const rightOf = (app: App, lang: "en" | "ja", pick: (l: string) => boolean, rows = 40): string => {
+  app.lang = lang;
+  const line = stripAnsi(renderFrame(app.view(now), { cols: 120, rows }).text).split("\n").find(pick)!;
+  assert.ok(line, "hint row");
+  return line.split(" │ ")[1]!;
+};
+
+test("Q6 T-1: at 120 cols (right column 44) `x` stays visible in the hint; pickers keep Esc back", () => {
+  for (const lang of ["en", "ja"] as const) {
+    const right = rightOf(appOf(), lang, (l) => l.includes("j/k") && l.includes("Enter"));
+    assert.match(right, lang === "en" ? /x can't/ : /x 返答不可/, right);
+    assert.ok(width(right.trimEnd()) <= 44);
+    for (const k of ["x", "n"]) {
+      const a = appOf();
+      press(a, ch(k));
+      assert.match(rightOf(a, lang, (l) => l.includes("j/k")), lang === "en" ? /Esc back/ : /Esc 戻る/);
+    }
+  }
+});
+
+test("Q6 T-2: the ja Can't answer terms hint wraps instead of being cut", () => {
+  const a = appOf();
+  press(a, ch("x"));
+  press(a, ch("j"));
+  const raw = draw(a, "ja").text;
+  const joined = raw.split("\n").map((l) => (l.split(" │ ")[1] ?? "").trim()).join("");
+  assert.ok(joined.includes("入力で追加") || !joined.includes("分かった語"), joined);
+});
+
+test("Q6 T-3: the scrollbar track is not drawn as a box edge (no ││)", () => {
+  const { text } = draw(appOf(), "en");
+  assert.doesNotMatch(text, /││/);
 });

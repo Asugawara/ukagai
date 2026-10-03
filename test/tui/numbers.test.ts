@@ -72,10 +72,10 @@ test("plan: digits are ignored; a number with no card (7 of 2) is ignored", () =
   assert.deepEqual(press(open(V2_MD), ch("7")), []);
 });
 
-test("cards carry a dim number and the hint says 1-9 send", () => {
+test("cards carry a dim number and the hint lists 1-9", () => {
   const app = open(V2_MD);
   const text = stripAnsi(renderFrame(app.view(now), { cols: 160, rows: 70 }).text);
   assert.match(text, /1 ▸ ● SSE/);
   assert.match(text, /2   ○ WebSocket/);
-  assert.match(text, /1-9 send/);
+  assert.match(text, / 1-9 /);
 });
