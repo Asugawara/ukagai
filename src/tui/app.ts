@@ -2,7 +2,7 @@ import { MULTI_SELECT_SEPARATOR, type Decision, type SessionHistory } from "../c
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
 import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { PlanFile, PlanSummary } from "./api.js";
-import type { Frame, ListItem, RecentItem, View } from "./render.js";
+import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
@@ -39,7 +39,6 @@ export const FULL_HINT_MS = 6000;
 /** A plan is new (shown by itself, counted) while unread and written within this long */
 export const NEW_PLAN_MS = 24 * 3600_000;
 /** Plans listed on the idle screen */
-export const RECENT_PLANS = 10;
 
 const STATUS_KEY: Record<string, MessageKey> = {
   answer_submitted: "status_answer_submitted",
@@ -94,8 +93,6 @@ export class App {
   onPlans: () => void = () => {};
   /** Effects produced outside a key press (an answer that marks its plan read, a plan opened from a list) */
   onEffect: (e: Effect[]) => void = () => {};
-  /** Cursor of the idle screen's Recent plans */
-  private recentIndex = 0;
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
@@ -419,7 +416,7 @@ export class App {
       this.mode === "list"
         ? {
             index: this.listIndex,
-            items: this.listItems().map((it): ListItem => {
+            items: this.listItems(now).map((it): ListItem => {
               if (it.plan) {
                 const p = it.plan;
                 return { blocker: false, title: p.title, chips: [], kindLabel: t(this.lang, "plan_kind"), createdAt: p.mtime, noExplanation: false, current: p.name === this.shownPlan, plan: { sections: p.sections, lines: p.lines, isNew: this.isNew(p, now) } };
@@ -437,7 +434,6 @@ export class App {
             }),
           }
         : null;
-    const recent: RecentItem[] = m ? [] : this.visiblePlans().slice(0, RECENT_PLANS).map((p) => ({ title: p.title, mtime: p.mtime, sections: p.sections, lines: p.lines, isNew: this.isNew(p, now) }));
     return {
       model: m,
       cursor: dr?.cursor ?? 0,
@@ -453,7 +449,6 @@ export class App {
       lang: this.lang,
       conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
       list,
-      recent: recent.length ? { items: recent, index: clamp(this.recentIndex, recent.length) } : null,
       history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
       histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
       copy: this.copySupported,
@@ -581,14 +576,14 @@ export class App {
       case "prev": this.cycle(-1); return [];
       case "next": this.cycle(1); return [];
       case "list":
-        if (this.listItems().length) {
+        if (this.listItems(now).length) {
           this.mode = "list";
-          this.listIndex = Math.max(0, this.listItems().findIndex((it) => (it.plan ? it.plan.name === this.shownPlan : it.decision!.id === this.shownId)));
+          this.listIndex = Math.max(0, this.listItems(now).findIndex((it) => (it.plan ? it.plan.name === this.shownPlan : it.decision!.id === this.shownId)));
         }
         return [];
-      case "list-move": this.listIndex = clamp(this.listIndex + a.delta, this.listItems().length); return [];
+      case "list-move": this.listIndex = clamp(this.listIndex + a.delta, this.listItems(now).length); return [];
       case "list-pick": {
-        const it = this.listItems()[clamp(this.listIndex, this.listItems().length)];
+        const it = this.listItems(now)[clamp(this.listIndex, this.listItems(now).length)];
         this.mode = "normal";
         if (it?.plan) this.openPlan(it.plan.name);
         else if (it?.decision) this.show(it.decision.id);
@@ -643,7 +638,7 @@ export class App {
         return [];
       }
     }
-    if (!m) return this.idle(a);
+    if (!m) return [];
     const dr = this.draft(m);
     switch (a.type) {
       case "input-confirm": return this.confirmInput(m, dr, now);
@@ -736,9 +731,9 @@ export class App {
 
   // ---- Items ----
 
-  /** The list (`b`): pending decisions first, then the plans newest first (a plan that is a pending approval is its decision's row) */
-  private listItems(): { decision?: Decision; plan?: PlanSummary }[] {
-    return [...this.pending().map((decision) => ({ decision })), ...this.visiblePlans().map((plan) => ({ plan }))];
+  /** The list (`b`): pending decisions first, then the new plans newest first (a plan that is a pending approval is its decision's row) */
+  private listItems(now: number): { decision?: Decision; plan?: PlanSummary }[] {
+    return [...this.pending().map((decision) => ({ decision })), ...this.newPlans(now).map((plan) => ({ plan }))];
   }
 
   /** What `[` `]` cycle through: the pending decisions, then the new plans */
@@ -756,17 +751,6 @@ export class App {
     const next = items[(from + step + items.length) % items.length]!;
     if ("id" in next) this.show(next.id);
     else this.openPlan(next.plan);
-  }
-
-  /** The idle screen: j/k move in Recent plans, Enter opens one (a plan already read is not marked again) */
-  private idle(a: Action): Effect[] {
-    const n = Math.min(RECENT_PLANS, this.visiblePlans().length);
-    if (a.type === "move") this.recentIndex = clamp(this.recentIndex + a.delta, n);
-    else if (a.type === "submit") {
-      const p = this.visiblePlans()[clamp(this.recentIndex, n)];
-      if (p) this.openPlan(p.name);
-    }
-    return [];
   }
 
   /** Done reading: mark the plan read (unless it already is), then the next item or the idle screen */

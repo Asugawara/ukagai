@@ -24,15 +24,6 @@ export interface ListItem {
   plan?: { sections: number; lines: number; isNew: boolean };
 }
 
-/** A row of the idle screen's Recent plans */
-export interface RecentItem {
-  title: string;
-  mtime: string;
-  sections: number;
-  lines: number;
-  isNew: boolean;
-}
-
 export interface View {
   model: ScreenModel | null;
   /** Display language */
@@ -66,8 +57,6 @@ export interface View {
   plan: PlanState | null;
   /** When the list is open */
   list: { items: ListItem[]; index: number } | null;
-  /** The idle screen's Recent plans (up to 10); null when there is no plan or something is on screen */
-  recent: { items: RecentItem[]; index: number } | null;
   /** First row of the background (the whole screen in the stacked layout) */
   scroll: number;
   /** First row of the decision column; null follows the cursor */
@@ -566,20 +555,6 @@ function planFileMeta(m: ScreenModel, now: number, lang: Lang): string {
   return `${DIM}${parts.join("  ")}${RESET}`;
 }
 
-/** The idle screen's Recent plans: dot (new ones) · title · age · stats, the cursor kept in view */
-function recentLines(v: View, cols: number, rows: number): string[] {
-  const r = v.recent!;
-  const size = Math.max(0, rows - 1);
-  const off = Math.max(0, Math.min(r.index - Math.floor(size / 2), r.items.length - size));
-  const body = r.items.slice(off, off + size).map((it, k) => {
-    const on = off + k === r.index;
-    const counts = `${planCount(v.lang, "plan_sections", it.sections)} · ${planCount(v.lang, "plan_lines", it.lines)}`;
-    const text = `${it.title}  ·  ${elapsed(it.mtime, v.now, v.lang)}  ·  ${counts}`;
-    return truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${it.isNew ? `${CYAN}●${RESET}` : " "} ${on ? BOLD : DIM}${text}${RESET}`, cols);
-  });
-  return [`${DIM}${t(v.lang, "plan_recent")}${RESET}`, ...body];
-}
-
 /** The `s` overlay: when · first line of each instruction, the cursor kept in view */
 function historyBody(v: View, cols: number, rows: number): string[] {
   const h = v.history!;
@@ -634,13 +609,8 @@ export function renderFrame(v: View, size: Size): Frame {
   if (!m) {
     const body = new Array<string>(Math.max(0, rows - 1)).fill("");
     const msg = t(v.lang, "empty");
-    // With Recent plans the message moves up to make room under it
-    const recent = v.recent ? recentLines(v, cols, Math.max(0, rows - 1 - 4)) : [];
-    const row = recent.length ? 1 : Math.floor((rows - 1) / 2);
+    const row = Math.floor((rows - 1) / 2);
     body[row] = " ".repeat(Math.max(0, Math.floor((cols - width(msg)) / 2))) + `${DIM}${msg}${RESET}`;
-    recent.forEach((l, k) => {
-      if (row + 2 + k < body.length) body[row + 2 + k] = l;
-    });
     return fin(body, []);
   }
 
