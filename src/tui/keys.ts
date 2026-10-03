@@ -109,7 +109,7 @@ export class KeyParser {
 
 // ---- Actions ----
 
-export type Mode = "normal" | "input" | "list" | "none";
+export type Mode = "normal" | "input" | "list" | "none" | "cannot";
 export type Kind = "question" | "plan";
 /** The column that arrows and j/k act on. background = the left explanation, decision = the right-hand decision */
 export type Focus = "background" | "decision";
@@ -138,6 +138,15 @@ export type Action =
   | { type: "none-confirm" }
   | { type: "none-note" }
   | { type: "none-cancel" }
+  /** "Can't answer this…": open the picker, move, tick a term, add a note, send at once, close */
+  | { type: "cannot" }
+  /** `1`-`9`: send that card at once (single select) */
+  | { type: "pick"; n: number }
+  | { type: "cannot-move"; delta: 1 | -1 }
+  | { type: "cannot-toggle" }
+  | { type: "cannot-note" }
+  | { type: "cannot-confirm" }
+  | { type: "cannot-cancel" }
   /** Scroll the background half a screen (half) or one row (line) */
   | { type: "scroll"; delta: 1 | -1; unit: "half" | "line" }
   | { type: "scroll-edge"; to: "top" | "bottom" }
@@ -196,6 +205,17 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     if (key.name === "enter") return done({ type: "none-confirm" });
     if (key.name === "esc") return done({ type: "none-cancel" });
     if (key.name === "char" && key.ch === "i") return done({ type: "none-note" });
+    if (key.name === "char" && key.ch === "q") return done({ type: "quit" });
+    return done(null);
+  }
+
+  if (ctx.mode === "cannot") {
+    if (down) return done({ type: "cannot-move", delta: 1 });
+    if (up) return done({ type: "cannot-move", delta: -1 });
+    if (key.name === "enter") return done({ type: "cannot-confirm" });
+    if (key.name === "esc") return done({ type: "cannot-cancel" });
+    if (key.name === "char" && key.ch === " ") return done({ type: "cannot-toggle" });
+    if (key.name === "char" && key.ch === "i") return done({ type: "cannot-note" });
     if (key.name === "char" && key.ch === "q") return done({ type: "quit" });
     return done(null);
   }
@@ -272,7 +292,9 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     return done(null);
   }
 
+  if (ch !== null && ch >= "1" && ch <= "9") return done({ type: "pick", n: Number(ch) });
   if (ch === "n") return done({ type: "none" });
+  if (ch === "x") return done({ type: "cannot" });
   if (ch === "g") {
     return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "top" }) : done(null, ctx.now);
   }

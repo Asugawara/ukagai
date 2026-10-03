@@ -6,6 +6,7 @@ import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
+import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -69,6 +70,8 @@ export class App {
   private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
   /** The "None of these" picker (index into NONE_TYPES, optional note) */
   private none: { index: number; text: string } | null = null;
+  /** The "Can't answer this" picker: `pos` is the row (0-2 the reasons, then the terms checklist), `index` the reason in force */
+  private cannot: { index: number; pos: number; terms: string[]; checked: Set<string>; text: string } | null = null;
   /** First Enter of a two-step confirmation; `prior` is the one in force when the current key arrived */
   private confirm: { id: string; kind: string; until: number } | null = null;
   private prior: { id: string; kind: string; until: number } | null = null;
@@ -156,9 +159,10 @@ export class App {
     this.hintUntil = 0;
     this.input = null;
     this.none = null;
+    this.cannot = null;
     this.confirm = null;
     this.footIdx = -1;
-    if (this.mode === "input" || this.mode === "none") this.mode = "normal";
+    if (this.mode === "input" || this.mode === "none" || this.mode === "cannot") this.mode = "normal";
   }
 
   private advance(_now: number): void {
@@ -213,6 +217,7 @@ export class App {
       free: dr?.free ?? { on: false, text: "" },
       input: this.input,
       none: this.none,
+      cannot: this.cannot ? { index: this.cannot.index, pos: this.cannot.pos, terms: this.cannot.terms, checked: this.cannot.checked, text: this.cannot.text } : null,
       notice: this.notice(now),
       reason: dr?.reason ?? "",
       pending: pending.length,
@@ -329,7 +334,7 @@ export class App {
       case "focus": this.focus = this.focus === "decision" ? "background" : "decision"; return [];
       case "input-char": if (this.input) this.input.text += a.ch; return [];
       case "input-backspace": if (this.input) this.input.text = Array.from(this.input.text).slice(0, -1).join(""); return [];
-      case "input-cancel": this.mode = this.input?.kind === "note" && this.none ? "none" : "normal"; this.input = null; return [];
+      case "input-cancel": this.mode = this.input?.kind === "note" && this.none ? "none" : this.input?.kind === "note" && this.cannot ? "cannot" : "normal"; this.input = null; return [];
       case "footnote": {
         const rows = this.frame.footRows;
         if (!rows.length) return [];
@@ -352,6 +357,33 @@ export class App {
         this.none = null;
         this.mode = "normal";
         return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: noneAnswer(n.index, n.text) } });
+      }
+      case "cannot": return this.openCannot(m, dr);
+      case "pick": return this.pick(m, dr, a.n - 1, now);
+      case "cannot-move": return this.cannotMove(a.delta);
+      case "cannot-cancel": this.cannot = null; this.mode = "normal"; return [];
+      case "cannot-toggle": {
+        const c = this.cannot;
+        const row = c ? cannotRows(c.index, c.terms.length)[c.pos] : undefined;
+        const term = c && row?.kind === "term" ? c.terms[row.index] : undefined;
+        if (c && term !== undefined) {
+          if (c.checked.has(term)) c.checked.delete(term);
+          else c.checked.add(term);
+        }
+        return [];
+      }
+      case "cannot-note": if (this.cannot) { this.input = { kind: "note", text: this.cannot.text }; this.mode = "input"; } return [];
+      case "cannot-confirm": {
+        const c = this.cannot;
+        if (!c) return [];
+        const body = cannotAnswer(c.index, c.terms.filter((x) => c.checked.has(x)), c.text);
+        if (body === null) {
+          this.showToast(t(this.lang, "cannot_need_term"), now);
+          return [];
+        }
+        this.cannot = null;
+        this.mode = "normal";
+        return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: body } });
       }
       case "move": this.moveCursor(m, dr, dr.cursor + a.delta); return [];
       case "top": this.moveCursor(m, dr, 0); return [];
@@ -382,10 +414,10 @@ export class App {
     this.show(list[(i + step + list.length) % list.length]!.id);
   }
 
-  /** Number of positions the cursor can rest on: cards + "None of these" + free text for a question, 3 buttons for a plan */
+  /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, 3 buttons for a plan */
   private slots(m: ScreenModel): number {
     if (m.kind === "plan") return 3;
-    return m.question ? m.question.cards.length + 2 : 0;
+    return m.question ? m.question.cards.length + 3 : 0;
   }
 
   /** Approve a plan (Enter twice when the decision is irreversible) */
@@ -416,6 +448,49 @@ export class App {
     return [];
   }
 
+  /** `1`-`9`: send the card at once. A heavy card (irreversible) first moves the cursor there and asks for the same key (or Enter) again */
+  private pick(m: ScreenModel, dr: Draft, i: number, now: number): Effect[] {
+    const q = m.question;
+    if (!q || q.multi || i >= q.cards.length) return [];
+    const heavy = m.reversibility === "irreversible" || !!q.cards[i]!.heavy;
+    if (dr.cursor !== i) {
+      this.moveCursor(m, dr, i);
+      if (heavy) {
+        this.confirm = { id: m.id, kind: "answer", until: now + CONFIRM_MS };
+        return [];
+      }
+    } else if (!this.guard(m, "answer", heavy, now)) return [];
+    return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: q.cards[i]!.value } });
+  }
+
+  private openCannot(m: ScreenModel, dr: Draft): Effect[] {
+    const q = m.question;
+    if (!q) return [];
+    dr.cursor = q.cards.length + 1;
+    if (!q.multi) {
+      dr.sel.clear();
+      dr.free.on = false;
+    }
+    if (!this.cannot) {
+      const index = defaultCannotReason(m.coinedTerms);
+      this.cannot = { index, pos: cannotRows(index, m.coinedTerms.length).findIndex((r) => r.kind === "reason" && r.index === index), terms: [...m.coinedTerms], checked: new Set(m.coinedTerms), text: "" };
+    }
+    this.mode = "cannot";
+    return [];
+  }
+
+  private cannotMove(delta: 1 | -1): Effect[] {
+    const c = this.cannot;
+    if (!c) return [];
+    const before = cannotRows(c.index, c.terms.length);
+    const row = before[clamp(c.pos + delta, before.length)]!;
+    // Landing on a reason makes it the one in force (the terms list opens or closes); the row is found again in the new layout
+    if (row.kind === "reason") c.index = row.index;
+    const after = cannotRows(c.index, c.terms.length);
+    c.pos = after.findIndex((r) => r.kind === row.kind && r.index === row.index);
+    return [];
+  }
+
   private moveCursor(m: ScreenModel, dr: Draft, to: number): void {
     const n = this.slots(m);
     if (!n) return;
@@ -430,7 +505,7 @@ export class App {
       dr.free.on = false;
     } else {
       dr.sel.clear();
-      dr.free.on = dr.cursor > q.cards.length;
+      dr.free.on = dr.cursor > q.cards.length + 1;
     }
   }
 
@@ -438,7 +513,8 @@ export class App {
     const q = m.question;
     if (!q?.multi) return [];
     if (dr.cursor === q.cards.length) return this.openNone(m, dr);
-    if (dr.cursor > q.cards.length) {
+    if (dr.cursor === q.cards.length + 1) return this.openCannot(m, dr);
+    if (dr.cursor > q.cards.length + 1) {
       dr.free.on = !dr.free.on;
       if (dr.free.on && !dr.free.text.trim()) this.startFree(m, dr);
       return [];
@@ -452,7 +528,7 @@ export class App {
   private startFree(m: ScreenModel, dr: Draft): Effect[] {
     const q = m.question;
     if (!q) return [];
-    dr.cursor = q.cards.length + 1;
+    dr.cursor = q.cards.length + 2;
     if (!q.multi) dr.sel.clear();
     dr.free.on = true;
     this.input = { kind: "free", text: dr.free.text };
@@ -468,6 +544,12 @@ export class App {
   private confirmInput(m: ScreenModel, dr: Draft, now: number): Effect[] {
     const inp = this.input;
     if (!inp) return [];
+    if (inp.kind === "note" && this.cannot) {
+      this.cannot.text = inp.text;
+      this.input = null;
+      this.mode = "cannot";
+      return [];
+    }
     if (inp.kind === "note") {
       if (this.none) this.none.text = inp.text;
       this.input = null;
@@ -507,7 +589,8 @@ export class App {
     const q = m.question;
     if (!q) return [];
     if (dr.cursor === q.cards.length) return this.openNone(m, dr);
-    if (dr.cursor === q.cards.length + 1 && !dr.free.text.trim()) return this.startFree(m, dr);
+    if (dr.cursor === q.cards.length + 1) return this.openCannot(m, dr);
+    if (dr.cursor === q.cards.length + 2 && !dr.free.text.trim()) return this.startFree(m, dr);
     if (!this.complete(m, dr)) return [];
     // The answer uses the original option.label
     const picked = q.cards.map((c) => c.value).filter((v) => dr.sel.has(v));

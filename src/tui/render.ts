@@ -2,6 +2,7 @@ import { BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, STRONG_RISK, YELLOW, inlin
 import { IRREVERSIBLE_RE, UNDO_RE, elapsed, type Card, type Chip, type ScreenModel } from "./model.js";
 import { SECTION, normalizeHeading } from "../hook/explain.js";
 import { NONE_TYPES } from "./none.js";
+import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
 import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 import { padEnd, sliceCols, truncate, width, wrap } from "./width.js";
@@ -31,6 +32,8 @@ export interface View {
   input: { kind: "free" | "reason" | "note"; text: string } | null;
   /** The "None of these" reason picker (index into NONE_TYPES, optional note); null when closed */
   none: { index: number; text: string } | null;
+  /** The "Can't answer this" picker (reason in force, row, terms with their ticks, note); null when closed */
+  cannot: { index: number; pos: number; terms: readonly string[]; checked: ReadonlySet<string>; text: string } | null;
   /** A prompt that needs attention in the footer ("Press Enter again…", "Sent in 3… Undo (u)") */
   notice: string | null;
   reason: string;
@@ -105,7 +108,11 @@ const BADGE_BLOCKER = "\x1b[43;30m";
 export const OPT_COLORS = [CYAN, MAGENTA, YELLOW, "\x1b[94m"];
 const FG_OFF = "\x1b[39m";
 
-const termMarks = (m: ScreenModel): Mark[] => literalMarks(m.terms.map((x) => x.term), "\x1b[4m", "\x1b[24m");
+const termMarks = (m: ScreenModel): Mark[] => [
+  ...literalMarks(m.terms.map((x) => x.term), "\x1b[4m", "\x1b[24m"),
+  // Tokens Terms does not define: red + underline (not every terminal has a dotted underline)
+  ...literalMarks(m.coinedTerms, "\x1b[31;4m", "\x1b[39;24m"),
+];
 /** Option labels colored in running text (labels shorter than 3 characters would match too much) */
 const labelMarks = (m: ScreenModel): Mark[] =>
   (m.question?.cards ?? []).flatMap((c, i) => literalMarks(c.label.length >= 3 ? [c.label] : [], OPT_COLORS[i % 4]!, FG_OFF));
@@ -148,7 +155,8 @@ interface Column {
 
 function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; selected: boolean; multi: boolean; index: number; marks: Mark[] }): string[] {
   const mark = o.multi ? (o.selected ? "[x]" : "[ ]") : o.selected ? "●" : "○";
-  const lead = `${o.cursor ? `${BOLD}▸${RESET}` : " "} ${o.selected ? CYAN : ""}${mark}${RESET} `;
+  const num = !o.multi && o.index < 9 ? `${DIM}${o.index + 1}${RESET} ` : "";
+  const lead = `${num}${o.cursor ? `${BOLD}▸${RESET}` : " "} ${o.selected ? CYAN : ""}${mark}${RESET} `;
   const label = `${o.cursor ? BOLD : ""}${OPT_COLORS[o.index % 4]}${card.label}${RESET}`;
   const head = `${label}${card.recommended ? `  ${BADGE_REC} ${t(lang, "recommended_badge")} ${RESET}` : ""}`;
   const pad = " ".repeat(width(lead));
@@ -264,7 +272,29 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   }
   if (non || v.none) focus = [nstart, lines.length];
   lines.push("");
-  const fi = q.cards.length + 1;
+  const ci = q.cards.length + 1;
+  const cstart = lines.length;
+  const con = v.cursor === ci;
+  lines.push(`${con ? `${BOLD}▸${RESET}` : " "} ${v.cannot ? CYAN : ""}${q.multi ? "[ ]" : "○"}${RESET} ${con ? BOLD : ""}${t(lang, "cannot_answer")}${RESET}  ${CYAN}x${RESET}`);
+  if (v.cannot) {
+    const c = v.cannot;
+    cannotRows(c.index, c.terms.length).forEach((row, k) => {
+      const cur = c.pos === k ? `${BOLD}▸${RESET} ` : "  ";
+      if (row.kind === "term") {
+        const term = c.terms[row.index]!;
+        lines.push(`        ${cur}${c.checked.has(term) ? `${CYAN}[x]${RESET}` : "[ ]"} \x1b[31;4m${term}${RESET}`);
+        return;
+      }
+      const here = row.index === c.index;
+      lines.push(`    ${cur}${here ? BOLD : DIM}${t(lang, CANNOT_REASONS[row.index]!.label)}${RESET}`);
+      if (here) lines.push(`        ${DIM}${t(lang, row.index === CANNOT_TERMS ? "cannot_terms_hint" : "cannot_detail_hint")}${RESET}`);
+    });
+    const note = v.input?.kind === "note" ? `${v.input.text}▏` : c.text;
+    if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
+  }
+  if (con || v.cannot) focus = [cstart, lines.length];
+  lines.push("");
+  const fi = q.cards.length + 2;
   const fstart = lines.length;
   const fon = v.cursor === fi;
   const typing = v.input?.kind === "free";
@@ -274,7 +304,9 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   if (ftext) for (const x of wrap(ftext, Math.max(8, w - width(lead)))) lines.push(" ".repeat(width(lead)) + x);
   if (fon) focus = [fstart, lines.length];
 
-  const hint = v.none
+  const hint = v.cannot
+    ? t(lang, v.input?.kind === "note" ? "hint_input" : "hint_cannot_pick")
+    : v.none
     ? t(lang, v.input?.kind === "note" ? "hint_input" : "hint_none_pick")
     : typing
     ? t(lang, "hint_input")
@@ -283,7 +315,9 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
         ...(q.multi ? [t(lang, "hint_toggle")] : []),
         t(lang, "hint_answer") + (m.todoCode.length ? ` ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
         t(lang, "hint_free"),
+        ...(q.multi ? [] : [t(lang, "hint_numbers")]),
         t(lang, "hint_none"),
+        t(lang, "hint_cannot"),
         ...(m.footnotes.length ? [t(lang, "hint_evidence")] : []),
       ].join(" ");
   return { lines, focus, hint };

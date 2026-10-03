@@ -347,10 +347,10 @@ test("the new messages exist in en and ja with the same placeholders", () => {
 // ---- Q5 fixes ----
 
 test("render: 'cannot be restored' is red as a whole; 'restored' is not also green (N0 vocabulary)", () => {
-  const { raw } = draw(appOf(RICH().replace("Cannot be undone", "The history cannot be restored")));
+  const { raw } = draw(appOf(RICH().replace("Adds a dependency. Cannot be undone.", "It cannot be restored.")));
   assert.ok(raw.includes("\x1b[4;31mcannot be restored\x1b[24;39m"), "bad phrase is red");
   assert.ok(!raw.includes("\x1b[4;32mrestored"), "restored is not green");
-  const can = draw(appOf(RICH().replace("Cannot be undone", "It can't be rolled back")));
+  const can = draw(appOf(RICH().replace("Adds a dependency. Cannot be undone.", "It can't be rolled back.")));
   assert.ok(can.raw.includes("\x1b[4;31mcan't be rolled back\x1b[24;39m"));
 });
 
