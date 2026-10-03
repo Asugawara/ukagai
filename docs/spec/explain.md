@@ -175,7 +175,7 @@ All take the whole Markdown (front matter included; it is skipped). Lines inside
 
 ## 4. Check result
 
-The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter`, `language`, `question` … `recommended`, `why`, `why_long`, `options`, `table`, `cell_long`, `coined_term`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `diagram`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
+The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter`, `language`, `question` … `recommended`, `why`, `why_long`, `options`, `table`, `cell_long`, `coined_term`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `recommend_name`, `against_weak`, `assumptions_long`, `diagram`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
 
 | Code | Condition (added when it is not satisfied) | Name in the deny reason |
 |---|---|---|
@@ -200,7 +200,9 @@ The check lists the following `missing` codes **in this order** (the table is by
 | `recommend_long` | (not evaluated for a blocker) The "Recommendation" section exceeds the limit of 3.6 (not evaluated when `recommend` failed) | the "Recommendation" section is too long (at most 5 sentences and 400 characters) |
 | `recommend_cond` | (not evaluated for a blocker) The body of the "Recommendation" section (excluding code blocks and callout lines) contains none of the words matched by `RECOMMEND_COND`: `なら` (not `ならない` / `ならず`) / `なければ` (not `なければなら…`; includes 「でなければ」) / `場合` / `とき` (not `ときどき`) / `であれば` / `際は` / `際に` / `\bif\b` / `\bwhen\b` / `\bunless\b` / `\botherwise\b` / `\bin case\b` (Latin letters are case-insensitive) (not evaluated when `recommend` failed; right after `recommend_long`) | a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.) |
 | `multi` | (not a check; used in step 0 of section 5) `questions` has two or more entries | one question per call |
+| `recommend_name` | (not evaluated for a blocker; only when `recommended` is set and `recommend` passed) The **first sentence** of the "Recommendation" body (callouts and code blocks excluded; ends at `。` / `!` / `?` / a `.` followed by whitespace; NFKC, whitespace / backticks / asterisks removed, lowercase) does not contain the `recommended` label without `(Recommended)` / `(推奨)`, nor its opening (first 3 words for an ASCII label of 4+ words, else the first 12 characters), **or** it refers to an option by position: `POSITIONAL_REF` = `1つ目` / `2つ目` / `3つ目` / `一つ目` / `二つ目` / `三つ目` / `最初の案` / `案 ?[A-D]` / `選択肢 ?[0-9]` / `the first|second|third one|option` / `option [0-9A-D]` / `plan [A-D]` (a positional wording fails even when the label is present; right after `recommend_cond`) | the first sentence of "Recommendation" must name the recommended option by its label (quote its first words), not by position; do not refer to options by position ("the first one", "plan A") |
 | `against_weak` | (not a blocker; only when both sections exist) The "Counterargument" body, with whitespace, punctuation and symbols removed (NFKC, lowercase), is a substring of the "Recommendation" body normalized the same way (right after `recommend_cond`) | the Counterargument repeats the Recommendation; make it attack the pick |
+| `assumptions_long` | (not a blocker) The "Assumptions" section has 4 or more bullets (`-` / `*` / `+` / `1.`; fenced lines excluded; right after `against_weak`) | at most 3 Assumptions: keep only premises you did not verify and that would change the pick |
 | `diagram` | (not evaluated for a blocker) A diagram is required (3.2) but the "Diagram" section or the ` ```mermaid ` block is absent | a "Diagram" section with a Mermaid diagram |
 | `checked` | (not evaluated for a blocker) Not (`reversibility: reversible` and `scope: file`), and the "What I checked" section is absent or empty (right after `diagram`) | the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes) |
 | `footnote` | (not evaluated for a blocker) The body has a `[^id]` reference with no `[^id]: …` definition (3.7; right after `checked`) | a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked") |
@@ -326,7 +328,7 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 
 ## 11. Fixtures
 
-`test/explain-fixtures/` has 27. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
+`test/explain-fixtures/` has 29. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
 
 `pass-*` and the other `fail-*` fixtures satisfy `checked` and `undo` (their text was extended), so each `fail-*` reports only its own code. The fixtures are written in English. The `question:` line keeps the original question text, because `expected.json` records it. Three Japanese variants (`*-ja.md`, with the same `expected.json` contents) exercise the Japanese aliases.
 
@@ -349,6 +351,8 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 | `fail-blocker-no-todo.md` | false | `todo` |
 | `fail-bad-type.md` | false | `type` (`type: foo`) |
 | `fail-no-recommend-cond.md` | false | `recommend_cond` |
+| `fail-recommend-name.md` | false | `recommend_name` (`pass-design-ja.md` whose first sentence says 「1つ目を勧めます。」) |
+| `fail-assumptions-long.md` | false | `assumptions_long` (`pass-rich.md` with 4 Assumptions) |
 | `fail-against-weak.md` | false | `against_weak` (`pass-rich.md` whose Counterargument repeats a sentence of the Recommendation) |
 | `fail-cell-long.md` | false | `cell_long` |
 | `fail-coined-terms.md` | false | `coined_term` (plan codes W-T2 / FT4 / G-T2 / TM28 / P-GH, undefined) |
