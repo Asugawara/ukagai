@@ -235,7 +235,10 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   }
 
   const q = m.question!;
-  if (!q.v2) {
+  if (q.approval) {
+    // A Codex approval: the question with its backticked command in bold cyan, so the command stands out
+    lines.push(...wrap(q.text.split(/(`[^`]+`)/).filter(Boolean).map((p) => (/^`[^`]+`$/.test(p) ? `${BOLD}${CYAN}${p.slice(1, -1)}${RESET}` : p)).join(""), w), "");
+  } else if (!q.v2) {
     if (m.title !== q.text || !m.hasExplanation) {
       lines.push(...wrap(`${DIM}${q.header}${RESET}`, w));
       if (m.title !== q.text) lines.push(...wrap(`${BOLD}${q.text}${RESET}`, w));
@@ -246,22 +249,23 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   const textMarks = [...labelMarks(m), ...tm];
   if (m.todo) lines.push(`${BOLD}${YELLOW}${t(lang, "todo_title")}${RESET}`, ...renderMarkdown(m.todo, w, { lang, marks: tm }), "");
   // 1 second: the conclusion, what it touches, what only the human can decide
-  if (m.headline) lines.push(...wrap(`${BOLD}${inline(m.headline, { base: BOLD, marks: textMarks })}${RESET}`, w), "");
+  if (m.headline) lines.push(...wrap(`${BOLD}${inline(m.headline, { base: BOLD, marks: textMarks })}${RESET}`, w));
+  // The condition under which another option is right: one dim line right under the headline
+  if (m.cond) lines.push(...wrap(`${DIM}${t(lang, "cond_prefix")} ${inline(m.cond, { base: DIM, marks: textMarks })}${RESET}`, w));
+  if (m.headline) lines.push("");
   if (m.affects.length) lines.push(...wrap(`${DIM}${t(lang, "affects_title")}${RESET} ${affectsText(m).slice(2)}`, w));
   if (m.unknowns.length) lines.push(...wrap(`${BOLD}${YELLOW}${t(lang, "you_decide")}${RESET} ${inline(m.unknowns.join(" · "), { marks: tm })}`, w));
   if (m.affects.length || m.unknowns.length) lines.push("");
-  // 10 seconds: the rest of the recommendation, its assumptions, the strongest objection
-  if (m.recRest) lines.push(...recBox(m.recRest, w, { rows, full: v.recFull, lang, marks: textMarks }), "");
-  else if (m.recommendation && !m.headline) lines.push(...recBox(m.recommendation, w, { rows, full: v.recFull, lang, marks: textMarks }), "");
-  if (m.assumptions.length) {
-    lines.push(`${BOLD}${t(lang, "assumptions_title")}${RESET}`);
-    for (const a of m.assumptions) wrap(inline(a, { marks: textMarks }), Math.max(8, w - 2)).forEach((l, k) => lines.push((k === 0 ? `${GREEN}☐${RESET} ` : "  ") + l));
-    lines.push(`${DIM}${t(lang, "assumptions_note")}${RESET}`, "");
-  }
+  // 10 seconds: the strongest objection, then the assumptions (the rest of the recommendation is in the background column, under Why)
   if (m.against) {
     lines.push(`${BOLD}${DIM}${t(lang, "against_title")}${RESET}`);
     for (const l of wrap(inline(m.against, { marks: textMarks }), Math.max(8, w - 2))) lines.push(`${DIM}▏${RESET} ${l}`);
     lines.push("");
+  }
+  if (m.assumptions.length) {
+    lines.push(`${BOLD}${t(lang, "assumptions_title")}${RESET}`);
+    for (const a of m.assumptions) wrap(inline(a, { marks: textMarks }), Math.max(8, w - 2)).forEach((l, k) => lines.push((k === 0 ? `${GREEN}☐${RESET} ` : "  ") + l));
+    lines.push(`${DIM}${t(lang, "assumptions_note")}${RESET}`, "");
   }
 
   const cardMarks = tm;
@@ -272,39 +276,42 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     if (on) focus = [start, lines.length];
     lines.push("");
   });
-  const ni = q.cards.length;
-  const nstart = lines.length;
-  const non = v.cursor === ni;
-  lines.push(`${non ? `${BOLD}▸${RESET}` : " "} ${v.none ? CYAN : ""}${q.multi ? "[ ]" : "○"}${RESET} ${non ? BOLD : ""}${t(lang, "none_of_these")}${RESET}  ${CYAN}n${RESET}`);
-  if (v.none) {
-    NONE_TYPES.forEach((nt, k) => lines.push(`    ${k === v.none!.index ? `${BOLD}▸${RESET} ${BOLD}` : "  "}${t(lang, nt.label)}${RESET}`));
-    const note = v.input?.kind === "note" ? `${v.input.text}▏` : v.none.text;
-    if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
+  // With no options (a prose question) only free text is left: no None of these / Can't answer rows
+  if (q.cards.length) {
+    const ni = q.cards.length;
+    const nstart = lines.length;
+    const non = v.cursor === ni;
+    lines.push(`${non ? `${BOLD}▸${RESET}` : " "} ${v.none ? CYAN : ""}${q.multi ? "[ ]" : "○"}${RESET} ${non ? BOLD : ""}${t(lang, "none_of_these")}${RESET}  ${CYAN}n${RESET}`);
+    if (v.none) {
+      NONE_TYPES.forEach((nt, k) => lines.push(`    ${k === v.none!.index ? `${BOLD}▸${RESET} ${BOLD}` : "  "}${t(lang, nt.label)}${RESET}`));
+      const note = v.input?.kind === "note" ? `${v.input.text}▏` : v.none.text;
+      if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
+    }
+    if (non || v.none) focus = [nstart, lines.length];
+    lines.push("");
+    const ci = q.cards.length + 1;
+    const cstart = lines.length;
+    const con = v.cursor === ci;
+    lines.push(`${con ? `${BOLD}▸${RESET}` : " "} ${v.cannot ? CYAN : ""}${q.multi ? "[ ]" : "○"}${RESET} ${con ? BOLD : ""}${t(lang, "cannot_answer")}${RESET}  ${CYAN}x${RESET}`);
+    if (v.cannot) {
+      const c = v.cannot;
+      cannotRows(c.index, c.terms.length).forEach((row, k) => {
+        const cur = c.pos === k ? `${BOLD}▸${RESET} ` : "  ";
+        if (row.kind === "term") {
+          const term = c.terms[row.index]!;
+          lines.push(`        ${cur}${c.checked.has(term) ? `${CYAN}[x]${RESET}` : "[ ]"} \x1b[31;4m${term}${RESET}`);
+          return;
+        }
+        const here = row.index === c.index;
+        lines.push(`    ${cur}${here ? BOLD : DIM}${t(lang, CANNOT_REASONS[row.index]!.label)}${RESET}`);
+        if (here) for (const x of wrap(`${DIM}${t(lang, row.index === CANNOT_TERMS ? "cannot_terms_hint" : "cannot_detail_hint")}${RESET}`, Math.max(8, w - 8))) lines.push(`        ${x}`);
+      });
+      const note = v.input?.kind === "note" ? `${v.input.text}▏` : c.text;
+      if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
+    }
+    if (con || v.cannot) focus = [cstart, lines.length];
+    lines.push("");
   }
-  if (non || v.none) focus = [nstart, lines.length];
-  lines.push("");
-  const ci = q.cards.length + 1;
-  const cstart = lines.length;
-  const con = v.cursor === ci;
-  lines.push(`${con ? `${BOLD}▸${RESET}` : " "} ${v.cannot ? CYAN : ""}${q.multi ? "[ ]" : "○"}${RESET} ${con ? BOLD : ""}${t(lang, "cannot_answer")}${RESET}  ${CYAN}x${RESET}`);
-  if (v.cannot) {
-    const c = v.cannot;
-    cannotRows(c.index, c.terms.length).forEach((row, k) => {
-      const cur = c.pos === k ? `${BOLD}▸${RESET} ` : "  ";
-      if (row.kind === "term") {
-        const term = c.terms[row.index]!;
-        lines.push(`        ${cur}${c.checked.has(term) ? `${CYAN}[x]${RESET}` : "[ ]"} \x1b[31;4m${term}${RESET}`);
-        return;
-      }
-      const here = row.index === c.index;
-      lines.push(`    ${cur}${here ? BOLD : DIM}${t(lang, CANNOT_REASONS[row.index]!.label)}${RESET}`);
-      if (here) for (const x of wrap(`${DIM}${t(lang, row.index === CANNOT_TERMS ? "cannot_terms_hint" : "cannot_detail_hint")}${RESET}`, Math.max(8, w - 8))) lines.push(`        ${x}`);
-    });
-    const note = v.input?.kind === "note" ? `${v.input.text}▏` : c.text;
-    if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
-  }
-  if (con || v.cannot) focus = [cstart, lines.length];
-  lines.push("");
   const fi = q.cards.length + 2;
   const fstart = lines.length;
   const fon = v.cursor === fi;
@@ -324,8 +331,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     : fitHint(
         [
           t(lang, q.multi ? "hint_main_multi" : "hint_main") + (m.todoCode.length ? ` ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
-          t(lang, "hint_cannot"),
-          t(lang, "hint_none"),
+          ...(q.cards.length ? [t(lang, "hint_cannot"), t(lang, "hint_none")] : []),
           ...(q.multi ? [] : [t(lang, "hint_numbers")]),
           t(lang, "hint_free"),
           ...(m.footnotes.length ? [t(lang, "hint_evidence")] : []),
@@ -346,7 +352,7 @@ function goalLines(m: ScreenModel, w: number, lang: Lang): string[] {
   return [rows[0]!, `${truncate(rows.slice(1).map(stripAnsi).join(" "), Math.max(1, w - 1))}…`, ""];
 }
 
-function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true): Rendered {
+function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true, rows = 24): Rendered {
   const lang = v.lang;
   if (v.histDetail) {
     const e = v.histDetail;
@@ -356,7 +362,7 @@ function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true): Render
     return { lines, wide: lines.map(() => null), footnotes: [] };
   }
   const goal = goalLines(m, w, lang);
-  const r = leftBody(m, w, lang, fullHint);
+  const r = leftBody(v, m, w, lang, fullHint, rows);
   if (!goal.length) return r;
   return {
     lines: [...goal, ...r.lines],
@@ -365,13 +371,20 @@ function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true): Render
   };
 }
 
-function leftBody(m: ScreenModel, w: number, lang: Lang, fullHint: boolean): Rendered {
+function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean, rows: number): Rendered {
   if (m.backgroundNote) {
     const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
     return { lines, wide: lines.map(() => null), footnotes: [] };
   }
-  if (m.background) return renderMarkdownRich(m.background, w, { fullHint, lang, marks: termMarks(m), termsHeadings: TERMS_HEADINGS });
-  return { lines: [], wide: [], footnotes: [] };
+  // Order: Why, then the recommendation (what follows its headline), then the rest of the background
+  const tm = termMarks(m);
+  const front: string[] = [];
+  if (m.why) front.push(`${BOLD}${m.why.heading}${RESET}`, ...renderMarkdown(m.why.text, w, { lang, marks: tm }), "");
+  const recText = m.recRest ?? (m.recommendation && !m.headline ? m.recommendation : null);
+  if (recText) front.push(...recBox(recText, w, { rows, full: v.recFull, lang, marks: [...labelMarks(m), ...tm] }), "");
+  const rest = m.background ? renderMarkdownRich(m.background, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] };
+  if (!front.length) return rest;
+  return { lines: [...front, ...rest.lines], wide: [...front.map(() => null), ...rest.wide], footnotes: rest.footnotes.map((x) => ({ ...x, row: x.row + front.length })) };
 }
 
 /** Shift only the rows of too-wide diagrams by hoff columns. Also returns the maximum shift and the widest diagram */
@@ -497,7 +510,7 @@ export function renderFrame(v: View, size: Size): Frame {
     const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ▶ ${label} ${RESET}` : `${DIM}   ${label}${RESET}`, w);
 
     // Left: when it overflows (tall, or has a diagram that can shift sideways) put a bar on the right edge and the position on the last row; otherwise leave it as is
-    let leftR = leftColumn(v, m, leftW);
+    let leftR = leftColumn(v, m, leftW, true, winRows);
     const hasWide = leftR.wide.some(Boolean);
     const leftOver = leftR.lines.length > winRows || hasWide;
     let scrollMax = 0;
@@ -507,7 +520,7 @@ export function renderFrame(v: View, size: Size): Frame {
     let textW = leftW;
     if (leftOver) {
       textW = leftW - 1;
-      leftR = leftColumn(v, m, textW);
+      leftR = leftColumn(v, m, textW, true, winRows);
       const sh = shifted(leftR, textW, v.hscroll);
       hMax = sh.hMax;
       figW = sh.figW;
@@ -552,7 +565,7 @@ export function renderFrame(v: View, size: Size): Frame {
 
   // Narrow: stacked. Put the decision first (so it is always reachable) and continue with the background below
   const right = rightColumn(v, m, cols - 1, bodyRows);
-  const leftR = leftColumn(v, m, cols - 1, false);
+  const leftR = leftColumn(v, m, cols - 1, false, bodyRows);
   const sh = shifted(leftR, cols - 1, v.hscroll);
   const leftAll = sh.lines;
   const all = [...right.lines, "", `${DIM}${right.hint}${RESET}`, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];

@@ -81,21 +81,21 @@ async function api(path: string, body?: unknown) {
 }
 
 type Opt = { label: string; description?: string };
-type Seed = { reversibility?: string; scope?: string; title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string; noneReason?: string; jaSeed?: boolean };
+type Seed = { reversibility?: string; scope?: string; title?: string; options?: Opt[]; multiSelect?: boolean; explain?: boolean; markdown?: string; noneReason?: string; jaSeed?: boolean; header?: string; question?: string };
 
 /** Seed a decision. Defaults to a single-select with a v2 explanation (A / B(Recommended) / C) */
 async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }> {
   const n = ++seq;
   const title = s.title ?? `Key check ${n}`;
   const fmQuestion = s.markdown ? /^question: (.+)$/m.exec(s.markdown)![1]! : undefined;
-  const question = fmQuestion ?? `Test question ${n}: A, B or C?`;
+  const question = fmQuestion ?? s.question ?? `Test question ${n}: A, B or C?`;
   const options = s.options ?? [{ label: "A", description: "About A" }, { label: "B (Recommended)", description: "About B" }, { label: "C", description: "About C" }];
   const explain = s.explain ?? true;
   const body: Record<string, unknown> = {
     tool_use_id: `toolu_gui_${process.pid}_${n}`,
     kind: "answer_question",
     session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
-    request: { questions: [{ question, header: "Check", options, multiSelect: s.multiSelect ?? false }] },
+    request: { questions: [{ question, header: s.header ?? "Check", options, multiSelect: s.multiSelect ?? false }] },
   };
   if (s.noneReason) {
     body.explanation = { path: "", markdown: "", has: { mermaid: false, table: false, diff: false }, match: "question", attached_via: "none", none_reason: s.noneReason };
@@ -470,7 +470,7 @@ gui("a long headline folds at 2 lines with a Show all button, the cards and Answ
   assert.equal(inView("#decision .opt:last-of-type"), true);
   assert.equal(inView("#foot .hint"), true);
   assert.equal(ev<boolean>(folded), true); // folded at 2 lines
-  assert.equal(ev<number>(`document.querySelector("#head .headline").getBoundingClientRect().height`) < 2 * 1.5 * 15 + 2, true);
+  assert.equal(ev<number>(`document.querySelector("#head .headline").getBoundingClientRect().height`) < 2 * 1.5 * 18 + 2, true);
   assert.equal(ev<boolean>(`document.querySelector("#head .more-chip").hidden`), false);
   assert.equal(q1("#head .more-chip"), "Show all");
   assert.equal(count("kbd"), 0);
@@ -875,20 +875,20 @@ gui("layers: the header has the title, the headline and the chips; the right col
   assert.equal(q1("#head .v2-title").startsWith("Rich check"), true);
   // header: row 1 = title + meta (chips, reversibility, scope), row 2 = the headline
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(rows, ["hd-top", "hd-line2"]);
+  assert.deepEqual(rows, ["hd-top", "hd-line2", "hd-cond"]); // X1: the condition sentence is row 3
   const top = ev<string[]>(`JSON.stringify([...document.querySelector("#head .hd-top").children].map(e => e.className.split(" ")[0]))`);
   assert.deepEqual(top.slice(0, 2), ["v2-title", "hd-meta"]);
   assert.equal(q1("#head .hd-meta .where").startsWith("fix-gui-header ⎇ ") || q1("#head .hd-meta .where").length > 0, true); // one line of dim text: repo ⎇ branch ⧉ worktree · scope · age
   assert.equal(count("#head .chip, #head .pill"), 0);
   assert.equal(count("#head .hd-line2 .headline"), 1);
-  assert.equal(ev<boolean>(`document.querySelector("#head").getBoundingClientRect().height < 3 * 30 + 24`), true); // 2-3 lines
+  assert.equal(ev<boolean>(`document.querySelector("#head").getBoundingClientRect().height < 4 * 30 + 24`), true); // 2-4 lines (title, headline, condition, goal)
   // the right column holds the cards and nothing of the old top panel
   for (const sel of [".rec", ".unknowns", ".assumptions", ".against", ".affects", ".headline", ".optrow", ".keys", ".meta-line", ".v2-title"]) assert.equal(count(`#decision ${sel}`), 0, sel);
   assert.equal(count("#decision .opt"), 4);
-  // the left column starts with the lead: the rest of the recommendation, You decide, Assumptions, Against, Affected, then the 60-second layer
+  // the left column starts with the lead: Why, the rest of the recommendation, You decide, Against, Assumptions, then the 60-second layer
   assert.equal(q1("#background .rec-body").startsWith("It also fits"), true);
   const lead = ev<string[]>(`JSON.stringify([...document.querySelector("#background .lead").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(lead, ["rec", "unknowns", "assumptions", "against"]);
+  assert.deepEqual(lead, ["why", "rec", "unknowns", "against", "assumptions"]); // X1: Why, recommendation, You decide, Against, Assumptions
   assert.equal(ev<boolean>(`document.querySelector("#background").firstElementChild.classList.contains("lead")`), true);
   assert.equal(q1("#background .unknowns").startsWith("You decide:"), true);
   assert.equal(count("#background .unknowns li"), 2);
@@ -1630,4 +1630,67 @@ gui("V4 §0: free text stashed in sessionStorage before a reload is put back", a
   await reopen();
   ev(`sessionStorage.setItem("ukagai.drafts", JSON.stringify({ ${JSON.stringify(id)}: { free: { 0: { on: true, text: "kept text" } }, reason: "" } })), location.reload(), "ok"`);
   await waitFor("restored text", `document.querySelector("#decision .free-text")?.value === "kept text"`, 5000);
+});
+
+gui("X1: the left column is Why, recommendation, You decide, Against, Assumptions, What I checked, Diagram, Diff, Terms-less, Affected (DOM order)", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  const order = ev<string[]>(`JSON.stringify((() => {
+    const b = document.querySelector("#background");
+    const at = (el) => el ? [...b.querySelectorAll("*")].indexOf(el) : -1;
+    const q = (s) => b.querySelector(s);
+    const h = (re) => [...b.querySelectorAll("h1,h2,h3")].find((e) => re.test(e.textContent));
+    return [["why", q(".why")], ["rec", q(".rec")], ["unknowns", q(".unknowns")], ["against", q(".against")], ["assumptions", q(".assumptions")],
+      ["checked", h(/What I checked/)], ["diagram", q(".mermaid-ok, .mermaid")], ["diff", q("pre.diff")], ["affects", q(".affects")]]
+      .map(([n, e]) => [n, at(e)]).filter(([, i]) => i >= 0).sort((x, y) => x[1] - y[1]).map(([n]) => n);
+  })())`);
+  assert.deepEqual(order, ["why", "rec", "unknowns", "against", "assumptions", "checked", "diagram", "diff", "affects"]);
+});
+
+gui("X1: the condition sentence is header row 3 (dim, `Otherwise: …`), the Goal row is under it; no condition, no row; the cards stay visible at 1000x700", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]).filter((c) => c !== "hd-goal"))`);
+  assert.deepEqual(rows, ["hd-top", "hd-line2", "hd-cond"]);
+  assert.equal(q1("#head .hd-cond"), "Otherwise: Another option is right if the team already runs a database server.");
+  // the headline is one step larger than the title, the title is dimmer
+  assert.ok(ev<number>(`parseFloat(getComputedStyle(document.querySelector("#head .headline")).fontSize)`) > ev<number>(`parseFloat(getComputedStyle(document.querySelector("#head .v2-title")).fontSize)`));
+  assert.notEqual(ev<string>(`getComputedStyle(document.querySelector("#head .v2-title")).color`), ev<string>(`getComputedStyle(document.querySelector("#head .headline")).color`));
+  try {
+    ab("set", "viewport", "1000", "700");
+    await reopen(RICH_READY);
+    assert.equal(visible("#head .hd-cond"), true);
+    assert.equal(visible("#decision .opt.cursor"), true, "cursor card at 1000x700");
+    assert.equal(visible("#foot .hint"), true);
+  } finally { ab("set", "viewport", "1440", "900"); }
+  // no condition word in the last sentence: no row
+  await cancelAll();
+  const md = RICH_MD.replace(" Another option is right if the team already runs a database server.", "");
+  const title = `Rich check nocond ${seq + 1}`;
+  await seedQuestion({ options: RICH_OPTIONS, reversibility: "costly", scope: "repo", title, markdown: md.replace("__QUESTION__", `Rich question nocond ${seq + 1}: which store?`).replace("__TITLE__", title) });
+  await reopen(RICH_READY);
+  assert.equal(count("#head .hd-cond"), 0);
+});
+
+gui("X1 (a): a question with no options is free text only: no None of these / Can't answer, and n / x do nothing", async () => {
+  await seedQuestion({ options: [], explain: false, question: "Which of the two approaches do you prefer?" });
+  await reopen("document.querySelector('#decision .q-cards, #decision input[type=text]')");
+  assert.equal(count("#decision .opt"), 1); // the free-text card only
+  assert.equal(count("#decision .escape-row, #decision .none-card, #decision .cannot-card"), 0);
+  press("n");
+  press("x");
+  assert.equal(count("#decision .esc-panel"), 0);
+});
+
+gui("X1 (b): an Approval shows the backticked command in monospace, and Deny is not weighty even when its risk says it cannot be undone", async () => {
+  await seedQuestion({
+    header: "Approval", question: "Allow Codex to run `rm -rf build/`?", explain: false,
+    options: [{ label: "Allow", description: "Runs the command" }, { label: "Deny", description: "The command is skipped. This cannot be undone." }],
+  });
+  await reopen();
+  assert.equal(q1("#decision .approval-q code.approval-cmd"), "rm -rf build/");
+  assert.match(ev<string>(`getComputedStyle(document.querySelector("#decision .approval-cmd")).fontFamily`), /mono|Menlo|Courier/i);
+  ab("click", "#decision .opt:nth-of-type(2)");
+  // sent at once (no "Click again" confirmation)
+  await waitFor("sent", `!document.querySelector("#decision .opt")  || document.querySelector("#empty") && !document.querySelector("#empty").hidden`);
 });

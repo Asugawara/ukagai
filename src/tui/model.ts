@@ -2,6 +2,7 @@ import { AskUserQuestionInput, ExitPlanModeInput, type Decision, type SessionHis
 import {
   COLUMN_HAPPENS,
   COLUMN_RISK,
+  RECOMMEND_COND,
   SECTION,
   UNDO_BAD_WORDS,
   UNDO_WORDS,
@@ -92,6 +93,10 @@ export interface ScreenModel {
   headline: string | null;
   /** The recommendation without its first sentence (what the box shows) */
   recRest: string | null;
+  /** "Why this decision is needed now" (heading text and body); first in the background column. null when absent (or it has footnotes: it stays in the background) */
+  why: { heading: string; text: string } | null;
+  /** The sentence of the recommendation (its last one) that says when another option is right; shown under the headline. null when absent */
+  cond: string | null;
   /** "What only you know" bullets */
   unknowns: string[];
   assumptions: string[];
@@ -114,6 +119,8 @@ export interface ScreenModel {
   question?: {
     text: string;
     header: string;
+    /** A Codex approval (header "Approval", Allow / Deny): the question is shown with its backticked command, and Deny is not heavy */
+    approval: boolean;
     multi: boolean;
     cards: Card[];
     /** Initial cursor (the recommended option, else 0) */
@@ -279,13 +286,29 @@ export function impactOf(plan: string): string | null {
 }
 
 /** Split off the first sentence (`。` `!` `?`, or a `.` followed by whitespace / the end) */
+/** The last sentence of the recommendation's prose (callouts and code excluded) when it holds a condition word and is not the headline itself */
+export function condOf(recommendation: string): string | null {
+  let fence = false;
+  const prose: string[] = [];
+  for (const line of recommendation.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    else if (!fence && !line.startsWith(">")) prose.push(line);
+  }
+  const sentences = prose.join(" ").split(/(?<=[。！？])|(?<=[.!?])\s+/u).map((x) => x.trim()).filter(Boolean);
+  const last = sentences.length > 1 ? sentences.at(-1)! : "";
+  return last && RECOMMEND_COND.test(last) ? last : null;
+}
+
 export function splitHeadline(text: string): { headline: string; rest: string } {
   const flat = text.replace(/\s*\n\s*/g, " ").trim();
   const m = /^(.+?(?:[。！？!?]+|\.(?=\s|$)))\s*(.*)$/su.exec(flat);
   return m ? { headline: m[1]!.trim(), rest: m[2]!.trim() } : { headline: flat, rest: "" };
 }
 
-const NO_RICH = { headline: null, recRest: null, unknowns: [], assumptions: [], against: null, affects: [], terms: [], coinedTerms: [] as string[], footnotes: [] };
+/** The Deny option of a Codex approval */
+const DENY_RE = /^\s*(deny|denied|reject|拒否|却下)/i;
+
+const NO_RICH = { why: null, cond: null, headline: null, recRest: null, unknowns: [], assumptions: [], against: null, affects: [], terms: [], coinedTerms: [] as string[], footnotes: [] };
 
 export function buildModel(d: Decision, lang: Lang = "en", history: SessionHistory | null = null): ScreenModel {
   const explained = hasExplanation(d);
@@ -337,10 +360,12 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     };
   }
   const rawCards = q.options.map((o) => rawCard(o, SUFFIX_RE.test(o.label)));
-  const pref = (cards: Card[]) => Math.max(0, cards.findIndex((c) => c.recommended));
+  // With no options (a prose question) only free text is left: the cursor starts on it (slot 2, after the hidden None of these / Can't answer)
+  const pref = (cards: Card[]) => (cards.length ? Math.max(0, cards.findIndex((c) => c.recommended)) : 2);
   const plainQuestion = {
     text: q.question,
     header: q.header,
+    approval: /^approval$/i.test(q.header.trim()),
     multi: !!q.multiSelect,
   };
 
@@ -389,6 +414,16 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
   };
   // The hook parsers read the whole Markdown; secBody is still called so the sections are dropped from the background.
   const full = body.join("\n");
+  // Why leads the background column; a Why with footnotes stays in the background (renderMarkdown has no footnote definitions)
+  let why: ScreenModel["why"] = null;
+  const whySec = findSection(headings, body.length, [...SECTION.why, ...SECTION.blockerWhy]);
+  if (whySec && whySec.start !== optSec!.start && !(recSec && whySec.start === recSec.start)) {
+    const text = body.slice(whySec.start + 1, whySec.end).join("\n").trim();
+    if (text && !/\[\^/.test(text)) {
+      why = { heading: body[whySec.start]!.replace(/^\s*#+\s*/, "").trim(), text };
+      drop.push([whySec.start, whySec.end]);
+    }
+  }
   const unknowns = secBody(SECTION.unknowns, true) ? parseBullets(full, SECTION.unknowns) : [];
   const assumptions = secBody(SECTION.assumptions, true) ? parseBullets(full, SECTION.assumptions) : [];
   const against = secBody(SECTION.against, true).replace(/\s*\n\s*/g, " ") || null;
@@ -414,7 +449,7 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     }
   }
   const kept = body.filter((_, i) => !drop.some(([s, e]) => i >= s && i < e));
-  const cards = [...parsed.cards, ...parsed.extras];
+  const cards = [...parsed.cards, ...parsed.extras].map((c) => (plainQuestion.approval && DENY_RE.test(c.label) ? { ...c, heavy: false } : c));
   const split = recommendation ? splitHeadline(recommendation) : null;
   const fns = parseFootnotes(body.join("\n"));
   return {
@@ -422,6 +457,8 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     kind: "question",
     background: kept.join("\n").trim(),
     recommendation,
+    why,
+    cond: recommendation ? condOf(recommendation) : null,
     headline: split?.headline ?? null,
     recRest: split?.rest || null,
     unknowns,

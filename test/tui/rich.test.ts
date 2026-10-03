@@ -167,7 +167,7 @@ test("render: headline, reversibility symbol, You decide, Assumptions with ☐, 
   assert.ok(text.includes("Effort: 1 day"));
   const lines = text.split("\n");
   const at = (s: string) => lines.findIndex((l) => l.includes(s));
-  assert.ok(at("Use SSE because") < at("You decide") && at("You decide") < at("Assumptions") && at("Assumptions") < at("Against this") && at("Against this") < at("▸ ● SSE"));
+  assert.ok(at("Use SSE because") < at("You decide") && at("You decide") < at("Against this") && at("Against this") < at("Assumptions") && at("Assumptions") < at("▸ ● SSE"));
 });
 
 test("render: the other two reversibility symbols", () => {
@@ -400,4 +400,85 @@ test("Q6 T-2: the ja Can't answer terms hint wraps instead of being cut", () => 
 test("Q6 T-3: the scrollbar track is not drawn as a box edge (no ││)", () => {
   const { text } = draw(appOf(), "en");
   assert.doesNotMatch(text, /││/);
+});
+
+// ---- X1: readable order ----
+
+const NOFN = () => RICH().replace("exists.[^1]", "exists.");
+
+test("X1 model: Why leads on its own field, and the condition sentence is the last sentence of the recommendation (none without one)", () => {
+  const m = buildModel(rich(NOFN()));
+  assert.match(m.why?.heading ?? "", /Why this decision is needed now/);
+  assert.ok(!(m.background ?? "").includes("Why this decision"));
+  assert.equal(m.cond, "If you need two-way messages, choose WebSocket.");
+  // a Why with a footnote stays in the background
+  const fn = buildModel(rich());
+  assert.equal(fn.why, null);
+  assert.match(fn.background ?? "", /Why this decision/);
+  // no condition word, or a single sentence (it is the headline itself): none
+  assert.equal(buildModel(rich(RICH().replace(" If you need two-way messages, choose WebSocket.", ""))).cond, null);
+  assert.equal(buildModel(rich(RICH().replace("Use SSE because the GUI only listens. The server stays small. If you need two-way messages, choose WebSocket.", "Use SSE if the GUI only listens."))).cond, null);
+  // callouts are not prose
+  assert.equal(buildModel(rich(RICH().replace("choose WebSocket.", "choose WebSocket.\n\n> [!CAUTION]\n> Do it only when asked.\n"))).cond, "If you need two-way messages, choose WebSocket.");
+});
+
+test("X1 render: background starts with Why, then the recommendation box, then What I checked; the right column has the condition under the headline", () => {
+  const { text } = draw(appOf(NOFN()));
+  const lines = text.split("\n");
+  const left = (s: string) => lines.findIndex((l) => l.split(" │ ")[0]!.includes(s));
+  assert.ok(left("Why this decision") >= 0 && left("Why this decision") < left("Recommendation"), "Why before the recommendation box");
+  assert.ok(left("Recommendation") < left("What I checked"));
+  assert.ok(left("The server stays small") > left("Recommendation"), "the box holds what follows the headline");
+  const right = (s: string) => lines.findIndex((l) => l.split(" │ ").at(-1)!.includes(s));
+  assert.ok(!lines.some((l) => l.split(" │ ").at(-1)!.includes("The server stays small")), "the box is no longer in the right column");
+  assert.ok(right("Use SSE because") >= 0 && right("Otherwise: If you need two-way") === right("Use SSE because") + 1, "condition is the line right under the headline");
+  // ja
+  const ja = draw(appOf(NOFN()), "ja").text;
+  assert.ok(ja.includes("ただし:"));
+  // no condition: no line
+  assert.ok(!draw(appOf(RICH().replace(" If you need two-way messages, choose WebSocket.", ""))).text.includes("Otherwise:"));
+});
+
+test("X1 (a) TUI: a question with no options starts on free text and shows no None of these / Can't answer", () => {
+  const d = decision({ request: { questions: [{ question: "Which approach do you prefer?", header: "Question", multiSelect: false, options: [] }] } });
+  const app = new App();
+  app.upsert(d, now);
+  const { text } = draw(app);
+  assert.ok(!text.includes("None of these") && !text.includes("Can't answer"));
+  assert.ok(/▸ ○ Free text/.test(text), "the cursor starts on free text");
+  press(app, ch("n"), ch("x"));
+  assert.ok(!draw(app).text.includes("Undefined terms"));
+  press(app, { name: "up" } as Key);
+  assert.ok(/▸ [○●] Free text/.test(draw(app).text), "up does not leave free text");
+});
+
+test("X1 (b) TUI: an Approval shows the question with its command emphasised, and Deny is not heavy", () => {
+  const md = `---
+ukagai: 1
+question: Allow Codex to run \`rm -rf build/\`?
+title: Run rm
+recommended: Allow
+reversibility: reversible
+scope: file
+---
+
+## Options
+
+| Option | What happens if chosen | Risks and how to undo |
+|---|---|---|
+| Allow | Runs the command | Files are removed. |
+| Deny | The command is skipped | This cannot be undone. |
+
+## Recommendation
+
+Allow it.
+`;
+  const d = decision({ request: { questions: [{ question: "Allow Codex to run `rm -rf build/`?", header: "Approval", multiSelect: false, options: [{ label: "Allow" }, { label: "Deny" }] }] }, ...withExplanation(md) });
+  const m = buildModel(d);
+  assert.equal(m.question!.approval, true);
+  assert.equal(m.question!.cards.find((c) => c.label === "Deny")!.heavy, false);
+  const app = new App();
+  app.upsert(d, now);
+  const { raw } = draw(app);
+  assert.ok(raw.includes("\x1b[1m\x1b[36mrm -rf build/") || /\x1b\[1m.*rm -rf build\//.test(raw));
 });

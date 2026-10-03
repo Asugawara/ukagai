@@ -39,13 +39,15 @@ body {
 .rev { flex: none; white-space: nowrap; }
 .hd.blocker .hd-top, .hd.blocker .hd-top .hd-meta, .hd.blocker .hd-top .pending-btn { color: #1d1d1f; }
 .hd-meta .badge { flex: none; }
-.v2-title { flex: 1 1 0; min-width: 0; font-size: 18px; font-weight: 700; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.v2-title { flex: 1 1 0; min-width: 0; font-size: 14px; font-weight: 700; color: var(--muted); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .expanded .v2-title { white-space: normal; overflow-wrap: anywhere; }
 .hd-line2 { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 0 18px 8px; }
 .hd-line2 .more-chip { flex: none; margin-top: 3px; margin-left: auto; }
 .hd-line2:empty { display: none; }
 .hd.blocker .hd-top { background: var(--blocker); color: #1d1d1f; padding-bottom: 6px; }
 .hd.blocker .hd-line2 { padding-top: 6px; }
+.hd-cond { min-width: 0; padding: 0 18px 4px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expanded .hd-cond { white-space: normal; overflow-wrap: anywhere; }
 .hd-goal { display: flex; gap: 8px; min-width: 0; padding: 0 18px 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .hd-goal .goal-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hd-goal .goal-n { flex: none; white-space: nowrap; }
@@ -81,6 +83,8 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 .qs { flex: 1 0 auto; }
 .q { margin-bottom: 18px; }
 .q .header { font-size: 12px; color: var(--muted); }
+.approval-q { margin: 0 0 8px; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.approval-cmd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-weight: 700; padding: 1px 4px; background: rgba(127, 127, 127, .15); border-radius: 3px; }
 .q .question { font-size: 17px; font-weight: 700; line-height: 1.5; margin-bottom: 8px; overflow-wrap: anywhere; }
 .opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; }
 .opt:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); }
@@ -208,7 +212,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 /* ---- Rich decision screen ---- */
 
 /* 1-second layer: headline, reversibility shape, affected chips, "You decide", option chips */
-.headline { flex: 1 1 0; min-width: 0; font-size: 15px; font-weight: 700; line-height: 1.5; color: var(--accent); overflow-wrap: anywhere; cursor: pointer; }
+.headline { flex: 1 1 0; min-width: 0; font-size: 18px; font-weight: 700; line-height: 1.5; color: var(--accent); overflow-wrap: anywhere; cursor: pointer; }
 .headline.plain { color: var(--muted); font-weight: 500; font-size: 13px; }
 .headline strong { color: var(--accent); }
 .unknowns { margin-top: 8px; padding: 6px 10px; border-left: 4px solid var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); border-radius: 0 6px 6px 0; font-size: 13px; }
@@ -307,8 +311,8 @@ pre code.hljs { background: none; padding: 0; }
 }
 @media (max-height: 820px) {
   .q-top { max-height: 58vh; }
-  .headline { font-size: 14px; }
-  .q .question, .v2-title { font-size: 16px; }
+  .headline { font-size: 16px; }
+  .q .question { font-size: 16px; }
 }
 
 /* Left column lead: Recommendation body, You decide, Assumptions, Against, Affected (all whole; the column scrolls) */
