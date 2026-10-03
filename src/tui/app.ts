@@ -1,21 +1,23 @@
 import { MULTI_SELECT_SEPARATOR, type Decision, type SessionHistory } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
-import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, titleOf, chipsOf, type ScreenModel } from "./model.js";
+import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { PlanFile, PlanSummary } from "./api.js";
-import type { Frame, ListItem, View } from "./render.js";
+import type { Frame, ListItem, RecentItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 import { historyItems, type HistoryItem } from "./history.js";
-import { initialPlanState, planOutline, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
+import { initialPlanState, remapState, sectionHashes, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
 export type Effect =
   | { type: "answer"; id: string; body: Record<string, unknown> }
   | { type: "copy"; text: string }
+  /** Mark a plan read at the mtime the human read (POST /api/plans/:name/read) */
+  | { type: "read"; name: string; mtime: string }
   | { type: "quit" };
 
 interface Draft {
@@ -34,6 +36,10 @@ export const WHEEL_LINES = 3;
 export const HSCROLL_STEP = 8;
 /** How long the "f for full width" hint stays up */
 export const FULL_HINT_MS = 6000;
+/** A plan is new (shown by itself, counted) while unread and written within this long */
+export const NEW_PLAN_MS = 24 * 3600_000;
+/** Plans listed on the idle screen */
+export const RECENT_PLANS = 10;
 
 const STATUS_KEY: Record<string, MessageKey> = {
   answer_submitted: "status_answer_submitted",
@@ -77,14 +83,19 @@ export class App {
   /** The `s` overlay cursor, and the instruction shown in full in the background column (index into the items) */
   private hist = { index: 0 };
   private histDetail: number | null = null;
-  /** The plan browser (`p`): the list of plan files, and the plan file shown read-only (the decision screen is left as it was and comes back on Esc) */
-  fetchPlans: (() => Promise<PlanSummary[]>) | null = null;
+  /** Plans are items like decisions: the summaries (GET /api/plans, plan.updated), the files read so far and the screen models built from them */
+  readonly plans = new Map<string, PlanSummary>();
+  private files = new Map<string, PlanFile>();
+  private planModels = new Map<string, ScreenModel>();
+  /** The plan file shown as an item of its own (shownId is null then) */
+  shownPlan: string | null = null;
+  /** Fetches one plan file (set by index.ts; absent in tests that do not need it) and is told when a screen should be redrawn */
   fetchPlan: ((name: string, since?: string) => Promise<PlanFile | null>) | null = null;
   onPlans: () => void = () => {};
-  private browser: { items: PlanSummary[]; index: number; loaded: boolean } | null = null;
-  private pv: { name: string; mtime: string; model: ScreenModel; saved: { scroll: number; rscroll: number | null; focus: Focus; hscroll: number; full: boolean } } | null = null;
-  /** A decision arrived or changed while the plan browser was open: the screen is reset when it closes */
-  private stale = false;
+  /** Effects produced outside a key press (an answer that marks its plan read, a plan opened from a list) */
+  onEffect: (e: Effect[]) => void = () => {};
+  /** Cursor of the idle screen's Recent plans */
+  private recentIndex = 0;
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
@@ -96,8 +107,9 @@ export class App {
   private confirm: { id: string; kind: string; until: number } | null = null;
   private prior: { id: string; kind: string; until: number } | null = null;
   private footIdx = -1;
-  /** A long plan's open / read sections and contents cursor, by decision */
-  private plans = new Map<string, PlanState>();
+  /** A long plan's open / read sections and contents cursor, by decision (by plan file when the decision names one, so a plan keeps its state when its approval arrives) */
+  private planStates = new Map<string, { st: PlanState; hashes: string[] }>();
+  private hashCache = new WeakMap<ScreenModel, string[]>();
   /** The section (contents row) the background should scroll to once the next frame has told where it is */
   private reveal: number | null = null;
   private listIndex = 0;
@@ -123,13 +135,21 @@ export class App {
   /** The list at startup / refetch (pending only). Decisions still pending locally but missing from the list are returned to be re-fetched */
   replacePending(list: Decision[], now: number): string[] {
     const seen = new Set<string>();
+    const fresh: Decision[] = [];
     for (const d of list) {
       seen.add(d.id);
+      if (!this.decisions.has(d.id)) fresh.push(d);
       this.decisions.set(d.id, d);
     }
     const stale = [...this.decisions.values()].filter((d) => d.status === "pending" && !seen.has(d.id)).map((d) => d.id);
-    const cur = this.shownId ? this.decisions.get(this.shownId) : undefined;
-    if (!cur || cur.status !== "pending") this.advance(now);
+    if (this.shownPlan) {
+      // A plan on screen stays (it may have been picked on purpose); a decision seen for the first time takes the screen
+      const first = fresh.filter((d) => d.status === "pending").sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+      if (first) this.show(first.id, planNameOf(first) === this.shownPlan);
+    } else {
+      const cur = this.shownId ? this.decisions.get(this.shownId) : undefined;
+      if (!cur || cur.status !== "pending") this.advance(now);
+    }
     return stale;
   }
 
@@ -140,11 +160,137 @@ export class App {
       if (key) this.showToast(t(this.lang, key), now);
       if (d.status !== "answer_submitted") this.sent.delete(d.id);
     }
+    // The plan of an approval this UI answered is read, whichever of the answer and the event arrives first
+    if (d.status !== "pending" && (this.sending.has(d.id) || this.sent.has(d.id))) this.readPlanOf(d);
     if (d.id === this.shownId) {
       if (d.status !== "pending") this.advance(now);
     } else if (this.shownId == null && d.status === "pending") {
-      this.show(d.id);
+      // A decision needs an answer, a plan does not: it takes the screen. Its own plan on screen turns into the approval in place
+      this.show(d.id, planNameOf(d) !== null && planNameOf(d) === this.shownPlan);
     }
+  }
+
+  // ---- Plans ----
+
+  /** A plan is new while unread and written in the last 24 hours */
+  isNew(p: PlanSummary, now: number): boolean {
+    return !p.read && now - Date.parse(p.mtime) < NEW_PLAN_MS;
+  }
+
+  /** Plans with an approval decision pending are shown as that decision, not as a row of their own */
+  private hiddenPlans(): Set<string> {
+    const out = new Set<string>();
+    for (const d of this.pending()) {
+      const n = planNameOf(d);
+      if (n) out.add(n);
+    }
+    return out;
+  }
+
+  /** The plans to list: newest first, minus the ones that are an approval decision */
+  private visiblePlans(): PlanSummary[] {
+    const hidden = this.hiddenPlans();
+    return [...this.plans.values()].filter((p) => !hidden.has(p.name)).sort((a, b) => b.mtime.localeCompare(a.mtime));
+  }
+
+  private newPlans(now: number): PlanSummary[] {
+    return this.visiblePlans().filter((p) => this.isNew(p, now));
+  }
+
+  /** What `Pending N` counts: the decisions waiting plus the new plans */
+  count(now: number): number {
+    return this.pending().length + this.newPlans(now).length;
+  }
+
+  /** The list at startup / refetch. A plan on screen that is gone leaves the screen; with nothing on screen a new plan comes up by itself */
+  replacePlans(list: PlanSummary[], now: number): void {
+    const seen = new Set(list.map((p) => p.name));
+    for (const name of [...this.plans.keys()]) if (!seen.has(name)) this.forgetPlan(name);
+    for (const p of list) this.plans.set(p.name, p);
+    if (this.shownPlan && !this.plans.has(this.shownPlan)) this.advance(now);
+    this.autoShow(now);
+    this.onPlans();
+  }
+
+  /** `plan.updated`: a file was written or its read mark changed */
+  planUpdated(p: PlanSummary, now: number): void {
+    this.plans.set(p.name, p);
+    if (p.name === this.shownPlan) {
+      const have = this.files.get(p.name);
+      if (!have || have.mtime !== p.mtime) this.refreshShown(p.name);
+      return;
+    }
+    this.autoShow(now);
+  }
+
+  planRemoved(name: string, now: number): void {
+    this.forgetPlan(name);
+    if (name === this.shownPlan) this.advance(now);
+  }
+
+  private forgetPlan(name: string): void {
+    this.plans.delete(name);
+    this.files.delete(name);
+    this.planModels.delete(name);
+    this.planStates.delete(`plan:${name}`);
+  }
+
+  /** With nothing on screen, the newest new plan comes up by itself (once its text is here) */
+  private autoShow(now: number): void {
+    if (this.shownId !== null || this.shownPlan !== null) return;
+    const next = this.newPlans(now)[0];
+    if (next) this.openPlan(next.name, true);
+  }
+
+  /** Show a plan file: at once when its text is here, else after fetching it. `auto`: only if nothing is on screen by then */
+  private openPlan(name: string, auto = false): void {
+    const sum = this.plans.get(name);
+    if (!sum) return;
+    const have = this.files.get(name);
+    if (have && have.mtime === sum.mtime) {
+      this.showPlan(name);
+      return;
+    }
+    if (!this.fetchPlan) return;
+    void this.fetchPlan(name).then(
+      (file) => {
+        if (!file) return;
+        if (auto && (this.shownId !== null || this.shownPlan !== null)) return;
+        this.files.set(name, file);
+        this.planModels.delete(name);
+        this.showPlan(name);
+        this.onPlans();
+      },
+      () => {},
+    );
+  }
+
+  /** A plan on screen was written again: fetch it and rebuild; the folding state follows the section hashes (see `planState`), the scroll stays */
+  private refreshShown(name: string): void {
+    if (!this.fetchPlan) return;
+    void this.fetchPlan(name).then(
+      (file) => {
+        if (!file || this.shownPlan !== name) return;
+        this.files.set(name, file);
+        this.planModels.delete(name);
+        this.onPlans();
+      },
+      () => {},
+    );
+  }
+
+  /** Done reading, or the approval of this plan answered: mark it read at the mtime that was read (no effect when it already is) */
+  private markRead(name: string, mtime: string): void {
+    const sum = this.plans.get(name);
+    if (!sum || sum.read) return;
+    if (sum.mtime === mtime) this.plans.set(name, { ...sum, read: true });
+    this.onEffect([{ type: "read", name, mtime }]);
+  }
+
+  private readPlanOf(d: Decision): void {
+    const name = planNameOf(d);
+    const sum = name ? this.plans.get(name) : undefined;
+    if (name && sum) this.markRead(name, this.files.get(name)?.mtime ?? sum.mtime);
   }
 
   /** SSE connection state: "cannot connect" while down, and "reconnected" for 2 seconds after it comes back */
@@ -161,7 +307,7 @@ export class App {
     this.decisions.delete(id);
     this.models.delete(id);
     this.drafts.delete(id);
-    this.plans.delete(id);
+    this.planStates.delete(id);
     this.recFull.delete(id);
     this.hinted.delete(id);
     this.sending.delete(id);
@@ -173,19 +319,29 @@ export class App {
     this.toast = { text, until: now + TOAST_MS };
   }
 
-  private show(id: string | null): void {
+  private show(id: string | null, keepView = false): void {
     this.shownId = id;
-    // The plan browser keeps the screen (and its scroll); the new decision is shown when it closes
-    if (this.mode === "plans" || this.mode === "planview") {
-      this.stale = true;
-      return;
+    this.shownPlan = null;
+    this.resetView(keepView);
+    this.loadHistory(id);
+  }
+
+  private showPlan(name: string): void {
+    this.shownPlan = name;
+    this.shownId = null;
+    this.resetView(false);
+  }
+
+  /** `keepView`: the same plan turned into its approval, so the reader keeps their place */
+  private resetView(keepView: boolean): void {
+    if (!keepView) {
+      // Focus does not carry over between items (left on the background, j / Enter would scroll it and cause wrong answers)
+      this.focus = "decision";
+      this.scroll = 0;
+      this.rscroll = null;
+      this.hscroll = 0;
+      this.full = false;
     }
-    // Focus does not carry over between decisions (left on the background, j / Enter would scroll it and cause wrong answers)
-    this.focus = "decision";
-    this.scroll = 0;
-    this.rscroll = null;
-    this.hscroll = 0;
-    this.full = false;
     this.hintUntil = 0;
     this.input = null;
     this.none = null;
@@ -194,8 +350,7 @@ export class App {
     this.footIdx = -1;
     this.reveal = null;
     this.histDetail = null;
-    if (this.mode === "input" || this.mode === "none" || this.mode === "cannot" || this.mode === "history") this.mode = "normal";
-    this.loadHistory(id);
+    if (this.mode === "input" || this.mode === "none" || this.mode === "cannot" || this.mode === "history" || this.mode === "list") this.mode = "normal";
   }
 
   /** Lazily fetch the session's instructions the first time a decision of that session is shown. Failures are ignored */
@@ -220,14 +375,23 @@ export class App {
     return historyItems(d ? (this.histories.get(d.session.session_id) ?? null) : null);
   }
 
-  private advance(_now: number): void {
-    this.show(this.pending()[0]?.id ?? null);
+  /** Next item: a pending decision, else the newest new plan, else the idle screen */
+  private advance(now: number): void {
+    const d = this.pending()[0];
+    if (d) return this.show(d.id);
+    this.show(null);
+    this.autoShow(now);
   }
 
   // ---- Accessors ----
 
   model(): ScreenModel | null {
-    if (this.pv) return this.pv.model;
+    if (this.shownPlan) {
+      let pm = this.planModels.get(this.shownPlan);
+      const file = this.files.get(this.shownPlan);
+      if (!pm && file) this.planModels.set(this.shownPlan, (pm = buildPlanFileModel(file.name, file.title, file.markdown, file.mtime)));
+      return pm ?? null;
+    }
     const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
     if (!d) return null;
     let m = this.models.get(d.id);
@@ -250,22 +414,30 @@ export class App {
   view(now: number): View {
     const m = this.model();
     const dr = m ? this.draft(m) : null;
-    const pending = this.pending();
+    const count = this.count(now);
     const list: View["list"] =
       this.mode === "list"
         ? {
             index: this.listIndex,
-            items: pending.map((d): ListItem => ({
-              blocker: isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}),
-              title: titleOf(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}, this.lang),
-              chips: chipsOf(d),
-              kindLabel: t(this.lang, d.kind === "approve_plan" ? "kind_plan" : "kind_question"),
-              createdAt: d.created_at,
-              noExplanation: d.kind === "answer_question" && !hasExplanation(d),
-              current: d.id === this.shownId,
-            })),
+            items: this.listItems().map((it): ListItem => {
+              if (it.plan) {
+                const p = it.plan;
+                return { blocker: false, title: p.title, chips: [], kindLabel: t(this.lang, "plan_kind"), createdAt: p.mtime, noExplanation: false, current: p.name === this.shownPlan, plan: { sections: p.sections, lines: p.lines, isNew: this.isNew(p, now) } };
+              }
+              const d = it.decision!;
+              return {
+                blocker: isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}),
+                title: titleOf(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}, this.lang),
+                chips: chipsOf(d),
+                kindLabel: t(this.lang, d.kind === "approve_plan" ? "kind_plan" : "kind_question"),
+                createdAt: d.created_at,
+                noExplanation: d.kind === "answer_question" && !hasExplanation(d),
+                current: d.id === this.shownId,
+              };
+            }),
           }
         : null;
+    const recent: RecentItem[] = m ? [] : this.visiblePlans().slice(0, RECENT_PLANS).map((p) => ({ title: p.title, mtime: p.mtime, sections: p.sections, lines: p.lines, isNew: this.isNew(p, now) }));
     return {
       model: m,
       cursor: dr?.cursor ?? 0,
@@ -276,12 +448,12 @@ export class App {
       cannot: this.cannot ? { index: this.cannot.index, pos: this.cannot.pos, terms: this.cannot.terms, checked: this.cannot.checked, text: this.cannot.text } : null,
       notice: this.notice(now),
       reason: dr?.reason ?? "",
-      pending: pending.length,
+      pending: count,
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
       lang: this.lang,
       conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
       list,
-      plans: this.mode === "plans" && this.browser ? { items: this.browser.items, index: this.browser.index, loaded: this.browser.loaded } : null,
+      recent: recent.length ? { items: recent, index: clamp(this.recentIndex, recent.length) } : null,
       history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
       histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
       copy: this.copySupported,
@@ -304,10 +476,27 @@ export class App {
     return unread ? `${unread} · ${t(this.lang, "confirm_again")}` : t(this.lang, "confirm_again");
   }
 
+  /**
+   * The folding state of a long plan. It lives under the plan file's name when there is one (the plan file and its approval are one item), else under
+   * the decision id. When the text changed since the state was made, the section hashes decide what carries over (`remapState`).
+   */
   private planState(m: ScreenModel): PlanState {
-    let st = this.plans.get(m.id);
-    if (!st) this.plans.set(m.id, (st = initialPlanState(m.plan!.outline)));
-    return st;
+    const key = m.planKey ?? m.id;
+    const o = m.plan!.outline;
+    let hashes = this.hashCache.get(m);
+    if (!hashes) this.hashCache.set(m, (hashes = sectionHashes(o, m.plan!.text)));
+    const memo = this.planStates.get(key);
+    if (!memo) {
+      const st = initialPlanState(o);
+      this.planStates.set(key, { st, hashes });
+      return st;
+    }
+    if (memo.hashes.join() !== hashes.join()) {
+      const st = remapState(o, hashes, memo);
+      this.planStates.set(key, { st, hashes });
+      return st;
+    }
+    return memo.st;
   }
 
   /** `Unread sections (3): a, b, c` for a long plan with sections never opened; "" otherwise */
@@ -374,14 +563,14 @@ export class App {
       this.confirm = null;
     }
     if (key.name === "hwheel") {
-      if (this.mode === "normal" || this.mode === "planview") this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
+      if (this.mode === "normal") this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
       return [];
     }
     if (key.name === "wheel") {
-      if (this.mode === "normal" || this.mode === "planview") this.wheel(key.dir, key.x);
+      if (this.mode === "normal") this.wheel(key.dir, key.x);
       return [];
     }
-    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, lastG: this.lastG, now });
+    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now });
     this.lastG = lastG;
     return action ? this.apply(action, m, now) : [];
   }
@@ -392,16 +581,17 @@ export class App {
       case "prev": this.cycle(-1); return [];
       case "next": this.cycle(1); return [];
       case "list":
-        if (this.pending().length) {
+        if (this.listItems().length) {
           this.mode = "list";
-          this.listIndex = Math.max(0, this.pending().findIndex((d) => d.id === this.shownId));
+          this.listIndex = Math.max(0, this.listItems().findIndex((it) => (it.plan ? it.plan.name === this.shownPlan : it.decision!.id === this.shownId)));
         }
         return [];
-      case "list-move": this.listIndex = clamp(this.listIndex + a.delta, this.pending().length); return [];
+      case "list-move": this.listIndex = clamp(this.listIndex + a.delta, this.listItems().length); return [];
       case "list-pick": {
-        const d = this.pending()[clamp(this.listIndex, this.pending().length)];
-        if (d) this.show(d.id);
+        const it = this.listItems()[clamp(this.listIndex, this.listItems().length)];
         this.mode = "normal";
+        if (it?.plan) this.openPlan(it.plan.name);
+        else if (it?.decision) this.show(it.decision.id);
         return [];
       }
       case "list-close": this.mode = "normal"; return [];
@@ -423,11 +613,7 @@ export class App {
         this.mode = "normal";
         return [];
       case "history-close": this.mode = "normal"; return [];
-      case "plans": this.openPlans(); return [];
-      case "plans-move": if (this.browser) this.browser.index = clamp(this.browser.index + a.delta, this.browser.items.length); return [];
-      case "plans-pick": this.pickPlan(); return [];
-      case "plans-close": this.closePlans(); return [];
-      case "plan-back": this.planBack(); return [];
+      case "plan-done": return this.planDone(now);
       case "history-back": {
         this.histDetail = null;
         this.focus = "decision";
@@ -457,7 +643,7 @@ export class App {
         return [];
       }
     }
-    if (!m) return [];
+    if (!m) return this.idle(a);
     const dr = this.draft(m);
     switch (a.type) {
       case "input-confirm": return this.confirmInput(m, dr, now);
@@ -514,9 +700,9 @@ export class App {
         return [];
       }
       case "submit": return this.submit(m, dr, now);
-      case "approve": dr.cursor = 0; return this.approve(m, false, now);
-      case "approve-auto": dr.cursor = 1; return this.approve(m, true, now);
-      case "reject": dr.cursor = 2; this.startReason(dr); return [];
+      case "approve": if (m.readonly) return []; dr.cursor = 0; return this.approve(m, false, now);
+      case "approve-auto": if (m.readonly) return []; dr.cursor = 1; return this.approve(m, true, now);
+      case "reject": if (m.readonly) return []; dr.cursor = 2; this.startReason(dr); return [];
       case "toc-move": {
         if (!m.plan) return [];
         const st = this.planState(m);
@@ -548,88 +734,54 @@ export class App {
     }
   }
 
-  // ---- Plan browser ----
+  // ---- Items ----
 
-  private openPlans(): void {
-    this.browser = { items: this.browser?.items ?? [], index: 0, loaded: this.browser?.loaded ?? false };
-    this.mode = "plans";
-    void this.refreshPlans();
+  /** The list (`b`): pending decisions first, then the plans newest first (a plan that is a pending approval is its decision's row) */
+  private listItems(): { decision?: Decision; plan?: PlanSummary }[] {
+    return [...this.pending().map((decision) => ({ decision })), ...this.visiblePlans().map((plan) => ({ plan }))];
   }
 
-  private closePlans(): void {
-    this.mode = "normal";
-    this.browser = null;
-    if (this.stale) {
-      this.stale = false;
-      this.show(this.shownId);
-    }
-  }
-
-  private pickPlan(): void {
-    const b = this.browser;
-    const item = b?.items[clamp(b.index, b.items.length)];
-    if (!item || !this.fetchPlan) return;
-    void this.fetchPlan(item.name).then(
-      (file) => {
-        if (!file || this.mode !== "plans") return;
-        const saved = { scroll: this.scroll, rscroll: this.rscroll, focus: this.focus, hscroll: this.hscroll, full: this.full };
-        this.pv = { name: file.name, mtime: file.mtime, model: buildPlanFileModel(file.name, file.title, file.markdown, file.mtime), saved };
-        this.scroll = 0;
-        this.rscroll = null;
-        this.focus = "decision";
-        this.hscroll = 0;
-        this.full = false;
-        this.reveal = null;
-        this.mode = "planview";
-        this.onPlans();
-      },
-      () => {},
-    );
-  }
-
-  private planBack(): void {
-    const pv = this.pv;
-    if (!pv) return;
-    Object.assign(this, pv.saved);
-    this.drafts.delete(pv.model.id);
-    this.plans.delete(pv.model.id);
-    this.reveal = null;
-    this.pv = null;
-    this.mode = "plans";
-    void this.refreshPlans();
-  }
-
-  /** Every 10 seconds (index.ts): refresh the open list, or re-fetch the shown plan with its mtime and rebuild it only when the file changed */
-  async refreshPlans(): Promise<void> {
-    try {
-      if (this.mode === "plans" && this.browser && this.fetchPlans) {
-        const items = await this.fetchPlans();
-        if (this.mode === "plans" && this.browser) {
-          this.browser.items = items;
-          this.browser.loaded = true;
-          this.browser.index = clamp(this.browser.index, items.length);
-        }
-      } else if (this.mode === "planview" && this.pv && this.fetchPlan) {
-        const pv = this.pv;
-        const file = await this.fetchPlan(pv.name, pv.mtime);
-        if (!file || this.pv !== pv) return;
-        const sig = (md: string) => planOutline(md).entries.map((e) => `${e.level}${e.title}`).join("\n");
-        // Open and read marks stay while the headings are the same; a changed outline starts over
-        if (sig(file.markdown) !== sig(pv.model.background ?? "")) this.plans.delete(pv.model.id);
-        pv.mtime = file.mtime;
-        pv.model = buildPlanFileModel(file.name, file.title, file.markdown, file.mtime);
-      }
-    } catch {
-      // Keep what is shown; the next tick retries
-    }
-    this.onPlans();
+  /** What `[` `]` cycle through: the pending decisions, then the new plans */
+  private cycleItems(now: number): ({ id: string } | { plan: string })[] {
+    return [...this.pending().map((d) => ({ id: d.id })), ...this.newPlans(now).map((p) => ({ plan: p.name }))];
   }
 
   private cycle(step: number): void {
-    const list = this.pending();
-    if (list.length < 2) return;
-    const i = list.findIndex((d) => d.id === this.shownId);
-    this.show(list[(i + step + list.length) % list.length]!.id);
+    const now = Date.now();
+    const items = this.cycleItems(now);
+    const i = items.findIndex((x) => ("id" in x ? x.id === this.shownId : x.plan === this.shownPlan));
+    if (!items.length || (items.length === 1 && i === 0)) return;
+    // A plan that is not an item (an old one opened from the idle list) steps to the first / last
+    const from = i >= 0 ? i : step > 0 ? -1 : items.length;
+    const next = items[(from + step + items.length) % items.length]!;
+    if ("id" in next) this.show(next.id);
+    else this.openPlan(next.plan);
+  }
+
+  /** The idle screen: j/k move in Recent plans, Enter opens one (a plan already read is not marked again) */
+  private idle(a: Action): Effect[] {
+    const n = Math.min(RECENT_PLANS, this.visiblePlans().length);
+    if (a.type === "move") this.recentIndex = clamp(this.recentIndex + a.delta, n);
+    else if (a.type === "submit") {
+      const p = this.visiblePlans()[clamp(this.recentIndex, n)];
+      if (p) this.openPlan(p.name);
+    }
+    return [];
+  }
+
+  /** Done reading: mark the plan read (unless it already is), then the next item or the idle screen */
+  private planDone(now: number): Effect[] {
+    const name = this.shownPlan;
+    if (!name) return [];
+    const file = this.files.get(name);
+    const effects: Effect[] = [];
+    const sum = this.plans.get(name);
+    if (file && sum && !sum.read) {
+      if (sum.mtime === file.mtime) this.plans.set(name, { ...sum, read: true });
+      effects.push({ type: "read", name, mtime: file.mtime });
+    }
+    this.advance(now);
+    return effects;
   }
 
   /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, 3 buttons for a plan */
@@ -802,6 +954,7 @@ export class App {
   }
 
   private submit(m: ScreenModel, dr: Draft, now: number): Effect[] {
+    if (m.readonly) return [];
     if (m.kind === "plan") {
       if (dr.cursor === 0) return this.approve(m, false, now);
       if (dr.cursor === 1) return this.approve(m, true, now);
@@ -835,6 +988,7 @@ export class App {
     this.sending.delete(updated.id);
     this.sent.add(updated.id);
     this.decisions.set(updated.id, updated);
+    if (updated.status !== "pending") this.readPlanOf(updated);
     const key = STATUS_KEY[updated.status];
     this.showToast(t(this.lang, key ?? "sent"), now);
     if (updated.id === this.shownId) this.advance(now);

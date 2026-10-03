@@ -109,7 +109,7 @@ export class KeyParser {
 
 // ---- Actions ----
 
-export type Mode = "normal" | "input" | "list" | "none" | "cannot" | "history" | "plans" | "planview";
+export type Mode = "normal" | "input" | "list" | "none" | "cannot" | "history";
 export type Kind = "question" | "plan";
 /** The column that arrows and j/k act on. background = the left explanation, decision = the right-hand decision */
 export type Focus = "background" | "decision";
@@ -174,12 +174,8 @@ export type Action =
   | { type: "history-pick" }
   | { type: "history-close" }
   | { type: "history-back" }
-  /** `p`: open the plan browser (the list of plan files); move in it; Enter opens one read-only; Esc / p closes; Esc in a plan goes back to the list */
-  | { type: "plans" }
-  | { type: "plans-move"; delta: 1 | -1 }
-  | { type: "plans-pick" }
-  | { type: "plans-close" }
-  | { type: "plan-back" };
+  /** A plan file on its own (no decision): Esc = Done reading */
+  | { type: "plan-done" };
 
 export interface KeyContext {
   mode: Mode;
@@ -193,6 +189,8 @@ export interface KeyContext {
   hscrollable?: boolean;
   /** A long plan: the plan is folded into sections with a contents */
   toc?: boolean;
+  /** A plan file shown on its own: read-only, `y a n` / answers do nothing, Esc is Done reading */
+  planOnly?: boolean;
   /** Whether one instruction is shown in full in the background column (Esc leaves it) */
   histDetail?: boolean;
   /** Time of the first g of gg (0 if none) */
@@ -259,22 +257,11 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     return done(null);
   }
 
-  if (ctx.mode === "plans") {
-    if (down) return done({ type: "plans-move", delta: 1 });
-    if (up) return done({ type: "plans-move", delta: -1 });
-    if (key.name === "enter") return done({ type: "plans-pick" });
-    if (key.name === "esc" || (key.name === "char" && key.ch === "p")) return done({ type: "plans-close" });
-    if (key.name === "char" && key.ch === "q") return done({ type: "quit" });
-    return done(null);
-  }
-
-  if (ctx.mode === "planview") return planViewKey(key, ctx, down, up);
-
   const ch = key.name === "char" ? key.ch : null;
   if (ch === "q") return done({ type: "quit" });
   if (ch === "s") return done({ type: "history" });
-  if (ch === "p") return done({ type: "plans" });
   if (ctx.histDetail && key.name === "esc") return done({ type: "history-back" });
+  if (ctx.planOnly && !ctx.full && key.name === "esc") return done({ type: "plan-done" });
   const goLeft = key.name === "left" || ch === "h";
   const goRight = key.name === "right" || ch === "l";
 
@@ -331,13 +318,18 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   }
   if (ch === "[") return done({ type: "prev" });
   if (ch === "]") return done({ type: "next" });
+  if (ctx.planOnly && (key.name === "left" || key.name === "right")) return done(null);
   if (ch === "h" || key.name === "left") return ctx.kind === "plan" && key.name === "left" ? done({ type: "move", delta: -1 }) : done({ type: "prev" });
   if (ch === "l" || key.name === "right") return ctx.kind === "plan" && key.name === "right" ? done({ type: "move", delta: 1 }) : done({ type: "next" });
   if (ch === "b") return done({ type: "list" });
+  // Nothing to answer on a plan file: j/k only scroll (the contents cursor moved above)
+  if (ctx.planOnly && down) return done({ type: "scroll", delta: 1, unit: "line" });
+  if (ctx.planOnly && up) return done({ type: "scroll", delta: -1, unit: "line" });
   if (down) return done({ type: "move", delta: 1 });
   if (up) return done({ type: "move", delta: -1 });
   if (key.name === "enter") return done({ type: "submit" });
 
+  if (ctx.planOnly) return done(null);
   if (ctx.kind === "plan") {
     if (ch === "y") return done({ type: "approve" });
     if (ch === "a") return done({ type: "approve-auto" });
@@ -357,37 +349,5 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ch === "i") return done({ type: "free" });
   if (ch === "c") return done({ type: "copy" });
   if (ch === ".") return done({ type: "rec" });
-  return done(null);
-}
-
-/** A plan file shown read-only: the PL1 folding keys and the scrolling keys; nothing here can answer a decision */
-function planViewKey(key: Key, ctx: KeyContext, down: boolean, up: boolean): { action: Action | null; lastG: number } {
-  const done = (action: Action | null, lastG = 0) => ({ action, lastG });
-  const ch = key.name === "char" ? key.ch : null;
-  if (ch === "q") return done({ type: "quit" });
-  if (key.name === "esc") return ctx.full ? done({ type: "full" }) : done({ type: "plan-back" });
-  const bg = ctx.full || ctx.focus === "background";
-  if (ctx.full) {
-    if (key.name === "tab" || ch === "f") return done({ type: "full" });
-  } else {
-    if (key.name === "tab") return done({ type: "focus" });
-    if (ch === "f" && ctx.wide) return done({ type: "full" });
-  }
-  if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
-  if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1, unit: "half" });
-  if (ctx.toc) {
-    if (ch === "o") return done({ type: "toc-all" });
-    if (key.name === "enter" || ch === " ") return done({ type: "toc-toggle" });
-    if (ch === "[") return done({ type: "toc-section", delta: -1 });
-    if (ch === "]") return done({ type: "toc-section", delta: 1 });
-    if (!bg && down) return done({ type: "toc-move", delta: 1 });
-    if (!bg && up) return done({ type: "toc-move", delta: -1 });
-  }
-  if (bg || !ctx.toc) {
-    if (down) return done({ type: "scroll", delta: 1, unit: "line" });
-    if (up) return done({ type: "scroll", delta: -1, unit: "line" });
-    if (ch === "G") return done({ type: "scroll-edge", to: "bottom" });
-    if (ch === "g") return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "scroll-edge", to: "top" }) : done(null, ctx.now);
-  }
   return done(null);
 }

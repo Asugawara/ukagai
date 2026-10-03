@@ -1,17 +1,19 @@
-// The plan browser (`p`): the list of plan files and the read-only plan view, with no network (the App's fetchers are stubbed).
+// Plans flow in like questions (PL3c): a new plan arrives by itself, Esc is Done reading, a live update marks only the changed sections,
+// the approval of the same plan upgrades the screen in place. No network: the App's fetcher and effect sink are stubbed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { App } from "../../src/tui/app.js";
+import { App, type Effect } from "../../src/tui/app.js";
 import type { PlanFile, PlanSummary } from "../../src/tui/api.js";
 import type { Key } from "../../src/tui/keys.js";
 import { MESSAGES } from "../../src/tui/i18n.js";
 import { renderFrame } from "../../src/tui/render.js";
+import { planOutline, sectionHashes } from "../../src/tui/plan.js";
+import { sectionsOf } from "../../src/serve/plans.js";
 import { stripAnsi } from "../../src/tui/width.js";
 import { decision } from "./helpers.js";
 
 const LONG = readFileSync(new URL("../gui/fixtures/long-plan.md", import.meta.url), "utf8");
-const SHORT_A = "# Short plan A\n\n## One\n\nText `src/a.ts`.\n";
 const SHORT_C = "# Short plan C\n\n## One\n\nText.\n\n## Two\n\nMore.\n";
 const ch = (c: string): Key => ({ name: "char", ch: c });
 const enter: Key = { name: "enter" };
@@ -20,25 +22,36 @@ const tab: Key = { name: "tab" };
 let clock = Date.parse("2026-10-03T12:00:00.000Z");
 const press = (app: App, ...keys: Key[]) => keys.flatMap((k) => app.handle(k, (clock += 10)));
 const tick = () => new Promise((r) => setTimeout(r, 5));
-
 const ago = (ms: number) => new Date(clock - ms).toISOString();
-const FILES: Record<string, PlanFile> = {
-  "a.md": { name: "a.md", title: "Short plan A", mtime: ago(3 * 3600_000), markdown: SHORT_A },
-  "b.md": { name: "b.md", title: "Export retry", mtime: ago(3600_000), markdown: LONG },
-  "c.md": { name: "c.md", title: "Short plan C", mtime: ago(5 * 60_000), markdown: SHORT_C },
-};
-// Newest first, as the API returns them
-const LIST: PlanSummary[] = [FILES["c.md"]!, FILES["b.md"]!, FILES["a.md"]!].map((f) => ({ name: f.name, title: f.title, mtime: f.mtime, bytes: f.markdown.length, sections: f.name === "b.md" ? 9 : f.name === "c.md" ? 2 : 1, lines: f.markdown.split("\n").length - 1 }));
 
-function stubbed(files = LIST, calls: string[] = []): App {
+function file(name: string, title: string, markdown: string, ageMs: number): PlanFile {
+  return { name, title, mtime: ago(ageMs), markdown };
+}
+function summary(f: PlanFile, read = false): PlanSummary {
+  const o = planOutline(f.markdown);
+  return { name: f.name, title: f.title, mtime: f.mtime, bytes: f.markdown.length, sections: o.h2, lines: o.lines, read };
+}
+
+let FILES: Record<string, PlanFile>;
+let fetched: string[];
+
+/** An App with stubbed plan fetching; `effects` collects what would be POSTed outside a key press */
+function setup(): { app: App; effects: Effect[] } {
+  FILES = {
+    "b.md": file("b.md", "Export retry", LONG, 3600_000),
+    "c.md": file("c.md", "Short plan C", SHORT_C, 5 * 60_000),
+    "old.md": file("old.md", "Old plan", SHORT_C, 30 * 3600_000),
+  };
+  fetched = [];
   const app = new App();
-  app.fetchPlans = async () => { calls.push("list"); return files; };
+  const effects: Effect[] = [];
+  app.onEffect = (e) => effects.push(...e);
   app.fetchPlan = async (name, since) => {
-    calls.push(`plan:${name}:${since ?? ""}`);
+    fetched.push(name);
     const f = FILES[name]!;
     return since === f.mtime ? null : f;
   };
-  return app;
+  return { app, effects };
 }
 
 function draw(app: App, cols = 140, rows = 50) {
@@ -47,192 +60,257 @@ function draw(app: App, cols = 140, rows = 50) {
   return { text: stripAnsi(frame.text), lines: frame.lines.map(stripAnsi) };
 }
 
-async function openList(app: App, cols = 140, rows = 50) {
-  press(app, ch("p"));
+const foldedRows = (text: string) => text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*[▸▾] [☐☑] .+ \(\d+ lines\)/.test(l));
+
+/** The plan b.md arrives while idle and comes up by itself */
+async function arrive(app: App, name = "b.md") {
+  app.planUpdated(summary(FILES[name]!), clock);
   await tick();
-  return draw(app, cols, rows);
 }
 
-test("p on the empty screen lists the plans in mtime order with section and line counts", async () => {
-  const app = stubbed();
-  const { text, lines } = await openList(app);
-  const rows = lines.filter((l) => l.includes("·") && /sections?/.test(l));
-  assert.equal(rows.length, 3);
-  assert.ok(rows[0]!.includes("Short plan C") && rows[0]!.includes("5m") && rows[0]!.includes("2 sections · "), rows[0]);
-  assert.ok(rows[1]!.includes("Export retry") && rows[1]!.includes("1h") && rows[1]!.includes("9 sections · 200 lines"), rows[1]);
-  assert.ok(rows[2]!.includes("Short plan A") && rows[2]!.includes("3h") && rows[2]!.includes("1 section · "), rows[2]);
-  assert.ok(text.includes("Plans"));
-  assert.ok(lines.at(-1)!.includes("Esc close"));
-});
-
-test("an empty plans directory shows the dim line (en and ja)", async () => {
-  for (const [lang, line] of [["en", "No plans in ~/.claude/plans"], ["ja", "~/.claude/plans に計画はありません"]] as const) {
-    const app = stubbed([]);
-    app.lang = lang;
-    const { text } = await openList(app);
-    assert.ok(text.includes(line), text);
-  }
-});
-
-test("Esc and p close the list; q still quits", async () => {
-  const app = stubbed();
-  await openList(app);
-  press(app, esc);
-  assert.equal(app.mode, "normal");
-  await openList(app);
-  press(app, ch("p"));
-  assert.equal(app.mode, "normal");
-  await openList(app);
-  assert.deepEqual(press(app, ch("q")), [{ type: "quit" }]);
-});
-
-test("Enter on the long plan: folded rows, contents and the read-only header; no buttons", async () => {
-  const app = stubbed();
-  await openList(app);
-  press(app, ch("j"), enter);
-  await tick();
+test("a new plan arriving on the idle screen comes up by itself: header, folded rows, no buttons; y a n do nothing (en and ja)", async () => {
+  const { app, effects } = setup();
+  await arrive(app);
+  assert.equal(app.shownPlan, "b.md");
   const { text, lines } = draw(app, 140, 400);
-  assert.equal(app.mode, "planview");
-  assert.ok(lines[0]!.includes("Plan (read only)") && lines[0]!.includes("9 sections · 200 lines · 12 files") && lines[0]!.includes("b.md"), lines[0]);
-  assert.ok(lines[1]!.includes("Export retry"), lines[1]);
-  const heads = text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*[▸▾] [☐☑] .+ \(\d+ lines\)/.test(l));
+  assert.ok(lines[0]!.includes("Export retry"), lines[0]);
+  assert.ok(lines[1]!.includes("Plan") && lines[1]!.includes("updated 1h") && lines[1]!.includes("9 sections · 200 lines · 12 files") && lines[1]!.includes("b.md"), lines[1]);
+  assert.ok(!/read only/i.test(text));
+  const heads = foldedRows(text);
   assert.equal(heads.length, 9, "the H3 rows of folded sections are hidden");
-  assert.equal(heads.filter((h) => h.trim().startsWith("▾")).length, 1);
+  assert.equal(heads.filter((h) => h.trim().startsWith("▾")).length, 1, "the first H2 is open");
   const toc = text.split("\n").map((l) => l.split(" │ ")[1] ?? "").filter((l) => /[☐☑]/.test(l));
   assert.equal(toc.length, 15);
+  assert.ok(text.includes("Done reading (Esc)"));
   for (const word of ["Approve", "Reject", "Free text", "None of these", "Can't answer", "[y]"]) assert.ok(!text.includes(word), word);
-  assert.ok(text.includes("j/k Contents · Enter Open · o All · [ ] Section"));
-  assert.ok(lines.at(-1)!.includes("Esc back"), "the footer says how to go back");
-});
-
-test("plan view in ja: header and hint words", async () => {
-  const app = stubbed();
-  app.lang = "ja";
-  await openList(app);
-  press(app, ch("j"), enter);
-  await tick();
-  const { text, lines } = draw(app);
-  assert.ok(lines[0]!.includes("計画(読むだけ)") && lines[0]!.includes("9 節 · 200 行 · 12 ファイル"), lines[0]);
-  assert.ok(text.includes("j/k 目次") && lines.at(-1)!.includes("Esc 戻る"));
-});
-
-test("o opens everything; Enter folds the section under the cursor; y a n do nothing", async () => {
-  const app = stubbed();
-  await openList(app);
-  press(app, ch("j"), enter);
-  await tick();
-  press(app, ch("o"));
-  assert.equal(draw(app, 140, 400).text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*▾ [☐☑] /.test(l)).length, 15);
-  press(app, ch("o"));
-  assert.equal(draw(app, 140, 400).text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*▾ [☐☑] /.test(l)).length, 0);
+  assert.ok(text.includes("Pending 1"), "a new plan is counted");
+  const posted = effects.length;
   for (const k of ["y", "a", "n"]) assert.deepEqual(press(app, ch(k)), []);
-  assert.equal(app.mode, "planview");
-  // j moves the contents cursor to the second row, Enter opens it
-  press(app, ch("j"), enter);
-  assert.equal(draw(app, 140, 400).text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*▾ [☐☑] /.test(l)).length, 1);
+  assert.equal(effects.length, posted);
+  assert.equal(app.shownPlan, "b.md");
+
+  const ja = setup();
+  ja.app.lang = "ja";
+  await arrive(ja.app);
+  const jd = draw(ja.app, 140, 400);
+  assert.ok(jd.lines[1]!.includes("計画") && jd.lines[1]!.includes("更新 1") && jd.lines[1]!.includes("9 節 · 200 行 · 12 ファイル"), jd.lines[1]);
+  assert.ok(jd.text.includes("読んだ (Esc)"));
 });
 
-test("Esc goes back to the list, a second Esc closes it", async () => {
-  const app = stubbed();
-  await openList(app);
-  press(app, enter);
+test("Esc is Done reading: the read POST, then the idle screen lists the plan dim with no dot", async () => {
+  const { app, effects } = setup();
+  await arrive(app);
+  const out = press(app, esc);
+  assert.deepEqual(out, [{ type: "read", name: "b.md", mtime: FILES["b.md"]!.mtime }]);
+  assert.equal(app.shownPlan, null);
+  const { text, lines } = draw(app);
+  assert.ok(text.includes("No pending decisions") && text.includes("Recent plans"));
+  const row = lines.find((l) => l.includes("Export retry"))!;
+  assert.ok(row && row.includes("9 sections · 200 lines") && !row.includes("●"), row);
+  assert.equal(app.count(clock), 0);
+  assert.deepEqual(effects, []);
+});
+
+test("Recent plans: j/k Enter opens one; a plan already read is not marked again on Esc", async () => {
+  const { app } = setup();
+  await arrive(app);
+  press(app, esc);
+  press(app, ch("j"), enter);
+  assert.equal(app.shownPlan, "b.md");
+  assert.deepEqual(press(app, esc), []);
+  assert.equal(app.shownPlan, null);
+});
+
+test("live update: a changed section turns unread with `updated`, unchanged ones keep their state, the scroll stays", async () => {
+  const { app } = setup();
+  await arrive(app);
+  press(app, ch("o"));
+  assert.equal(foldedRows(draw(app, 140, 30).text).filter((h) => h.trim().startsWith("▾")).length > 0, true);
+  press(app, tab, { name: "pgdn" });
+  draw(app, 140, 30);
+  const scrolled = app.scroll;
+  assert.ok(scrolled > 0, "scrolled down");
+  // Only Rollout changes; the other sections are byte for byte the same
+  FILES["b.md"] = { ...FILES["b.md"]!, mtime: ago(1000), markdown: LONG.replace("## Rollout\n", "## Rollout\n\nA new rollout note.\n") };
+  app.planUpdated(summary(FILES["b.md"]), clock);
   await tick();
-  assert.equal(app.mode, "planview");
+  draw(app, 140, 30);
+  assert.equal(app.scroll, scrolled);
+  const after = draw(app, 140, 400);
+  const rows = foldedRows(after.text);
+  const rollout = rows.find((r) => r.includes("Rollout"))!;
+  assert.ok(rollout.includes("☐") && rollout.includes("updated") && rollout.trim().startsWith("▸"), rollout);
+  assert.equal(rows.filter((r) => r.includes("updated")).length, 1, "only the changed section");
+  assert.equal(rows.filter((r) => r.includes("☑")).length, 14, "the others stay read");
+  assert.equal(rows.filter((r) => r.trim().startsWith("▾")).length, 14, "the others stay open");
+  // Opening it clears the word
+  const i = app.view(clock).plan!;
+  assert.equal(i.updated.size, 1);
+  press(app, tab); // focus back to the decision column (j/k move the contents cursor)
+  const idx = planOutline(FILES["b.md"].markdown).entries.findIndex((e) => e.plain === "Rollout");
+  while (app.view(clock).plan!.cur !== idx) press(app, ch("j"));
+  press(app, enter);
+  assert.equal(app.view(clock).plan!.updated.size, 0);
+  assert.ok(!foldedRows(draw(app, 140, 400).text).some((r) => r.includes("updated")));
+});
+
+test("live update with no change in the text only ticks the age (the summary alone does not refetch)", async () => {
+  const { app } = setup();
+  await arrive(app);
+  fetched.length = 0;
+  app.planUpdated({ ...summary(FILES["b.md"]!), read: true }, clock); // a read mark from another UI: same mtime
+  await tick();
+  assert.deepEqual(fetched, []);
+  assert.equal(app.shownPlan, "b.md");
+});
+
+test("decision precedence: a decision takes the screen (Pending 2); ] is the plan, [ the decision; answered leaves the plan", async () => {
+  const { app } = setup();
+  await arrive(app);
+  app.upsert(decision({ id: "q1" }), clock);
+  assert.equal(app.shownId, "q1");
+  assert.equal(app.shownPlan, null);
+  assert.ok(draw(app).text.includes("Pending 2"));
+  press(app, ch("]"));
+  assert.equal(app.shownPlan, "b.md");
+  assert.equal(app.shownId, null);
+  press(app, ch("["));
+  assert.equal(app.shownId, "q1");
+  app.upsert(decision({ id: "q1", status: "answered" }), clock);
+  assert.equal(app.shownPlan, "b.md", "the plan is next");
+});
+
+test("upgrade in place: the approval of the shown plan keeps the folding state, shows the buttons, is one list row; answering marks the plan read", async () => {
+  const { app, effects } = setup();
+  await arrive(app);
+  press(app, tab, ch("]"), ch("]"));
+  const open = [...app.view(clock).plan!.open].sort();
+  assert.ok(open.length >= 3, "three sections open");
+  const ap = decision({ id: "ap", kind: "approve_plan", request: { plan: LONG, planFilePath: "/Users/a/.claude/plans/b.md" } } as never);
+  app.upsert(ap, clock);
+  assert.equal(app.shownId, "ap");
+  assert.equal(app.shownPlan, null);
+  const { text } = draw(app, 140, 400);
+  assert.ok(text.includes("Approve this plan?") && text.includes("Approve") && text.includes("Reject"));
+  assert.deepEqual([...app.view(clock).plan!.open].sort(), open, "open sections carried over");
+  assert.equal(app.view(clock).list, null);
+  press(app, ch("b"));
+  assert.equal(app.view(clock).list!.items.length, 1, "the plan and its approval are one row");
   press(app, esc);
-  assert.equal(app.mode, "plans");
-  assert.ok(draw(app).text.includes("Short plan C"));
-  press(app, esc);
+  assert.equal(app.count(clock), 1, "one item, counted once");
+  // The unread guard reflects what was read: the first press only arms and names the sections never opened
+  assert.deepEqual(press(app, ch("y")), []);
+  const notice = draw(app, 140, 50).lines.at(-1)!;
+  assert.ok(notice.includes("Unread sections (6)"), notice);
+  const out = press(app, ch("y"));
+  assert.deepEqual(out, [{ type: "answer", id: "ap", body: { approve: true, set_mode_auto: false } }]);
+  app.answered({ ...ap, status: "answered" } as never, clock);
+  assert.deepEqual(effects, [{ type: "read", name: "b.md", mtime: FILES["b.md"]!.mtime }]);
+  assert.equal(app.shownPlan, null, "the plan is read, so nothing is next");
+});
+
+test("a plan with a pending approval is not shown or counted twice", async () => {
+  const { app } = setup();
+  app.upsert(decision({ id: "ap", kind: "approve_plan", request: { plan: LONG, planFilePath: "/x/b.md" } } as never), clock);
+  app.planUpdated(summary(FILES["b.md"]!), clock);
+  await tick();
+  assert.equal(app.shownId, "ap");
+  assert.equal(app.count(clock), 1);
+});
+
+test("a plan unread for 30 hours is not shown by itself or counted; it is in Recent plans without a dot", async () => {
+  const { app } = setup();
+  app.planUpdated(summary(FILES["old.md"]!), clock);
+  await tick();
+  assert.equal(app.shownPlan, null);
+  assert.equal(app.count(clock), 0);
+  const { text, lines } = draw(app);
+  assert.ok(text.includes("Recent plans"));
+  const row = lines.find((l) => l.includes("Old plan"))!;
+  assert.ok(row && !row.includes("●"), row);
+  // a new one shows the dot
+  app.planUpdated(summary(FILES["c.md"]!), clock);
+  await tick();
+  assert.equal(app.shownPlan, "c.md");
+});
+
+test("a plan removed while shown goes to the idle screen without a word", async () => {
+  const { app } = setup();
+  await arrive(app);
+  app.planRemoved("b.md", clock);
+  assert.equal(app.shownPlan, null);
+  const { text } = draw(app);
+  assert.ok(text.includes("No pending decisions") && !text.includes("Export retry"));
+});
+
+test("p does nothing (the plan browser is gone) and the footer has no p hint", async () => {
+  const { app } = setup();
+  assert.deepEqual(press(app, ch("p")), []);
   assert.equal(app.mode, "normal");
-  assert.ok(draw(app).text.includes("No pending decisions"));
+  app.upsert(decision({ id: "q1" }), clock);
+  assert.deepEqual(press(app, ch("p")), []);
+  assert.ok(!draw(app).lines.at(-1)!.includes("p Plans"));
+});
+
+test("works at 100x24 stacked: the plan screen and the recent list", async () => {
+  const { app } = setup();
+  await arrive(app);
+  const { text, lines } = draw(app, 100, 24);
+  assert.ok(!text.includes(" │ "), "one column");
+  assert.ok(lines[0]!.includes("Export retry") && lines[1]!.includes("Plan"));
+  assert.ok(text.includes("Contents") && text.includes("Done reading (Esc)"));
+  assert.ok(!text.includes("Approve"));
+  press(app, esc);
+  const idle = draw(app, 100, 24);
+  assert.ok(idle.text.includes("Recent plans") && idle.text.includes("Export retry"));
 });
 
 test("a short plan shows the whole document with no contents", async () => {
-  const app = stubbed();
-  await openList(app);
-  press(app, enter); // Short plan C: 2 H2
-  await tick();
+  const { app } = setup();
+  await arrive(app, "c.md");
   const { text, lines } = draw(app);
-  assert.ok(lines[0]!.includes("Plan (read only)") && lines[0]!.includes("c.md") && !lines[0]!.includes("sections"), lines[0]);
-  assert.ok(text.includes("More.") && !text.includes("Contents"));
+  assert.ok(lines[1]!.includes("Plan") && lines[1]!.includes("c.md") && !lines[1]!.includes("sections"), lines[1]);
+  assert.ok(text.includes("More.") && !text.includes("Contents") && text.includes("Done reading (Esc)"));
   assert.ok(!/[☐☑]/.test(text));
 });
 
-test("works at 100x24 stacked: the list, the plan and the hint", async () => {
-  const app = stubbed();
-  await openList(app, 100, 24);
-  press(app, ch("j"), enter);
-  await tick();
-  const { text, lines } = draw(app, 100, 24);
-  assert.ok(!text.includes(" │ "), "one column");
-  assert.ok(lines[0]!.includes("Plan (read only)"));
-  assert.ok(text.includes("Contents") && lines.at(-1)!.includes("Esc back"));
-  assert.ok(!text.includes("Approve"));
-});
-
-test("with a pending decision: p overlays it and Esc returns with the cursor where it was; a decision arriving meanwhile waits", async () => {
-  const app = stubbed();
+test("the list (b) holds decisions first, then plans newest first with the `plan` word and the dot on new ones", async () => {
+  const { app } = setup();
+  app.planUpdated(summary(FILES["old.md"]!), clock);
+  await arrive(app, "c.md");
   app.upsert(decision({ id: "q1" }), clock);
-  draw(app);
-  press(app, ch("j"));
-  const before = draw(app).text;
-  await openList(app);
-  press(app, ch("j"), enter);
-  await tick();
-  // a second decision arrives while the plan is open: the plan stays
-  app.upsert(decision({ id: "q2", tool_use_id: "t2", created_at: "2026-10-02T00:01:00.000Z" }), clock);
-  assert.equal(app.mode, "planview");
-  const view = draw(app);
-  assert.ok(view.text.includes("Plan (read only)") && view.text.includes("Pending 2"), "pending indicator in the footer");
-  press(app, esc, esc);
-  assert.equal(app.mode, "normal");
-  assert.equal(app.shownId, "q1");
-  assert.equal(draw(app).text.replace(/Pending \d/, "").includes("Should notifications use SSE"), true);
-  assert.equal(draw(app).text.split("\n").find((l) => l.includes("▸")), before.split("\n").find((l) => l.includes("▸")));
+  press(app, ch("b"));
+  const { lines } = draw(app);
+  const titles = lines.filter((l) => /^ ?[▸ ] /.test(l) && !l.startsWith("      ")).map((l) => l.trim());
+  assert.ok(titles[0]!.includes("Should notifications") || titles[0]!.includes("SSE"), titles[0]);
+  const plan = lines.findIndex((l) => l.includes("●") && l.includes("Short plan C"));
+  assert.ok(plan > 0);
+  assert.ok(lines[plan + 1]!.includes("plan") && lines[plan + 1]!.includes("2 sections"), lines[plan + 1]);
+  const old = lines.find((l) => l.includes("Old plan"))!;
+  assert.ok(old && !old.includes("●"));
 });
 
-test("a pending decision that is answered elsewhere while a plan is open does not change the plan view", async () => {
-  const app = stubbed();
-  app.upsert(decision({ id: "q1" }), clock);
-  await openList(app);
-  press(app, ch("j"), enter);
-  await tick();
-  const before = draw(app).text;
-  app.upsert(decision({ id: "q1", status: "answered" }), clock);
-  assert.equal(draw(app).text.replace(/Pending \d+  ?/, ""), before.replace(/Pending \d+  ?/, ""));
-  press(app, esc, esc);
-  assert.equal(app.shownId, null);
+test("section hashes computed in the TUI equal the server's", () => {
+  const ours = sectionHashes(planOutline(LONG), LONG);
+  assert.deepEqual(ours, sectionsOf(LONG).map((s) => s.hash));
 });
 
-test("refresh: the list re-fetches; the plan re-fetches with ?since and rebuilds only on a change", async () => {
-  const calls: string[] = [];
-  const app = stubbed(LIST, calls);
-  await openList(app);
-  calls.length = 0;
-  await app.refreshPlans();
-  assert.deepEqual(calls, ["list"]);
-  press(app, ch("j"), enter);
-  await tick();
-  press(app, ch("o"));
-  calls.length = 0;
-  await app.refreshPlans();
-  assert.deepEqual(calls, [`plan:b.md:${FILES["b.md"]!.mtime}`]);
-  // unchanged (304): the open state stays
-  assert.equal(draw(app, 140, 400).text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*▾ [☐☑] /.test(l)).length, 15);
-  // same headings, new text: the open state stays; changed headings: it starts over
-  FILES["b.md"] = { ...FILES["b.md"]!, mtime: ago(1000), markdown: LONG.replace("Retry export jobs", "Retry export jobs!") };
-  await app.refreshPlans();
-  assert.equal(draw(app, 140, 400).text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*▾ [☐☑] /.test(l)).length, 15);
-  FILES["b.md"] = { ...FILES["b.md"]!, mtime: ago(500), markdown: LONG.replace("## Context", "## Background") };
-  await app.refreshPlans();
-  assert.equal(draw(app, 140, 400).text.split("\n").map((l) => l.split(" │ ")[0]!).filter((l) => /^\s*▾ [☐☑] /.test(l)).length, 1);
-});
-
-test("TUI and GUI use the same words for the plan browser", async () => {
+test("TUI and GUI use the same words for plans", async () => {
   const { MESSAGES: GUI } = (await import(new URL("../../public/i18n.js", import.meta.url).href)) as { MESSAGES: Record<"en" | "ja", Record<string, string>> };
+  const table = {
+    plan_kind: ["plan", "計画"],
+    plan_updated_ago: ["updated {age}", "更新 {age}"],
+    plan_done_reading: ["Done reading", "読んだ"],
+    plan_section_updated: ["updated", "更新"],
+    plan_recent: ["Recent plans", "最近の計画"],
+  } as const;
+  for (const [k, [en, ja]] of Object.entries(table)) {
+    assert.equal(MESSAGES.en[k as keyof typeof MESSAGES.en], en, `en.${k}`);
+    assert.equal(MESSAGES.ja[k as keyof typeof MESSAGES.ja], ja, `ja.${k}`);
+    // The GUI side adds the same keys in its own brief; compare once it has them
+    for (const [lang, want] of [["en", en], ["ja", ja]] as const) if (GUI[lang]![k] !== undefined) assert.equal(GUI[lang]![k], want, `gui ${lang}.${k}`);
+  }
   for (const lang of ["en", "ja"] as const) {
-    for (const k of ["plans_title", "plans_empty", "plan_readonly", "plan_sections", "plan_sections_one", "plan_lines", "plan_lines_one", "plan_files", "plan_files_one"] as const) {
-      assert.equal(MESSAGES[lang][k], GUI[lang]![k], `${lang}.${k}`);
-    }
-    assert.equal(MESSAGES[lang].footer_plans_key, `p ${GUI[lang]!.hint_plans}`);
+    for (const k of ["plan_sections", "plan_sections_one", "plan_lines", "plan_lines_one", "plan_files", "plan_files_one"] as const) assert.equal(MESSAGES[lang][k], GUI[lang]![k], `${lang}.${k}`);
   }
 });

@@ -1,4 +1,4 @@
-import { ApiError, type StreamEvent } from "./api.js";
+import { ApiError, type PlanSummary, type StreamEvent } from "./api.js";
 import type { App } from "./app.js";
 import type { Decision } from "../contract.js";
 
@@ -7,6 +7,8 @@ import type { Decision } from "../contract.js";
 export interface SyncApi {
   listPending(): Promise<Decision[]>;
   get(id: string): Promise<Decision>;
+  /** The plan files (absent in tests that do not need them) */
+  plans?(): Promise<PlanSummary[]>;
   stream(onEvent: (e: StreamEvent) => void, signal: AbortSignal, onOpen?: () => void): Promise<void>;
 }
 
@@ -28,6 +30,14 @@ export async function refetch(api: SyncApi, app: App, now: () => number = Date.n
       // Anything else is retried on the next fetch
     }
   }
+  // Plans are best effort: a failure leaves what is known
+  if (api.plans) {
+    try {
+      app.replacePlans(await api.plans(), now());
+    } catch {
+      // The next fetch retries
+    }
+  }
 }
 
 export interface LoopOptions {
@@ -45,7 +55,9 @@ export async function streamLoop(api: SyncApi, app: App, signal: AbortSignal, o:
     try {
       await api.stream(
         (ev) => {
-          app.upsert(ev.decision, now());
+          if (ev.event === "plan.updated") app.planUpdated(ev.plan, now());
+          else if (ev.event === "plan.removed") app.planRemoved(ev.name, now());
+          else app.upsert(ev.decision, now());
           o.onChange();
         },
         signal,
