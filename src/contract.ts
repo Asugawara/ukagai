@@ -457,3 +457,27 @@ export const SessionHistory = z.object({
   recent: z.array(HistoryEntry),
 });
 export type SessionHistory = z.infer<typeof SessionHistory>;
+
+// ---- GET /api/plans, GET /api/plans/:name ----
+
+export const PlanSummary = z.object({
+  /** File name including `.md` (the `:name` of GET /api/plans/:name) */
+  name: z.string(),
+  /** First H1 of the file, or `name` if there is none */
+  title: z.string(),
+  /** File mtime, ISO */
+  mtime: z.string(),
+  bytes: z.number().int().nonnegative(),
+  /** Number of H2 headings */
+  sections: z.number().int().nonnegative(),
+  lines: z.number().int().nonnegative(),
+});
+export type PlanSummary = z.infer<typeof PlanSummary>;
+
+export const PlanContent = z.object({
+  name: z.string(),
+  title: z.string(),
+  mtime: z.string(),
+  markdown: z.string(),
+});
+export type PlanContent = z.infer<typeof PlanContent>;

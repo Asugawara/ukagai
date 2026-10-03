@@ -18,6 +18,7 @@ import {
 import type { Lang } from "../settings/config.js";
 import type { SseHub } from "./sse.js";
 import { collectHistory } from "./history.js";
+import { PlanError, listPlans, readPlan } from "./plans.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
@@ -212,6 +213,19 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/decisions/:id", auth("any"), (c) => {
     const d = store.get(c.req.param("id"));
     return d ? c.json(d) : c.json({ error: "decision not found" }, 404);
+  });
+
+  // Read-only view of ~/.claude/plans (the GUI polls it; nothing goes through SSE)
+  app.get("/api/plans", auth("any"), async (c) => c.json({ plans: await listPlans(deps.home) }));
+
+  app.get("/api/plans/:name", auth("any"), async (c) => {
+    try {
+      const plan = await readPlan(deps.home, c.req.param("name"), c.req.query("since"));
+      return plan ? c.json(plan) : c.body(null, 304);
+    } catch (e) {
+      if (e instanceof PlanError) return c.json({ error: e.message }, e.status);
+      throw e;
+    }
   });
 
   app.get("/api/decisions/:id/history", auth("any"), async (c) => {

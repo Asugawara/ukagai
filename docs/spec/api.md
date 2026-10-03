@@ -23,6 +23,7 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `POST /api/sessions/:id/pending-rewrite/consume` | hook | Delete the memo above |
 | `GET /api/metrics` | GUI | Aggregates for (a')(b)(d) |
 | `GET /api/decisions/:id/history` | GUI / TUI (cookie or Bearer) | The human instructions of the decision's session (first + last 20), read from the transcript on request |
+| `GET /api/plans` / `GET /api/plans/:name` | GUI / TUI (cookie or Bearer) | Read-only view of the plan files Claude Code writes to `~/.claude/plans` (list, and one file). See below |
 | `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja", "build": string }`: the display language from `<data-dir>/config.json` (read once at startup; missing/malformed → `"en"`) and the current `app.js` version (the `?v=` value). The GUI reloads itself when `build` differs from its own |
 | `GET /api/stream` | GUI | SSE. `decision.created` / `decision.updated` / `session.updated` |
 | `GET /healthz` | hook | Connectivity check |
@@ -237,6 +238,28 @@ null
 - (b) `human` = `created_at → decided_at`, `agent` = `first_denied_at → created_at`, `baseline` = values taken with `--observe`.
 - (d) Decisions with `plan_mode` are excluded from `total`.
 
+### GET /api/plans / GET /api/plans/:name
+
+Read-only access to the plan files Claude Code writes in plan mode, so a plan can be read outside the approval moment. Allowed with cookie or Bearer. Source: `<HOME>/.claude/plans` (`HOME` of the server process). There are no write or delete endpoints, and nothing is sent over SSE; the GUI polls.
+
+`GET /api/plans` → 200
+
+```json
+{ "plans": [ { "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "bytes": 1234, "sections": 4, "lines": 60 } ] }
+```
+
+- Only `*.md` files, newest `mtime` first, at most 50. Names starting with `.` are skipped. A file whose `realpath` is outside the plans directory (a symlink leading out) is not listed. A missing directory gives `{ "plans": [] }`.
+- `name` is the file name including `.md`. `title` is the first H1 (`# …`, outside code fences), or `name` if there is none. `sections` counts H2 headings (outside code fences). `lines` counts lines (0 for an empty file). A file over 1 MB is listed with `title = name` and `sections = 0`.
+
+`GET /api/plans/:name[?since=<mtime ISO>]` → 200
+
+```json
+{ "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "markdown": "# Add X\n…" }
+```
+
+- 400 if `name` is empty or contains `/`, `\`, `..` or a NUL, or starts with `.` (URL-encoded separators are decoded first). 404 if the file does not exist, is not a regular file, or its `realpath` is outside the plans directory. 413 if it is larger than 1 MB.
+- 304 (empty body) if `since` equals the file's current `mtime` exactly (the ISO string from a previous response). Any other `since` value is ignored and gives 200.
+
 ### GET /api/config
 
 Returns the GUI display language, from `<data-dir>/config.json`. It is read once when the server starts; a missing or malformed file gives `"en"`. Allowed with cookie or Bearer.
@@ -293,7 +316,7 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 | Authorization | Endpoints |
 |---|---|
 | Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
-| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
+| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
 | none | `GET /healthz`, `GET /`, `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
 - **Content-Type**: **every POST** (including ack / consume, which have no body) requires `application/json` (otherwise 415). If there is no body, send `{}`. The order of checks is Host (400) → authorization (401) → Content-Type (415) → body (400).
