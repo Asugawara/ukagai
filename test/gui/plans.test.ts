@@ -257,8 +257,8 @@ gui("live update: unchanged sections keep their state, the changed and the new o
   assert.ok([...m.slice(2, 8), m[9]].every((x) => x === "☑"), `unchanged sections stay read: ${m.join("")}`);
   const sec = (i: number) => `${SEC}[${i}]`;
   assert.equal(ev(`${sec(0)}.open`), true);
-  assert.equal(ev(`${sec(1)}.open`), false);
-  assert.equal(ev(`${sec(8)}.open`), false);
+  assert.equal(ev(`${sec(1)}.open`), true, "the changed section that was open stays open");
+  assert.equal(ev(`${sec(8)}.open`), false, "the new section arrives folded");
   assert.equal(ev(`${sec(8)}.querySelector(":scope > summary > .ps-title").textContent`), "Epilogue");
   assert.equal(ev(`${sec(1)}.querySelector(":scope > summary > .ps-upd").hidden`), false);
   assert.equal(ev(`${sec(1)}.querySelector(":scope > summary > .ps-upd").textContent`), "updated");
@@ -270,11 +270,26 @@ gui("live update: unchanged sections keep their state, the changed and the new o
   assert.ok(line2().includes("0s ago"), line2());
   assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 16);
   ab("screenshot", join(SHOTS, "PL3b-plan-live.png"));
-  // opening the updated section clears the word and marks it read
+  // the updated section stayed open; folding it and opening it again clears the word and marks it read
+  ev(`${sec(1)}.querySelector(":scope > summary").click(), "ok"`);
+  assert.equal(ev(`${sec(1)}.open`), false);
   ev(`${sec(1)}.querySelector(":scope > summary").click(), "ok"`);
   assert.equal(ev(`${sec(1)}.open`), true);
   assert.equal(ev(`${sec(1)}.querySelector(":scope > summary > .ps-upd").hidden`), true);
   assert.equal(marks()[1], "☑");
+  // a changed section that was folded stays folded (unread, updated)
+  ev(`${sec(3)}.querySelector(":scope > summary").click(), "ok"`);
+  assert.equal(ev(`${sec(3)}.open`), false);
+  const title = ev<string>(`${sec(3)}.querySelector(":scope > summary > .ps-title").textContent`);
+  const body = LONG.replace("Three pieces change; each is described below.", "Three pieces change; each is described below, and one more sentence.").replace("## Scope and reversibility", "## Epilogue\n\nNew words here.\n\n## Scope and reversibility");
+  assert.ok(body.includes(`## ${title}\n`), title);
+  writePlan("live.md", body.replace(`## ${title}\n`, `## ${title}\n\nA later note.\n`));
+  await waitFor("folded section updated", `${SEC}[3]?.querySelector(":scope > summary > .ps-upd")?.hidden === false`, 4000);
+  assert.equal(ev(`${sec(3)}.open`), false, "the changed section that was folded stays folded");
+  assert.equal(marks()[3], "☐");
+  assert.equal(ev(`${sec(1)}.open`), true);
+  key("Escape"); // Done reading: the next test starts from the idle screen
+  await waitFor("idle", IDLE);
 });
 
 gui("a decision takes the screen from a plan: count 2, ] goes to the plan, h back, answering returns to the plan", async () => {
