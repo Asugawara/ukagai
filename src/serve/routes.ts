@@ -6,6 +6,7 @@ import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import {
   AnswerRequest,
+  CheckpointRequest,
   PlanReadRequest,
   CreateDecisionRequest,
   DecisionStatus,
@@ -187,6 +188,11 @@ export function createApp(deps: AppDeps): Hono {
     if (req.explanation && req.explanation.path !== "" && !isAllowedExplanationPath(req.explanation.path, req.session.scratchpad_dir, deps.home, deps.dataDir)) {
       return c.json({ error: "explanation.path not allowed" }, 400);
     }
+    if (req.kind === "checkpoint") {
+      if (!CheckpointRequest.safeParse(req.request).success || req.status !== undefined) return c.json({ error: "checkpoint needs request {recap, recap_at}" }, 400);
+      const made = store.create(req, {});
+      return c.json(made.decision, made.created ? 201 : 200);
+    }
     const existing = store.findByToolUse(req.tool_use_id);
     if (existing && !(existing.status === "denied_explain" && req.status !== "denied_explain")) {
       return c.json(existing, 200);
@@ -291,7 +297,8 @@ export function createApp(deps: AppDeps): Hono {
     if (!store.get(id)) return c.json({ error: "decision not found" }, 404);
     const body = await parse(c, AnswerRequest);
     let patch: AnswerPatch;
-    if ("answers" in body) patch = { kind: "answers", answers: body.answers };
+    if ("kind" in body) patch = { kind: "checkpoint", answer: body.kind, ...(body.text !== undefined ? { text: body.text } : {}) };
+    else if ("answers" in body) patch = { kind: "answers", answers: body.answers };
     else if ("fallback" in body) patch = { kind: "fallback" };
     else if (body.approve) patch = { kind: "approve", ...(body.set_mode_auto ? { set_mode_auto: true } : {}) };
     else patch = { kind: "reject", reason: body.reason };
@@ -318,6 +325,12 @@ export function createApp(deps: AppDeps): Hono {
     const open = store.findOpen(c.req.param("id"), c.req.query("agent_id") || undefined, fingerprint);
     if (!open) return c.json({ error: "no open decision" }, 404);
     return c.json({ decision: store.reattach(open, toolUseId) });
+  });
+
+  // The human's reply to a progress checkpoint, for the agent's next tool call. Reading it consumes it
+  app.get("/api/sessions/:id/instruction", auth("bearer"), (c) => {
+    const instruction = store.consumeInstruction(c.req.param("id"));
+    return instruction ? c.json({ instruction }) : c.json({ error: "no instruction" }, 404);
   });
 
   app.get("/api/sessions/:id/pending-mode-switch", auth("bearer"), (c) => {

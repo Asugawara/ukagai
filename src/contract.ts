@@ -17,6 +17,8 @@ export const RECENCY_WINDOW_MS = 600000;
 export const MODE_SWITCH_TTL_MS = 120000;
 /** If UserPromptSubmit / Stop arrives within this time after the lease expires, the decision is cancelled */
 export const CANCEL_WINDOW_MS = 10000;
+/** A checkpoint nobody answered expires after this long */
+export const CHECKPOINT_TTL_MS = 12 * 3600 * 1000;
 
 // ---- hook stdin (unknown keys pass through) ----
 
@@ -161,7 +163,7 @@ export type SessionStartContext = z.infer<typeof SessionStartContext>;
 
 // ---- Decision ----
 
-export const DecisionKind = z.enum(["answer_question", "approve_plan"]);
+export const DecisionKind = z.enum(["answer_question", "approve_plan", "checkpoint"]);
 export type DecisionKind = z.infer<typeof DecisionKind>;
 
 export const DecisionStatus = z.enum([
@@ -190,7 +192,25 @@ export const DecisionSession = z.object({
 });
 export type DecisionSession = z.infer<typeof DecisionSession>;
 
-export const DecisionRequestBody = z.union([AskUserQuestionInput, ExitPlanModeInput]);
+/** A progress recap Claude Code wrote into the transcript (`away_summary`). Non-blocking: no hook waits on it */
+export const CheckpointRequest = z.object({
+  recap: z.string(),
+  /** Timestamp of the recap line in the transcript */
+  recap_at: z.string(),
+});
+export type CheckpointRequest = z.infer<typeof CheckpointRequest>;
+
+export const DecisionRequestBody = z.union([AskUserQuestionInput, ExitPlanModeInput, CheckpointRequest]);
+
+/** `tool_use_id` of a checkpoint (the unique index key) */
+export function checkpointToolUseId(sessionId: string, recapAt: string): string {
+  return `checkpoint:${sessionId}:${recapAt}`;
+}
+
+/** Identity of a checkpoint: sha256 hex of `recap_at` */
+export function checkpointFingerprint(recapAt: string): string {
+  return createHash("sha256").update(recapAt).digest("hex");
+}
 
 export const DecisionContext = z.object({
   branch: z.string().optional(),
@@ -225,10 +245,37 @@ export const DecisionResponse = z.object({
   approve: z.boolean().optional(),
   reason: z.string().optional(),
   set_mode_auto: z.boolean().optional(),
+  /** checkpoint only (see CheckpointResponse) */
+  kind: z.enum(["continue", "instruct", "stop"]).optional(),
+  text: z.string().optional(),
   decided_at: z.string(),
+  /** For a checkpoint: when its instruction was handed to the agent */
   delivered_at: z.string().optional(),
 });
 export type DecisionResponse = z.infer<typeof DecisionResponse>;
+
+/** The response of an answered checkpoint (`text` is required for `instruct`, optional for `stop`) */
+export const CheckpointResponse = z.object({
+  via: z.enum(["gui", "terminal"]),
+  kind: z.enum(["continue", "instruct", "stop"]),
+  text: z.string().optional(),
+  decided_at: z.string(),
+  delivered_at: z.string().optional(),
+});
+export type CheckpointResponse = z.infer<typeof CheckpointResponse>;
+
+/** What the human told the agent through a checkpoint, waiting for the agent's next tool call (one per session, newest wins) */
+export const Instruction = z.object({
+  decision_id: z.string(),
+  kind: z.enum(["instruct", "stop"]),
+  text: z.string(),
+  created_at: z.string(),
+});
+export type Instruction = z.infer<typeof Instruction>;
+
+/** Body of a 200 from GET /api/sessions/:id/instruction (404 when there is none) */
+export const InstructionResponse = z.object({ instruction: Instruction });
+export type InstructionResponse = z.infer<typeof InstructionResponse>;
 
 export const Decision = z.object({
   id: z.string(),
@@ -276,6 +323,15 @@ export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequest>;
 
 /** POST /api/decisions/:id/answer. Strict so that the key sets are mutually exclusive */
 export const AnswerRequest = z.union([
+  // checkpoint: `text` is required for instruct; `via` / `decided_at` of the CheckpointResponse shape are accepted and ignored (the server sets them)
+  z
+    .strictObject({
+      kind: z.enum(["continue", "instruct", "stop"]),
+      text: z.string().optional(),
+      via: z.enum(["gui", "terminal"]).optional(),
+      decided_at: z.string().optional(),
+    })
+    .refine((b) => b.kind !== "instruct" || (b.text ?? "").trim() !== "", { message: "text is required for instruct", path: ["text"] }),
   z.strictObject({ answers: z.record(z.string(), z.string()) }),
   z.strictObject({ approve: z.literal(true), set_mode_auto: z.boolean().optional() }),
   z.strictObject({ approve: z.literal(false), reason: z.string().min(1) }),
@@ -307,6 +363,8 @@ export const SessionSummary = z.object({
   last_event_at: z.string(),
   title: z.string().optional(),
   cwd: z.string(),
+  /** From the hook events (absent for Codex --ephemeral and before the first event) */
+  transcript_path: z.string().optional(),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
@@ -343,7 +401,15 @@ export const Metrics = z.object({
     baseline: DurationStat,
   }),
   // (c) Auxiliary: number of times the GUI session list was opened
-  c: z.object({ session_panel_opens: z.number().int().nonnegative() }),
+  c: z.object({
+    session_panel_opens: z.number().int().nonnegative(),
+    // Progress checkpoints (excluded from a.total and d)
+    checkpoints: z.object({
+      created: z.number().int().nonnegative(),
+      answered: z.number().int().nonnegative(),
+      delivered: z.number().int().nonnegative(),
+    }),
+  }),
   // (d) Explanation attachment. plan_mode decisions are excluded from total
   d: z.object({
     first_call: z.number().int().nonnegative(),
@@ -484,6 +550,11 @@ export function realFileUnder(root: string, p: string): string | null {
 
 /** Largest transcript tail that is read (history reader and the hook's plan-file lookup) */
 export const TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024;
+
+/** A Claude Code transcript (the recap watcher reads these only) */
+export function isClaudeTranscriptPath(p: string, home: string): boolean {
+  return isUnder(p, join(home, ".claude", "projects"));
+}
 
 export function isAllowedTranscriptPath(p: string, home: string): boolean {
   return isUnder(p, join(home, ".claude", "projects")) || isUnder(p, join(home, ".codex", "sessions"));

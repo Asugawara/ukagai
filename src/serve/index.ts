@@ -12,6 +12,7 @@ import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
 import { PlanReadStore } from "./plan-read.js";
 import { startPlanWatcher } from "./plan-watch.js";
+import { startRecapWatcher } from "./recap-watch.js";
 import { listPlans, planNameOfPath, planSummarySync } from "./plans.js";
 import { createApp } from "./routes.js";
 import { SseHub } from "./sse.js";
@@ -31,6 +32,8 @@ export type ServeOptions = {
   /** Plan watcher timings (tests shorten them) */
   planPollMs?: number;
   planDebounceMs?: number;
+  /** Recap watcher poll interval (default 5 s; tests shorten it) */
+  recapPollMs?: number;
   /** Run the Codex plan-approval bridge (a second client of the Codex app-server). Off unless asked: `run` turns it on */
   codexBridge?: boolean;
   /** Codex home whose app-server socket the bridge connects to (default: $CODEX_HOME, else ~/.codex) */
@@ -114,6 +117,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       hub.broadcast("plan.removed", { name });
     },
   });
+  const recapWatcher = startRecapWatcher({ store, home, pollMs: opts.recapPollMs });
   const codexBridge = opts.codexBridge
     ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, collect: (session) => collectContext(session, { home }) })
     : undefined;
@@ -128,6 +132,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       new Promise<void>((resolve) => {
         codexBridge?.close();
         planWatcher.stop();
+        recapWatcher.stop();
         store.close();
         hub.closeAll();
         server.close(() => resolve());
