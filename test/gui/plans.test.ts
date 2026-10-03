@@ -313,7 +313,7 @@ gui("a decision takes the screen from a plan: count 2, ] goes to the plan, h bac
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
 });
 
-gui("upgrade in place: the approval for the shown plan keeps the sections' state, has one drawer row, y names the unread ones, answering reads the plan", async () => {
+gui("upgrade in place: the approval for the shown plan keeps the sections' state, has one drawer row, the unread line goes away with the sections, one y answers and reads the plan", async () => {
   await arrive("up.md");
   ev(`(() => { const s = document.querySelectorAll("#background details.plan-sec > summary"); s[1].click(); s[2].click(); return "ok"; })()`);
   const before = marks();
@@ -324,15 +324,16 @@ gui("upgrade in place: the approval for the shown plan keeps the sections' state
   assert.deepEqual(marks(), before);
   assert.equal(ev(openCount), openBefore);
   assert.equal(line2(), "Approve this plan?");
-  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 3);
+  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 2);
   assert.equal(ev(`document.querySelectorAll("#pending-list .row").length`), 1);
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
-  key("y");
-  await waitFor("unread names", `document.querySelector("#decision .confirm-bar") && !document.querySelector("#decision .confirm-bar").hidden`);
-  const bar = ev<string>(`document.querySelector("#decision .confirm-bar").textContent`);
-  assert.ok(bar.startsWith("Unread sections (5):"), bar);
-  assert.deepEqual(posts().filter((u) => u.includes("/answer")), []);
-  key("y");
+  const line = () => ev<string>(`(() => { const e = document.querySelector("#decision .plan-unread"); return !e || e.hidden ? "" : e.textContent; })()`);
+  assert.ok(line().startsWith("Unread sections (5):"), line());
+  key("o");
+  await waitFor("unread line gone", `document.querySelector("#decision .plan-unread").hidden`);
+  assert.equal(line(), "");
+  assert.equal(ev(`document.querySelectorAll("#decision .confirm-bar").length`), 0);
+  key("y"); // once
   await waitStatus(id, "answer_submitted").catch(() => waitStatus(id, "answered"));
   // The server marks the plan read when the approval resolves and the GUI also POSTs read unless the SSE echo
   // (read: true) arrives first, so wait on the server state, not on the GUI's request.

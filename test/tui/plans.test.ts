@@ -199,12 +199,10 @@ test("upgrade in place: the approval of the shown plan keeps the folding state, 
   assert.equal(app.view(clock).list!.items.length, 1, "the plan and its approval are one row");
   press(app, esc);
   assert.equal(app.count(clock), 1, "one item, counted once");
-  // The unread guard reflects what was read: the first press only arms and names the sections never opened
-  assert.deepEqual(press(app, ch("y")), []);
-  const notice = draw(app, 140, 50).lines.at(-1)!;
-  assert.ok(notice.includes("Unread sections (6)"), notice);
+  // The unread line reflects what was read; it never blocks: one y sends
+  assert.ok(draw(app, 140, 50).text.includes("Unread sections (6)"));
   const out = press(app, ch("y"));
-  assert.deepEqual(out, [{ type: "answer", id: "ap", body: { approve: true, set_mode_auto: false } }]);
+  assert.deepEqual(out, [{ type: "answer", id: "ap", body: { approve: true, set_mode_auto: true } }]);
   app.answered({ ...ap, status: "answered" } as never, clock);
   assert.deepEqual(effects, [{ type: "read", name: "b.md", mtime: FILES["b.md"]!.mtime }]);
   assert.equal(app.shownPlan, null, "the plan is read, so nothing is next");

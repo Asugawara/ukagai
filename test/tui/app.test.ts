@@ -62,14 +62,14 @@ test("gg / G go to the top / bottom (the bottom is free text)", () => {
   assert.equal(app.view(t).cursor, 0);
 });
 
-test("plan: y approves, a approves with auto, n asks for a reason then Enter rejects", () => {
+test("plan: y approves once with auto, a does nothing, n asks for a reason then Enter rejects", () => {
   const plan = decision({ kind: "approve_plan", request: { plan: "# P\n\n## Scope and reversibility\n\nx", planFilePath: "/p" } } as never);
   let app = new App();
   app.upsert(plan, t);
-  assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: false } }]);
+  assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: true } }]);
   app = new App();
   app.upsert(plan, t);
-  assert.deepEqual(press(app, ch("a")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: true } }]);
+  assert.deepEqual(press(app, ch("a")), []);
   app = new App();
   app.upsert(plan, t);
   assert.deepEqual(press(app, ch("n"), enter), []); // empty reason

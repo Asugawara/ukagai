@@ -37,7 +37,7 @@ test("Space / Enter / i / h / l / b / q", () => {
 
 test("y a n work for a plan and do nothing for a question", () => {
   assert.equal(type(ch("y"), { kind: "plan" }), "approve");
-  assert.equal(type(ch("a"), { kind: "plan" }), "approve-auto");
+  assert.equal(type(ch("a"), { kind: "plan" }), null);
   assert.equal(type(ch("n"), { kind: "plan" }), "reject");
   assert.equal(type(ch("y")), null);
 });

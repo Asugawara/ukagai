@@ -1,4 +1,4 @@
-// Checks the long-plan screen (public/app.js: folding sections, contents, read marks, unread confirmation) against a real server and a
+// Checks the long-plan screen (public/app.js: folding sections, contents, read marks, unread line) against a real server and a
 // real browser (agent-browser). Skipped when agent-browser is not on PATH. Keys are sent as KeyboardEvents (eval), not with `press`.
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -154,7 +154,6 @@ const openCount = `document.querySelectorAll("#background details.plan-sec[open]
 const tocRow = (title: string) => `[...document.querySelectorAll("#decision .toc-row")].find(r => r.querySelector(".toc-title").textContent.startsWith(${JSON.stringify(title)}))`;
 const secOf = (title: string) => `[...document.querySelectorAll("#background details.plan-sec, #background details.plan-sub")].find(d => d.querySelector(":scope > summary .ps-title").textContent.startsWith(${JSON.stringify(title)}))`;
 const mark = (title: string) => ev<string>(`${tocRow(title)}.querySelector(".toc-mark").textContent`);
-const confirmText = () => ev<string>(`document.querySelector("#decision .confirm-bar").hidden ? "" : document.querySelector("#decision .confirm-bar").textContent`);
 
 gui("a long plan folds into one <details> per H2 (only the first open), the contents lists 15 rows, the header counts 9 sections · 200 lines · 12 files", async () => {
   await seedPlan(LONG);
@@ -265,7 +264,7 @@ gui("j / k move the contents cursor, Enter and Space fold the section under it",
   key("Enter");
   await waitFor("Changes open again", `${secOf("Changes")}.open`);
   // Enter did not approve anything
-  assert.equal(ev(`!!document.querySelector("#decision .btn.primary") && document.querySelector("#decision .confirm-bar").hidden`), true);
+  assert.equal(ev(`!!document.querySelector("#decision .btn.primary") && !document.querySelector("#decision .confirm-bar")`), true);
 });
 
 gui("[ and ] open and go to the previous / next section (H3 rows included)", async () => {
@@ -291,57 +290,67 @@ gui("[ and ] open and go to the previous / next section (H3 rows included)", asy
   assert.equal(cur(), "Context");
 });
 
-gui("y with unread sections names them on the confirmation bar and does not send; the second y sends", async () => {
+const count = (sel: string) => ev<number>(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
+const unreadLine = () => ev<string>(`(() => { const e = document.querySelector("#decision .plan-unread"); return !e || e.hidden ? "" : e.textContent; })()`);
+
+gui("one y sends at once with set_mode_auto: true, even with unread sections; the decision has two buttons and no confirm bar", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  key("y");
-  await waitFor("confirm bar", `!document.querySelector("#decision .confirm-bar").hidden`);
-  assert.equal(confirmText(), "Unread sections (7): Changes, Split and owners, Commit granularity, Verification, Observation path +2 · Press the same key or click again (3s)");
-  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  assert.equal(count("#decision .btn"), 2);
+  assert.equal(count("#decision .confirm-bar"), 0);
   key("y");
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(d.response.approve, true);
-  assert.ok(!d.response.set_mode_auto);
+  assert.equal(d.response.set_mode_auto, true);
 });
 
-gui("reading a section shortens the unread list; with everything read y and a send at once", async () => {
+gui("a does nothing on a plan", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
+  key("a");
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+});
+
+gui("the unread line sits above the buttons, updates as sections are opened and disappears at 0 (never blocks)", async () => {
+  const { id } = await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  assert.equal(unreadLine(), "Unread sections (7): Changes, Split and owners, Commit granularity, Verification, Observation path +2");
+  assert.equal(ev(`document.querySelector("#decision .plan-unread").nextElementSibling.classList.contains("primary")`), true, "directly above the buttons");
   ev(`${tocRow("Changes")}.click(), "ok"`);
   await waitFor("Changes open", `${secOf("Changes")}.open`);
-  key("a");
-  await waitFor("confirm bar", `!document.querySelector("#decision .confirm-bar").hidden`);
-  assert.ok(confirmText().startsWith("Unread sections (6): Split and owners, Commit granularity"), confirmText());
-  // opening one more while the bar is up updates it
-  ev(`${tocRow("Split and owners")}.click(), "ok"`);
-  await waitFor("bar updated", `document.querySelector("#decision .confirm-bar").textContent.includes("(5)")`);
+  await waitFor("line updated", `document.querySelector("#decision .plan-unread").textContent.startsWith("Unread sections (6): Split and owners, Commit granularity")`);
   key("o");
   await waitFor("all open", `document.querySelectorAll("#background details[open]").length === 15`);
+  assert.equal(unreadLine(), "");
   assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
-  key("y"); // everything is read now: the first press that finds nothing unread sends
+  key("y");
   const d = await waitStatus(id, "answer_submitted");
-  assert.equal(d.response.approve, true);
+  assert.equal(d.response.set_mode_auto, true);
 });
 
-gui("an irreversible long plan still needs two presses with everything read (the two rules share one bar)", async () => {
+gui("ja: the unread line is 未読 n 節 and the buttons are 承認 / 却下", async () => {
+  await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  await setLang("ja", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("未読 7 節:")`);
+  assert.equal(unreadLine(), "未読 7 節: Changes, Split and owners, Commit granularity, Verification, Observation path +2");
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .btn")].map(b => b.textContent))`), ["承認", "却下"]);
+  await setLang("en", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("Unread sections (7)")`);
+});
+
+gui("an irreversible long plan is approved with one y too", async () => {
   const explanation = { path: "", title: "Drop the store", reversibility: "irreversible", scope: "machine", markdown: LONG, has: { mermaid: false, table: false, diff: false }, match: "recency", attached_via: "first_call" };
   const { id } = await seedPlan(LONG, explanation);
   await reopen("document.querySelector('#background details.plan-sec')");
   key("y");
-  await waitFor("confirm bar", `!document.querySelector("#decision .confirm-bar").hidden`);
-  assert.ok(confirmText().startsWith("Unread sections (7)"), confirmText());
-  key("o");
-  key("y");
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(d.response.approve, true);
+  assert.equal(d.response.set_mode_auto, true);
 });
 
-gui("clicking an Approve button with unread sections arms the bar, the second click sends", async () => {
+gui("clicking Approve sends at once", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  ev(`document.querySelector("#decision .btn.primary").click(), "ok"`);
-  await waitFor("bar", `!document.querySelector("#decision .confirm-bar").hidden`);
-  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
   ev(`document.querySelector("#decision .btn.primary").click(), "ok"`);
   await waitStatus(id, "answer_submitted");
 });

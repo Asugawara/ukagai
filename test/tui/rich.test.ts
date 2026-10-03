@@ -262,16 +262,17 @@ const PLAN = (rev?: string) =>
     ...(rev ? withExplanation("# P\n\n## Scope and reversibility\n\nx", { reversibility: rev, scope: "repo" }) : {}),
   } as never);
 
-test("plan: irreversible approval (y, a, Enter on a button) needs a second press; reject does not", () => {
+test("plan: irreversible approval (y, Enter on the button) sends at once; a does nothing", () => {
   const app = new App();
   app.upsert(PLAN("irreversible"), now);
-  assert.deepEqual(press(app, ch("y")), []);
-  assert.ok(app.view(now).notice);
-  assert.equal(press(app, enter).length, 1, "Enter confirms y (the cursor moved to Approve) and sends at once");
-  const auto = new App();
-  auto.upsert(PLAN("irreversible"), now);
-  assert.deepEqual(press(auto, ch("a")), []);
-  assert.deepEqual(press(auto, ch("a")).map((e) => (e as { body: unknown }).body), [{ approve: true, set_mode_auto: true }]);
+  assert.deepEqual(press(app, ch("y")).map((e) => (e as { body: unknown }).body), [{ approve: true, set_mode_auto: true }]);
+  assert.equal(app.view(now).notice, null);
+  const enterApp = new App();
+  enterApp.upsert(PLAN("irreversible"), now);
+  assert.equal(press(enterApp, enter).length, 1, "Enter on the Approve button sends at once");
+  const a = new App();
+  a.upsert(PLAN("irreversible"), now);
+  assert.deepEqual(press(a, ch("a")), []);
 });
 
 // ---- sent at once ----
