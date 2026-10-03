@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App } from "../../src/tui/app.js";
-import { buildModel } from "../../src/tui/model.js";
+import { buildModel, fixedLabel } from "../../src/tui/model.js";
 import { render, renderFrame, type View } from "../../src/tui/render.js";
 import { stripAnsi, width } from "../../src/tui/width.js";
 import { BLOCKER_MD_JA, V2_MD, V2_MD_JA, blockerDecision, decision, withExplanation } from "./helpers.js";
@@ -23,7 +23,7 @@ test("140x40: heading, chips, recommendation, cards, background, hints, status l
     "Whether the GUI update channel uses SSE or WebSocket",
     "Why this decision is needed now", "What I checked", "hook", "serve",
     "Recommendation", "I recommend SSE", "▸ ● SSE", "○ WebSocket", "One-way delivery from the", "Free text",
-    "j/k move Enter send i text", "Pending 1", "h/l switch  b list  q quit",
+    "j/k Enter send", "i text", "Pending 1", "h/l switch  b list  q quit",
   ]) assert.ok(out.includes(s), `missing: ${s}`);
   assert.ok(lines.some((l) => l.includes(" │ ") && l.includes("◄") === false && l.includes("SSE")), "two columns");
   assert.ok(lines.some((l) => l.includes("Background") && l.includes("Decision")), "column headings");
@@ -71,7 +71,7 @@ test("without an explanation (multi-select): raw options and checkboxes", () => 
     request: { questions: [{ question: "Which ones to include?", header: "Target", multiSelect: true, options: [{ label: "A", description: "a is first" }, { label: "B", description: "b is second" }] }] },
   } as never);
   const out = stripAnsi(render(viewOf(d), { cols: 140, rows: 30 }));
-  for (const s of ["Which ones to include?", "[ ] A", "a is first", "Space pick", "The agent did not write an explanation"]) assert.ok(out.includes(s), s);
+  for (const s of ["Which ones to include?", "[ ] A", "a is first", "Space Enter send", "The agent did not write an explanation"]) assert.ok(out.includes(s), s);
 });
 
 test("a plan shows approve / auto / reject buttons", () => {
@@ -138,7 +138,7 @@ test("ja: the main UI strings are Japanese", () => {
   const out = stripAnsi(render(viewOf(decision(withExplanation(V2_MD)), "ja"), { cols: 140, rows: 40 }));
   for (const s of [
     "戻すのにコストがかかる", "推奨", "自由記述", "背景", "判断",
-    "j/k 移動 Enter 送信 i 記述", "保留 1", "h/l 切替  b 一覧  q 終了",
+    "j/k Enter 送信", "x 返答不可", "保留 1", "h/l 切替  b 一覧  q 終了",
   ]) assert.ok(out.includes(s), `missing: ${s}`);
   // headings written in the file are shown as written (not translated)
   assert.ok(out.includes("Why this decision is needed now"));
@@ -170,9 +170,31 @@ test("Japanese heading aliases in the file give the same screen as the English h
   const blocker = stripAnsi(render(viewOf(blockerDecision({}, BLOCKER_MD_JA, [
     { label: "対応した。続けて (Recommended)" }, { label: "この手順は飛ばして続けて" }, { label: "ここで中断" },
   ])), { cols: 140, rows: 40 }));
-  for (const s of ["▸ ● 対応した。続けて", "gcloud auth login", "Waiting for you"]) assert.ok(blocker.includes(s), s);
+  for (const s of ["▸ ● Done. Continue", "gcloud auth login", "Waiting for you"]) assert.ok(blocker.includes(s), s);
   // The todo section moves to the right column (it is not left in the background)
   const rows = blocker.split("\n");
   assert.ok(rows.some((l) => l.split(" │ ").slice(1).join(" │ ").includes("What you need to do")), "todo heading is in the right column");
   assert.ok(!rows.some((l) => l.split(" │ ")[0]!.includes("人にしてほしいこと")), "todo section is not in the background");
+});
+
+test("W1: a trailing (Recommended) / (推奨) is stripped from the card label; the value sent stays as received", () => {
+  for (const [lbl, other] of [["A (Recommended)", "B"], ["A (推奨)", "B"], ["A（推奨）", "B"]] as const) {
+    const d = decision({ request: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [{ label: lbl, description: "x" }, { label: other, description: "y" }] }] } });
+    const m = buildModel(d);
+    assert.equal(m.question!.cards[0]!.label, "A");
+    assert.equal(m.question!.cards[0]!.value, lbl);
+  }
+});
+
+test("W1: blocker fixed labels are shown in the display language (value unchanged); either-language input", () => {
+  for (const lang of ["en", "ja"] as const) {
+    for (const d of [blockerDecision(), blockerDecision({}, BLOCKER_MD_JA)]) {
+      const out = stripAnsi(render(viewOf(d, lang), { cols: 140, rows: 40 }));
+      const want = lang === "en" ? ["Done. Continue", "Skip this step and continue", "Stop here"] : ["完了。続けて", "この手順を飛ばして続けて", "ここで止める"];
+      for (const s of want) assert.ok(out.includes(s), `${lang}: ${s}`);
+    }
+  }
+  assert.equal(fixedLabel("対応した。続けて (推奨)"), "done");
+  assert.equal(fixedLabel("Stop here"), "stop");
+  assert.equal(fixedLabel("Sqlite"), undefined);
 });

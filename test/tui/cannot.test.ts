@@ -150,7 +150,7 @@ test("cannotAnswer, i18n keys and the hint", () => {
     assert.ok(MESSAGES.en[k] && MESSAGES.ja[k], k);
   }
   const app = open(V2_MD);
-  assert.match(draw(app).text, /x Can't answer/);
+  assert.match(draw(app).text, /x can't/);
   app.lang = "ja";
   assert.match(stripAnsi(renderFrame(app.view(now), { cols: 200, rows: 70 }).text), /x 返答不可/);
 });

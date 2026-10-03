@@ -51,6 +51,23 @@ export interface Card {
   recommended: boolean;
   /** The risk cell says it cannot be undone (choosing it needs Enter twice) */
   heavy?: boolean;
+  /** One of the blocker's three fixed options: shown in the display language, the value stays as received */
+  fixed?: FixedLabel;
+}
+
+export type FixedLabel = "done" | "skip" | "stop";
+
+const FIXED_ALIASES: Record<FixedLabel, string[]> = {
+  done: ["Done. Continue", "対応した。続けて", "完了。続けて"],
+  skip: ["Skip this step and continue", "この手順は飛ばして続けて", "この手順を飛ばして続けて"],
+  stop: ["Stop here", "ここで中断", "ここで止める"],
+};
+const squash = (s: string): string => s.normalize("NFKC").replace(/\s/gu, "").toLowerCase();
+
+/** Which blocker fixed label this option is (any language alias, with or without the (Recommended) suffix), if any */
+export function fixedLabel(label: string): FixedLabel | undefined {
+  const key = squash(label.replace(SUFFIX_RE, ""));
+  return (Object.keys(FIXED_ALIASES) as FixedLabel[]).find((k) => FIXED_ALIASES[k].some((a) => squash(a) === key));
 }
 
 export type Reversibility = "reversible" | "costly" | "irreversible";
@@ -235,16 +252,21 @@ function cardsFromTable(
   const extras = options
     .filter((o) => !used.has(o.label))
     .map((o) => rawCard(o, false));
-  return { cards: cards.map(({ suffix: _s, key: _k, ...c }) => c), extras };
+  return { cards: cards.map(({ suffix: _s, key: _k, ...c }) => withFixed(c)), extras };
 }
 
+const withFixed = (c: Card): Card => {
+  const f = fixedLabel(c.value);
+  return f ? { ...c, fixed: f } : c;
+};
+
 function rawCard(o: { label: string; description?: string | undefined }, recommended: boolean): Card {
-  return {
+  return withFixed({
     value: o.label,
     label: stripSuffix(o.label),
     lines: o.description ? [{ text: o.description, md: false }] : [],
     recommended,
-  };
+  });
 }
 
 /** Extract the body of the "Scope and reversibility" section from a plan (exact match first, then partial); null if absent */
