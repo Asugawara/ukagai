@@ -431,7 +431,7 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   await seedPlan();
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(count("kbd"), 0);
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Approve", "Approve and auto", "Reject"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Approve", "Reject"]);
   const planHint = ev<string>(`document.querySelector("#foot .hint").textContent`);
   assert.ok(planHint.includes("y Approve") && planHint.includes("n Reject"), planHint);
 });
@@ -1156,7 +1156,7 @@ gui("risk column: 'cannot be undone' is red, the way back is green and underline
   assert.equal(style.line.includes("underline"), true);
 });
 
-gui("plan: an irreversible plan needs y twice too, then it is sent at once", async () => {
+gui("plan: an irreversible plan is approved with one y", async () => {
   const n = ++seq;
   const plan = "# Drop the old store\n\nStep 1";
   const d = await api("/api/decisions", {
@@ -1167,12 +1167,11 @@ gui("plan: an irreversible plan needs y twice too, then it is sent at once", asy
   });
   assert.ok(d.id);
   await reopen("document.querySelector('#decision .btn')");
-  press("y");
-  assert.equal(ev<boolean>(`!document.querySelector("#decision .confirm-bar").hidden`), true);
-  assert.equal((await api(`/api/decisions/${d.id}`)).status, "pending");
-  press("y"); // the second y sends at once
+  assert.equal(count("#decision .confirm-bar"), 0);
+  press("y"); // one y sends at once
   const done = await waitStatus(d.id, "answer_submitted", 1500);
   assert.equal(done.response.approve, true);
+  assert.equal(done.response.set_mode_auto, true);
 });
 
 gui("ja: the shape, You decide, Against, None of these and the confirmation follow the language", async () => {

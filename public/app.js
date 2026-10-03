@@ -923,18 +923,9 @@ window.addEventListener("resize", () => {
 
 // ---- Weight (Enter twice) ----
 
-// The bar under the plan's buttons: why a second press is needed (unread sections) and how to give it
-function confirmText(d) {
-  const unread = unreadText(d);
-  return unread ? `${unread} · ${t("confirm_again")}` : t("confirm_again");
-}
 function syncConfirm(dr) {
   const bar = document.querySelector("#decision .confirm-bar");
-  if (bar) {
-    bar.hidden = !dr.confirmKey;
-    const d = decisions.get(shownId);
-    if (d?.kind === "approve_plan") bar.textContent = confirmText(d);
-  }
+  if (bar) bar.hidden = !dr.confirmKey;
   for (const e of document.querySelectorAll("#decision .confirm-inline")) e.hidden = e.dataset.key !== dr.confirmKey;
   document.querySelector("#decision .btn.primary")?.classList.toggle("confirming", !!dr.confirmKey);
 }
@@ -957,7 +948,7 @@ function attempt(d, dr, key, body, weighty) {
   send(d, body);
 }
 
-const confirmBar = (dr, d) => el("div", { class: "confirm-bar", hidden: !dr.confirmKey, text: d?.kind === "approve_plan" ? confirmText(d) : t("confirm_again") });
+const confirmBar = (dr) => el("div", { class: "confirm-bar", hidden: !dr.confirmKey, text: t("confirm_again") });
 
 // ---- Tooltips (terms and footnotes), evidence jump, badge copy ----
 
@@ -1428,12 +1419,11 @@ function renderRightBody(d) {
   const outline = planOutline(d);
   if (outline) qsBox.append(planToc(d, outline));
   root.append(qsBox);
-  // A second press is needed when the decision is irreversible, or when a section has never been opened (the bar says which)
-  const weighty = () => reversibilityOf(d) === "irreversible" || !!unreadText(d);
-  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => attempt(d, dr, "approve", { approve: true, set_mode_auto: false }, weighty()) }, el("span", { text: t("approve") }));
-  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => attempt(d, dr, "auto", { approve: true, set_mode_auto: true }, weighty()) }, el("span", { text: t("approve_auto") }));
+  // One press sends, for every plan; unread sections are only shown (the dim line above the buttons)
+  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: t("approve") }));
   const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }));
-  const actions = el("div", { class: "actions" }, confirmBar(dr, d));
+  const unread = el("div", { class: "plan-unread", hidden: !unreadText(d), text: unreadText(d) });
+  const actions = el("div", { class: "actions" });
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
       class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
@@ -1446,15 +1436,15 @@ function renderRightBody(d) {
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(approve, auto, reject);
+  actions.append(unread, approve, reject);
   const keysHint = outline ? t("hint_plan_toc") : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")}`;
-  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`));
+  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`));
   root.append(actions);
-  const buttons = [approve, auto, reject];
+  const buttons = [approve, reject];
   ui = {
-    kind: "plan", buttons, closed, approve, auto, toc: !!outline,
+    kind: "plan", buttons, closed, approve, toc: !!outline,
     setCursor(i) {
-      if (outline) return; // the arrows move the contents cursor instead (the buttons are y / a / n or a click)
+      if (outline) return; // the arrows move the contents cursor instead (the buttons are y / n or a click)
       i = clamp(i, buttons.length);
       if (i !== dr.cursor) clearConfirm(dr);
       dr.cursor = i;
@@ -2118,7 +2108,11 @@ function syncPlan(d) {
     row?.classList.toggle("cursor", st.cur === e.i);
     row?.classList.toggle("open", st.open.has(e.i));
   }
-  if (!d.readonly) syncConfirm(draftOf(d));
+  if (!d.readonly) {
+    syncConfirm(draftOf(d));
+    const line = document.querySelector("#decision .plan-unread");
+    if (line) { const text = unreadText(d); line.textContent = text; line.hidden = !text; }
+  }
 }
 
 function planSetOpen(d, i, open) {
@@ -2826,7 +2820,6 @@ document.addEventListener("keydown", (ev) => {
   else if (key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
   else if (key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }
   else if (key === "y") { ev.preventDefault(); ui.approve.click(); }
-  else if (key === "a") { ev.preventDefault(); ui.auto.click(); }
   else if (key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });
 

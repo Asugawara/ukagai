@@ -128,7 +128,6 @@ export type Action =
   | { type: "list" }
   | { type: "quit" }
   | { type: "approve" }
-  | { type: "approve-auto" }
   | { type: "reject" }
   /** A long plan: move the contents cursor, open / close the section under it, open / close all, go to the previous / next section (opening it) */
   | { type: "toc-move"; delta: 1 | -1 }
@@ -332,7 +331,6 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ctx.planOnly) return done(null);
   if (ctx.kind === "plan") {
     if (ch === "y") return done({ type: "approve" });
-    if (ch === "a") return done({ type: "approve-auto" });
     if (ch === "n") return done({ type: "reject" });
     if (ch === ".") return done({ type: "rec" });
     return done(null);

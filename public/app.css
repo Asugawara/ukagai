@@ -252,6 +252,7 @@ sup.fn, sup.fn-n { font-size: 10px; line-height: 0; font-weight: 700; color: var
 .tip { position: fixed; z-index: 90; background: var(--fg); color: var(--bg); font-size: 12px; line-height: 1.5; padding: 6px 10px; border-radius: 6px; box-shadow: 0 2px 10px #0004; pointer-events: none; overflow-wrap: anywhere; }
 
 /* Weight: Enter twice */
+.plan-unread { color: var(--muted); font-size: 12px; }
 .confirm-bar { background: var(--yellow-bg); border: 1px solid var(--yellow); color: var(--fg); font-weight: 600; font-size: 13px; text-align: center; border-radius: 6px; padding: 4px 8px; }
 button.btn.primary.confirming { background: var(--yellow); border-color: var(--yellow); color: #1d1d1f; }
 /* None of these / Can't answer this: one quiet row of underlined text buttons, panels with a left rule only (no boxes) */

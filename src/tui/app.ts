@@ -9,7 +9,7 @@ import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 import { historyItems, type HistoryItem } from "./history.js";
-import { initialPlanState, headings, remapState, sectionHashes, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
+import { initialPlanState, headings, remapState, sectionHashes, setOpen, toggleAll, type PlanState } from "./plan.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -467,8 +467,7 @@ export class App {
   /** The prompt shown in the footer: "Press Enter again" */
   private notice(now: number): string | null {
     if (!this.confirm || this.confirm.until < now) return null;
-    const unread = this.unreadText(this.confirm.id);
-    return unread ? `${unread} · ${t(this.lang, "confirm_again")}` : t(this.lang, "confirm_again");
+    return t(this.lang, "confirm_again");
   }
 
   /**
@@ -492,14 +491,6 @@ export class App {
       return st;
     }
     return memo.st;
-  }
-
-  /** `Unread sections (3): a, b, c` for a long plan with sections never opened; "" otherwise */
-  private unreadText(id: string): string {
-    const m = this.models.get(id);
-    if (!m?.plan) return "";
-    const un = unreadSections(m.plan.outline, this.planState(m));
-    return un.length ? t(this.lang, "plan_unread", { n: un.length, names: unreadNames(un) }) : "";
   }
 
   /** Take the drawn screen dimensions and clamp the scroll positions. Returns true when a hint just started (redraw) */
@@ -695,9 +686,8 @@ export class App {
         return [];
       }
       case "submit": return this.submit(m, dr, now);
-      case "approve": if (m.readonly) return []; dr.cursor = 0; return this.approve(m, false, now);
-      case "approve-auto": if (m.readonly) return []; dr.cursor = 1; return this.approve(m, true, now);
-      case "reject": if (m.readonly) return []; dr.cursor = 2; this.startReason(dr); return [];
+      case "approve": if (m.readonly) return []; dr.cursor = 0; return this.approve(m);
+      case "reject": if (m.readonly) return []; dr.cursor = 1; this.startReason(dr); return [];
       case "toc-move": {
         if (!m.plan) return [];
         const st = this.planState(m);
@@ -768,18 +758,15 @@ export class App {
     return effects;
   }
 
-  /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, 3 buttons for a plan */
+  /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, 2 buttons for a plan */
   private slots(m: ScreenModel): number {
-    if (m.kind === "plan") return 3;
+    if (m.kind === "plan") return 2;
     return m.question ? m.question.cards.length + 3 : 0;
   }
 
-  /** Approve a plan (Enter twice when the decision is irreversible) */
-  private approve(m: ScreenModel, auto: boolean, now: number): Effect[] {
-    // A second press is needed when the decision is irreversible, or when a section of a long plan was never opened (the footer names them)
-    const heavy = m.reversibility === "irreversible" || !!this.unreadText(m.id);
-    if (!this.guard(m, auto ? "approve-auto" : "approve", heavy, now)) return [];
-    return this.emit(m.id, { approve: true, set_mode_auto: auto });
+  /** Approve a plan: one press, always with the auto mode (unread sections are shown above the buttons, never a gate) */
+  private approve(m: ScreenModel): Effect[] {
+    return this.emit(m.id, { approve: true, set_mode_auto: true });
   }
 
   /** The first press of a heavy action only arms it; the same action on the very next key (within 3s) goes through */
@@ -940,8 +927,7 @@ export class App {
   private submit(m: ScreenModel, dr: Draft, now: number): Effect[] {
     if (m.readonly) return [];
     if (m.kind === "plan") {
-      if (dr.cursor === 0) return this.approve(m, false, now);
-      if (dr.cursor === 1) return this.approve(m, true, now);
+      if (dr.cursor === 0) return this.approve(m);
       this.startReason(dr);
       return [];
     }

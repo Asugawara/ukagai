@@ -139,39 +139,35 @@ test("plan (long): [ and ] still switch pending decisions while the decision col
   assert.equal(app.shownId, "b");
 });
 
-test("plan (long): y with unread sections names them in the footer and sends on the second y; reading changes the list", () => {
+test("plan (long): one y sends at once with auto; the unread sections are one dim line above the buttons and update live; a does nothing", () => {
   const app = open();
-  assert.deepEqual(press(app, ch("y")), []);
   let { lines } = draw(app);
-  const footer = lines.at(-1)!;
-  assert.match(footer, /Unread sections \(7\): Changes, Split and owners, Commit granularity, Verification, Observation path/, footer);
-  assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: false } }]);
-  // a is guarded the same way, and opening sections shortens the list
+  const at = lines.findIndex((l) => l.includes("Unread sections (7): Changes, Split and owners"));
+  const btn = lines.findIndex((l) => l.includes("[y] Approve"));
+  assert.ok(at >= 0 && btn > at, lines.join("\n"));
+  assert.match(lines.slice(at, btn).map((l) => l.split(" │ ")[1] ?? "").join(" "), /Verification, Observation path \+2$/, "the line (wrapped) ends right above the buttons");
+  assert.ok(!lines.at(-1)!.includes("Press the same key"), "no confirmation in the footer");
+  assert.deepEqual(press(app, ch("a")), []);
+  assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: true } }]);
+  // opening sections shortens the list; reading everything removes the line
   const app2 = open();
   press(app2, ch("j"), enter);
-  assert.deepEqual(press(app2, ch("a")), []);
   ({ lines } = draw(app2));
-  assert.match(lines.at(-1)!, /Unread sections \(6\): Split and owners/);
-  assert.equal(press(app2, ch("a")).length, 1);
+  assert.ok(lines.some((l) => /Unread sections \(6\): Split and owners/.test(l)));
+  press(app2, ch("o"));
+  ({ lines } = draw(app2));
+  assert.ok(!lines.some((l) => l.includes("Unread sections")));
+  assert.equal(press(app2, ch("y")).length, 1);
 });
 
-test("plan (long): with everything read y sends at once", () => {
-  const app = open();
-  press(app, ch("o"));
-  assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: false } }]);
-});
-
-test("plan (long): an irreversible plan needs two presses even when everything is read", () => {
-  // The TUI reads the mark from the explanation the hook attached (a plan without one is treated as reversible)
+test("plan (long): an irreversible plan is approved with one y too", () => {
   const app = new App();
   app.upsert(decision({
     kind: "approve_plan", request: { plan: LONG, planFilePath: "/p/plan.md" },
     explanation: { path: "", title: "Drop it", reversibility: "irreversible", scope: "machine", markdown: LONG, has: { mermaid: false, table: false, diff: false }, match: "recency", attached_via: "first_call" },
   } as never), clock);
   draw(app);
-  press(app, ch("o"));
-  assert.deepEqual(press(app, ch("y")), []);
-  assert.equal(press(app, ch("y")).length, 1);
+  assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: true } }]);
 });
 
 test("plan (short): no contents, one open document, y sends at once", () => {
@@ -193,10 +189,10 @@ test("plan (long): the buttons stay on screen in a short terminal, and ja words 
   assert.ok(lines.length <= 24);
 });
 
-test("plan (long): the footer says which sections are unread in Japanese", () => {
+test("plan (long): the unread line is in Japanese", () => {
   const app = open();
   app.lang = "ja";
-  press(app, ch("y"));
   const { lines } = draw(app);
-  assert.match(lines.at(-1)!, /未読 7 節: Changes/);
+  assert.ok(lines.some((l) => /未読 7 節: Changes/.test(l)));
+  assert.ok(lines.some((l) => l.includes("[y] 承認")) && !lines.some((l) => l.includes("auto")));
 });

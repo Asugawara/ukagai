@@ -6,7 +6,7 @@ import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
 import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 import { oneLine, type HistoryItem } from "./history.js";
-import type { PlanState } from "./plan.js";
+import { unreadNames, unreadSections, type PlanState } from "./plan.js";
 import { padEnd, sliceCols, stripAnsi, truncate, width, wrap } from "./width.js";
 
 // ScreenModel + interaction state to screen (strings). No I/O.
@@ -230,10 +230,11 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, lang, title: t(lang, "impact_title"), always: true }), "");
     const ro = !!m.readonly;
     const toc = m.plan && v.plan ? { p: m.plan, st: v.plan } : null;
+    const unread = !ro && toc ? unreadSections(toc.p.outline, toc.st) : [];
     if (toc) {
       // The contents: a window of rows around the cursor so the buttons stay on screen (the rest is "▲ n" / "▼ n")
       const es = toc.p.outline.entries;
-      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (v.input?.kind === "reason" || v.reason ? 2 : 0));
+      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (unread.length ? 1 : 0) - (v.input?.kind === "reason" || v.reason ? 2 : 0));
       const size = Math.min(es.length, budget);
       const start = Math.max(0, Math.min(toc.st.cur - Math.floor(size / 2), es.length - size));
       lines.push(`${BOLD}${t(lang, "toc_title")}${RESET}`);
@@ -256,8 +257,10 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
       lines.push(`${CYAN}${t(lang, "plan_done_reading")}${RESET} ${DIM}(Esc)${RESET}`);
       return { lines, focus, hint: toc ? t(lang, "hint_planview_toc") : "" };
     }
+    // Information, never a gate: the sections not yet opened, one dim line above the buttons
     lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
-    const buttons: [string, string][] = [["y", t(lang, "approve")], ["a", t(lang, "approve_auto")], ["n", t(lang, "reject")]];
+    if (unread.length) lines.push(...wrap(`${DIM}${t(lang, "plan_unread", { n: unread.length, names: unreadNames(unread) })}${RESET}`, w));
+    const buttons: [string, string][] = [["y", t(lang, "approve")], ["n", t(lang, "reject")]];
     buttons.forEach(([k, label], i) => {
       const start = lines.length;
       // With a contents the arrows and Enter act on it, not on the buttons: no cursor mark on them
