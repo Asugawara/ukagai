@@ -6,6 +6,7 @@ import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
 import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 import { oneLine, type HistoryItem } from "./history.js";
+import type { PlanState } from "./plan.js";
 import { padEnd, sliceCols, stripAnsi, truncate, width, wrap } from "./width.js";
 
 // ScreenModel + interaction state to screen (strings). No I/O.
@@ -50,6 +51,8 @@ export interface View {
   copy: boolean;
   /** Show a long recommendation box in full (`.`) */
   recFull: boolean;
+  /** A long plan's open / read sections and contents cursor; null for any other decision */
+  plan: PlanState | null;
   /** When the list is open */
   list: { items: ListItem[]; index: number } | null;
   /** First row of the background (the whole screen in the stacked layout) */
@@ -96,7 +99,12 @@ export interface Frame {
   figOver: boolean;
   /** Scroll positions (in the background scroll coordinates) of the footnote definitions */
   footRows: number[];
+  /** Scroll positions of each contents row's heading in a long plan (a hidden H3 points at its H2) */
+  secRows: number[];
 }
+
+/** The background column's lines, plus where each section of a long plan starts */
+type Left = Rendered & { secRows: number[] };
 
 export const WIDE_COLS = 120;
 
@@ -218,11 +226,34 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
 
   if (m.kind === "plan") {
     if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, lang, title: t(lang, "impact_title"), always: true }), "");
+    const toc = m.plan && v.plan ? { p: m.plan, st: v.plan } : null;
+    if (toc) {
+      // The contents: a window of rows around the cursor so the buttons stay on screen (the rest is "▲ n" / "▼ n")
+      const es = toc.p.outline.entries;
+      const budget = Math.max(4, rows - lines.length - 1 - 2 - 4 - 2 - (v.input?.kind === "reason" || v.reason ? 2 : 0));
+      const size = Math.min(es.length, budget);
+      const start = Math.max(0, Math.min(toc.st.cur - Math.floor(size / 2), es.length - size));
+      lines.push(`${BOLD}${t(lang, "toc_title")}${RESET}`);
+      if (start > 0) lines.push(`${DIM}  ▲ ${start}${RESET}`);
+      for (const e of es.slice(start, start + size)) {
+        const on = toc.st.cur === e.i;
+        if (on) focus = [lines.length, lines.length + 1];
+        // A long title is cut with … so the line count at its end always shows
+        const lead = `${on ? `${BOLD}▸${RESET}` : " "} ${e.level === 3 ? "  " : ""}${toc.st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} `;
+        const count = t(lang, e.lines === 1 ? "toc_lines_one" : "toc_lines", { n: e.lines });
+        const room = Math.max(4, w - width(lead) - width(count) - 2);
+        const title = width(e.plain) > room ? `${truncate(e.plain, room - 1)}…` : e.plain;
+        lines.push(`${lead}${on ? BOLD : ""}${title}${RESET}  ${DIM}${count}${RESET}`);
+      }
+      if (start + size < es.length) lines.push(`${DIM}  ▼ ${es.length - start - size}${RESET}`);
+      lines.push("");
+    }
     lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
     const buttons: [string, string][] = [["y", t(lang, "approve")], ["a", t(lang, "approve_auto")], ["n", t(lang, "reject")]];
     buttons.forEach(([k, label], i) => {
       const start = lines.length;
-      const on = v.cursor === i;
+      // With a contents the arrows and Enter act on it, not on the buttons: no cursor mark on them
+      const on = !toc && v.cursor === i;
       lines.push(`${on ? `${BOLD}▸${RESET}` : " "} ${CYAN}[${k}]${RESET} ${on ? BOLD : ""}${label}${RESET}`);
       if (on) focus = [start, lines.length];
     });
@@ -234,7 +265,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     return {
       lines,
       focus,
-      hint: v.input ? t(lang, "hint_plan_input") : t(lang, "hint_plan"),
+      hint: v.input ? t(lang, "hint_plan_input") : t(lang, m.plan ? "hint_plan_toc" : "hint_plan"),
     };
   }
 
@@ -341,14 +372,14 @@ function goalLines(m: ScreenModel, w: number, lang: Lang): string[] {
   return [rows[0]!, `${truncate(rows.slice(1).map(stripAnsi).join(" "), Math.max(1, w - 1))}…`, ""];
 }
 
-function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true, rows = 24): Rendered {
+function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true, rows = 24): Left {
   const lang = v.lang;
   if (v.histDetail) {
     const e = v.histDetail;
     const head = `${BOLD}${t(lang, "history_detail_title")}${RESET} ${DIM}${e.at ? elapsed(e.at, v.now, lang) : ""}${e.first ? ` · ${t(lang, "history_first")}` : ""}${RESET}`;
     // Shown as typed: line breaks and spacing kept
     const lines = [head, "", ...e.text.split("\n").flatMap((l) => (l === "" ? [""] : wrap(l, w)))];
-    return { lines, wide: lines.map(() => null), footnotes: [] };
+    return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
   }
   const goal = goalLines(m, w, lang);
   const r = leftBody(v, m, w, lang, fullHint, rows);
@@ -357,14 +388,67 @@ function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true, rows = 
     lines: [...goal, ...r.lines],
     wide: [...goal.map(() => null), ...r.wide],
     footnotes: r.footnotes.map((x) => ({ ...x, row: x.row + goal.length })),
+    secRows: r.secRows.map((x) => x + goal.length),
   };
 }
 
-function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean, rows: number): Rendered {
+/** A long plan: the text before the first section, then one `▸ ☐ Heading (n lines)` row per H2 / H3 with its body under it while open */
+function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean): Left {
+  const { outline: o, text, extra } = m.plan!;
+  const st = v.plan!;
+  const src = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  const tm = termMarks(m);
+  const out: Left = { lines: [], wide: [], footnotes: [], secRows: [] };
+  const add = (md: string, width: number, indent: string) => {
+    if (!md.trim()) return;
+    const r = renderMarkdownRich(md, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS });
+    out.footnotes.push(...r.footnotes.map((x) => ({ ...x, row: x.row + out.lines.length })));
+    out.lines.push(...r.lines.map((l, i) => (r.wide[i] ? l : indent + l)));
+    out.wide.push(...r.wide);
+    while (out.lines.length && out.lines.at(-1) === "") {
+      out.lines.pop();
+      out.wide.pop();
+    }
+    out.lines.push("");
+    out.wide.push(null);
+  };
+  add(src.slice(0, o.entries[0]?.at ?? src.length).join("\n"), w, "");
+  let parentRow = 0;
+  let parentOpen = true;
+  o.entries.forEach((e, k) => {
+    if (e.level === 2) parentOpen = st.open.has(e.i);
+    else if (!parentOpen) {
+      out.secRows[e.i] = parentRow;
+      return;
+    }
+    const row = out.lines.length;
+    out.secRows[e.i] = row;
+    if (e.level === 2) parentRow = row;
+    const open = st.open.has(e.i);
+    const ind = e.level === 3 ? "  " : "";
+    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${st.cur === e.i ? `${BOLD}${CYAN}` : BOLD}${e.plain}${RESET} ${DIM}(${t(lang, e.lines === 1 ? "toc_lines_one" : "toc_lines", { n: e.lines })})${RESET}`;
+    for (const l of wrap(head, w)) {
+      out.lines.push(l);
+      out.wide.push(null);
+    }
+    if (!open) return;
+    const next = o.entries[k + 1]?.at ?? src.length;
+    add(src.slice(e.at + 1, next).join("\n"), Math.max(8, w - ind.length - 2), `${ind}  `);
+  });
+  add(extra, w, "");
+  while (out.lines.length && out.lines.at(-1) === "") {
+    out.lines.pop();
+    out.wide.pop();
+  }
+  return out;
+}
+
+function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean, rows: number): Left {
   if (m.backgroundNote) {
     const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
-    return { lines, wide: lines.map(() => null), footnotes: [] };
+    return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
   }
+  if (m.plan && v.plan) return planLeft(v, m, w, lang, fullHint);
   // Order (the same as the GUI): Why, the recommendation (what follows its headline), You decide, Against, Assumptions, then the rest of the background, then Affected
   const tm = termMarks(m);
   const textMarks = [...labelMarks(m), ...tm];
@@ -383,7 +467,7 @@ function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     for (const a of m.assumptions) wrap(inline(a, { marks: textMarks }), Math.max(8, w - 2)).forEach((l, k) => front.push((k === 0 ? `${GREEN}☐${RESET} ` : "  ") + l));
     front.push(`${DIM}${t(lang, "assumptions_note")}${RESET}`, "");
   }
-  const rest = m.background ? renderMarkdownRich(m.background, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] };
+  const rest: Left = { secRows: [], ...(m.background ? renderMarkdownRich(m.background, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] }) };
   const back = m.affects.length ? wrap(`${DIM}${t(lang, "affects_title")}${RESET} ${affectsText(m).slice(2)}`, w) : [];
   const tailLines = back.length ? ["", ...back] : [];
   if (!front.length && !tailLines.length) return rest;
@@ -391,6 +475,7 @@ function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     lines: [...front, ...rest.lines, ...tailLines],
     wide: [...front.map(() => null), ...rest.wide, ...tailLines.map(() => null)],
     footnotes: rest.footnotes.map((x) => ({ ...x, row: x.row + front.length })),
+    secRows: [],
   };
 }
 
@@ -486,7 +571,7 @@ export function renderFrame(v: View, size: Size): Frame {
   const { cols, rows } = size;
   const m = v.model;
   const fin = (body: string[], head: string[], meta: Partial<Frame> = {}, overflow = false): Frame => {
-    const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false, footRows: [] as number[] };
+    const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false, footRows: [] as number[], secRows: [] as number[] };
     const f = { ...base, ...meta };
     const lines = [...head, ...body, footer(v, cols, overflow, { full: f.full, hint: v.fullHint && f.figOver && !f.full, hscrollable: f.hMax > 0 })].map((l) => truncate(l, cols));
     return { text: lines.join("\n"), lines, ...f };
@@ -537,7 +622,7 @@ export function renderFrame(v: View, size: Size): Frame {
       left = scrolled(sh.lines, size, off, leftW, [], { off: Math.min(v.hscroll, hMax), figW });
     } else left = window(leftR.lines, winRows, 0);
     const figOver = !full && hMax > 0 && figW <= cols - 1;
-    const meta = { scrollMax, wide: true, bodyRows: winRows, hMax, full, figOver, footRows: leftR.footnotes.map((x) => x.row) };
+    const meta = { scrollMax, wide: true, bodyRows: winRows, hMax, full, figOver, footRows: leftR.footnotes.map((x) => x.row), secRows: leftR.secRows };
 
     if (full) {
       const body = [heading(t(v.lang, "bg_full_title"), cols, true), ...left.map((l) => truncate(l, cols))];
@@ -578,13 +663,14 @@ export function renderFrame(v: View, size: Size): Frame {
   const all = [...right.lines, "", `${DIM}${right.hint}${RESET}`, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];
   const hOff = Math.min(v.hscroll, sh.hMax);
   const footRows = leftR.footnotes.map((x) => x.row + right.lines.length + 4);
-  if (all.length <= bodyRows && sh.hMax === 0) return fin(window(all, bodyRows, 0), head, { bodyRows, footRows });
+  const secRows = leftR.secRows.map((x) => x + right.lines.length + 4);
+  if (all.length <= bodyRows && sh.hMax === 0) return fin(window(all, bodyRows, 0), head, { bodyRows, footRows, secRows });
   const win = bodyRows - 1;
   const scrollMax = Math.max(0, all.length - win);
   let off = Math.min(v.scroll, scrollMax);
   if (off === 0) off = Math.max(0, Math.min(right.focus[0], right.focus[1] - win));
   off = Math.min(off, scrollMax);
-  return fin(scrolled(all, win, off, cols, [], { off: hOff, figW: sh.figW }), head, { scrollMax, off, bodyRows: win, hMax: sh.hMax, footRows }, true);
+  return fin(scrolled(all, win, off, cols, [], { off: hOff, figW: sh.figW }), head, { scrollMax, off, bodyRows: win, hMax: sh.hMax, footRows, secRows }, true);
 }
 
 export function render(v: View, size: Size): string {

@@ -411,7 +411,7 @@ function renderHead(d) {
       blocker ? el("span", { class: "blocker-band", text: t("blocker_band") }) : null,
       el("div", { class: "v2-title", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d))),
       metaBox(d)),
-    el("div", { class: "hd-line2" }, line2 ?? null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
+    el("div", { class: "hd-line2" }, line2 ?? null, d.kind === "approve_plan" ? planMetaLine(d) : null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
   head.onclick = (e) => {
     if (e.target.closest(".hd-goal")) openHistory(d);
     else if (e.target.closest(".headline, .v2-title")) toggleExpand(dr);
@@ -706,9 +706,18 @@ window.addEventListener("resize", () => {
 
 // ---- Weight (Enter twice) ----
 
+// The bar under the plan's buttons: why a second press is needed (unread sections) and how to give it
+function confirmText(d) {
+  const unread = unreadText(d);
+  return unread ? `${unread} · ${t("confirm_again")}` : t("confirm_again");
+}
 function syncConfirm(dr) {
   const bar = document.querySelector("#decision .confirm-bar");
-  if (bar) bar.hidden = !dr.confirmKey;
+  if (bar) {
+    bar.hidden = !dr.confirmKey;
+    const d = decisions.get(shownId);
+    if (d?.kind === "approve_plan") bar.textContent = confirmText(d);
+  }
   for (const e of document.querySelectorAll("#decision .confirm-inline")) e.hidden = e.dataset.key !== dr.confirmKey;
   document.querySelector("#decision .btn.primary")?.classList.toggle("confirming", !!dr.confirmKey);
 }
@@ -731,7 +740,7 @@ function attempt(d, dr, key, body, weighty) {
   send(d, body);
 }
 
-const confirmBar = (dr) => el("div", { class: "confirm-bar", hidden: !dr.confirmKey, text: t("confirm_again") });
+const confirmBar = (dr, d) => el("div", { class: "confirm-bar", hidden: !dr.confirmKey, text: d?.kind === "approve_plan" ? confirmText(d) : t("confirm_again") });
 
 // ---- Tooltips (terms and footnotes), evidence jump, badge copy ----
 
@@ -1199,12 +1208,15 @@ function renderRightBody(d) {
   const qsBox = el("div", { class: "qs" });
   const impact = impactBox(d);
   if (impact) qsBox.append(impact);
+  const outline = planOutline(d);
+  if (outline) qsBox.append(planToc(d, outline));
   root.append(qsBox);
-  const weighty = reversibilityOf(d) === "irreversible";
-  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => attempt(d, dr, "approve", { approve: true, set_mode_auto: false }, weighty) }, el("span", { text: t("approve") }));
-  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => attempt(d, dr, "auto", { approve: true, set_mode_auto: true }, weighty) }, el("span", { text: t("approve_auto") }));
+  // A second press is needed when the decision is irreversible, or when a section has never been opened (the bar says which)
+  const weighty = () => reversibilityOf(d) === "irreversible" || !!unreadText(d);
+  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => attempt(d, dr, "approve", { approve: true, set_mode_auto: false }, weighty()) }, el("span", { text: t("approve") }));
+  const auto = el("button", { class: "btn", type: "button", disabled: closed, onclick: () => attempt(d, dr, "auto", { approve: true, set_mode_auto: true }, weighty()) }, el("span", { text: t("approve_auto") }));
   const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }));
-  const actions = el("div", { class: "actions" }, confirmBar(dr));
+  const actions = el("div", { class: "actions" }, confirmBar(dr, d));
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
       class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
@@ -1218,12 +1230,14 @@ function renderRightBody(d) {
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
   actions.append(approve, auto, reject);
-  setHint(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`));
+  const keysHint = outline ? t("hint_plan_toc") : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")}`;
+  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
-    kind: "plan", buttons, closed, approve, auto,
+    kind: "plan", buttons, closed, approve, auto, toc: !!outline,
     setCursor(i) {
+      if (outline) return; // the arrows move the contents cursor instead (the buttons are y / a / n or a click)
       i = clamp(i, buttons.length);
       if (i !== dr.cursor) clearConfirm(dr);
       dr.cursor = i;
@@ -1234,6 +1248,7 @@ function renderRightBody(d) {
   };
   if (!closed) ui.setCursor(dr.cursor ?? 0);
   markClamps(root, dr);
+  if (outline) syncPlan(d);
 }
 
 // "None of these…": open the type picker under the card (the answer is `None of these — <type>: <note>`)
@@ -1760,6 +1775,234 @@ function findSection(secs, names, exact = false) {
   return secs.find((s) => ns.includes(s.norm)) ?? (exact ? undefined : secs.find((s) => ns.some((n) => s.norm.includes(n))));
 }
 
+// ---- Long plans: outline, folding sections, table of contents, read marks ----
+
+// The same outline rules as src/tui/plan.ts (test/gui/plan.test.ts and test/tui/plan.test.ts pin the same numbers on one fixture)
+const PLAN_SHORT_H2 = 2;
+const PLAN_SHORT_LINES = 40;
+const PATH_LINE_SUFFIX = /:\d+(?:[-:]\d+)?$/;
+const PATH_SHAPE = /^(?:~\/|\.{1,2}\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+$/;
+// A backticked token that names a file: it has a `/`, or ends in a short extension (`.ts`); `:12` line suffixes are ignored
+function pathOf(code) {
+  const s = code.trim().replace(PATH_LINE_SUFFIX, "");
+  if (!PATH_SHAPE.test(s)) return null;
+  return s.includes("/") || /\.[a-z][a-z0-9]{0,5}$/i.test(s) ? s : null;
+}
+const isImpactTitle = (title) => SECTION.impact.map(normHeading).some((n) => normHeading(plainMd(title)).includes(n));
+
+// Split the plan text at ## / ### (outside code fences). entries = every H2 / H3 in order (the table of contents rows)
+function planOutlineOf(md) {
+  const lines = md.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  let fence = "";
+  const marks = []; // { level, at, title }
+  const prose = lines.map(() => true);
+  lines.forEach((ln, i) => {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(ln);
+    if (f) {
+      if (!fence) fence = f[1][0];
+      else if (f[1][0] === fence) fence = "";
+      prose[i] = false;
+      return;
+    }
+    if (fence) { prose[i] = false; return; }
+    const m = /^(#{1,3})[ \t]+(.+?)[ \t#]*$/.exec(ln);
+    if (m) marks.push({ level: m[1].length, at: i, title: m[2] });
+  });
+  const entries = [];
+  marks.forEach((m, k) => {
+    if (m.level === 1) return;
+    let end = lines.length;
+    for (const n of marks.slice(k + 1)) if (n.level <= m.level) { end = n.at; break; }
+    const files = new Set();
+    for (let i = m.at; i < end; i++) {
+      if (!prose[i]) continue;
+      for (const c of lines[i].matchAll(/`([^`\n]+)`/g)) { const p = pathOf(c[1]); if (p) files.add(p); }
+    }
+    entries.push({ i: entries.length, level: m.level, title: m.title, plain: plainMd(m.title), at: m.at, lines: end - m.at, files, scope: isImpactTitle(m.title) });
+  });
+  const all = new Set();
+  lines.forEach((ln, i) => { if (prose[i]) for (const c of ln.matchAll(/`([^`\n]+)`/g)) { const p = pathOf(c[1]); if (p) all.add(p); } });
+  const h2 = entries.filter((e) => e.level === 2).length;
+  return { lines: lines.length, entries, h2, files: all.size, long: h2 > PLAN_SHORT_H2 && lines.length > PLAN_SHORT_LINES };
+}
+
+const outlines = new Map(); // decision id -> { plan, outline }
+// The outline of a plan decision, or null when the plan is short (shown as one open document, no contents)
+function planOutline(d) {
+  if (d?.kind !== "approve_plan") return null;
+  const plan = String(d.request?.plan ?? "");
+  let c = outlines.get(d.id);
+  if (!c || c.plan !== plan) outlines.set(d.id, (c = { plan, outline: planOutlineOf(plan) }));
+  return c.outline.long ? c.outline : null;
+}
+
+// Per-decision state: which sections are open, which have been opened at least once (read), the contents cursor.
+// The first H2 is open (and counts as read); the scope section is on screen in the right column, so it counts as read
+function planState(d, o) {
+  const dr = draftOf(d);
+  if (!dr.plan) {
+    const first = o.entries.find((e) => e.level === 2);
+    dr.plan = { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), cur: first?.i ?? 0 };
+  }
+  return dr.plan;
+}
+
+const parentOf = (o, e) => (e.level === 3 ? o.entries.findLast((x) => x.level === 2 && x.at < e.at) : undefined);
+const unreadSections = (d, o) => { const st = planState(d, o); return o.entries.filter((e) => e.level === 2 && !st.read.has(e.i)); };
+function unreadText(d) {
+  const o = planOutline(d);
+  const un = o ? unreadSections(d, o) : [];
+  if (!un.length) return "";
+  const names = un.slice(0, 5).map((e) => e.plain).join(", ") + (un.length > 5 ? ` +${un.length - 5}` : "");
+  return t("plan_unread", { n: un.length, names });
+}
+
+// "16 lines", "1 file": the singular form is its own message (ja has the same text for both)
+const count = (key, n) => t(n === 1 ? `${key}_one` : key, { n });
+// A section's "n lines · m files" (no files part when its prose names none)
+const metaText = (e) => [count("plan_lines", e.lines), e.files.size ? count("plan_files", e.files.size) : ""].filter(Boolean).join(" · ");
+
+// Mirror the state onto the left column (open, marks) and the contents (marks, cursor)
+function syncPlan(d) {
+  const o = planOutline(d);
+  if (!o || d.id !== shownId) return;
+  const st = planState(d, o);
+  for (const e of o.entries) {
+    const det = document.querySelector(`#background details[data-i="${e.i}"]`);
+    if (det && det.open !== st.open.has(e.i)) det.open = st.open.has(e.i);
+    for (const mark of document.querySelectorAll(`#background details[data-i="${e.i}"] > summary > .ps-mark, #decision .toc-row[data-i="${e.i}"] .toc-mark`)) mark.textContent = st.read.has(e.i) ? "☑" : "☐";
+    const row = document.querySelector(`#decision .toc-row[data-i="${e.i}"]`);
+    row?.classList.toggle("cursor", st.cur === e.i);
+    row?.classList.toggle("open", st.open.has(e.i));
+  }
+  const dr = draftOf(d);
+  syncConfirm(dr);
+}
+
+function planSetOpen(d, i, open) {
+  const o = planOutline(d);
+  const e = o?.entries[i];
+  if (!e) return;
+  const st = planState(d, o);
+  if (open) {
+    st.open.add(i);
+    st.read.add(i);
+    const parent = parentOf(o, e);
+    if (parent) { st.open.add(parent.i); st.read.add(parent.i); }
+  } else st.open.delete(i);
+  syncPlan(d);
+}
+
+// Open the section and bring it to the top of the left column
+function planReveal(d, i) {
+  const o = planOutline(d);
+  if (!o?.entries[i]) return;
+  planState(d, o).cur = i;
+  planSetOpen(d, i, true);
+  document.querySelector(`#background details[data-i="${i}"]`)?.scrollIntoView({ block: "start" });
+  document.querySelector(`#decision .toc-row[data-i="${i}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+function planMoveCursor(d, step) {
+  const o = planOutline(d);
+  if (!o) return;
+  const st = planState(d, o);
+  st.cur = Math.max(0, Math.min(o.entries.length - 1, st.cur + step));
+  syncPlan(d);
+  document.querySelector(`#decision .toc-row[data-i="${st.cur}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+// `o`: open everything, or close everything when everything is already open
+function planToggleAll(d) {
+  const o = planOutline(d);
+  if (!o) return;
+  const st = planState(d, o);
+  if (o.entries.every((e) => st.open.has(e.i))) st.open.clear();
+  else for (const e of o.entries) { st.open.add(e.i); st.read.add(e.i); }
+  syncPlan(d);
+}
+
+// Replace the h2 / h3 headings of the rendered plan with <details> blocks. false (nothing changed) when the DOM does not match the outline
+function foldPlanSections(container, o, d) {
+  const heads = [...container.children].filter((k) => /^H[23]$/.test(k.tagName));
+  if (heads.length !== o.entries.length || heads.some((h, k) => h.tagName !== `H${o.entries[k].level}`)) return false;
+  const st = planState(d, o);
+  const make = (h, e) => {
+    const summary = el("summary", { tabindex: "-1" }, el("span", { class: "ps-mark", text: st.read.has(e.i) ? "☑" : "☐" }), el("span", { class: "ps-title" }), el("span", { class: "ps-meta", text: metaText(e) }));
+    summary.querySelector(".ps-title").append(...h.childNodes);
+    const det = el("details", { class: e.level === 2 ? "plan-sec" : "plan-sub", "data-i": String(e.i) }, summary);
+    det.open = st.open.has(e.i);
+    return det;
+  };
+  const clicked = (ev) => {
+    const sum = ev.target instanceof Element ? ev.target.closest("summary") : null;
+    if (!sum) return;
+    ev.preventDefault(); // the state lives in the draft; syncPlan opens / closes the element
+    if (ev.target.closest(".cbadge")) return; // a click on a path copies it (the document handler) and does not fold the section
+    const det = sum.parentElement;
+    const i = Number(det.dataset.i);
+    planState(d, o).cur = i;
+    planSetOpen(d, i, !planState(d, o).open.has(i));
+  };
+  container.addEventListener("click", clicked);
+  let k = 0;
+  let d2 = null;
+  let d3 = null;
+  for (const n of [...container.children]) {
+    if (n.tagName === "H1") { d2 = d3 = null; continue; }
+    if (n.tagName === "H2") {
+      d2 = make(n, o.entries[k++]);
+      d3 = null;
+      n.replaceWith(d2);
+    } else if (n.tagName === "H3") {
+      d3 = make(n, o.entries[k++]);
+      if (d2) { d2.append(d3); n.remove(); } else n.replaceWith(d3);
+    } else if (d3 || d2) (d3 ?? d2).append(n);
+  }
+  return true;
+}
+
+// Backticked paths in the plan copy on click (the same `.cbadge` as the evidence lines)
+function pathBadges(container) {
+  for (const c of container.querySelectorAll("code")) {
+    if (c.closest("pre") || c.classList.contains("cbadge") || !pathOf(c.textContent ?? "")) continue;
+    c.classList.add("cbadge");
+    c.tabIndex = 0;
+  }
+}
+
+// The plan body into the left column: long plans fold into sections, short ones stay one document
+async function renderPlanMarkdown(container, d) {
+  container.innerHTML = sanitize(window.marked.parse(d.request.plan ?? "", { async: false }));
+  dropExternalImages(container);
+  const o = planOutline(d);
+  if (o && foldPlanSections(container, o, d)) container.classList.add("plan-long");
+  pathBadges(container);
+  await enhance(container);
+  pathBadges(container);
+}
+
+// The contents (right column): one row per H2 / H3 with its read mark and line count
+function planToc(d, o) {
+  const st = planState(d, o);
+  const rows = o.entries.map((e) => el("div", {
+    class: `toc-row l${e.level}${st.cur === e.i ? " cursor" : ""}${st.open.has(e.i) ? " open" : ""}`, "data-i": String(e.i), title: e.plain,
+    onclick: () => planReveal(d, e.i),
+  }, el("span", { class: "toc-mark", text: st.read.has(e.i) ? "☑" : "☐" }), el("span", { class: "toc-title", text: e.plain }), el("span", { class: "toc-n", text: String(e.lines) })));
+  return el("div", { class: "plan-toc" }, el("div", { class: "impact-cap", text: t("plan_toc") }), ...rows);
+}
+
+// The line next to "Approve this plan?": 9 sections · 219 lines · 14 files, and the plan file's name (full path on hover)
+function planMetaLine(d) {
+  const o = planOutline(d);
+  const file = String(d.request?.planFilePath ?? "");
+  if (!o && !file) return null;
+  const meta = el("span", { class: "plan-meta" });
+  if (o) meta.append(el("span", { class: "plan-stats", text: [count("plan_sections", o.h2), count("plan_lines", o.lines), count("plan_files", o.files)].join(" · ") }));
+  if (file) meta.append(el("span", { class: "plan-file", title: file, text: file.split(/[\\/]/).filter(Boolean).pop() ?? file }));
+  return meta;
+}
+
 const models = new Map(); // id -> { left, v2 }
 const modelFor = (d) => {
   let m = models.get(d.id);
@@ -1937,7 +2180,7 @@ function renderLeft(d) {
   if (d.kind === "approve_plan") {
     const plan = el("div", { class: "md" });
     root.append(plan);
-    const jobs = [renderMarkdown(plan, d.request.plan ?? "")];
+    const jobs = [renderPlanMarkdown(plan, d)];
     // The hook puts the plan body into explanation.markdown, so continue only when it differs from the plan
     if (hasExplanation(d) && ex.markdown.trim() !== (d.request.plan ?? "").trim()) {
       const md = el("div", { class: "md" });
@@ -2073,7 +2316,7 @@ function cycle(step) {
 // With an IME enabled, keydown has key "Process" and keyCode 229, so the character is lost.
 // Outside text fields, decide the bound key from the physical key (code)
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", Slash: "/", Period: ".",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyO: "o", BracketLeft: "[", BracketRight: "]", Slash: "/", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -2288,6 +2531,18 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if (key === "Enter" && isBtn) return;
+  if (ui.toc && !isBtn) {
+    // A long plan: the arrows walk the contents; Enter / Space fold the section under the cursor, o opens / closes all, [ ] go to the previous / next section
+    const d = decisions.get(shownId);
+    const st = planState(d, planOutline(d));
+    const toc = (fn) => { ev.preventDefault(); t.blur?.(); fn(); };
+    if (key === "ArrowUp" || key === "k") return toc(() => planMoveCursor(d, -1));
+    if (key === "ArrowDown" || key === "j") return toc(() => planMoveCursor(d, 1));
+    if (key === "Enter" || key === " ") return toc(() => planSetOpen(d, st.cur, !st.open.has(st.cur)));
+    if (key === "o") return toc(() => planToggleAll(d));
+    if (key === "[") return toc(() => planReveal(d, Math.max(0, st.cur - 1)));
+    if (key === "]") return toc(() => planReveal(d, Math.min(planOutline(d).entries.length - 1, st.cur + 1)));
+  }
   if (key === ".") { ev.preventDefault(); ui.toggleExpand(); }
   else if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
   else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }

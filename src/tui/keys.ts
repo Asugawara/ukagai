@@ -130,6 +130,11 @@ export type Action =
   | { type: "approve" }
   | { type: "approve-auto" }
   | { type: "reject" }
+  /** A long plan: move the contents cursor, open / close the section under it, open / close all, go to the previous / next section (opening it) */
+  | { type: "toc-move"; delta: 1 | -1 }
+  | { type: "toc-toggle" }
+  | { type: "toc-all" }
+  | { type: "toc-section"; delta: 1 | -1 }
   /** Jump the background to the next footnote definition (`e`) */
   | { type: "footnote" }
   /** "None of these…": open the reason picker, move in it, send, add a note, close */
@@ -180,6 +185,8 @@ export interface KeyContext {
   full?: boolean;
   /** Whether there is a diagram that can be shifted sideways */
   hscrollable?: boolean;
+  /** A long plan: the plan is folded into sections with a contents */
+  toc?: boolean;
   /** Whether one instruction is shown in full in the background column (Esc leaves it) */
   histDetail?: boolean;
   /** Time of the first g of gg (0 if none) */
@@ -286,6 +293,16 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   }
   if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
   if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1, unit: "half" });
+  if (ctx.toc && ctx.kind === "plan") {
+    // Enter / Space fold the section under the contents cursor; j/k move that cursor while the decision column is focused (the background scrolls instead).
+    // [ ] go to the previous / next section where they do not switch pending decisions (background focus, or the stacked layout)
+    if (ch === "o") return done({ type: "toc-all" });
+    if (key.name === "enter" || ch === " ") return done({ type: "toc-toggle" });
+    if (ch === "[" && (ctx.focus === "background" || !ctx.wide)) return done({ type: "toc-section", delta: -1 });
+    if (ch === "]" && (ctx.focus === "background" || !ctx.wide)) return done({ type: "toc-section", delta: 1 });
+    if (ctx.focus !== "background" && down) return done({ type: "toc-move", delta: 1 });
+    if (ctx.focus !== "background" && up) return done({ type: "toc-move", delta: -1 });
+  }
   if (ctx.focus === "background") {
     if (down) return done({ type: "scroll", delta: 1, unit: "line" });
     if (up) return done({ type: "scroll", delta: -1, unit: "line" });
