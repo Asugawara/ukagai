@@ -6,13 +6,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
-import { LEASE_GRACE_MS } from "../contract.js";
+import { LEASE_GRACE_MS, type Decision } from "../contract.js";
 import { readConfig } from "../settings/config.js";
 import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
 import { PlanReadStore } from "./plan-read.js";
 import { startPlanWatcher } from "./plan-watch.js";
-import { planSummary, plansDir } from "./plans.js";
+import { listPlans, planNameOfPath, planSummary, plansDir } from "./plans.js";
 import { createApp } from "./routes.js";
 import { SseHub } from "./sse.js";
 import { Store } from "./store.js";
@@ -48,17 +48,32 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const dataDir = opts.dataDir ?? join(homedir(), ".ukagai");
   const home = opts.home ?? homedir();
   const hub = new SseHub();
+  const planRead = new PlanReadStore(dataDir, plansDir(home));
+  // First run (no plans-read.json): plans already on disk are not new
+  if (!planRead.exists()) planRead.seed(await listPlans(home));
+  // A resolved approval marks its plan read at the current mtime, so it does not come back as new in the other UI
+  const markPlanRead = async (d: Decision): Promise<void> => {
+    const filePath = (d.request as { planFilePath?: unknown }).planFilePath;
+    if (typeof filePath !== "string" || filePath === "") return;
+    const dir = plansDir(home);
+    const name = await planNameOfPath(dir, filePath);
+    if (!name) return;
+    const summary = await planSummary(dir, name);
+    if (!summary) return;
+    planRead.mark(name, summary.mtime);
+    hub.broadcast("plan.updated", { ...summary, read: true });
+  };
   const store = new Store({
     dir: dataDir,
     leaseGraceMs: opts.leaseGraceMs ?? LEASE_GRACE_MS,
     broadcast: (event, data) => hub.broadcast(event, data),
+    onPlanDecisionClosed: (d) => void markPlanRead(d).catch(() => {}),
   });
   store.load();
 
   const { lang } = await readConfig(dataDir);
   const token = randomBytes(32).toString("hex");
 
-  const planRead = new PlanReadStore(dataDir, plansDir(home));
   let port = opts.port ?? DEFAULT_PORT;
   const app = createApp({
     planRead,

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import type { PlanContent, PlanSection, PlanSummary } from "../contract.js";
 
 /** Whether a plan (name, mtime ISO) is marked read. Defaults to "never" */
@@ -179,4 +179,17 @@ export async function planFingerprint(dir: string, name: string): Promise<string
   if (!name.endsWith(".md") || !isPlanName(name)) return null;
   const r = await resolvePlan(dir, name);
   return r ? `${r.mtimeMs}:${r.size}` : null;
+}
+
+/** The plan name a file path points at, if its realpath is a plan file directly inside the plans dir; null otherwise (missing, outside, subdirectory) */
+export async function planNameOfPath(dir: string, filePath: string): Promise<string | null> {
+  try {
+    const root = await realpath(dir);
+    const real = await realpath(filePath);
+    if (dirname(real) !== root) return null;
+    const name = basename(real);
+    return name.endsWith(".md") && isPlanName(name) ? name : null;
+  } catch {
+    return null;
+  }
 }

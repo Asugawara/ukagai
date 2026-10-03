@@ -36,6 +36,8 @@ export type StoreOptions = {
   dir: string;
   leaseGraceMs: number;
   broadcast?: (event: SseEventName, data: unknown) => void;
+  /** An approve_plan decision left `pending` (answered, cancelled, expired, answered in the terminal) */
+  onPlanDecisionClosed?: (d: Decision) => void;
 };
 
 export type AnswerPatch =
@@ -147,6 +149,15 @@ export class Store {
     this.opts.broadcast?.(event, data);
   }
 
+  private planClosed(d: Decision): void {
+    if (d.kind !== "approve_plan") return;
+    try {
+      this.opts.onPlanDecisionClosed?.(d);
+    } catch {
+      // Read marks are a convenience
+    }
+  }
+
   private notify(id: string): void {
     const set = this.waiters.get(id);
     if (!set) return;
@@ -253,6 +264,7 @@ export class Store {
         to = "fallback";
         break;
     }
+    const wasPending = d.status === "pending";
     this.transition(d, to);
     d.response = response;
     this.persist(d);
@@ -262,6 +274,7 @@ export class Store {
     if (patch.kind === "answers") this.rememberCannotAnswer(d, patch.answers);
     this.emit("decision.updated", d);
     this.notify(d.id);
+    if (wasPending) this.planClosed(d);
     return d;
   }
 
@@ -285,12 +298,14 @@ export class Store {
   cancel(id: string, reason?: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
+    const wasPending = d.status === "pending";
     this.transition(d, d.status === "answer_submitted" ? "answer_lost" : "cancelled");
     if (reason) d.status_reason = reason;
     delete d.lease_until;
     this.persist(d);
     this.emit("decision.updated", d);
     this.notify(d.id);
+    if (wasPending) this.planClosed(d);
     return d;
   }
 
@@ -357,6 +372,7 @@ export class Store {
       if (to === "hook_disconnected") this.expiredAt.set(d.id, now);
       this.emit("decision.updated", d);
       this.notify(d.id);
+      if (to === "hook_disconnected") this.planClosed(d);
     }
   }
 
@@ -444,6 +460,7 @@ export class Store {
       this.persist(d);
       this.emit("decision.updated", d);
       this.notify(d.id);
+      this.planClosed(d);
     }
   }
 
