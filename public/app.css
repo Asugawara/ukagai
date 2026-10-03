@@ -242,13 +242,18 @@ sup.fn, sup.fn-n { font-size: 10px; line-height: 0; font-weight: 700; color: var
 /* Weight: Enter twice */
 .confirm-bar { background: var(--yellow-bg); border: 1px solid var(--yellow); color: var(--fg); font-weight: 600; font-size: 13px; text-align: center; border-radius: 6px; padding: 4px 8px; }
 button.btn.primary.confirming { background: var(--yellow); border-color: var(--yellow); color: #1d1d1f; }
-/* None of these */
-.none-card { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; margin-bottom: 8px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); cursor: pointer; font-size: 13px; }
-.none-card.open { border-color: var(--accent); color: var(--fg); }
-.none-panel { margin: -2px 0 8px; padding: 6px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-bg); }
-.none-type { padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-.none-type.cursor { outline: 2px solid var(--accent); background: var(--panel); }
-.none-note { margin-top: 6px; }
+/* None of these / Can't answer this: one quiet row of underlined text buttons, panels with a left rule only (no boxes) */
+.escape-row { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 2px 0 8px; }
+.none-card, .cannot-card { padding: 0 2px; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 20px; text-decoration: underline; text-underline-offset: 2px; }
+.none-card.open, .cannot-card.open { color: var(--fg); }
+.esc-panel { margin: 0 0 8px; padding: 2px 0 2px 10px; border-left: 2px solid var(--accent); font-size: 13px; }
+.none-type, .cannot-reason, .cannot-term { padding: 2px 6px; cursor: pointer; }
+.cannot-term { margin-left: 14px; color: var(--muted); }
+.cannot-term.on { color: var(--fg); }
+.none-type.cursor, .cannot-reason.cursor, .cannot-term.cursor { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.none-note, .cannot-note { margin-top: 6px; }
+.cannot-need { color: var(--red); font-size: 12px; margin-top: 4px; }
+.term-undef { color: var(--red); text-decoration: underline dotted var(--red); text-decoration-thickness: 2px; text-underline-offset: 3px; cursor: pointer; }
 
 /* Overlays: term list (?) and comparison table (v) */
 .overlay { position: fixed; inset: 0; z-index: 70; background: #00000066; display: flex; align-items: center; justify-content: center; padding: 16px; }
@@ -311,3 +316,7 @@ pre code.hljs { background: none; padding: 0; }
   .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 .unknowns { margin-top: 6px; padding-top: 4px; padding-bottom: 4px; }
+.esc-panel input[type=text] { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 4px 2px; }
+.cardkey { flex: none; width: 10px; margin-top: 1px; color: var(--muted); font-size: 12px; opacity: .7; }
+.confirm-inline { margin-top: 4px; color: var(--red); font-size: 12px; font-weight: 600; }
+.confirm-inline[hidden] { display: none; }
