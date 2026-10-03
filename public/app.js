@@ -246,6 +246,7 @@ function rawTitleOf(d) {
   let title = d.explanation?.title;
   if (!title && hasExplanation(d) && d.kind === "answer_question") title = parseFrontMatter(d.explanation.markdown).fm.title;
   if (title) return title;
+  if (d.readonly) return d.title;
   if (d.kind === "approve_plan") return /^#[ \t]+(.+?)[ \t]*$/m.exec(d.request.plan ?? "")?.[1] ?? t("plan_approval");
   return d.session.title || d.request.questions[0]?.question || t("question");
 }
@@ -351,9 +352,9 @@ function placePending() {
 }
 
 function renderHeader() {
-  const n = pendingList().length;
+  const n = itemIds().length;
   pendingCount.textContent = String(n);
-  pendingBtn.hidden = n < (planUi?.view ? 1 : 2); // with one decision only the shown one exists, so hide it (the plan view has none shown)
+  pendingBtn.hidden = n < 2; // with one item only the shown one exists, so hide it
   const blocked = pendingList().some(isBlocker);
   document.title = n > 0 ? `(${n}) ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
 }
@@ -508,194 +509,225 @@ function syncHistory() {
   listEl.children[sel]?.scrollIntoView({ block: "nearest" });
 }
 
-// ---- Plan browser (`p`): a read-only list of ~/.claude/plans and a read-only plan view ----
+// ---- Plans: the files in ~/.claude/plans flow in like decisions ----
 
-// planUi = { items, sel, view, dirty, timer, stash }. view = { item, pd, mtime } while a plan is shown. The decision screen (or the idle
-// screen) is parked in `stash` while a plan is shown and put back untouched on Esc; renderAll defers to the close (dirty)
-let planUi = null;
-const PLAN_POLL_MS = 10000;
-const screenId = () => planUi?.view?.pd.id ?? shownId;
+// A plan is an item next to the pending decisions. Its id is `plan:<file name>` (shownId may hold one). A plan is "new" while it is unread
+// and was written in the last 24 h: only new plans are auto-shown and counted; the others stay in the idle screen's "Recent plans".
+// One plan and its approval decision are one item: a pending approve_plan whose planFilePath names the file hides the plan row.
+const plans = new Map(); // name -> PlanSummary (from GET /api/plans and SSE)
+const planData = new Map(); // name -> { name, title, mtime, markdown, read, sections } (fetched when shown or new)
+const PLAN_ID = "plan:";
+const PLAN_NEW_MS = 24 * 3600 * 1000;
+const isPlanId = (id) => typeof id === "string" && id.startsWith(PLAN_ID);
+const planNameOf = (id) => id.slice(PLAN_ID.length);
+const baseName = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+const isNewPlan = (p) => !p.read && Date.now() - Date.parse(p.mtime) < PLAN_NEW_MS;
+const planFileOf = (d) => (d?.kind === "approve_plan" ? baseName(d.request?.planFilePath) : "");
+const answering = new Set(); // plan files whose approval is being sent: the plan is on its way to read, so it is not "new" any more
+const newPlans = () => {
+  const paired = new Set([...pendingList().map(planFileOf).filter(Boolean), ...answering]);
+  return [...plans.values()].filter((p) => isNewPlan(p) && !paired.has(p.name)).sort((a, b) => b.mtime.localeCompare(a.mtime));
+};
+// Every item in order: pending decisions (oldest first), then new plans (newest first)
+const itemIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
+const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name } });
+const shownPlanPd = () => (isPlanId(shownId) && planData.has(planNameOf(shownId)) ? planPd(planData.get(planNameOf(shownId))) : null);
+const ageText = (iso) => t("history_ago", { t: elapsed(iso) });
+const planStatsText = (p) => [count("plan_sections", p.sections), count("plan_lines", p.lines)].join(" · ");
 
-function closePlanTimer() { clearInterval(planUi?.timer); if (planUi) planUi.timer = null; }
+async function fetchPlan(name) {
+  return api(`/api/plans/${encodeURIComponent(name)}`);
+}
 
-async function fetchPlans() {
+// Fetch the body of a plan into planData. true when it is there
+async function ensurePlanData(name) {
+  if (planData.has(name)) return true;
+  try { planData.set(name, await fetchPlan(name)); return true; } catch { return false; }
+}
+
+function markPlanRead(name) {
+  const p = plans.get(name);
+  if (!p || p.read) return;
+  p.read = true;
+  post(`/api/plans/${encodeURIComponent(name)}/read`, { mtime: p.mtime }).catch(() => {});
+}
+
+// Replace the whole list (page load, SSE reconnect). A shown plan whose file changed or vanished meanwhile is brought up to date
+async function loadPlans() {
   const data = await api("/api/plans");
-  return Array.isArray(data?.plans) ? data.plans : [];
+  const list = Array.isArray(data?.plans) ? data.plans : [];
+  const seen = new Set(list.map((p) => p.name));
+  for (const name of [...plans.keys()]) if (!seen.has(name)) dropPlan(name);
+  for (const p of list) {
+    const cached = planData.get(p.name);
+    plans.set(p.name, p);
+    if (cached && cached.mtime !== p.mtime) {
+      if (shownId === PLAN_ID + p.name) await refreshPlanData(p.name); else planData.delete(p.name);
+    }
+  }
+  await Promise.all(newPlans().map((p) => ensurePlanData(p.name)));
 }
 
-async function openPlans() {
-  if (planUi) return;
-  planUi = { items: [], sel: 0, view: null, dirty: false, timer: null, stash: null };
+function dropPlan(name) {
+  plans.delete(name);
+  planData.delete(name);
+  planStates.delete(PLAN_ID + name);
+  outlines.delete(PLAN_ID + name);
+}
+
+function onPlanRemoved(name) {
+  dropPlan(name);
+  if (shownId === PLAN_ID + name) { advance(); return; }
+  refreshItems();
+}
+
+function onPlanUpdated(p) {
+  plans.set(p.name, p);
+  const cached = planData.get(p.name);
+  if (cached && cached.mtime !== p.mtime) {
+    if (shownId === PLAN_ID + p.name) { refreshPlanData(p.name); return; }
+    planData.delete(p.name);
+  }
+  if (shownId == null && isNewPlan(p) && newPlans().some((x) => x.name === p.name)) {
+    ensurePlanData(p.name).then((ok) => { if (ok && shownId == null && newPlans().some((x) => x.name === p.name)) show(PLAN_ID + p.name); });
+    return;
+  }
+  refreshItems();
+}
+
+// The header count, the drawer and (idle) the recent list; the shown screen is untouched
+function refreshItems() {
   renderHeader();
-  try { planUi.items = await fetchPlans(); } catch {}
-  if (!planUi) return;
-  showPlanList();
-  planUi.timer = setInterval(pollPlans, PLAN_POLL_MS);
+  renderList();
+  if (shownId == null) renderRecent();
 }
 
-function showPlanList() {
-  const u = planUi;
-  const list = el("div", { class: "hist-list plan-list" });
-  const hint = el("div", { class: "overlay-hint", text: t("plans_hint") });
-  openOverlay("plans", t("plans_title"), el("div", {}, list, hint), { items: u.items, listEl: list });
-  fillPlans();
+// The shown plan changed on disk: fetch it, carry the open / read state over by section hash, and re-render in place (scroll kept)
+async function refreshPlanData(name) {
+  let data;
+  try { data = await fetchPlan(name); } catch { return; }
+  const old = planData.get(name);
+  planData.set(name, data);
+  const key = PLAN_ID + name;
+  if (shownId !== key) return;
+  if (old?.markdown === data.markdown) return; // only the mtime moved: nothing to redraw (the age text keeps ticking)
+  remapPlanState(key, old, data);
+  const keep = $("background").scrollTop;
+  const keepRight = $("decision").scrollTop;
+  renderAll();
+  $("background").scrollTop = keep;
+  $("decision").scrollTop = keepRight;
 }
 
-function fillPlans() {
-  const u = planUi;
-  if (overlay?.kind !== "plans" || !u) return;
-  overlay.items = u.items;
-  overlay.listEl.replaceChildren();
-  if (!u.items.length) overlay.listEl.append(el("div", { class: "hist-row plan-empty", style: "cursor:default", text: t("plans_empty") }));
-  u.items.forEach((it, i) => {
-    overlay.listEl.append(el("div", { class: "hist-row", "data-i": String(i), onclick: () => { u.sel = i; openPlan(it); } },
-      el("span", { class: "hist-text", title: it.name, text: it.title }),
-      el("span", { class: "hist-at", text: t("history_ago", { t: elapsed(it.mtime) }) }),
-      el("span", { class: "hist-first plan-counts", text: [count("plan_sections", it.sections), count("plan_lines", it.lines)].join(" · ") })));
+// Unchanged sections (same heading, level and hash) keep their open / read state; changed or new ones are closed, unread and marked
+// `updated` until opened; removed ones are gone. The server's sections[] and the GUI's outline split the file the same way (H2 / H3 outside fences)
+function remapPlanState(key, old, data) {
+  const o = planOutlineOf(data.markdown);
+  outlines.set(key, { plan: data.markdown, outline: o });
+  const st = planStates.get(key);
+  if (!st || !old || o.entries.length !== data.sections.length) { if (st) planStates.delete(key); return; }
+  const used = new Set();
+  const same = new Map(); // new index -> old index
+  data.sections.forEach((s, j) => {
+    const k = old.sections.findIndex((x, k) => !used.has(k) && x.level === s.level && x.heading === s.heading && x.hash === s.hash);
+    if (k >= 0) { used.add(k); same.set(j, k); }
   });
-  u.sel = u.items.length ? clamp(u.sel, u.items.length) : 0;
-  syncPlans();
+  const next = { open: new Set(), read: new Set(), upd: new Set(), cur: 0 };
+  data.sections.forEach((s, j) => {
+    const k = same.get(j);
+    if (k === undefined) {
+      const m = old.sections.findIndex((x, m) => !used.has(m) && x.level === s.level && x.heading === s.heading);
+      if (m >= 0) used.add(m);
+      next.upd.add(j);
+      return;
+    }
+    if (st.open.has(k)) next.open.add(j);
+    if (st.read.has(k)) next.read.add(j);
+    if (st.upd.has(k)) next.upd.add(j);
+  });
+  next.cur = clamp([...same.entries()].find(([, k]) => k === st.cur)?.[0] ?? 0, o.entries.length);
+  planStates.set(key, next);
 }
 
-function syncPlans() {
-  if (overlay?.kind !== "plans" || !planUi) return;
-  for (const r of overlay.listEl.children) r.classList.toggle("sel", Number(r.dataset.i) === planUi.sel);
-  overlay.listEl.children[planUi.sel]?.scrollIntoView({ block: "nearest" });
-}
+// ---- The plan screen (read only) and the idle screen's recent list ----
 
-async function pollPlans() {
-  if (!planUi) return;
-  if (planUi.view) { fetchPlanFile(planUi.view.item, planUi.view.mtime).then((r) => { if (r && planUi?.view?.item === r.item) refreshPlanView(r.data); }).catch(() => {}); return; }
-  try {
-    const items = await fetchPlans();
-    if (!planUi || planUi.view) return;
-    planUi.items = items;
-    fillPlans();
-  } catch {}
-}
-
-// The plan body, or null on 304
-async function fetchPlanFile(item, since) {
-  const url = `/api/plans/${encodeURIComponent(item.name)}${since ? `?since=${encodeURIComponent(since)}` : ""}`;
-  const res = await fetch(url, { credentials: "same-origin" });
-  if (res.status === 304) return null;
-  if (res.status === 401 && (await refreshAuth())) return fetchPlanFile(item, since);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return { item, data: await res.json() };
-}
-
-const planPd = (data) => ({ id: `plan:${data.name}`, kind: "approve_plan", readonly: true, status: "pending", request: { plan: data.markdown, planFilePath: data.name } });
-const outlineSig = (md) => planOutlineOf(md).entries.map((e) => `${e.level}${e.title}`).join("\n");
-
-async function openPlan(item) {
-  let r;
-  try { r = await fetchPlanFile(item); } catch { return; }
-  if (!planUi || !r) return;
-  const root = (id) => $(id);
-  const park = (node) => { const f = document.createDocumentFragment(); f.append(...node.childNodes); return f; };
-  stashPending();
-  planUi.stash = {
-    head: park(root("head")), headClass: root("head").className, headHidden: root("head").hidden,
-    bg: park(root("background")), bgTop: root("background").scrollTop,
-    dec: park(root("decision")), decClass: root("decision").className, decTop: root("decision").scrollTop,
-    foot: park(root("foot")), footHidden: root("foot").hidden,
-    mainHidden: root("main").hidden, emptyHidden: root("empty").hidden,
-    headOnclick: root("head").onclick,
-  };
-  closeOverlay();
-  planUi.view = { item, pd: planPd(r.data), mtime: r.data.mtime, sig: outlineSig(r.data.markdown), data: r.data };
-  renderPlanView();
-  renderHeader();
-}
-
-function renderPlanView() {
-  const { pd, data } = planUi.view;
+function renderPlanHead(pd) {
   const head = $("head");
+  stashPending();
   head.replaceChildren();
   head.hidden = false;
   head.className = "hd";
   head.onclick = null;
+  const cap = t("plan_kind").replace(/^./, (c) => c.toUpperCase());
   head.append(
     el("div", { class: "hd-top" },
-      el("div", { class: "v2-title", title: data.title, text: data.title }),
+      el("div", { class: "v2-title", title: pd.title, text: pd.title }),
       el("div", { class: "hd-meta" })),
-    el("div", { class: "hd-line2" }, el("div", { class: "headline plain", text: t("plan_readonly") }), planMetaLine(pd)));
+    el("div", { class: "hd-line2" },
+      el("div", { class: "headline plain" }, `${cap} · `, el("span", { class: "age", "data-created": pd.mtime, "data-tpl": "plan_updated_ago", text: t("plan_updated_ago", { age: ageText(pd.mtime) }) })),
+      planMetaLine(pd)));
   placePending();
-  $("main").hidden = false;
-  $("empty").hidden = true;
-  const left = $("background");
-  left.replaceChildren();
-  left.scrollTop = 0;
-  const md = el("div", { class: "md" });
-  left.append(md);
-  const outline = planOutline(pd);
+}
+
+// Right column of a plan: the contents (long plans) and one text action, `Done reading`
+function renderPlanRight(pd) {
+  document.body.append(toastBox);
   const right = $("decision");
+  right.classList.remove("split");
+  document.activeElement?.blur?.();
   right.replaceChildren();
-  right.className = "";
-  right.scrollTop = 0;
+  const outline = planOutline(pd);
+  ui = { kind: "planview", toc: !!outline };
   if (outline) right.append(el("div", { class: "qs" }, planToc(pd, outline)));
-  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}${t("hint_back")}` }));
-  const job = renderPlanMarkdown(md, pd).catch(() => {});
-  job.then(refreshWide);
+  right.append(el("div", { class: "actions" },
+    el("div", { class: "done-reading", role: "button", tabindex: "-1", onclick: doneReading },
+      el("span", { text: t("plan_done_reading") }), el("kbd", { text: "Esc" }))));
+  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ←→ ${t("hint_next")}` }));
+  placeToasts();
   if (outline) syncPlan(pd);
-  refreshWide();
 }
 
-function refreshPlanView(data) {
-  const v = planUi.view;
-  const sig = outlineSig(data.markdown);
-  if (sig !== v.sig) { drafts.delete(v.pd.id); outlines.delete(v.pd.id); }
-  v.pd = planPd(data);
-  v.mtime = data.mtime;
-  v.sig = sig;
-  v.data = data;
-  const keep = $("background").scrollTop;
-  renderPlanView();
-  $("background").scrollTop = keep;
+// Esc / the text: mark the plan read (unless it already is), then the next item or the idle screen
+function doneReading() {
+  if (!isPlanId(shownId)) return;
+  markPlanRead(planNameOf(shownId));
+  advance();
 }
 
-function closePlanView() {
-  const u = planUi;
-  const s = u.stash;
-  drafts.delete(u.view.pd.id);
-  outlines.delete(u.view.pd.id);
-  u.view = null;
-  u.stash = null;
-  stashPending();
-  $("head").replaceChildren(s.head);
-  $("head").className = s.headClass;
-  $("head").hidden = s.headHidden;
-  $("head").onclick = s.headOnclick;
-  $("background").replaceChildren(s.bg);
-  $("background").scrollTop = s.bgTop;
-  $("decision").replaceChildren(s.dec);
-  $("decision").className = s.decClass;
-  $("decision").scrollTop = s.decTop;
-  $("foot").replaceChildren(s.foot);
-  $("foot").hidden = s.footHidden;
-  $("main").hidden = s.mainHidden;
-  $("empty").hidden = s.emptyHidden;
-  placePending();
-  renderHeader();
-  refreshWide();
+let recentSel = 0;
+function renderRecent() {
+  const box = $("recent");
+  const list = [...plans.values()].sort((a, b) => b.mtime.localeCompare(a.mtime)).slice(0, 10);
+  box.hidden = !list.length;
+  box.replaceChildren();
+  if (!list.length) return;
+  recentSel = clamp(recentSel, list.length);
+  box.append(el("div", { class: "recent-cap", text: t("plan_recent") }));
+  list.forEach((p, i) => {
+    const fresh = isNewPlan(p);
+    box.append(el("div", { class: "recent-row" + (fresh ? " fresh" : "") + (i === recentSel ? " sel" : ""), role: "button", "data-name": p.name, onclick: () => { recentSel = i; show(PLAN_ID + p.name); } },
+      el("span", { class: "mark", text: fresh ? "●" : "" }),
+      el("span", { class: "recent-title", title: p.name, text: p.title }),
+      el("span", { class: "age", "data-created": p.mtime, text: ageText(p.mtime) }),
+      el("span", { class: "recent-stats", text: planStatsText(p) })));
+  });
 }
 
-function closePlans() {
-  if (!planUi) return;
-  if (planUi.view) closePlanView();
-  closePlanTimer();
-  const dirty = planUi.dirty;
-  planUi = null;
-  closeOverlay();
-  if (dirty) renderAll(); else renderHeader();
+function moveRecent(step) {
+  const rows = $("recent").querySelectorAll(".recent-row");
+  if (!rows.length) return;
+  recentSel = clamp(recentSel + step, rows.length);
+  rows.forEach((r, i) => r.classList.toggle("sel", i === recentSel));
+  rows[recentSel].scrollIntoView({ block: "nearest" });
 }
 
 function planViewKey(ev) {
   const key = logicalKey(ev);
+  const pd = shownPlanPd();
+  if (!pd) return;
   ev.preventDefault();
-  const pd = planUi.view.pd;
+  if (key === "Escape") { doneReading(); return; }
   const o = planOutline(pd);
-  if (key === "Escape") { closePlanView(); showPlanList(); renderHeader(); return; }
   if (!o) return;
   const st = planState(pd, o);
   if (key === "ArrowUp" || key === "k") planMoveCursor(pd, -1);
@@ -717,7 +749,7 @@ function focusDrawerRow() {
 }
 
 function setDrawer(open) {
-  if (open) drawerIdx = Math.max(0, pendingList().findIndex((d) => d.id === shownId));
+  if (open) drawerIdx = Math.max(0, itemIds().indexOf(shownId));
   else if (drawerOpen()) document.activeElement?.blur?.();
   $("drawer").classList.toggle("open", open);
   $("drawer").setAttribute("aria-hidden", String(!open));
@@ -746,6 +778,16 @@ function renderList() {
       onclick: () => { show(d.id); setDrawer(false); },
     }, el("div", { class: "title", text: titleOf(d) }), whereLine(d), meta);
     list.append(el("li", {}, row));
+  }
+  for (const p of newPlans()) {
+    const id = PLAN_ID + p.name;
+    const meta = el("div", { class: "meta" },
+      el("span", { text: t("plan_kind") }),
+      el("span", { class: "age", "data-created": p.mtime, text: ageText(p.mtime) }),
+      el("span", { text: planStatsText(p) }),
+      el("span", { class: "mark", title: id === shownId ? t("badge_shown") : "", text: id === shownId ? "▸" : "●" }));
+    list.append(el("li", {}, el("button", { class: "row plan-row" + (id === shownId ? " current" : ""), type: "button", "data-name": p.name, onclick: () => { show(id); setDrawer(false); } },
+      el("div", { class: "title", text: p.title }), meta)));
   }
   if (!list.children.length) list.append(el("li", { class: "muted", text: t("no_pending") }));
   else if (drawerOpen()) focusDrawerRow();
@@ -809,9 +851,12 @@ const statusText = (status, fallbackKey) => t(STATUS_KEYS[status] ?? fallbackKey
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
+  const file = d.kind === "approve_plan" ? planFileOf(d) : "";
+  if (file) answering.add(file); // the SSE echo of the answer can arrive before the POST returns and must not bring the plan back
   try {
     const updated = await post(`/api/decisions/${d.id}/answer`, body);
     decisions.set(updated.id, updated);
+    if (file) markPlanRead(file); // the plan was read and decided
     if (shownId === d.id) {
       toast(statusText(updated.status, "sent"));
       advance();
@@ -822,6 +867,8 @@ async function send(d, body) {
   } catch (e) {
     if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
     if (shownId === d.id) renderRight(decisions.get(d.id));
+  } finally {
+    if (file) answering.delete(file);
   }
 }
 
@@ -1063,15 +1110,6 @@ function overlayKey(ev) {
   const key = logicalKey(ev);
   ev.preventDefault();
   const d = decisions.get(shownId);
-  if (overlay.kind === "plans") {
-    const n = overlay.items.length;
-    if (key === "Escape" || key === "p") closePlans();
-    else if (key === "ArrowDown" || key === "j") { planUi.sel = clamp(planUi.sel + 1, n); syncPlans(); }
-    else if (key === "ArrowUp" || key === "k") { planUi.sel = clamp(planUi.sel - 1, n); syncPlans(); }
-    else if (key === "Home" || key === "End") { planUi.sel = key === "Home" ? 0 : n - 1; syncPlans(); }
-    else if (key === "Enter" && n) openPlan(overlay.items[planUi.sel]);
-    return;
-  }
   if (overlay.kind === "history") {
     // Digits, x and n do nothing here. `?` swaps to the term list, `s` closes
     if (overlay.full) {
@@ -1146,7 +1184,7 @@ function renderRightBody(d) {
   if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
-  setHint(d ? null : el("div", { class: "hint" }, `p ${t("hint_plans")}`));
+  setHint(null);
   if (!d) return;
   const dr = draftOf(d);
   const closed = d.status !== "pending";
@@ -2033,25 +2071,50 @@ function planOutlineOf(md) {
   return { lines: lines.length, entries, h2, files: all.size, long: h2 > PLAN_SHORT_H2 && lines.length > PLAN_SHORT_LINES };
 }
 
-const outlines = new Map(); // decision id -> { plan, outline }
-// The outline of a plan decision, or null when the plan is short (shown as one open document, no contents)
+// The state of a plan is keyed by its file name when there is one (`plan:<name>`), so the read-only plan screen and the approval
+// decision for the same file share it; a decision without planFilePath keeps its own id
+const planKey = (d) => (d.readonly ? d.id : planFileOf(d) ? PLAN_ID + planFileOf(d) : d.id);
+const outlines = new Map(); // plan key -> { plan, outline }
+const planStates = new Map(); // plan key -> { open, read, upd, cur }
+// The outline of a plan, or null when the plan is short (shown as one open document, no contents)
 function planOutline(d) {
   if (d?.kind !== "approve_plan") return null;
   const plan = String(d.request?.plan ?? "");
-  let c = outlines.get(d.id);
-  if (!c || c.plan !== plan) outlines.set(d.id, (c = { plan, outline: planOutlineOf(plan) }));
+  const key = planKey(d);
+  let c = outlines.get(key);
+  if (!c || c.plan !== plan) {
+    const outline = planOutlineOf(plan);
+    // The text under a kept state changed (the decision's copy differs from the file): carry the state over by heading
+    if (c && planStates.has(key)) planStates.set(key, remapByHeading(planStates.get(key), c.outline, outline));
+    outlines.set(key, (c = { plan, outline }));
+  }
   return c.outline.long ? c.outline : null;
+}
+
+function remapByHeading(st, from, to) {
+  const used = new Set();
+  const next = { open: new Set(), read: new Set(), upd: new Set(), cur: 0 };
+  for (const e of to.entries) {
+    const k = from.entries.findIndex((x) => !used.has(x.i) && x.level === e.level && x.plain === e.plain);
+    if (k < 0) { next.upd.add(e.i); continue; }
+    used.add(from.entries[k].i);
+    if (st.open.has(from.entries[k].i)) next.open.add(e.i);
+    if (st.read.has(from.entries[k].i)) next.read.add(e.i);
+    if (from.entries[k].i === st.cur) next.cur = e.i;
+  }
+  return next;
 }
 
 // Per-decision state: which sections are open, which have been opened at least once (read), the contents cursor.
 // The first H2 is open (and counts as read); the scope section is on screen in the right column, so it counts as read
 function planState(d, o) {
-  const dr = draftOf(d);
-  if (!dr.plan) {
+  const key = planKey(d);
+  let st = planStates.get(key);
+  if (!st) {
     const first = o.entries.find((e) => e.level === 2);
-    dr.plan = { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), cur: first?.i ?? 0 };
+    planStates.set(key, (st = { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), upd: new Set(), cur: first?.i ?? 0 }));
   }
-  return dr.plan;
+  return st;
 }
 
 const parentOf = (o, e) => (e.level === 3 ? o.entries.findLast((x) => x.level === 2 && x.at < e.at) : undefined);
@@ -2072,12 +2135,13 @@ const metaText = (e) => [count("plan_lines", e.lines), e.files.size ? count("pla
 // Mirror the state onto the left column (open, marks) and the contents (marks, cursor)
 function syncPlan(d) {
   const o = planOutline(d);
-  if (!o || d.id !== screenId()) return;
+  if (!o || d.id !== shownId) return;
   const st = planState(d, o);
   for (const e of o.entries) {
     const det = document.querySelector(`#background details[data-i="${e.i}"]`);
     if (det && det.open !== st.open.has(e.i)) det.open = st.open.has(e.i);
     for (const mark of document.querySelectorAll(`#background details[data-i="${e.i}"] > summary > .ps-mark, #decision .toc-row[data-i="${e.i}"] .toc-mark`)) mark.textContent = st.read.has(e.i) ? "☑" : "☐";
+    for (const w of document.querySelectorAll(`#background details[data-i="${e.i}"] > summary > .ps-upd`)) w.hidden = !st.upd.has(e.i);
     const row = document.querySelector(`#decision .toc-row[data-i="${e.i}"]`);
     row?.classList.toggle("cursor", st.cur === e.i);
     row?.classList.toggle("open", st.open.has(e.i));
@@ -2093,8 +2157,9 @@ function planSetOpen(d, i, open) {
   if (open) {
     st.open.add(i);
     st.read.add(i);
+    st.upd.delete(i);
     const parent = parentOf(o, e);
-    if (parent) { st.open.add(parent.i); st.read.add(parent.i); }
+    if (parent) { st.open.add(parent.i); st.read.add(parent.i); st.upd.delete(parent.i); }
   } else st.open.delete(i);
   syncPlan(d);
 }
@@ -2124,7 +2189,7 @@ function planToggleAll(d) {
   if (!o) return;
   const st = planState(d, o);
   if (o.entries.every((e) => st.open.has(e.i))) st.open.clear();
-  else for (const e of o.entries) { st.open.add(e.i); st.read.add(e.i); }
+  else for (const e of o.entries) { st.open.add(e.i); st.read.add(e.i); st.upd.delete(e.i); }
   syncPlan(d);
 }
 
@@ -2134,7 +2199,7 @@ function foldPlanSections(container, o, d) {
   if (heads.length !== o.entries.length || heads.some((h, k) => h.tagName !== `H${o.entries[k].level}`)) return false;
   const st = planState(d, o);
   const make = (h, e) => {
-    const summary = el("summary", { tabindex: "-1" }, el("span", { class: "ps-mark", text: st.read.has(e.i) ? "☑" : "☐" }), el("span", { class: "ps-title" }), el("span", { class: "ps-meta", text: metaText(e) }));
+    const summary = el("summary", { tabindex: "-1" }, el("span", { class: "ps-mark", text: st.read.has(e.i) ? "☑" : "☐" }), el("span", { class: "ps-title" }), el("span", { class: "ps-upd", hidden: !st.upd.has(e.i), text: t("plan_section_updated") }), el("span", { class: "ps-meta", text: metaText(e) }));
     summary.querySelector(".ps-title").append(...h.childNodes);
     const det = el("details", { class: e.level === 2 ? "plan-sec" : "plan-sub", "data-i": String(e.i) }, summary);
     det.open = st.open.has(e.i);
@@ -2412,28 +2477,50 @@ function renderLeft(d) {
 // ---- Switching the view ----
 
 function renderAll() {
-  if (planUi) { planUi.dirty = true; renderHeader(); renderList(); return; } // the plan browser keeps the screen; closing it re-renders
   document.body.classList.remove("fullwide");
   closeOverlay();
-  const d = decisions.get(shownId);
+  const pd = shownPlanPd();
+  const d = pd ?? decisions.get(shownId);
   $("main").hidden = !d;
   $("empty").hidden = !!d;
   renderHeader();
   renderList();
+  if (pd) {
+    const left = renderLeft(pd);
+    renderPlanHead(pd);
+    renderPlanRight(pd);
+    refreshWide();
+    left?.then?.(refreshWide);
+    return;
+  }
   const left = renderLeft(d);
   renderHead(d);
   renderRight(d);
+  if (!d) renderRecent();
   refreshWide();
   left?.then?.(refreshWide);
 }
 
+// Show an item. A plan whose body is not loaded yet is fetched first (the screen stays as it is meanwhile)
 function show(id) {
+  if (isPlanId(id) && !planData.has(planNameOf(id))) {
+    ensurePlanData(planNameOf(id)).then((ok) => { if (ok) { shownId = id; renderAll(); } });
+    return;
+  }
   shownId = id;
   renderAll();
 }
 
+// The next item: the first pending decision, else the newest new plan, else the idle screen
 function advance() {
-  shownId = pendingList()[0]?.id ?? null;
+  const next = itemIds()[0] ?? null;
+  if (isPlanId(next) && !planData.has(planNameOf(next))) {
+    shownId = null;
+    renderAll();
+    show(next);
+    return;
+  }
+  shownId = next;
   renderAll();
 }
 
@@ -2450,12 +2537,12 @@ function upsert(d) {
     }
     return;
   }
-  if (shownId == null && d.status === "pending") {
+  // A decision needs an answer and a plan does not: it takes the screen from a plan (the plan keeps its state and is next)
+  if (d.status === "pending" && (shownId == null || (isPlanId(shownId) && !prev))) {
     show(d.id);
     return;
   }
-  renderHeader();
-  renderList();
+  if (shownId == null) renderAll(); else refreshItems();
 }
 
 async function loadAll() {
@@ -2463,7 +2550,7 @@ async function loadAll() {
   const seen = new Set();
   for (const d of ds) {
     seen.add(d.id);
-    if (decisions.has(d.id) && decisions.get(d.id).status !== d.status) upsert(d);
+    if ((decisions.has(d.id) && decisions.get(d.id).status !== d.status) || (!decisions.has(d.id) && isPlanId(shownId))) upsert(d);
     else decisions.set(d.id, d);
   }
   // Refetch decisions that are still pending locally but changed or vanished (missed SSE events, server restart)
@@ -2478,9 +2565,14 @@ async function loadAll() {
       }
     }
   }
+  try { await loadPlans(); } catch (e) { if (e.message === "unauthorized") throw e; }
+  if (isPlanId(shownId)) {
+    if (plans.has(planNameOf(shownId)) && planData.has(planNameOf(shownId))) refreshItems(); else advance();
+    return;
+  }
   const cur = decisions.get(shownId);
   if (!cur || cur.status !== "pending") advance();
-  else { renderHeader(); renderList(); }
+  else refreshItems();
 }
 
 // SSE. When it drops, renew the cookie and reconnect after 2 s (then doubling, capped at 5 s); sync pending decisions on open
@@ -2493,6 +2585,8 @@ function connect() {
   es = new EventSource("/api/stream");
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
+  es.addEventListener("plan.updated", (e) => onPlanUpdated(JSON.parse(e.data)));
+  es.addEventListener("plan.removed", (e) => onPlanRemoved(JSON.parse(e.data).name));
   es.addEventListener("open", () => {
     retryMs = 2000;
     if (connDown) setConnDown(false);
@@ -2514,16 +2608,17 @@ function connect() {
 let lastG = 0; // time of the first g of gg
 
 function cycle(step) {
-  const list = pendingList();
+  const list = itemIds();
+  const i = list.indexOf(shownId);
+  if (i < 0) { if (list.length) show(list[step > 0 ? 0 : list.length - 1]); return; }
   if (list.length < 2) return;
-  const i = list.findIndex((d) => d.id === shownId);
-  show(list[(i + step + list.length) % list.length].id);
+  show(list[(i + step + list.length) % list.length]);
 }
 
 // With an IME enabled, keydown has key "Process" and keyCode 229, so the character is lost.
 // Outside text fields, decide the bound key from the physical key (code)
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyO: "o", KeyP: "p", BracketLeft: "[", BracketRight: "]", Slash: "/", Period: ".",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyO: "o", BracketLeft: "[", BracketRight: "]", Slash: "/", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -2536,7 +2631,7 @@ function logicalKey(ev) {
 
 function drawerKey(ev) {
   const key = logicalKey(ev);
-  const list = pendingList();
+  const list = itemIds();
   if (key === "Escape" || key === "b" || key === "ArrowLeft") { ev.preventDefault(); setDrawer(false); }
   else if (key === "ArrowDown" || key === "ArrowUp" || key === "j" || key === "k") {
     ev.preventDefault();
@@ -2544,8 +2639,8 @@ function drawerKey(ev) {
     focusDrawerRow();
   } else if (key === "Enter") {
     ev.preventDefault();
-    const d = list[clamp(drawerIdx, list.length)];
-    if (d) show(d.id);
+    const id = list[clamp(drawerIdx, list.length)];
+    if (id) show(id);
     setDrawer(false);
   } else if (key === "Tab") ev.preventDefault();
 }
@@ -2574,14 +2669,9 @@ document.addEventListener("keydown", (ev) => {
     else if (k === "Enter") ev.preventDefault(); // no submit while full width
     return;
   }
-  if (planUi?.view) { planViewKey(ev); return; }
   if (overlay) { overlayKey(ev); return; }
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
-  if (!typing && key === "p") {
-    const pd = decisions.get(shownId);
-    if (!(pd && ui?.kind === "question" && (draftOf(pd).cannot || draftOf(pd).none))) { ev.preventDefault(); openPlans(); return; }
-  }
   if (!typing && key === "f" && hasWide()) { ev.preventDefault(); setFullwide(true); return; }
   if (key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
   if (!typing && (key === "h" || key === "l" || key === "ArrowLeft" || key === "ArrowRight")) {
@@ -2589,7 +2679,18 @@ document.addEventListener("keydown", (ev) => {
     cycle(key === "l" || key === "ArrowRight" ? 1 : -1);
     return;
   }
-  if (!typing && key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
+  if (!typing && key === "b" && itemIds().length) { ev.preventDefault(); setDrawer(true); return; }
+  // [ ] cycle through the items, except where they walk the contents of a long plan (h l ← → Tab always cycle)
+  if (!typing && (key === "[" || key === "]") && !ui?.toc) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }
+  if (isPlanId(shownId)) { planViewKey(ev); return; }
+  if (shownId == null) {
+    // The idle screen: j k pick a recent plan, Enter opens it
+    const row = $("recent").querySelectorAll(".recent-row")[recentSel];
+    if (!typing && (key === "j" || key === "ArrowDown")) { ev.preventDefault(); moveRecent(1); }
+    else if (!typing && (key === "k" || key === "ArrowUp")) { ev.preventDefault(); moveRecent(-1); }
+    else if (!typing && key === "Enter" && row) { ev.preventDefault(); show(PLAN_ID + row.dataset.name); }
+    return;
+  }
   if (!typing && key === "s") {
     // Not while the "Can't answer" / "None of these" panel is open (those keep the key for themselves)
     const sd = decisions.get(shownId);
@@ -2765,11 +2866,14 @@ document.addEventListener("keydown", (ev) => {
   else if (key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });
 
-pendingBtn.addEventListener("click", () => { if (planUi) closePlans(); else setDrawer(!drawerOpen()); });
+pendingBtn.addEventListener("click", () => setDrawer(!drawerOpen()));
 $("backdrop").addEventListener("click", () => setDrawer(false));
 
 setInterval(() => {
-  for (const e of document.querySelectorAll(".age")) e.textContent = elapsed(e.dataset.created);
+  for (const e of document.querySelectorAll(".age")) {
+    const age = e.dataset.tpl ? ageText(e.dataset.created) : e.closest(".recent-row, .plan-row") ? ageText(e.dataset.created) : elapsed(e.dataset.created);
+    e.textContent = e.dataset.tpl ? t(e.dataset.tpl, { age }) : age;
+  }
 }, 10000);
 
 $("build").textContent = `build ${BUILD}`;
