@@ -390,9 +390,9 @@ test("diagram requirement: repo + reversible is optional; costly / machine / ext
 
 test("length limits: Recommendation 400 characters / 5 sentences, cells 160 characters, Why 600 characters; full-width and half-width count the same", () => {
   const rec = (body: string) => GOOD.replace("I recommend A. If C, choose B.", body);
-  assert.equal(validateExplanation(rec("if " + "a".repeat(397))).valid, true);
-  assert.deepEqual(validateExplanation(rec("if " + "a".repeat(398))).missing, ["recommend_long"]);
-  assert.deepEqual(validateExplanation(rec("if " + "Ａ".repeat(398))).missing, ["recommend_long"]);
+  assert.equal(validateExplanation(rec("A if " + "a".repeat(395))).valid, true);
+  assert.deepEqual(validateExplanation(rec("A if " + "a".repeat(396))).missing, ["recommend_long"]);
+  assert.deepEqual(validateExplanation(rec("A if " + "Ａ".repeat(396))).missing, ["recommend_long"]);
   assert.equal(validateExplanation(rec("If a so. Two. Three. Four. Five.")).valid, true);
   assert.deepEqual(validateExplanation(rec("If a so. Two. Three. Four. Five. Six.")).missing, ["recommend_long"]);
   assert.equal(validateExplanation(rec("Use a file.ts and 0.5 if needed.")).valid, true);
@@ -673,6 +673,37 @@ test("recommend_name: the first sentence names the recommended option by label, 
   // order: right after recommend_cond, before against_weak
   const both = rec("Keep it", "I recommend this.").replace("## Recommendation", "## Counterargument\nI recommend this.\n## Recommendation");
   assert.deepEqual(validateExplanation(both).missing, ["recommend_cond", "recommend_name", "against_weak"]);
+});
+
+test("recommend_name: labels with `.` / `。` or a positional phrase can be named; short labels need a word boundary", () => {
+  const rec = (label: string, body: string) =>
+    GOOD.replace("recommended: A", `recommended: ${label}`).replace("| A |", `| ${label} |`).replace("I recommend A. If C, choose B.", body);
+  const ok: [string, string][] = [
+    ["1. Redis", "Use 1. Redis for the cache. If C, choose B."],
+    ["Keep it.", "Keep it. Nothing else changes. If C, choose B."],
+    ["Redis を使う。", "Redis を使う。理由は速いから。C の場合は B。"],
+    ["Use e.g. Redis or similar", "Use e.g. Redis or similar for the cache. If C, choose B."],
+    ["Plan B: rollback", "Plan B: rollback is the safest. If C, choose B."],
+    ["Keep the first option as default", "Keep the first option as default, since it is cheap. If C, choose B."],
+    ["案 A を採用", "案 A を採用する。C の場合は B。"],
+  ];
+  for (const [label, body] of ok) assert.deepEqual(validateExplanation(rec(label, body)).missing, [], label);
+  // positional wording outside the label still fails, even when the label (with its own positional words) is present
+  assert.deepEqual(validateExplanation(rec("Plan B: rollback", "The first one, Plan B: rollback, is best. If C, choose B.")).missing, ["recommend_name"]);
+  // the label only in the second sentence, or absent
+  assert.deepEqual(validateExplanation(rec("1. Redis", "I recommend this. Use 1. Redis. If C, choose B.")).missing, ["recommend_name"]);
+  assert.deepEqual(validateExplanation(rec("Keep it.", "I recommend this one. If C, choose B.")).missing, ["recommend_name"]);
+  // a label of 3 characters or fewer must not match inside another word
+  assert.deepEqual(validateExplanation(rec("Go", "Google Cloud を勧める。C の場合は B。")).missing, ["recommend_name"]);
+  assert.deepEqual(validateExplanation(rec("Go", "Use Google Cloud. If C, choose B.")).missing, ["recommend_name"]);
+  assert.deepEqual(validateExplanation(rec("Go", "Go with Google Cloud. If C, choose B.")).missing, []);
+  assert.deepEqual(validateExplanation(rec("Go", "Go を勧める。C の場合は B。")).missing, []);
+});
+
+test("assumptions_long: only top-level bullets are counted", () => {
+  const nested = GOOD + "\n## Assumptions\n- one\n  - child a\n  - child b\n- two\n    - child c\n- three\n";
+  assert.equal(validateExplanation(nested).valid, true);
+  assert.deepEqual(validateExplanation(nested + "- four\n").missing, ["assumptions_long"]);
 });
 
 test("assumptions_long: more than 3 Assumptions bullets are a defect, after against_weak", () => {

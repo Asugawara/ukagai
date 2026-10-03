@@ -114,6 +114,27 @@ test("no explanation file → deny with the explain save path under <data-dir>/e
   assert.equal(denied[0].session.transcript_path, "");
 });
 
+test("deny texts for Codex say request_user_input, never AskUserQuestion or the Claude skill", async () => {
+  const s = await realServer();
+  const input = rui();
+  // no explanation file: first deny (template A)
+  const r = await runHook(a(s.url, s.dataDir), JSON.stringify(input));
+  const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason as string;
+  assert.ok(reason.includes("request_user_input"), reason);
+  assert.ok(!reason.includes("AskUserQuestion"), reason);
+  assert.ok(!reason.includes("skill ukagai-explain"), reason);
+  assert.ok(reason.includes("SessionStart context"), reason);
+  // template B
+  const r2 = await runHook([...a(s.url, s.dataDir), "--deny-template", "B"], JSON.stringify({ ...input, session_id: "other-session" }));
+  const reason2 = JSON.parse(r2.stdout).hookSpecificOutput.permissionDecisionReason as string;
+  assert.ok(reason2.includes("request_user_input") && !reason2.includes("AskUserQuestion") && !reason2.includes("skill ukagai-explain"), reason2);
+  // several questions
+  const multi = { ...input, session_id: "multi-session", tool_input: { questions: [...input.tool_input.questions, ...input.tool_input.questions] } };
+  const r3 = await runHook(a(s.url, s.dataDir), JSON.stringify(multi));
+  const reason3 = JSON.parse(r3.stdout).hookSpecificOutput.permissionDecisionReason as string;
+  assert.ok(reason3.includes("request_user_input") && !reason3.includes("AskUserQuestion"), reason3);
+});
+
 test("explanation present + GUI answer through the API → deny whose reason carries `<question> = <answer>`", async () => {
   const s = await realServer();
   const input = rui();

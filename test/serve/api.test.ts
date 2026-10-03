@@ -308,7 +308,7 @@ test("token file is 0600", async () => {
   assert.equal(statSync(join(env.dataDir, "token")).mode & 0o777, 0o600);
 });
 
-test("pending / answer_submitted are restored as hook_disconnected on restart", async () => {
+test("restart keeps pending / answer_submitted live with a fresh lease; they expire to hook_disconnected / answer_lost afterwards", async () => {
   const home = tmp();
   const dataDir = tmp();
   const env1 = await setup({ home, dataDir });
@@ -317,12 +317,28 @@ test("pending / answer_submitted are restored as hook_disconnected on restart", 
   await api(env1, `/api/decisions/${s.id}/answer`, { body: { answers: { q: "A" } } });
   await env1.h.close();
 
-  const env2 = await setup({ home, dataDir });
-  assert.equal((await getDecision(env2, p.id)).status, "hook_disconnected");
-  assert.equal((await getDecision(env2, s.id)).status, "hook_disconnected");
+  const env2 = await setup({ home, dataDir, leaseGraceMs: 300 });
+  assert.equal((await getDecision(env2, p.id)).status, "pending");
+  assert.equal((await getDecision(env2, s.id)).status, "answer_submitted");
+  assert.ok(Date.parse((await getDecision(env2, p.id)).lease_until) > Date.now());
   // the same tool_use_id returns the restored decision
   const again = await register(env2, "toolu_r1");
   assert.equal(again.id, p.id);
+  // no hook comes back: the lease runs out
+  await waitForStatus(env2, p.id, "hook_disconnected");
+  await waitForStatus(env2, s.id, "answer_lost");
+});
+
+test("restart: a resumed wait keeps the restored decision alive past the grace", async () => {
+  const home = tmp();
+  const dataDir = tmp();
+  const env1 = await setup({ home, dataDir });
+  const p = await register(env1, "toolu_r3");
+  await env1.h.close();
+  const env2 = await setup({ home, dataDir, leaseGraceMs: 300 });
+  const r = await api(env2, `/api/decisions/${p.id}/wait?timeout_ms=1000`);
+  assert.equal(r.status, 204);
+  assert.equal((await getDecision(env2, p.id)).status, "pending");
 });
 
 test("/api/metrics: (a') answered 2 / fallback 1 -> 2/3", async () => {

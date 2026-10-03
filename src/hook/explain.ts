@@ -367,41 +367,53 @@ function condText(text: string): string {
 export const POSITIONAL_REF =
   /1つ目|2つ目|3つ目|一つ目|二つ目|三つ目|最初の案|案 ?[A-D]\b|選択肢 ?[0-9]|\bthe (first|second|third) (one|option)\b|\boption [0-9A-D]\b|\bplan [A-D]\b/i;
 
-/** First sentence of a Recommendation (callouts excluded; splits like countSentences) */
-function firstSentence(text: string): string {
-  const t = condText(text).normalize("NFKC").trim();
-  const m = /[。!?]|\.(?=\s|$)/u.exec(t);
-  return m ? t.slice(0, m.index) : t;
-}
+const LABEL_MARK = "\uE000";
 
 /** NFKC, no whitespace / backticks / asterisks, lowercase (for finding a label in a sentence) */
 function nameForm(s: string): string {
   return s.normalize("NFKC").replace(/[\s`*]/gu, "").toLowerCase();
 }
 
+/** Replace every occurrence of `needle` (whitespace-insensitive, case-insensitive) in `text` with the placeholder; null when absent */
+function maskLabel(text: string, needle: string): string | null {
+  const chars = [...nameForm(needle)];
+  if (chars.length === 0) return null;
+  const esc = chars.map((c) => c.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("\\s*");
+  // Short labels (`Go`) must not match inside another word (`Google`)
+  const bound = chars.length <= 3;
+  const re = new RegExp((bound ? "(?<![A-Za-z0-9])" : "") + esc + (bound ? "(?![A-Za-z0-9])" : ""), "giu");
+  return re.test(text) ? text.replace(re, LABEL_MARK) : null;
+}
+
 /**
  * The first sentence of the Recommendation names the recommended option: it contains the whole label
  * (without `(Recommended)` / `(推奨)`) or its opening (first 3 words for a spaced English label, else first 12 characters).
- * Calling the option by position ("the first one", "案 A") fails even when the label is there.
+ * The label is masked out before splitting into sentences, so a `.` / `。` or a positional word inside the label does not matter.
+ * Calling the option by position ("the first one", "案 A") outside the label fails even when the label is there.
  */
 function namesRecommended(recommendation: string, label: string): boolean {
-  const sentence = firstSentence(recommendation);
-  if (POSITIONAL_REF.test(sentence)) return false;
   const bare = label.normalize("NFKC").replace(/\s*\((?:recommended|推奨)\)\s*$/iu, "").trim();
   const full = nameForm(bare);
   if (full === "") return true;
-  const hay = nameForm(sentence);
-  if (hay.includes(full)) return true;
+  const text = condText(recommendation).normalize("NFKC").replace(/[`*]/gu, "").trim();
   const words = bare.replace(/[`*]/gu, "").split(/\s+/u).filter((w) => w !== "");
-  const opening = words.length > 3 && /^[\x00-\x7f]+$/u.test(bare) ? nameForm(words.slice(0, 3).join(" ")) : [...full].slice(0, 12).join("");
-  return hay.includes(opening);
+  const opening = words.length > 3 && /^[\x00-\x7f]+$/u.test(bare) ? words.slice(0, 3).join(" ") : [...full].slice(0, 12).join("");
+  const masked = maskLabel(text, bare) ?? maskLabel(text, opening);
+  if (masked === null) return false;
+  const m = /[。!?]|\.(?=\s|$)/u.exec(masked);
+  const sentence = m ? masked.slice(0, m.index) : masked;
+  return sentence.includes(LABEL_MARK) && !POSITIONAL_REF.test(sentence);
 }
 
-/** Number of bullets in the Assumptions section (fenced lines excluded) */
+/** Number of top-level bullets in the Assumptions section (bullets indented deeper than the least-indented one, and fenced lines, excluded) */
 function countBullets(lines: string[], inFence: boolean[], s: Section): number {
-  let n = 0;
-  for (let i = s.start + 1; i < s.end; i++) if (!inFence[i] && /^\s*(?:[-*+]|\d+[.)])\s+\S/u.test(lines[i]!)) n++;
-  return n;
+  const indents: number[] = [];
+  for (let i = s.start + 1; i < s.end; i++) {
+    const m = !inFence[i] ? /^(\s*)(?:[-*+]|\d+[.)])\s+\S/u.exec(lines[i]!) : null;
+    if (m) indents.push(m[1]!.length);
+  }
+  const top = Math.min(...indents);
+  return indents.filter((n) => n === top).length;
 }
 
 /** Lowercase NFKC text without whitespace, punctuation and symbols (for comparing two passages) */
@@ -933,6 +945,8 @@ export interface DenyParams {
   codes?: MissingCode[];
   /** True when the file found has `type: blocker` */
   blocker?: boolean;
+  /** `codex` swaps the Claude Code tool / skill names in the text for Codex's (`request_user_input`, the SessionStart context) */
+  agent?: string;
 }
 
 /** The template is shown only when a front matter key (the core of the format) is missing. For blockers, whenever anything is missing */
@@ -987,7 +1001,22 @@ function templateBlock(p: DenyParams): string {
   return "```\n" + body.join("\n") + "\n```";
 }
 
+/** Codex has no skills and its question tool is `request_user_input`: the format is the one given in the SessionStart context */
+function forAgent(text: string, agent: string | undefined): string {
+  if (agent !== "codex") return text;
+  return text
+    .replace(/First read skill ukagai-explain \(if you have not\)\. /g, "")
+    .replace(/Could you first read skill ukagai-explain \(if you have not\)\? /g, "")
+    .replace(/The (?:full )?format is (?:in|described in) skill ukagai-explain\. /g, "The explanation file format is as given in the SessionStart context. ")
+    .replace(/skill ukagai-explain/g, "the explanation file format in the SessionStart context")
+    .replace(/AskUserQuestion/g, "request_user_input");
+}
+
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
+  return forAgent(composeRaw(template, p, missingText, withTail), p.agent);
+}
+
+function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
   const isPlan = p.path === undefined || p.question === undefined;
   if (isPlan) {
     return template === "A"
@@ -1028,10 +1057,11 @@ export function denyReason(template: DenyTemplate, p: DenyParams): string {
 }
 
 /** Deny reason for two or more questions (spec section 5, step 0). No URL, at most 1000 characters */
-export function multiDenyReason(count: number): string {
-  return (
+export function multiDenyReason(count: number, agent?: string): string {
+  return forAgent(
     `Ask one question per AskUserQuestion call (this call had ${count}). The GUI shows one question at a time, with its explanation file. ` +
-    "Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose."
+    "Starting from the first question, write an explanation file for each and call AskUserQuestion again with that single question. Do not ask in prose.",
+    agent,
   );
 }
 
