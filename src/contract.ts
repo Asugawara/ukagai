@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { z } from "zod";
 
@@ -249,10 +249,10 @@ export const Decision = z.object({
   response: DecisionResponse.optional(),
   /** decisionFingerprint of the request: how a re-called tool finds its still-open decision */
   fingerprint: z.string().optional(),
+  /** approve_plan only: basename of the plan file inside the plans directory (resolved once at create; absent when the path is outside it) */
+  plan_name: z.string().optional(),
   /** Number of hand-off cycles (the hook's budget ended and the agent was asked to call the tool again) */
   handoffs: z.number().int().nonnegative().optional(),
-  /** Set by a hand-off, cleared when the tool is called again */
-  handoff_at: z.string().optional(),
   /** `tool_use_id` is the current one; the ones before a re-attach are kept here */
   previous_tool_use_ids: z.array(z.string()).optional(),
 });
@@ -456,6 +456,35 @@ function isUnder(p: string, base: string): boolean {
   return target.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
+/** The directory Claude Code writes plan files to */
+export function plansDir(home: string): string {
+  return join(home, ".claude", "plans");
+}
+
+/** A basename only: no separators, no "..", no leading dot, no NUL */
+export function isPlanName(name: string): boolean {
+  return name !== "" && !/[/\\\0]/.test(name) && !name.includes("..") && !name.startsWith(".");
+}
+
+/** A name the plans API lists and the hook accepts: `*.md` and a plain basename */
+export function isPlanFile(name: string): boolean {
+  return name.endsWith(".md") && isPlanName(name);
+}
+
+/** realpath of `p` if it is an existing regular file under `root` (both realpath'd), else null */
+export function realFileUnder(root: string, p: string): string | null {
+  try {
+    const real = realpathSync(p);
+    if (!isUnder(real, root) || !statSync(real).isFile()) return null;
+    return real;
+  } catch {
+    return null;
+  }
+}
+
+/** Largest transcript tail that is read (history reader and the hook's plan-file lookup) */
+export const TRANSCRIPT_MAX_BYTES = 64 * 1024 * 1024;
+
 export function isAllowedTranscriptPath(p: string, home: string): boolean {
   return isUnder(p, join(home, ".claude", "projects")) || isUnder(p, join(home, ".codex", "sessions"));
 }
@@ -514,21 +543,12 @@ export const PlanSummary = z.object({
 });
 export type PlanSummary = z.infer<typeof PlanSummary>;
 
-/** An H2 / H3 section. `hash` = first 12 hex of sha256 of the section text (heading line through the line before the next heading of level <= its own, code fences respected) */
-export const PlanSection = z.object({
-  heading: z.string(),
-  level: z.union([z.literal(2), z.literal(3)]),
-  hash: z.string(),
-});
-export type PlanSection = z.infer<typeof PlanSection>;
-
 export const PlanContent = z.object({
   name: z.string(),
   title: z.string(),
   mtime: z.string(),
   markdown: z.string(),
   read: z.boolean(),
-  sections: z.array(PlanSection),
 });
 export type PlanContent = z.infer<typeof PlanContent>;
 

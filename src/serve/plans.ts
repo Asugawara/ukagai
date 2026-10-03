@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, sep } from "node:path";
-import { stripExplainBlocks, type PlanContent, type PlanSection, type PlanSummary } from "../contract.js";
+import { isPlanFile, plansDir, stripExplainBlocks, type PlanContent, type PlanSummary } from "../contract.js";
+import { scanFences, scanHeadings, toLines } from "../hook/explain.js";
 
 /** Whether a plan (name, mtime ISO) is marked read. Defaults to "never" */
 export type IsRead = (name: string, mtime: string) => boolean;
@@ -15,181 +16,136 @@ export class PlanError extends Error {
   }
 }
 
-export function plansDir(home: string): string {
-  return join(home, ".claude", "plans");
-}
+type Resolved = { path: string; size: number; mtimeMs: number };
 
-/** A basename only: no separators, no "..", no leading dot, no NUL */
-export function isPlanName(name: string): boolean {
-  return name !== "" && !/[/\\\0]/.test(name) && !name.includes("..") && !name.startsWith(".");
-}
-
-function splitLines(markdown: string): string[] {
-  return markdown === "" ? [] : markdown.replace(/\r?\n$/, "").split(/\r?\n/);
-}
-
-/**
- * H2 / H3 sections. A section runs from its heading line to the line before the next heading
- * (outside code fences) of level <= its own, so an H2 section contains its H3 sections.
- * hash = first 12 hex of sha256 of those lines joined with "\n". The GUI copies this rule.
- */
-export function sectionsOf(markdown: string): PlanSection[] {
-  const lines = splitLines(stripExplainBlocks(markdown));
-  const heads: { index: number; level: number; heading: string }[] = [];
-  let fence: string | undefined;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (f) {
-      if (fence === undefined) fence = f[1]![0]!;
-      else if (f[1]![0] === fence) fence = undefined;
-      continue;
-    }
-    if (fence !== undefined) continue;
-    if (line.startsWith("### ")) heads.push({ index: i, level: 3, heading: line.slice(4).trim() });
-    else if (line.startsWith("## ")) heads.push({ index: i, level: 2, heading: line.slice(3).trim() });
-    else if (line.startsWith("# ")) heads.push({ index: i, level: 1, heading: "" });
-  }
-  const out: PlanSection[] = [];
-  heads.forEach((h, k) => {
-    if (h.level === 1) return;
-    let end = lines.length;
-    for (let j = k + 1; j < heads.length; j++) {
-      if (heads[j]!.level <= h.level) {
-        end = heads[j]!.index;
-        break;
-      }
-    }
-    const text = lines.slice(h.index, end).join("\n");
-    out.push({
-      heading: h.heading,
-      level: h.level as 2 | 3,
-      hash: createHash("sha256").update(text).digest("hex").slice(0, 12),
-    });
-  });
-  return out;
-}
-
-/** Title (first H1 outside code fences) and H2 count */
+/** Title (first H1 outside code fences), H2 count and line count of a plan (explain blocks already stripped) */
 function scan(markdown: string): { title: string | undefined; sections: number; lines: number } {
-  let title: string | undefined;
-  let sections = 0;
-  let fence: string | undefined;
-  const all = splitLines(stripExplainBlocks(markdown));
-  for (const line of all) {
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (f) {
-      if (fence === undefined) fence = f[1]![0]!;
-      else if (f[1]![0] === fence) fence = undefined;
-      continue;
-    }
-    if (fence !== undefined) continue;
-    const h1 = /^# +(.+?)\s*#*\s*$/.exec(line);
-    if (h1 && title === undefined) title = h1[1]!.trim();
-    else if (/^## /.test(line)) sections++;
-  }
-  return { title, sections, lines: all.length };
+  const lines = markdown === "" ? [] : toLines(markdown.replace(/\r?\n$/, ""));
+  const headings = scanHeadings(lines, scanFences(lines).inFence);
+  return {
+    title: headings.find((h) => h.level === 1)?.title.trim(),
+    sections: headings.filter((h) => h.level === 2).length,
+    lines: lines.length,
+  };
 }
 
-/** Resolve a plan file; null if it is absent, not a regular file, or its realpath leaves the plans directory */
-async function resolvePlan(dir: string, name: string): Promise<{ path: string; size: number; mtimeMs: number } | null> {
+async function realRoot(dir: string): Promise<string | null> {
   try {
-    const root = await realpath(dir);
-    const real = await realpath(join(dir, name));
-    if (!real.startsWith(root + sep)) return null;
-    const st = await stat(real);
-    return st.isFile() ? { path: real, size: st.size, mtimeMs: st.mtimeMs } : null;
+    return await realpath(dir);
   } catch {
     return null;
   }
 }
 
-async function summarize(name: string, r: { path: string; size: number; mtimeMs: number }, isRead: IsRead): Promise<PlanSummary> {
+/** A plan file under the real plans directory `root`: a regular file whose realpath stays inside it. Null otherwise */
+async function resolveIn(root: string, name: string, symlink: boolean): Promise<Resolved | null> {
+  try {
+    // Only a symlink can leave the directory; a plain entry is already `root/name`
+    const path = symlink ? await realpath(join(root, name)) : join(root, name);
+    if (symlink && !path.startsWith(root + sep)) return null;
+    const st = await stat(path);
+    return st.isFile() ? { path, size: st.size, mtimeMs: st.mtimeMs } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every listable plan file (same filters as the list, no cap) */
+async function resolveAll(dir: string): Promise<{ name: string; r: Resolved }[]> {
+  const root = await realRoot(dir);
+  if (!root) return [];
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const found = await Promise.all(
+    entries
+      .filter((e) => isPlanFile(e.name) && (e.isFile() || e.isSymbolicLink()))
+      .map(async (e) => ({ name: e.name, r: await resolveIn(root, e.name, e.isSymbolicLink()) })),
+  );
+  return found.filter((x): x is { name: string; r: Resolved } => x.r !== null);
+}
+
+async function resolvePlan(dir: string, name: string): Promise<Resolved | null> {
+  const root = await realRoot(dir);
+  return root ? resolveIn(root, name, true) : null;
+}
+
+function buildSummary(name: string, size: number, mtimeMs: number, md: string, isRead: IsRead): PlanSummary {
+  const s = scan(md);
+  const mtime = new Date(mtimeMs).toISOString();
+  return { name, title: s.title ?? name, mtime, bytes: size, sections: s.sections, lines: s.lines, read: isRead(name, mtime) };
+}
+
+async function summarize(name: string, r: Resolved, isRead: IsRead): Promise<PlanSummary> {
   let md = "";
   if (r.size <= MAX_PLAN_BYTES) {
-    try { md = await readFile(r.path, "utf8"); } catch {}
+    try { md = stripExplainBlocks(await readFile(r.path, "utf8")); } catch {}
   }
-  const s = scan(md);
-  const mtime = new Date(r.mtimeMs).toISOString();
-  return {
-    name,
-    title: s.title ?? name,
-    mtime,
-    bytes: r.size,
-    sections: s.sections,
-    lines: s.lines,
-    read: isRead(name, mtime),
-  };
+  return buildSummary(name, r.size, r.mtimeMs, md, isRead);
+}
+
+/** The summary of a plan file known to sit directly in the plans dir (a name from `planNameOfPath`), read synchronously. Null if it is gone */
+export function planSummarySync(dir: string, name: string, isRead: IsRead = () => false): PlanSummary | null {
+  try {
+    const path = join(dir, name);
+    const st = statSync(path);
+    if (!st.isFile()) return null;
+    const md = st.size <= MAX_PLAN_BYTES ? stripExplainBlocks(readFileSync(path, "utf8")) : "";
+    return buildSummary(name, st.size, st.mtimeMs, md, isRead);
+  } catch {
+    return null;
+  }
 }
 
 /** One plan's summary through the same filters as the list (`*.md`, no dotfile, realpath inside the dir). Null if it does not pass. Oversize files are summarized without reading, as in the list */
 export async function planSummary(dir: string, name: string, isRead: IsRead = () => false): Promise<PlanSummary | null> {
-  if (!name.endsWith(".md") || !isPlanName(name)) return null;
+  if (!isPlanFile(name)) return null;
   const r = await resolvePlan(dir, name);
   return r ? summarize(name, r, isRead) : null;
 }
 
 export async function listPlans(home: string, isRead: IsRead = () => false): Promise<PlanSummary[]> {
-  const dir = plansDir(home);
-  let names: string[];
-  try {
-    names = (await readdir(dir)).filter((n) => n.endsWith(".md") && isPlanName(n));
-  } catch {
-    return [];
-  }
-  const found = (await Promise.all(names.map(async (n) => ({ n, r: await resolvePlan(dir, n) }))))
-    .filter((x): x is { n: string; r: NonNullable<typeof x.r> } => x.r !== null)
-    .sort((a, b) => b.r.mtimeMs - a.r.mtimeMs || (a.n < b.n ? -1 : 1))
+  const found = (await resolveAll(plansDir(home)))
+    .sort((a, b) => b.r.mtimeMs - a.r.mtimeMs || (a.name < b.name ? -1 : 1))
     .slice(0, MAX_PLANS);
-  return Promise.all(found.map(({ n, r }) => summarize(n, r, isRead)));
+  return Promise.all(found.map(({ name, r }) => summarize(name, r, isRead)));
 }
 
-/** Returns null when `since` equals the file's mtime (not modified). Throws PlanError otherwise on failure */
-export async function readPlan(home: string, name: string, since?: string, isRead: IsRead = () => false): Promise<PlanContent | null> {
-  if (!isPlanName(name)) throw new PlanError(400, "invalid plan name");
+/** Throws PlanError when the plan cannot be served */
+export async function readPlan(home: string, name: string, isRead: IsRead = () => false): Promise<PlanContent> {
+  if (!isPlanFile(name)) throw new PlanError(400, "invalid plan name");
   const r = await resolvePlan(plansDir(home), name);
   if (!r) throw new PlanError(404, "plan not found");
-  const mtime = new Date(r.mtimeMs).toISOString();
-  if (since !== undefined && since === mtime) return null;
   if (r.size > MAX_PLAN_BYTES) throw new PlanError(413, "plan too large");
   // The explanation blocks written for AskUserQuestion are shown on the question screen, not in the plan
   const markdown = stripExplainBlocks(await readFile(r.path, "utf8"));
-  return { name, title: scan(markdown).title ?? name, mtime, markdown, read: isRead(name, mtime), sections: sectionsOf(markdown) };
+  const mtime = new Date(r.mtimeMs).toISOString();
+  return { name, title: scan(markdown).title ?? name, mtime, markdown, read: isRead(name, mtime) };
 }
 
 /** name -> "mtimeMs:size" of every listable plan file (same filters as the list, no cap), for change detection */
 export async function plansFingerprint(dir: string): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  let names: string[];
-  try {
-    names = (await readdir(dir)).filter((n) => n.endsWith(".md") && isPlanName(n));
-  } catch {
-    return out;
-  }
-  await Promise.all(
-    names.map(async (n) => {
-      const r = await resolvePlan(dir, n);
-      if (r) out.set(n, `${r.mtimeMs}:${r.size}`);
-    }),
-  );
-  return out;
+  return new Map((await resolveAll(dir)).map(({ name, r }) => [name, `${r.mtimeMs}:${r.size}`]));
 }
 
 /** The fingerprint of one file, or null if it is not a listable plan */
 export async function planFingerprint(dir: string, name: string): Promise<string | null> {
-  if (!name.endsWith(".md") || !isPlanName(name)) return null;
+  if (!isPlanFile(name)) return null;
   const r = await resolvePlan(dir, name);
   return r ? `${r.mtimeMs}:${r.size}` : null;
 }
 
 /** The plan name a file path points at, if its realpath is a plan file directly inside the plans dir; null otherwise (missing, outside, subdirectory) */
-export async function planNameOfPath(dir: string, filePath: string): Promise<string | null> {
+export function planNameOfPath(dir: string, filePath: string): string | null {
   try {
-    const root = await realpath(dir);
-    const real = await realpath(filePath);
+    const root = realpathSync(dir);
+    const real = realpathSync(filePath);
     if (dirname(real) !== root) return null;
     const name = basename(real);
-    return name.endsWith(".md") && isPlanName(name) ? name : null;
+    return isPlanFile(name) ? name : null;
   } catch {
     return null;
   }

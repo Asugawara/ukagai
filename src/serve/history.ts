@@ -1,9 +1,9 @@
 import { createReadStream, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
-import { isAllowedTranscriptPath, type DecisionSession, type HistoryEntry, type SessionHistory } from "../contract.js";
+import { TRANSCRIPT_MAX_BYTES, isAllowedTranscriptPath, type DecisionSession, type HistoryEntry, type SessionHistory } from "../contract.js";
 
-export const HISTORY_MAX_BYTES = 64 * 1024 * 1024;
+export const HISTORY_MAX_BYTES = TRANSCRIPT_MAX_BYTES;
 export const FIRST_MAX = 4000;
 export const RECENT_MAX = 500;
 export const RECENT_COUNT = 20;

@@ -4,7 +4,7 @@ import { realpath } from "node:fs/promises";
 import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXPLAIN_BLOCK_CLOSE, EXPLAIN_BLOCK_OPEN, extractExplainBlocks, stripExplainBlocks } from "../../src/contract.js";
-import { blockFor, findPlanFile } from "../../src/hook/plan-file.js";
+import { blockFor, findPlanFile, readBlockFor } from "../../src/hook/plan-file.js";
 import { tmpDir } from "./helpers.js";
 
 // The wording of Claude Code's plan-mode reminder
@@ -26,7 +26,7 @@ test("findPlanFile: the path named in the reminder is found; the last mention wi
   writeFileSync(join(plans, "a.md"), "# a\n");
   writeFileSync(join(plans, "b.md"), "# b\n");
   writeFileSync(tp, [record(reminder(join(plans, "a.md"))), record("hello"), record(reminder(join(plans, "b.md")))].join("\n") + "\n");
-  assert.equal(await findPlanFile(tp, home), await realpath(join(plans, "b.md")));
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, await realpath(join(plans, "b.md")));
 });
 
 test("findPlanFile: the JSON-escaped form (\\/) and the second wording are found", async () => {
@@ -35,9 +35,9 @@ test("findPlanFile: the JSON-escaped form (\\/) and the second wording are found
   const escaped = JSON.stringify({ text: reminder(join(plans, "c.md")) }).replace(/\//g, "\\/");
   assert.ok(escaped.includes("\\/"));
   writeFileSync(tp, escaped + "\n");
-  assert.equal(await findPlanFile(tp, home), await realpath(join(plans, "c.md")));
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, await realpath(join(plans, "c.md")));
   writeFileSync(tp, record(`A plan file already exists at ${join(plans, "c.md")}. You can read it.`) + "\n");
-  assert.equal(await findPlanFile(tp, home), await realpath(join(plans, "c.md")));
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, await realpath(join(plans, "c.md")));
 });
 
 test("findPlanFile: a configured plans directory elsewhere under home is accepted", async () => {
@@ -46,7 +46,7 @@ test("findPlanFile: a configured plans directory elsewhere under home is accepte
   const f = join(home, "proj", "docs", "plans", "x.md");
   writeFileSync(f, "# x\n");
   writeFileSync(tp, record(reminder(f)) + "\n");
-  assert.equal(await findPlanFile(tp, home), await realpath(f));
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, await realpath(f));
 });
 
 test("findPlanFile: a path outside home (or a link out of it) is rejected; a missing file is rejected", async () => {
@@ -54,28 +54,62 @@ test("findPlanFile: a path outside home (or a link out of it) is rejected; a mis
   const outside = tmpDir("ukagai-pf-out-");
   writeFileSync(join(outside, "o.md"), "# o\n");
   writeFileSync(tp, record(reminder(join(outside, "o.md"))) + "\n");
-  assert.equal(await findPlanFile(tp, home), null);
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, null);
   symlinkSync(join(outside, "o.md"), join(plans, "link.md"));
   writeFileSync(tp, record(reminder(join(plans, "link.md"))) + "\n");
-  assert.equal(await findPlanFile(tp, home), null);
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, null);
   writeFileSync(tp, record(reminder(join(plans, "missing.md"))) + "\n");
-  assert.equal(await findPlanFile(tp, home), null);
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, null);
 });
 
 test("findPlanFile: no match → null; fallback finds the newest recent plan holding a block for the question", async () => {
   const { home, plans, tp } = setup();
   writeFileSync(tp, record("nothing about plans here, just a plan to refactor") + "\n");
-  assert.equal(await findPlanFile(tp, home), null);
-  assert.equal(await findPlanFile(tp, home, "Q?"), null);
+  assert.equal((await findPlanFile(tp, home))?.file ?? null, null);
+  assert.equal((await findPlanFile(tp, home, "Q?"))?.file ?? null, null);
   writeFileSync(join(plans, "old.md"), block("Q?"));
   const old = new Date(Date.now() - 3 * 3600_000);
   utimesSync(join(plans, "old.md"), old, old);
-  assert.equal(await findPlanFile(tp, home, "Q?"), null); // too old
+  assert.equal((await findPlanFile(tp, home, "Q?"))?.file ?? null, null); // too old
   writeFileSync(join(plans, "other.md"), block("Another?"));
-  assert.equal(await findPlanFile(tp, home, "Q?"), null); // no block for this question
+  assert.equal((await findPlanFile(tp, home, "Q?"))?.file ?? null, null); // no block for this question
   writeFileSync(join(plans, "new.md"), "# plan\n" + block("Q?"));
-  assert.equal(await findPlanFile(tp, home, "Q?"), await realpath(join(plans, "new.md")));
-  assert.equal(await findPlanFile(undefined, home, "Q?"), await realpath(join(plans, "new.md")));
+  assert.equal((await findPlanFile(tp, home, "Q?"))?.file ?? null, await realpath(join(plans, "new.md")));
+  assert.equal((await findPlanFile(undefined, home, "Q?"))?.file ?? null, await realpath(join(plans, "new.md")));
+});
+
+test("findPlanFile: a mention far from the end (several chunks back) is found; the last of two far mentions wins; a path straddling a chunk boundary is whole", async () => {
+  const { home, plans, tp } = setup();
+  writeFileSync(join(plans, "a.md"), "# a\n");
+  writeFileSync(join(plans, "b.md"), "# b\n");
+  const filler = record("x".repeat(1000)) + "\n";
+  const pad = filler.repeat(Math.ceil((2 * 512 * 1024) / filler.length)); // more than two chunks of unrelated lines
+  writeFileSync(tp, record(reminder(join(plans, "a.md"))) + "\n" + pad + record(reminder(join(plans, "b.md"))) + "\n" + pad);
+  assert.equal((await findPlanFile(tp, home))?.file, await realpath(join(plans, "b.md")));
+  writeFileSync(tp, record(reminder(join(plans, "a.md"))) + "\n" + pad);
+  assert.equal((await findPlanFile(tp, home))?.file, await realpath(join(plans, "a.md")));
+  // the mention straddles the first chunk boundary (512 KB from the end): its path sits exactly across the cut
+  const mention = record(reminder(join(plans, "a.md"))) + "\n";
+  const cut = mention.indexOf("a.md") - 3;
+  writeFileSync(tp, pad + mention + "y".repeat(512 * 1024 - (mention.length - cut)));
+  assert.equal((await findPlanFile(tp, home))?.file, await realpath(join(plans, "a.md")));
+});
+
+test("findPlanFile: only the server's plan file names are accepted (*.md basename, no dotfile)", async () => {
+  const { home, plans, tp } = setup();
+  writeFileSync(join(plans, ".hidden.md"), "# h\n");
+  writeFileSync(tp, record(reminder(join(plans, ".hidden.md"))) + "\n");
+  assert.equal(await findPlanFile(tp, home), null);
+});
+
+test("findPlanFile: the fallback hands back the block it matched, so the caller reads nothing again", async () => {
+  const { home, plans, tp } = setup();
+  writeFileSync(tp, record("nothing") + "\n");
+  writeFileSync(join(plans, "new.md"), "# plan\n" + block("Q?"));
+  const hit = await findPlanFile(tp, home, "Q?");
+  assert.equal(hit?.block?.question, "Q?");
+  assert.equal(await readBlockFor(join(plans, "missing.md"), "Q?"), undefined);
+  assert.equal((await readBlockFor(join(plans, "new.md"), "Q?"))?.question, "Q?");
 });
 
 test("extractExplainBlocks: 0 / 1 / 2 blocks, unterminated ignored, verbatim question match", () => {

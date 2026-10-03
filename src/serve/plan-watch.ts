@@ -1,9 +1,11 @@
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import type { PlanSummary } from "../contract.js";
-import { MAX_PLAN_BYTES, planFingerprint, planSummary, plansFingerprint } from "./plans.js";
+import { MAX_PLAN_BYTES, planFingerprint, planSummary, plansFingerprint, type IsRead } from "./plans.js";
 
 export type PlanWatcherOptions = {
   plansDir: string;
+  /** Read marks: `read` of the summaries handed to onChange */
+  isRead?: IsRead;
   /** A plan was created or modified (debounced per file, final state) */
   onChange: (summary: PlanSummary) => void;
   /** A plan was deleted or renamed away */
@@ -18,7 +20,7 @@ export type PlanWatcherOptions = {
  * Files present at start are not reported.
  */
 export function startPlanWatcher(opts: PlanWatcherOptions): { stop(): void } {
-  const { plansDir, onChange, onRemove, pollMs = 10000, debounceMs = 400 } = opts;
+  const { plansDir, onChange, onRemove, isRead, pollMs = 10000, debounceMs = 400 } = opts;
   const known = new Map<string, string>();
   const timers = new Map<string, NodeJS.Timeout>();
   let watcher: FSWatcher | undefined;
@@ -38,7 +40,7 @@ export function startPlanWatcher(opts: PlanWatcherOptions): { stop(): void } {
       return;
     }
     if (known.get(name) === sig) return;
-    const summary = await planSummary(plansDir, name);
+    const summary = await planSummary(plansDir, name, isRead);
     if (stopped) return;
     if (!summary) {
       if (known.delete(name)) onRemove(name);

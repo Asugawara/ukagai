@@ -12,19 +12,21 @@ import {
   EventInput,
   POLL_TIMEOUT_MS,
   isAllowedExplanationPath,
+  isPlanFile,
+  plansDir,
   isAllowedTranscriptPath,
   type DecisionContext,
   type DecisionSession,
 } from "../contract.js";
 import type { Lang } from "../settings/config.js";
 import type { SseHub } from "./sse.js";
+import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
-import { PlanError, isPlanName, listPlans, planSummary, plansDir, readPlan } from "./plans.js";
+import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanReadStore } from "./plan-read.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
-const CONTEXT_GUARD_MS = 1500;
 const MAX_WAIT_MS = 600000;
 const MAX_COOKIES = 1000;
 const WAIT_GONE: readonly DecisionStatus[] = ["answered", "hook_disconnected", "answer_lost", "cancelled", "denied_explain"];
@@ -192,8 +194,7 @@ export function createApp(deps: AppDeps): Hono {
 
     let context: DecisionContext = {};
     if (req.status !== "denied_explain") {
-      const guard = new Promise<DecisionContext>((r) => setTimeout(() => r({}), CONTEXT_GUARD_MS).unref());
-      context = await Promise.race([deps.collect(req.session).catch((): DecisionContext => ({})), guard]);
+      context = await collectGuarded(deps.collect, req.session);
     }
     const { decision, created } = store.create(req, context);
     return c.json(decision, created ? 201 : 200);
@@ -220,13 +221,12 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // ~/.claude/plans: read-only files, plus a per-plan read mark kept by ukagai (plan.updated / plan.removed come over SSE)
-  const isRead = (name: string, mtime: string) => deps.planRead.isRead(name, mtime);
+  const { isRead } = deps.planRead;
   app.get("/api/plans", auth("any"), async (c) => c.json({ plans: await listPlans(deps.home, isRead) }));
 
   app.get("/api/plans/:name", auth("any"), async (c) => {
     try {
-      const plan = await readPlan(deps.home, c.req.param("name"), c.req.query("since"), isRead);
-      return plan ? c.json(plan) : c.body(null, 304);
+      return c.json(await readPlan(deps.home, c.req.param("name"), isRead));
     } catch (e) {
       if (e instanceof PlanError) return c.json({ error: e.message }, e.status);
       throw e;
@@ -235,7 +235,7 @@ export function createApp(deps: AppDeps): Hono {
 
   const setPlanRead = async (c: Context, read: boolean) => {
     const name = c.req.param("name") ?? "";
-    if (!isPlanName(name) || !name.endsWith(".md")) return c.json({ error: "invalid plan name" }, 400);
+    if (!isPlanFile(name)) return c.json({ error: "invalid plan name" }, 400);
     let mtime: string | undefined;
     if (read) {
       const body = PlanReadRequest.safeParse(await c.req.json().catch(() => undefined));
@@ -243,7 +243,7 @@ export function createApp(deps: AppDeps): Hono {
       mtime = body.data.mtime;
     }
     const dir = plansDir(deps.home);
-    if (!(await planSummary(dir, name))) return c.json({ error: "plan not found" }, 404);
+    if ((await planFingerprint(dir, name)) === null) return c.json({ error: "plan not found" }, 404);
     if (mtime !== undefined) deps.planRead.mark(name, mtime);
     else deps.planRead.unmark(name);
     const summary = await planSummary(dir, name, isRead);
@@ -315,7 +315,7 @@ export function createApp(deps: AppDeps): Hono {
     const fingerprint = c.req.query("fingerprint");
     const toolUseId = c.req.query("tool_use_id");
     if (!fingerprint || !toolUseId) return c.json({ error: "fingerprint and tool_use_id are required" }, 400);
-    const open = store.findOpen(c.req.param("id"), fingerprint);
+    const open = store.findOpen(c.req.param("id"), c.req.query("agent_id") || undefined, fingerprint);
     if (!open) return c.json({ error: "no open decision" }, 404);
     return c.json({ decision: store.reattach(open, toolUseId) });
   });

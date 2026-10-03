@@ -188,3 +188,13 @@ export async function collectContext(session: DecisionSession, opts: CollectOpti
   ]);
   return { ...git, ...transcript };
 }
+
+/** collectContext (or any collector) that never takes longer than `ms` and never throws: a miss yields an empty context */
+export async function collectGuarded(
+  collect: (session: DecisionSession) => Promise<Context>,
+  session: DecisionSession,
+  ms = 1500,
+): Promise<Context> {
+  const guard = new Promise<Context>((r) => setTimeout(() => r({}), ms).unref());
+  return Promise.race([collect(session).catch((): Context => ({})), guard]);
+}

@@ -1,14 +1,13 @@
-import type { Decision, DecisionContext, DecisionSession } from "../../contract.js";
+import { POLL_TIMEOUT_MS, type Decision, type DecisionContext, type DecisionSession } from "../../contract.js";
 import { parsePlanImpact, validatePlan } from "../../hook/explain.js";
 import type { Lang } from "../../settings/config.js";
+import { collectGuarded } from "../context.js";
 import type { Store } from "../store.js";
 import type { Notification } from "./client.js";
 import type { BridgeLog } from "./log.js";
 
 export const IMPLEMENT_TEXT = "Implement the plan.";
 export const ANSWERED_ELSEWHERE = "answered_elsewhere";
-/** Length of one `store.wait` (the same long poll the hook uses; it also keeps the decision's lease alive) */
-const WAIT_MS = 25000;
 
 const NOTE: Record<Lang, string> = {
   en: "Codex's own 'Implement this plan?' popup stays open in the terminal after you decide here; choose 'No, stay in Plan mode' there (a second 'Yes' would run the plan twice).",
@@ -229,11 +228,7 @@ export class PlanBridge {
       agent: "codex",
       ...(t.title ? { title: t.title } : {}),
     };
-    let context: DecisionContext = {};
-    if (this.deps.collect) {
-      const guard = new Promise<DecisionContext>((r) => setTimeout(() => r({}), 1500).unref());
-      context = await Promise.race([this.deps.collect(session).catch((): DecisionContext => ({})), guard]);
-    }
+    const context: DecisionContext = this.deps.collect ? await collectGuarded(this.deps.collect, session) : {};
     const { decision, created } = this.deps.store.create(
       {
         tool_use_id: `codex-plan:${t.id}:${turnId}`,
@@ -265,7 +260,7 @@ export class PlanBridge {
     try {
       for (;;) {
         if (this.stopped) return;
-        const d = await store.wait(decisionId, this.deps.waitMs ?? WAIT_MS);
+        const d = await store.wait(decisionId, this.deps.waitMs ?? POLL_TIMEOUT_MS);
         if (d) return await this.deliver(t, d);
         const cur = store.get(decisionId);
         if (!cur || !["pending", "answer_submitted"].includes(cur.status)) return;

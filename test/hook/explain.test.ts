@@ -279,7 +279,7 @@ test("denyReason for a plan: English, no template, mentions ExitPlanMode", () =>
 
 test("multiDenyReason: has the question count; at most 1000 characters; no URL", () => {
   const r = multiDenyReason(3);
-  assert.match(r, /this call had 3/);
+  assert.match(r, /^\[ukagai, not a failure\] Ask one question per AskUserQuestion call \(this call had 3\)/);
   assert.ok(r.length <= 1000);
   assert.doesNotMatch(r, /https?:|localhost|127\.0\.0\.1|\/api\//);
   assert.doesNotMatch(r, /[ぁ-んァ-ン一-龥]/);

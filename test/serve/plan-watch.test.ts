@@ -23,10 +23,10 @@ function tmp(): string {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function watcher(dir: string, pollMs = 10000) {
+function watcher(dir: string, pollMs = 10000, isRead?: (name: string, mtime: string) => boolean) {
   const changes: PlanSummary[] = [];
   const removes: string[] = [];
-  const w = startPlanWatcher({ plansDir: dir, pollMs, debounceMs: 100, onChange: (s) => changes.push(s), onRemove: (n) => removes.push(n) });
+  const w = startPlanWatcher({ plansDir: dir, pollMs, debounceMs: 100, isRead, onChange: (s) => changes.push(s), onRemove: (n) => removes.push(n) });
   stops.push(() => w.stop());
   return { changes, removes, w };
 }
@@ -49,6 +49,17 @@ test("watcher: create emits one change; existing files are not reported", async 
   assert.equal(changes[0]!.name, "new.md");
   assert.equal(changes[0]!.title, "New");
   assert.equal(changes[0]!.sections, 1);
+});
+
+test("watcher: onChange gets the final summary, with `read` from isRead", async () => {
+  const dir = tmp();
+  const { changes } = watcher(dir, 10000, (name) => name === "marked.md");
+  await sleep(150);
+  writeFileSync(join(dir, "marked.md"), "# M\n");
+  writeFileSync(join(dir, "plain.md"), "# P\n");
+  await until(() => changes.length >= 2);
+  assert.equal(changes.find((c) => c.name === "marked.md")!.read, true);
+  assert.equal(changes.find((c) => c.name === "plain.md")!.read, false);
 });
 
 test("watcher: 5 rapid appends emit once with the final state", async () => {
