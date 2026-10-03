@@ -12,6 +12,7 @@ import { t } from "./i18n.js";
 const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h";
 const LEAVE_SCREEN = "\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l";
 const REFETCH_MS = 5000;
+const PLANS_MS = 10000;
 
 export interface Options {
   server: string;
@@ -55,6 +56,8 @@ export async function run(argv: string[]): Promise<number> {
   app.server = opts.server;
   app.lang = await resolveLang(opts);
   app.fetchHistory = (id) => api.history(id);
+  app.fetchPlans = () => api.plans();
+  app.fetchPlan = (name, since) => api.plan(name, since);
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());
@@ -86,6 +89,7 @@ export async function run(argv: string[]): Promise<number> {
   };
 
   app.onHistory = schedule;
+  app.onPlans = schedule;
 
   const refetch = async () => {
     try {
@@ -104,6 +108,7 @@ export async function run(argv: string[]): Promise<number> {
       abort.abort();
       clearInterval(tick);
       clearInterval(poll);
+      clearInterval(plansPoll);
       clearTimeout(escTimer);
       clearTimeout(paintTimer);
       process.stdin.removeAllListeners("data");
@@ -170,6 +175,7 @@ export async function run(argv: string[]): Promise<number> {
       if (++beat % 4 === 0) schedule();
     }, 250);
     const poll = setInterval(() => void refetch(), REFETCH_MS);
+    const plansPoll = setInterval(() => void app.refreshPlans(), PLANS_MS);
 
     out.write(ENTER_SCREEN);
     schedule();
