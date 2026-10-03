@@ -9,7 +9,7 @@ import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 import { historyItems, type HistoryItem } from "./history.js";
-import { initialPlanState, remapState, sectionHashes, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
+import { initialPlanState, headings, remapState, sectionHashes, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -105,7 +105,7 @@ export class App {
   private prior: { id: string; kind: string; until: number } | null = null;
   private footIdx = -1;
   /** A long plan's open / read sections and contents cursor, by decision (by plan file when the decision names one, so a plan keeps its state when its approval arrives) */
-  private planStates = new Map<string, { st: PlanState; hashes: string[] }>();
+  private planStates = new Map<string, { st: PlanState; hashes: string[]; heads: string[] }>();
   private hashCache = new WeakMap<ScreenModel, string[]>();
   /** The section (contents row) the background should scroll to once the next frame has told where it is */
   private reveal: number | null = null;
@@ -483,12 +483,12 @@ export class App {
     const memo = this.planStates.get(key);
     if (!memo) {
       const st = initialPlanState(o);
-      this.planStates.set(key, { st, hashes });
+      this.planStates.set(key, { st, hashes, heads: headings(o) });
       return st;
     }
     if (memo.hashes.join() !== hashes.join()) {
       const st = remapState(o, hashes, memo);
-      this.planStates.set(key, { st, hashes });
+      this.planStates.set(key, { st, hashes, heads: headings(o) });
       return st;
     }
     return memo.st;

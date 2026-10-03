@@ -112,17 +112,28 @@ export function sectionHashes(o: PlanOutline, text: string): string[] {
   return o.entries.map((e) => createHash("sha256").update(lines.slice(e.at, e.at + e.lines).join("\n")).digest("hex").slice(0, 12));
 }
 
+/** `level:title` per outline entry: how a changed section is matched with its earlier self */
+export const headings = (o: PlanOutline): string[] => o.entries.map((e) => `${e.level}:${e.title}`);
+
 /**
  * The state of a plan whose text changed (a live update, or a plan file turning into its approval screen): a section whose hash is unchanged keeps
- * its open / read state; a changed or new one is closed, unread and marked `updated`; removed ones are gone. The contents cursor follows its section.
+ * its open / read state; a changed one keeps its open state but turns unread and `updated`, a new one is folded, unread and `updated`; removed ones are gone. The contents cursor follows its section.
  */
-export function remapState(o: PlanOutline, hashes: string[], prev: { st: PlanState; hashes: string[] }): PlanState {
+export function remapState(o: PlanOutline, hashes: string[], prev: { st: PlanState; hashes: string[]; heads?: string[] }): PlanState {
   const used = new Set<number>();
+  const heads = headings(o);
   const st: PlanState = { open: new Set(), read: new Set(), updated: new Set(), cur: 0 };
   let cur: number | null = null;
   o.entries.forEach((e, j) => {
     const i = prev.hashes.findIndex((h, k) => h === hashes[j] && !used.has(k));
     if (i < 0) {
+      // A changed section keeps its open / folded state (matched by level and heading); a new one arrives folded
+      const m = prev.heads ? prev.heads.findIndex((h, k) => h === heads[j] && !used.has(k) && !hashes.includes(prev.hashes[k]!)) : -1;
+      if (m >= 0) {
+        used.add(m);
+        if (prev.st.open.has(m)) st.open.add(j);
+        if (prev.st.cur === m) cur = j;
+      }
       if (e.scope) st.read.add(j);
       else st.updated.add(j);
       return;

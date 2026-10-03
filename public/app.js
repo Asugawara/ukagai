@@ -618,8 +618,8 @@ async function refreshPlanData(name) {
   $("decision").scrollTop = keepRight;
 }
 
-// Unchanged sections (same heading, level and hash) keep their open / read state; changed or new ones are closed, unread and marked
-// `updated` until opened; removed ones are gone. The server's sections[] and the GUI's outline split the file the same way (H2 / H3 outside fences)
+// Unchanged sections (same heading, level and hash) keep their open / read state; changed ones keep their open state but turn unread and are marked
+// `updated` until opened; new ones are folded, unread and marked; removed ones are gone. The server's sections[] and the GUI's outline split the file the same way (H2 / H3 outside fences)
 function remapPlanState(key, old, data) {
   const o = planOutlineOf(data.markdown);
   outlines.set(key, { plan: data.markdown, outline: o });
@@ -636,7 +636,7 @@ function remapPlanState(key, old, data) {
     const k = same.get(j);
     if (k === undefined) {
       const m = old.sections.findIndex((x, m) => !used.has(m) && x.level === s.level && x.heading === s.heading);
-      if (m >= 0) used.add(m);
+      if (m >= 0) { used.add(m); if (st.open.has(m)) next.open.add(j); } // a changed section keeps its open / folded state; only the read mark and `updated` change
       next.upd.add(j);
       return;
     }

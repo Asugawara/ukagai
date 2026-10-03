@@ -127,19 +127,32 @@ test("live update: a changed section turns unread with `updated`, unchanged ones
   const after = draw(app, 140, 400);
   const rows = foldedRows(after.text);
   const rollout = rows.find((r) => r.includes("Rollout"))!;
-  assert.ok(rollout.includes("☐") && rollout.includes("updated") && rollout.trim().startsWith("▸"), rollout);
+  assert.ok(rollout.includes("☐") && rollout.includes("updated") && rollout.trim().startsWith("▾"), "changed and open before: still open, unread, updated: " + rollout);
   assert.equal(rows.filter((r) => r.includes("updated")).length, 1, "only the changed section");
   assert.equal(rows.filter((r) => r.includes("☑")).length, 14, "the others stay read");
-  assert.equal(rows.filter((r) => r.trim().startsWith("▾")).length, 14, "the others stay open");
+  assert.equal(rows.filter((r) => r.trim().startsWith("▾")).length, 15, "all stay open, the changed one too");
   // Opening it clears the word
   const i = app.view(clock).plan!;
   assert.equal(i.updated.size, 1);
   press(app, tab); // focus back to the decision column (j/k move the contents cursor)
   const idx = planOutline(FILES["b.md"].markdown).entries.findIndex((e) => e.plain === "Rollout");
   while (app.view(clock).plan!.cur !== idx) press(app, ch("j"));
+  press(app, enter); // it is open already: Enter folds it, the next Enter opens it again and clears the word
+  assert.equal(app.view(clock).plan!.updated.size, 1);
   press(app, enter);
   assert.equal(app.view(clock).plan!.updated.size, 0);
   assert.ok(!foldedRows(draw(app, 140, 400).text).some((r) => r.includes("updated")));
+});
+
+test("live update: a changed section that was folded stays folded (unread, updated)", async () => {
+  const { app } = setup();
+  await arrive(app);
+  assert.ok(foldedRows(draw(app, 140, 400).text).find((r) => r.includes("Rollout"))!.trim().startsWith("▸"), "Rollout starts folded");
+  FILES["b.md"] = { ...FILES["b.md"]!, mtime: ago(1000), markdown: LONG.replace("## Rollout\n", "## Rollout\n\nA new rollout note.\n") };
+  app.planUpdated(summary(FILES["b.md"]), clock);
+  await tick();
+  const rollout = foldedRows(draw(app, 140, 400).text).find((r) => r.includes("Rollout"))!;
+  assert.ok(rollout.trim().startsWith("▸") && rollout.includes("☐") && rollout.includes("updated"), rollout);
 });
 
 test("live update with no change in the text only ticks the age (the summary alone does not refetch)", async () => {
