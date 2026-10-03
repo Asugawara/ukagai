@@ -1,6 +1,6 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { start, type ServeHandle } from "../../src/serve/index.js";
@@ -122,6 +122,33 @@ test("(c) a denied_explain within 2 minutes and no explanation file registers as
   const out = await hook;
   assert.equal(out.code, 0);
   assert.equal(out.stdout, "");
+});
+
+test("(restart) the server restarts (same port, same data-dir) while the hook waits: the hook resumes and allow is emitted", async () => {
+  const env = await setup();
+  const dataDir = env.hookArgs[3]!;
+  const hook = runHook(env.hookArgs, stdin(env, tmp(), "AskUserQuestion", askInput, "plan", "tu-restart"));
+  const d = await waitForPending(env);
+  await new Promise((r) => setTimeout(r, 300));
+  const port = env.h.port;
+  await env.h.close();
+  const h2 = await start({ port, dataDir, home: env.home });
+  handles.push(h2);
+  const env2: Env = { ...env, h: h2 };
+  const again = (await (await call(env2, `/api/decisions/${d.id}`)).json()) as any;
+  assert.equal(again.status, "pending");
+  // the hook's retry (1 s backoff) reconnects; answer through the API once it waits again
+  await new Promise((r) => setTimeout(r, 1500));
+  const r = await call(env2, `/api/decisions/${d.id}/answer`, { answers: { [QUESTION]: "B" } });
+  assert.equal(r.status, 200);
+  const out = await hook;
+  assert.equal(out.code, 0);
+  let log = "";
+  try { log = readFileSync(join(dataDir, "hook.log"), "utf8"); } catch {}
+  assert.notEqual(out.stdout, "", log);
+  const j = JSON.parse(out.stdout);
+  assert.equal(j.hookSpecificOutput.permissionDecision, "allow");
+  assert.deepEqual(j.hookSpecificOutput.updatedInput.answers, { [QUESTION]: "B" });
 });
 
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {

@@ -121,13 +121,11 @@ export class Store {
         }
       }
     }
-    // After a restart the connection to the hook is gone. A special case outside canTransition
+    // After a restart live decisions stay live: the hook retries its wait (W2), so re-arm the lease with the default grace.
+    // If no hook comes back, the lease expires and checkLeases moves it to hook_disconnected / answer_lost as usual.
+    const lease = new Date(Date.now() + this.opts.leaseGraceMs).toISOString();
     for (const d of this.decisions.values()) {
-      if (LIVE.includes(d.status)) {
-        d.status = "hook_disconnected";
-        delete d.lease_until;
-        this.persist(d);
-      }
+      if (LIVE.includes(d.status)) d.lease_until = lease;
     }
     if (existsSync(this.eventsFile)) {
       for (const line of readFileSync(this.eventsFile, "utf8").split("\n")) {

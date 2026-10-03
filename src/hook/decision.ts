@@ -155,7 +155,7 @@ export async function handleDecision(
             lg("create_decision_failed", failMsg());
             return null;
           }
-          return deny(multiDenyReason(parsed.data.questions.length));
+          return deny(multiDenyReason(parsed.data.questions.length, input.agent));
         }
       }
       const found = await findExplanation(dir, q0.question);
@@ -216,6 +216,7 @@ export async function handleDecision(
             ...rewriteIssues.map((i) => i.text),
           ],
           codes,
+          agent: input.agent,
           blocker: found ? parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields["type"] === "blocker" : false,
         });
         const reg = await client.createDecision({ ...base, status: "denied_explain", missing: codes });
@@ -251,7 +252,7 @@ export async function handleDecision(
     } else if (prior.length > 0) {
       explanation = noExplanation("loop_guard");
     } else {
-      const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((c) => MISSING_LABELS[c]) });
+      const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((c) => MISSING_LABELS[c]), agent: input.agent });
       const reg = await client.createDecision({ ...base, status: "denied_explain", missing: v.missing });
       if (!reg) {
         lg("create_decision_failed", failMsg());

@@ -27,8 +27,8 @@ export class Client {
     private readonly dataDir: string,
   ) {}
 
-  private async getToken(): Promise<string | null> {
-    if (this.token !== undefined) return this.token;
+  private async getToken(fresh = false): Promise<string | null> {
+    if (!fresh && this.token !== undefined) return this.token;
     try {
       const t = (await readFile(join(this.dataDir, "token"), "utf8")).trim();
       this.token = t === "" ? null : t;
@@ -38,15 +38,34 @@ export class Client {
     return this.token;
   }
 
-  /** A missing token, no connection or a timeout yields null (treated as unreachable) */
+  /**
+   * A missing token, no connection or a timeout yields null (treated as unreachable).
+   * A 401 means the server may have restarted with a new token: re-read the token file and try again (up to twice, 300 ms apart,
+   * since the server writes the file just after it starts listening).
+   */
   private async request(
     method: string,
     path: string,
     body: unknown,
     timeoutMs: number,
   ): Promise<{ status: number; text: string } | null> {
+    let r = await this.requestOnce(method, path, body, timeoutMs, false);
+    for (let i = 0; i < 2 && r?.status === 401; i++) {
+      if (i > 0) await new Promise((res) => setTimeout(res, 300));
+      r = await this.requestOnce(method, path, body, timeoutMs, true);
+    }
+    return r;
+  }
+
+  private async requestOnce(
+    method: string,
+    path: string,
+    body: unknown,
+    timeoutMs: number,
+    fresh: boolean,
+  ): Promise<{ status: number; text: string } | null> {
     this.lastFailure = undefined;
-    const token = await this.getToken();
+    const token = await this.getToken(fresh);
     if (!token) {
       this.lastFailure = { message: "no token" };
       return null;
