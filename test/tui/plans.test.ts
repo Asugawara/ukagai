@@ -3,13 +3,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { App, type Effect } from "../../src/tui/app.js";
-import type { PlanFile, PlanSummary } from "../../src/tui/api.js";
+import { App } from "../../src/tui/app.js";
+import type { PlanContent, PlanSummary } from "../../src/contract.js";
 import type { Key } from "../../src/tui/keys.js";
 import { MESSAGES } from "../../src/tui/i18n.js";
 import { renderFrame } from "../../src/tui/render.js";
-import { planOutline, sectionHashes } from "../../src/tui/plan.js";
-import { sectionsOf } from "../../src/serve/plans.js";
+import { planOutline } from "../../src/tui/plan.js";
 import { stripAnsi } from "../../src/tui/width.js";
 import { decision } from "./helpers.js";
 
@@ -24,19 +23,19 @@ const press = (app: App, ...keys: Key[]) => keys.flatMap((k) => app.handle(k, (c
 const tick = () => new Promise((r) => setTimeout(r, 5));
 const ago = (ms: number) => new Date(clock - ms).toISOString();
 
-function file(name: string, title: string, markdown: string, ageMs: number): PlanFile {
-  return { name, title, mtime: ago(ageMs), markdown };
+function file(name: string, title: string, markdown: string, ageMs: number): PlanContent {
+  return { name, title, mtime: ago(ageMs), markdown, read: false };
 }
-function summary(f: PlanFile, read = false): PlanSummary {
+function summary(f: PlanContent, read = false): PlanSummary {
   const o = planOutline(f.markdown);
   return { name: f.name, title: f.title, mtime: f.mtime, bytes: f.markdown.length, sections: o.h2, lines: o.lines, read };
 }
 
-let FILES: Record<string, PlanFile>;
+let FILES: Record<string, PlanContent>;
 let fetched: string[];
 
-/** An App with stubbed plan fetching; `effects` collects what would be POSTed outside a key press */
-function setup(): { app: App; effects: Effect[] } {
+/** An App with stubbed plan fetching */
+function setup(): { app: App } {
   FILES = {
     "b.md": file("b.md", "Export retry", LONG, 3600_000),
     "c.md": file("c.md", "Short plan C", SHORT_C, 5 * 60_000),
@@ -44,14 +43,11 @@ function setup(): { app: App; effects: Effect[] } {
   };
   fetched = [];
   const app = new App();
-  const effects: Effect[] = [];
-  app.onEffect = (e) => effects.push(...e);
-  app.fetchPlan = async (name, since) => {
+  app.fetchPlan = async (name) => {
     fetched.push(name);
-    const f = FILES[name]!;
-    return since === f.mtime ? null : f;
+    return FILES[name]!;
   };
-  return { app, effects };
+  return { app };
 }
 
 function draw(app: App, cols = 140, rows = 50) {
@@ -69,7 +65,7 @@ async function arrive(app: App, name = "b.md") {
 }
 
 test("a new plan arriving on the idle screen comes up by itself: header, folded rows, no buttons; y a n do nothing (en and ja)", async () => {
-  const { app, effects } = setup();
+  const { app } = setup();
   await arrive(app);
   assert.equal(app.shownPlan, "b.md");
   const { text, lines } = draw(app, 140, 400);
@@ -84,9 +80,8 @@ test("a new plan arriving on the idle screen comes up by itself: header, folded 
   assert.ok(text.includes("Done reading (Esc)"));
   for (const word of ["Approve", "Reject", "Free text", "None of these", "Can't answer", "[y]"]) assert.ok(!text.includes(word), word);
   assert.ok(text.includes("Pending 1"), "a new plan is counted");
-  const posted = effects.length;
-  for (const k of ["y", "a", "n"]) assert.deepEqual(press(app, ch(k)), []);
-  assert.equal(effects.length, posted);
+  for (const k of ["y", "n"]) assert.deepEqual(press(app, ch(k)), []);
+  assert.deepEqual(press(app, enter), [], "Enter on a plan file does not submit");
   assert.equal(app.shownPlan, "b.md");
 
   const ja = setup();
@@ -98,7 +93,7 @@ test("a new plan arriving on the idle screen comes up by itself: header, folded 
 });
 
 test("Esc is Done reading: the read POST, then the idle screen with no plan on it", async () => {
-  const { app, effects } = setup();
+  const { app } = setup();
   await arrive(app);
   const out = press(app, esc);
   assert.deepEqual(out, [{ type: "read", name: "b.md", mtime: FILES["b.md"]!.mtime }]);
@@ -106,7 +101,7 @@ test("Esc is Done reading: the read POST, then the idle screen with no plan on i
   const { text } = draw(app);
   assert.ok(text.includes("No pending decisions") && !text.includes("Recent plans") && !text.includes("Export retry"));
   assert.equal(app.count(clock), 0);
-  assert.deepEqual(effects, []);
+  assert.deepEqual(press(app, esc), [], "nothing on screen: no second read POST");
 });
 
 test("live update: a changed section turns unread with `updated`, unchanged ones keep their state, the scroll stays", async () => {
@@ -181,8 +176,8 @@ test("decision precedence: a decision takes the screen (Pending 2); ] is the pla
   assert.equal(app.shownPlan, "b.md", "the plan is next");
 });
 
-test("upgrade in place: the approval of the shown plan keeps the folding state, shows the buttons, is one list row; answering marks the plan read", async () => {
-  const { app, effects } = setup();
+test("upgrade in place: the approval of the shown plan keeps the folding state, shows the buttons, is one list row; answering leaves nothing to mark read", async () => {
+  const { app } = setup();
   await arrive(app);
   press(app, tab, ch("]"), ch("]"));
   const open = [...app.view(clock).plan!.open].sort();
@@ -203,8 +198,9 @@ test("upgrade in place: the approval of the shown plan keeps the folding state, 
   assert.ok(draw(app, 140, 50).text.includes("Unread sections (6)"));
   const out = press(app, ch("y"));
   assert.deepEqual(out, [{ type: "answer", id: "ap", body: { approve: true, set_mode_auto: true } }]);
+  // The server marks the plan read when the approval leaves pending and broadcasts plan.updated first; the TUI posts nothing itself
+  app.planUpdated({ ...summary(FILES["b.md"]!), read: true }, clock);
   app.answered({ ...ap, status: "answered" } as never, clock);
-  assert.deepEqual(effects, [{ type: "read", name: "b.md", mtime: FILES["b.md"]!.mtime }]);
   assert.equal(app.shownPlan, null, "the plan is read, so nothing is next");
 });
 
@@ -289,11 +285,6 @@ test("the list (b) holds decisions first, then new plans newest first with the `
   assert.ok(plan > 0);
   assert.ok(lines[plan + 1]!.includes("plan") && lines[plan + 1]!.includes("2 sections"), lines[plan + 1]);
   assert.ok(!lines.some((l) => l.includes("Old plan")), "a plan unread for 30 hours is not in the list");
-});
-
-test("section hashes computed in the TUI equal the server's", () => {
-  const ours = sectionHashes(planOutline(LONG), LONG);
-  assert.deepEqual(ours, sectionsOf(LONG).map((s) => s.hash));
 });
 
 test("TUI and GUI use the same words for plans", async () => {

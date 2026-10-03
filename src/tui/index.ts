@@ -55,7 +55,7 @@ export async function run(argv: string[]): Promise<number> {
   app.server = opts.server;
   app.lang = await resolveLang(opts);
   app.fetchHistory = (id) => api.history(id);
-  app.fetchPlan = (name, since) => api.plan(name, since);
+  app.fetchPlan = (name) => api.plan(name);
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());
@@ -91,7 +91,7 @@ export async function run(argv: string[]): Promise<number> {
 
   const refetch = async () => {
     try {
-      await syncOnce(api, app);
+      await syncOnce(api, app, Date.now, app.down);
       schedule();
     } catch {
       // While disconnected, leave it to the SSE reconnect and the next refetch

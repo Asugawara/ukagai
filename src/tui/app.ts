@@ -1,7 +1,6 @@
-import { MULTI_SELECT_SEPARATOR, type Decision, type SessionHistory } from "../contract.js";
+import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type SessionHistory } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
-import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
-import type { PlanFile, PlanSummary } from "./api.js";
+import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
@@ -9,7 +8,7 @@ import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 import { historyItems, type HistoryItem } from "./history.js";
-import { initialPlanState, headings, remapState, sectionHashes, setOpen, toggleAll, type PlanState } from "./plan.js";
+import { initialPlanState, remapState, setOpen, toggleAll, type PlanOutline, type PlanState } from "./plan.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -38,7 +37,6 @@ export const HSCROLL_STEP = 8;
 export const FULL_HINT_MS = 6000;
 /** A plan is new (shown by itself, counted) while unread and written within this long */
 export const NEW_PLAN_MS = 24 * 3600_000;
-/** Plans listed on the idle screen */
 
 const STATUS_KEY: Record<string, MessageKey> = {
   answer_submitted: "status_answer_submitted",
@@ -84,15 +82,13 @@ export class App {
   private histDetail: number | null = null;
   /** Plans are items like decisions: the summaries (GET /api/plans, plan.updated), the files read so far and the screen models built from them */
   readonly plans = new Map<string, PlanSummary>();
-  private files = new Map<string, PlanFile>();
+  private files = new Map<string, PlanContent>();
   private planModels = new Map<string, ScreenModel>();
   /** The plan file shown as an item of its own (shownId is null then) */
   shownPlan: string | null = null;
   /** Fetches one plan file (set by index.ts; absent in tests that do not need it) and is told when a screen should be redrawn */
-  fetchPlan: ((name: string, since?: string) => Promise<PlanFile | null>) | null = null;
+  fetchPlan: ((name: string) => Promise<PlanContent>) | null = null;
   onPlans: () => void = () => {};
-  /** Effects produced outside a key press (an answer that marks its plan read, a plan opened from a list) */
-  onEffect: (e: Effect[]) => void = () => {};
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
@@ -105,8 +101,7 @@ export class App {
   private prior: { id: string; kind: string; until: number } | null = null;
   private footIdx = -1;
   /** A long plan's open / read sections and contents cursor, by decision (by plan file when the decision names one, so a plan keeps its state when its approval arrives) */
-  private planStates = new Map<string, { st: PlanState; hashes: string[]; heads: string[] }>();
-  private hashCache = new WeakMap<ScreenModel, string[]>();
+  private planStates = new Map<string, { st: PlanState; outline: PlanOutline }>();
   /** The section (contents row) the background should scroll to once the next frame has told where it is */
   private reveal: number | null = null;
   private listIndex = 0;
@@ -118,7 +113,8 @@ export class App {
   private sent = new Set<string>();
   /** Server address (shown in the footer "cannot connect" message; set by index.ts) */
   server = "";
-  private down = false;
+  /** The SSE stream is down (the safety poll then refetches the plans too) */
+  down = false;
   private restoredUntil = 0;
 
   // ---- Data ----
@@ -157,8 +153,6 @@ export class App {
       if (key) this.showToast(t(this.lang, key), now);
       if (d.status !== "answer_submitted") this.sent.delete(d.id);
     }
-    // The plan of an approval this UI answered is read, whichever of the answer and the event arrives first
-    if (d.status !== "pending" && (this.sending.has(d.id) || this.sent.has(d.id))) this.readPlanOf(d);
     if (d.id === this.shownId) {
       if (d.status !== "pending") this.advance(now);
     } else if (this.shownId == null && d.status === "pending") {
@@ -229,7 +223,7 @@ export class App {
     this.plans.delete(name);
     this.files.delete(name);
     this.planModels.delete(name);
-    this.planStates.delete(`plan:${name}`);
+    this.planStates.delete(planKeyOf(name));
   }
 
   /** With nothing on screen, the newest new plan comes up by itself (once its text is here) */
@@ -251,7 +245,6 @@ export class App {
     if (!this.fetchPlan) return;
     void this.fetchPlan(name).then(
       (file) => {
-        if (!file) return;
         if (auto && (this.shownId !== null || this.shownPlan !== null)) return;
         this.files.set(name, file);
         this.planModels.delete(name);
@@ -267,7 +260,7 @@ export class App {
     if (!this.fetchPlan) return;
     void this.fetchPlan(name).then(
       (file) => {
-        if (!file || this.shownPlan !== name) return;
+        if (this.shownPlan !== name) return;
         this.files.set(name, file);
         this.planModels.delete(name);
         this.onPlans();
@@ -276,18 +269,12 @@ export class App {
     );
   }
 
-  /** Done reading, or the approval of this plan answered: mark it read at the mtime that was read (no effect when it already is) */
-  private markRead(name: string, mtime: string): void {
+  /** Done reading: mark the plan read at the mtime that was read (no effect when it already is). The server marks an approved plan read itself */
+  private markRead(name: string, mtime: string): Effect[] {
     const sum = this.plans.get(name);
-    if (!sum || sum.read) return;
+    if (!sum || sum.read) return [];
     if (sum.mtime === mtime) this.plans.set(name, { ...sum, read: true });
-    this.onEffect([{ type: "read", name, mtime }]);
-  }
-
-  private readPlanOf(d: Decision): void {
-    const name = planNameOf(d);
-    const sum = name ? this.plans.get(name) : undefined;
-    if (name && sum) this.markRead(name, this.files.get(name)?.mtime ?? sum.mtime);
+    return [{ type: "read", name, mtime }];
   }
 
   /** SSE connection state: "cannot connect" while down, and "reconnected" for 2 seconds after it comes back */
@@ -472,25 +459,17 @@ export class App {
 
   /**
    * The folding state of a long plan. It lives under the plan file's name when there is one (the plan file and its approval are one item), else under
-   * the decision id. When the text changed since the state was made, the section hashes decide what carries over (`remapState`).
+   * the decision id. When the text changed since the state was made, the section hashes (`PlanEntry.hash`) decide what carries over (`remapState`).
    */
   private planState(m: ScreenModel): PlanState {
     const key = m.planKey ?? m.id;
     const o = m.plan!.outline;
-    let hashes = this.hashCache.get(m);
-    if (!hashes) this.hashCache.set(m, (hashes = sectionHashes(o, m.plan!.text)));
     const memo = this.planStates.get(key);
-    if (!memo) {
-      const st = initialPlanState(o);
-      this.planStates.set(key, { st, hashes, heads: headings(o) });
-      return st;
-    }
-    if (memo.hashes.join() !== hashes.join()) {
-      const st = remapState(o, hashes, memo);
-      this.planStates.set(key, { st, hashes, heads: headings(o) });
-      return st;
-    }
-    return memo.st;
+    // The outline is rebuilt only when the text changes, so the same outline is the same text
+    if (memo?.outline === o) return memo.st;
+    const st = memo ? remapState(o, memo) : initialPlanState(o);
+    this.planStates.set(key, { st, outline: o });
+    return st;
   }
 
   /** Take the drawn screen dimensions and clamp the scroll positions. Returns true when a hint just started (redraw) */
@@ -569,7 +548,7 @@ export class App {
       case "list":
         if (this.listItems(now).length) {
           this.mode = "list";
-          this.listIndex = Math.max(0, this.listItems(now).findIndex((it) => (it.plan ? it.plan.name === this.shownPlan : it.decision!.id === this.shownId)));
+          this.listIndex = Math.max(0, this.listItems(now).findIndex((it) => this.isShown(it)));
         }
         return [];
       case "list-move": this.listIndex = clamp(this.listIndex + a.delta, this.listItems(now).length); return [];
@@ -686,8 +665,8 @@ export class App {
         return [];
       }
       case "submit": return this.submit(m, dr, now);
-      case "approve": if (m.readonly) return []; dr.cursor = 0; return this.approve(m);
-      case "reject": if (m.readonly) return []; dr.cursor = 1; this.startReason(dr); return [];
+      case "approve": dr.cursor = 0; return this.approve(m);
+      case "reject": dr.cursor = 1; this.startReason(dr); return [];
       case "toc-move": {
         if (!m.plan) return [];
         const st = this.planState(m);
@@ -726,21 +705,19 @@ export class App {
     return [...this.pending().map((decision) => ({ decision })), ...this.newPlans(now).map((plan) => ({ plan }))];
   }
 
-  /** What `[` `]` cycle through: the pending decisions, then the new plans */
-  private cycleItems(now: number): ({ id: string } | { plan: string })[] {
-    return [...this.pending().map((d) => ({ id: d.id })), ...this.newPlans(now).map((p) => ({ plan: p.name }))];
+  private isShown(it: { decision?: Decision; plan?: PlanSummary }): boolean {
+    return it.plan ? it.plan.name === this.shownPlan : it.decision!.id === this.shownId;
   }
 
   private cycle(step: number): void {
-    const now = Date.now();
-    const items = this.cycleItems(now);
-    const i = items.findIndex((x) => ("id" in x ? x.id === this.shownId : x.plan === this.shownPlan));
+    const items = this.listItems(Date.now());
+    const i = items.findIndex((it) => this.isShown(it));
     if (!items.length || (items.length === 1 && i === 0)) return;
-    // A plan that is not an item (an old one opened from the idle list) steps to the first / last
+    // A plan on screen that is no longer an item (it was read meanwhile) steps to the first / last
     const from = i >= 0 ? i : step > 0 ? -1 : items.length;
     const next = items[(from + step + items.length) % items.length]!;
-    if ("id" in next) this.show(next.id);
-    else this.openPlan(next.plan);
+    if (next.plan) this.openPlan(next.plan.name);
+    else this.show(next.decision!.id);
   }
 
   /** Done reading: mark the plan read (unless it already is), then the next item or the idle screen */
@@ -748,12 +725,7 @@ export class App {
     const name = this.shownPlan;
     if (!name) return [];
     const file = this.files.get(name);
-    const effects: Effect[] = [];
-    const sum = this.plans.get(name);
-    if (file && sum && !sum.read) {
-      if (sum.mtime === file.mtime) this.plans.set(name, { ...sum, read: true });
-      effects.push({ type: "read", name, mtime: file.mtime });
-    }
+    const effects = file ? this.markRead(name, file.mtime) : [];
     this.advance(now);
     return effects;
   }
@@ -925,7 +897,6 @@ export class App {
   }
 
   private submit(m: ScreenModel, dr: Draft, now: number): Effect[] {
-    if (m.readonly) return [];
     if (m.kind === "plan") {
       if (dr.cursor === 0) return this.approve(m);
       this.startReason(dr);
@@ -958,7 +929,6 @@ export class App {
     this.sending.delete(updated.id);
     this.sent.add(updated.id);
     this.decisions.set(updated.id, updated);
-    if (updated.status !== "pending") this.readPlanOf(updated);
     const key = STATUS_KEY[updated.status];
     this.showToast(t(this.lang, key ?? "sent"), now);
     if (updated.id === this.shownId) this.advance(now);
