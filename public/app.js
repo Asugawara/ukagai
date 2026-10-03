@@ -252,7 +252,8 @@ function elapsed(iso) {
   const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
   if (sec < 60) return t("elapsed_s", { n: sec });
   if (sec < 3600) return t("elapsed_m", { n: Math.floor(sec / 60) });
-  return t("elapsed_h", { n: Math.floor(sec / 3600) });
+  if (sec < 86400) return t("elapsed_h", { n: Math.floor(sec / 3600) });
+  return t("elapsed_d", { n: Math.floor(sec / 86400) });
 }
 
 function diffBlock(text) {
@@ -370,9 +371,98 @@ function renderHead(d) {
       el("div", { class: "v2-title", text: title, title }),
       metaBox(d)),
     el("div", { class: "hd-line2" }, line2 ?? null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
-  head.onclick = (e) => { if (e.target.closest(".headline, .v2-title")) toggleExpand(dr); };
+  head.onclick = (e) => {
+    if (e.target.closest(".hd-goal")) openHistory(d);
+    else if (e.target.closest(".headline, .v2-title")) toggleExpand(dr);
+  };
+  renderGoal(d);
+  loadHistory(d);
   head.classList.toggle("expanded", !!dr.expanded);
   placePending();
+}
+
+// ---- Session history: the Goal row (header row 3) and the panel (`s`) ----
+
+// session_id -> { at, data } (fresh for 5 minutes) or { pending }. A failed fetch is not stored, so the next time the decision is shown retries
+const HISTORY_TTL_MS = 5 * 60 * 1000;
+const histories = new Map();
+const oneLine = (s) => s.replace(/\s+/g, " ").trim();
+
+function historyOf(d) {
+  const h = d ? histories.get(d.session.session_id) : null;
+  return h?.data && Date.now() - h.at < HISTORY_TTL_MS ? h.data : null;
+}
+
+// Chronological list for the panel: the first instruction, then the recent ones. `recent` overlaps `first` when the session is short
+// (same rule as historyItems in src/tui/history.ts)
+function historyItems(h) {
+  if (!h) return [];
+  const rest = h.first && h.recent.length >= h.total ? h.recent.slice(1) : h.recent;
+  return [...(h.first ? [{ first: true, ...h.first }] : []), ...rest.map((e) => ({ first: false, ...e }))];
+}
+
+// Lazy fetch when a decision is shown. One request per session (concurrent shows share it); failures are ignored
+async function loadHistory(d) {
+  const sid = d.session.session_id;
+  const cur = histories.get(sid);
+  if (cur?.pending || (cur?.data && Date.now() - cur.at < HISTORY_TTL_MS)) return;
+  histories.set(sid, { pending: true });
+  try {
+    const data = await api(`/api/decisions/${encodeURIComponent(d.id)}/history`);
+    histories.set(sid, { at: Date.now(), data });
+  } catch {
+    histories.delete(sid);
+    return;
+  }
+  const shown = decisions.get(shownId);
+  if (shown?.session.session_id === sid) { renderGoal(shown); syncHistoryHint(shown); }
+}
+
+// Header row 3: `Goal: <first instruction>` in dim text, one line, ending in … (CSS), with `· N instructions` when there are 2 or more.
+// Without history the row is not drawn at all (the header stays two rows)
+function renderGoal(d) {
+  const head = $("head");
+  head.querySelector(".hd-goal")?.remove();
+  const h = historyOf(d);
+  if (!d || !h?.first) return;
+  const text = oneLine(h.first.text);
+  if (!text) return;
+  head.append(el("div", { class: "hd-goal", role: "button", tabindex: "-1", title: t("history_title") },
+    el("span", { class: "goal-text", text: `${t("goal")} ${text}` }),
+    h.total >= 2 ? el("span", { class: "goal-n", text: t("history_count", { n: h.total }) }) : null));
+}
+
+// `s History` in the hint line, shown while the history has more than one instruction (same condition as the TUI footer)
+const hasHistoryHint = (d) => (historyOf(d)?.total ?? 0) > 1;
+function syncHistoryHint(d) {
+  for (const e of document.querySelectorAll("#decision .hs")) e.hidden = !hasHistoryHint(d);
+}
+
+function openHistory(d) {
+  const items = historyItems(historyOf(d));
+  if (!items.length) return;
+  const list = el("div", { class: "hist-list" });
+  items.forEach((it, i) => {
+    list.append(el("div", { class: "hist-row", "data-i": String(i), onclick: () => { overlay.sel = i; overlay.full = true; syncHistory(); } },
+      el("span", { class: "hist-at", text: it.at ? t("history_ago", { t: elapsed(it.at) }) : "" }),
+      el("span", { class: "hist-first", text: it.first ? t("history_first") : "" }),
+      el("span", { class: "hist-text", text: oneLine(it.text) })));
+  });
+  const full = el("pre", { class: "hist-full", hidden: true });
+  const hint = el("div", { class: "overlay-hint" });
+  openOverlay("history", t("history_title"), el("div", {}, list, full, hint), { items, sel: 0, full: false, listEl: list, fullEl: full, hintEl: hint });
+  syncHistory();
+}
+
+function syncHistory() {
+  if (overlay?.kind !== "history") return;
+  const { items, sel, full, listEl, fullEl, hintEl } = overlay;
+  listEl.hidden = full;
+  fullEl.hidden = !full;
+  if (full) fullEl.textContent = items[sel].text;
+  hintEl.textContent = t(full ? "history_full_hint" : "history_hint");
+  for (const r of listEl.children) r.classList.toggle("sel", Number(r.dataset.i) === sel);
+  listEl.children[sel]?.scrollIntoView({ block: "nearest" });
 }
 
 // ---- Drawer ----
@@ -684,6 +774,23 @@ function syncCompare() {
 function overlayKey(ev) {
   const key = logicalKey(ev);
   ev.preventDefault();
+  const d = decisions.get(shownId);
+  if (overlay.kind === "history") {
+    // Digits, x and n do nothing here. `?` swaps to the term list, `s` closes
+    if (overlay.full) {
+      if (key === "Escape") { overlay.full = false; syncHistory(); }
+      return;
+    }
+    const n = overlay.items.length;
+    if (key === "Escape" || key === "s") closeOverlay();
+    else if (key === "?") { closeOverlay(); if (ui?.v2?.terms.length) openTerms(ui.v2); }
+    else if (key === "ArrowDown" || key === "j") { overlay.sel = clamp(overlay.sel + 1, n); syncHistory(); }
+    else if (key === "ArrowUp" || key === "k") { overlay.sel = clamp(overlay.sel - 1, n); syncHistory(); }
+    else if (key === "Home" || key === "End") { overlay.sel = key === "Home" ? 0 : n - 1; syncHistory(); }
+    else if (key === "Enter" || key === ".") { overlay.full = true; syncHistory(); }
+    return;
+  }
+  if (key === "s" && overlay.kind === "terms" && historyOf(d)?.first) { openHistory(d); return; }
   if (key === "Escape" || key === "?" && overlay.kind === "terms" || key === "v" && overlay.kind === "compare") { closeOverlay(); return; }
   if (overlay.kind !== "compare") return;
   const n = overlay.v2.cards.length;
@@ -938,12 +1045,18 @@ function renderRightBody(d) {
         `n ${t("hint_none")} · `,
         `${t("hint_cannot")} · `,
       ].join("");
+      const hs = hasHistoryHint(d);
       // The full line, and a short one that CSS swaps in below 1100px / 800px so that the hint stays on one line
       const sendFull = needSubmit ? `Enter ${t("hint_answer")}` : t("hint_send");
       const sendShort = needSubmit ? `Enter ${t("hint_short_answer")}` : t("hint_short_send");
-      const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}${sendFull} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}←→ ${t("hint_next")} · Esc ${t("hint_back")}`;
-      const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}${sendShort} · ${letters.join(" ")} ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
-      actions.append(el("div", { class: "hint" }, el("span", { class: "hint-full", text: full }), el("span", { class: "hint-short", text: short }), " ", buildTag()));
+      const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}${sendFull} · ${v2?.todoBox?.querySelector("pre") ? `c ${t("hint_copy")} · ` : ""}${extraHints}`;
+      const fullTail = `←→ ${t("hint_next")} · Esc ${t("hint_back")}`;
+      const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}${sendShort} · ${letters.join(" ")}`;
+      const shortTail = ` ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
+      actions.append(el("div", { class: "hint" },
+        el("span", { class: "hint-full" }, full, el("span", { class: "hs", hidden: !hs, text: `${t("hint_history")} · ` }), fullTail),
+        el("span", { class: "hint-short" }, short, el("span", { class: "hs", hidden: !hs, text: " s" }), shortTail),
+        " ", buildTag()));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
@@ -1020,7 +1133,7 @@ function renderRightBody(d) {
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
   actions.append(approve, auto, reject);
-  actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · ←→ ${t("hint_next")}`, " ", buildTag()));
+  actions.append(el("div", { class: "hint" }, `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · y ${t("approve")} · a ${t("approve_auto")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`, " ", buildTag()));
   root.append(actions);
   const buttons = [approve, auto, reject];
   ui = {
@@ -1914,6 +2027,11 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if (!typing && key === "b" && pendingList().length) { ev.preventDefault(); setDrawer(true); return; }
+  if (!typing && key === "s") {
+    // Not while the "Can't answer" / "None of these" panel is open (those keep the key for themselves)
+    const sd = decisions.get(shownId);
+    if (sd && historyOf(sd)?.first && !(ui?.kind === "question" && (draftOf(sd).cannot || draftOf(sd).none))) { ev.preventDefault(); openHistory(sd); return; }
+  }
   if (!ui || ui.closed) return;
   const isBtn = t instanceof HTMLButtonElement;
 
