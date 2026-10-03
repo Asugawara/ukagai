@@ -27,6 +27,12 @@ const SETTINGS_OPTIONS = `  --settings <file>  Target settings file (default: ~/
   -h, --help         Show this help
 `;
 
+const CODEX_OPTIONS = `  --codex            Handle Codex CLI's hooks.json / config.toml (Claude Code is left alone unless --claude,
+                     --settings or --project is also given)
+  --claude           With --codex: handle Claude Code too
+  --codex-home <dir> Codex home (default: $CODEX_HOME, else ~/.codex)
+`;
+
 const SERVER_OPTIONS = `  --server <url>     Server URL (passed to the hook too when not the default)
   --data-dir <dir>   Where the token etc. live (passed to the hook too when not the default)
 `;
@@ -85,6 +91,7 @@ Options:
   install: `Usage: ukagai install [options]
 
 Register the hooks in Claude Code settings and place the skill.
+With --codex, register the hooks in Codex CLI's hooks.json and trust them in config.toml.
 
 Options:
   --lang <en|ja>     Display language of the GUI / TUI, written to <data-dir>/config.json
@@ -93,7 +100,7 @@ Options:
   --no-autostart     Install hooks that do not auto-start the server on SessionStart
   --timeout <sec>    PreToolUse timeout (15 or more, default: 3600)
   --dry-run          Print the diff only; write nothing
-${SERVER_OPTIONS}${SETTINGS_OPTIONS}`,
+${CODEX_OPTIONS}${SERVER_OPTIONS}${SETTINGS_OPTIONS}`,
   uninstall: `Usage: ukagai uninstall [options]
 
 Remove only the hooks and skill that install registered. Arguments other than those that locate the settings are ignored.
@@ -103,7 +110,7 @@ Options:
   --dry-run          Print the diff only; write nothing
   --server <url>     Used to locate the settings (server URL)
   --data-dir <dir>   Used to locate the settings (data directory)
-${SETTINGS_OPTIONS}`,
+${CODEX_OPTIONS}${SETTINGS_OPTIONS}`,
   doctor: `Usage: ukagai doctor [options]
 
 Diagnose registration and connectivity. Arguments other than those that locate the settings are ignored.
@@ -111,7 +118,7 @@ Diagnose registration and connectivity. Arguments other than those that locate t
 Options:
   --server <url>     Server URL to diagnose (default: http://127.0.0.1:4818)
   --data-dir <dir>   Where the token etc. live (default: ~/.ukagai)
-${SETTINGS_OPTIONS}`,
+${CODEX_OPTIONS}${SETTINGS_OPTIONS}`,
 };
 
 function isSubcommand(name: string): name is Subcommand {

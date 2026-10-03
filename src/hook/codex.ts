@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import {
   CodexRequestUserInputInput,
   PreToolUseInput,
+  isAllowedTranscriptPath,
   type CreateDecisionRequest,
   type DecisionResponse,
   type Explanation,
@@ -22,7 +25,9 @@ const STOP_QUESTION_MAX = 2000;
  */
 export function codexInput(raw: Record<string, unknown>): Record<string, unknown> {
   const { permission_mode: _drop, ...rest } = raw;
-  return { ...rest, transcript_path: typeof raw["transcript_path"] === "string" ? raw["transcript_path"] : "", agent: "codex" };
+  // A rollout outside ~/.codex/sessions (a custom CODEX_HOME) would be refused by the server and the decision lost; the server does not read Codex rollouts anyway
+  const tp = raw["transcript_path"];
+  return { ...rest, transcript_path: typeof tp === "string" && isAllowedTranscriptPath(tp, homedir()) ? tp : "", agent: "codex" };
 }
 
 /** `request_user_input` → AskUserQuestion shape (`id` and `isOther` pass through as extra keys) */
@@ -122,6 +127,22 @@ export async function codexStop(
     request: { questions: [{ question, header: "Question", options: [], multiSelect: false }] },
     explanation: NO_EXPLANATION,
   } as CreateDecisionRequest;
+  const response = await registerAndWait(req, opts, client, startedAt);
+  if (!response) return null;
+  const answer = Object.values(response.answers ?? {}).join("; ");
+  return { decision: "block", reason: `The human answered your question in the ukagai GUI: ${answer}. Continue with it.` };
+}
+
+/**
+ * Register a decision, wait for the human's answer in the GUI and acknowledge it. Null when nothing should be printed:
+ * the server is unreachable, the budget ran out, the human answered in the terminal, or the ack failed
+ */
+async function registerAndWait(
+  req: CreateDecisionRequest,
+  opts: HookOptions,
+  client: Client,
+  startedAt: number,
+): Promise<DecisionResponse | null> {
   const created = await client.createDecision(req);
   if (!created) return null;
 
@@ -145,11 +166,66 @@ export async function codexStop(
       if (r.kind === "timeout") continue;
       if (r.kind === "error") return null;
       if (r.response.via === "terminal" || !r.response.answers) return null;
-      const answer = Object.values(r.response.answers).join("; ");
       if (!(await client.ack(created.id))) return null;
-      return { decision: "block", reason: `The human answered your question in the ukagai GUI: ${answer}. Continue with it.` };
+      return r.response;
     }
   } finally {
     for (const s of signals) process.off(s, onSignal);
   }
+}
+
+/** Longest command shown in an approval card */
+const APPROVAL_COMMAND_MAX = 2000;
+
+/** What the approval card shows: the model's description, then the command (or the raw tool input when there is no command) */
+export function approvalQuestion(toolInput: Record<string, unknown>): string {
+  const description = typeof toolInput["description"] === "string" ? toolInput["description"].trim() : "";
+  const raw = typeof toolInput["command"] === "string" ? toolInput["command"] : JSON.stringify(toolInput);
+  const command = raw.length > APPROVAL_COMMAND_MAX ? raw.slice(0, APPROVAL_COMMAND_MAX) + " …" : raw;
+  return `${description ? description + "\n\n" : ""}\`${command}\``;
+}
+
+/** The PermissionRequest output for the human's answer: "Allow" allows, "Deny" or any free text denies (the text rides along) */
+export function approvalOutput(answer: string): Out {
+  const text = answer.trim();
+  if (text === APPROVE_LABEL) return { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
+  const message = text === DENY_LABEL || text === "" ? "Denied in the ukagai GUI" : `Denied in the ukagai GUI: ${text}`;
+  return { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "deny", message } } };
+}
+
+const APPROVE_LABEL = "Allow";
+const DENY_LABEL = "Deny";
+
+/**
+ * PermissionRequest (Codex asks for approval of a command): registered as a two-option question headed "Approval".
+ * No answer within the budget, no server, a terminal answer → nothing is printed and Codex shows its own popup
+ */
+export async function codexPermissionRequest(
+  input: Record<string, unknown>,
+  opts: HookOptions,
+  client: Client,
+  startedAt: number,
+): Promise<Out | null> {
+  const toolInput = input["tool_input"];
+  if (typeof toolInput !== "object" || toolInput === null || Array.isArray(toolInput)) return null;
+  const session = {
+    session_id: String(input["session_id"]),
+    cwd: String(input["cwd"]),
+    transcript_path: String(input["transcript_path"] ?? ""),
+    agent: "codex" as const,
+  };
+  const question = approvalQuestion(toolInput as Record<string, unknown>);
+  const req = {
+    tool_use_id: `perm-${String(input["turn_id"] ?? input["session_id"])}-${randomUUID().slice(0, 8)}`,
+    kind: "answer_question",
+    session,
+    request: {
+      questions: [{ question, header: "Approval", options: [{ label: APPROVE_LABEL }, { label: DENY_LABEL }], multiSelect: false }],
+      tool_name: input["tool_name"],
+    },
+    explanation: NO_EXPLANATION,
+  } as CreateDecisionRequest;
+  const response = await registerAndWait(req, opts, client, startedAt);
+  if (!response) return null;
+  return approvalOutput(Object.values(response.answers ?? {}).join("; "));
 }

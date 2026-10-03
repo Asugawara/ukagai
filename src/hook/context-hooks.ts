@@ -22,7 +22,8 @@ export function isEscapedQuestion(text: string | undefined): boolean {
 }
 
 /** The 5 lines of spec section 8. dir is the explanation directory itself */
-export function contextText(dir: string, lang: Lang = "en"): string {
+export function contextText(dir: string, lang: Lang = "en", agent: "claude" | "codex" = "claude"): string {
+  if (agent === "codex") return codexContextText(dir, lang);
   const language =
     lang === "ja"
       ? "Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese. Also write the AskUserQuestion question, option labels and descriptions in Japanese (code, proper nouns and an option that is itself an English sentence excepted): the recommended label ends with (推奨), and the blocker labels are 完了。続けて / この手順を飛ばして続けて / ここで止める."
@@ -33,6 +34,22 @@ export function contextText(dir: string, lang: Lang = "en"): string {
     'front matter: question is the AskUserQuestion question verbatim, title is the decision for the human in one sentence, recommended is the label of the option you recommend, reversibility is reversible / costly / irreversible, scope is file / repo / machine / external. Body: "Why this decision is needed now", "Options" (table: first column is the label; columns for what happens if chosen and for risks and how to undo), "Recommendation" (reason, and the condition under which another option is right). Recommendation: first sentence is a conclusion that decides on its own and names the option, last sentence is "if ..., B" (at most 5 sentences and 400 characters); table cells at most 160 characters and each risk cell says how to undo. Also write "What only you know" (1-3 bullets) and "Assumptions" (one per line), and unless reversible + file, "What I checked" with evidence as footnotes ([^1]) cited from the body. Optional: "Terms", "Counterargument", "Affected". Draw a Mermaid diagram only when the decision is hard to undo (anything but reversible) or scope is machine / external, and the options differ in structure or flow. Use no plan codes / phase names (W-T2, Phase 2): the reader cannot know them, so say what each is in plain words.',
     'Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section whose first 2 lines are "Reversibility: reversible|costly|irreversible" and "Scope: file|repo|machine|external". No explanation file is needed for AskUserQuestion in plan mode.',
     "When stopped by human work such as authentication or permissions, do not end in prose: write a blocker-format explanation and ask with AskUserQuestion (Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work. If an answer starts with \"None of these — \", act on its type: add options, fix the premise and re-ask, add evidence, or ask later. If it starts with \"Cannot answer — \", do not proceed: replace the undefined terms with plain words (or define them under Terms), shorten, or split the question, then re-ask with a new explanation.",
+  ].join("\n");
+}
+
+/** The Codex version: request_user_input (Plan mode only) or a prose question (Default mode); no skill, so the file format is spelled out */
+export function codexContextText(dir: string, lang: Lang = "en"): string {
+  const language =
+    lang === "ja"
+      ? "Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese. Also write the question, option labels and descriptions in Japanese (code and proper nouns excepted): the recommended label ends with (推奨)."
+      : "Write the explanation file in English.";
+  return [
+    "Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.",
+    `When you do ask, first write the explanation the human reads as a Markdown file in ${dir}/ (any file name ending in .md). ${language}`,
+    'Format: front matter with ukagai: 1, question (the question verbatim), title (the decision in one sentence), recommended (the label of the option you recommend), reversibility (reversible / costly / irreversible), scope (file / repo / machine / external). Sections in this order: "Why this decision is needed now", "Options" (a table: first column is the option label, then what happens if chosen, then risks and how to undo), "Recommendation" (first sentence names the option and decides on its own; last sentence is "if ..., B"; at most 5 sentences), "What only you know" (1-3 bullets), "Assumptions" (one per line), and unless reversible + file, "What I checked" with footnotes. Table cells at most 160 characters.',
+    "In Plan mode ask with request_user_input, one question at a time, the recommended option first with (Recommended) appended to its label. request_user_input is not available in Default mode: there, write the question as the last sentence of your reply, ending with a question mark, and stop. ukagai shows it to the human and passes the answer back to you as the reason of a block; do not ask again.",
+    "When stopped by human work such as authentication or permissions, do not end in prose without a question: ask it the same way (options: Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work.",
+    'If an answer starts with "None of these — ", act on its type: add options, fix the premise and re-ask, add evidence, or ask later. If it starts with "Cannot answer — ", do not proceed: replace the undefined terms with plain words, shorten, or split the question, then re-ask with a new explanation file.',
   ].join("\n");
 }
 
@@ -47,7 +64,7 @@ export async function sessionContext(
   if (ev !== "SessionStart" && ev !== "SubagentStart") return null;
   if (ev === "SessionStart") await autostart(opts, deps);
   const dir = explainDir(base.data.scratchpad_dir, opts.dataDir, base.data.session_id);
-  return { hookSpecificOutput: { hookEventName: ev, additionalContext: contextText(dir, (await readConfig(opts.dataDir)).lang) } };
+  return { hookSpecificOutput: { hookEventName: ev, additionalContext: contextText(dir, (await readConfig(opts.dataDir)).lang, opts.agent) } };
 }
 
 export async function permissionRequest(raw: Record<string, unknown>, client: Client): Promise<Out | null> {

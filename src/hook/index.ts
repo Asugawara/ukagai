@@ -1,7 +1,7 @@
 import { PreToolUseInput } from "../contract.js";
 import { Client } from "./client.js";
 import { observeDecisionTool, observedEvent, permissionRequest, sessionContext, stopDecision } from "./context-hooks.js";
-import { codexInput, codexPreToolUse, codexStop } from "./codex.js";
+import { codexInput, codexPermissionRequest, codexPreToolUse, codexStop } from "./codex.js";
 import { handleDecision } from "./decision.js";
 import { hookLog, initHookLog } from "./log.js";
 import { parseArgs } from "./options.js";
@@ -77,6 +77,8 @@ async function runCodex(input: Record<string, unknown>, opts: ReturnType<typeof 
   const client = new Client(opts.server, opts.dataDir);
   if (ev === "PreToolUse") {
     if (input["tool_name"] === "request_user_input" && !opts.observe) write(await codexPreToolUse(input, opts, client, startedAt));
+  } else if (ev === "PermissionRequest") {
+    if (!opts.observe) write(await codexPermissionRequest(input, opts, client, startedAt));
   } else if (ev === "SessionStart") {
     write(await sessionContext(input, opts));
   } else if (ev === "Stop") {

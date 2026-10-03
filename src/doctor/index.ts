@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { configPath, readConfig } from "../settings/config.js";
 import { HOOK_EVENTS } from "../settings/hooks-spec.js";
 import { findManaged, readSettings } from "../settings/merge.js";
+import { status as codexStatus } from "../install/codex.js";
 import { parseTarget } from "../settings/target.js";
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
@@ -19,14 +20,28 @@ export async function run(argv: string[]): Promise<number> {
   const add = (ok: boolean, name: string, note = ""): void => void rows.push([ok, name, note]);
 
   let settings: Record<string, unknown> = {};
-  try {
-    settings = await readSettings(t.settingsFile);
-  } catch (err) {
-    add(false, `settings ${t.settingsFile}`, (err as Error).message);
+  if (t.claude) {
+    try {
+      settings = await readSettings(t.settingsFile);
+    } catch (err) {
+      add(false, `settings ${t.settingsFile}`, (err as Error).message);
+    }
+  }
+  if (t.codex) {
+    try {
+      const cs = await codexStatus(t.codexHome);
+      for (const r of cs.rows) {
+        add(r.installed && r.trusted === "trusted", `codex hook ${r.event}`, !r.installed ? "not registered" : r.trusted === "trusted" ? "trusted" : `${r.trusted} (run: ukagai install --codex)`);
+      }
+      const cmd = cs.rows.find((r) => r.command !== undefined)?.command;
+      if (cmd !== undefined) add(true, "codex hooks.json", cs.hooksFile);
+    } catch (err) {
+      add(false, `codex ${t.codexHome}`, (err as Error).message);
+    }
   }
   let node: string | undefined;
   let cli: string | undefined;
-  for (const ev of HOOK_EVENTS) {
+  for (const ev of t.claude ? HOOK_EVENTS : []) {
     const h = findManaged(settings, ev);
     add(h !== undefined, `hook ${ev}`, h ? "" : "not registered");
     if (h && node === undefined) {
@@ -45,8 +60,10 @@ export async function run(argv: string[]): Promise<number> {
     add(false, `server ${t.server}/healthz`, `cannot connect (${(err as Error).cause instanceof Error ? ((err as Error).cause as Error).message : (err as Error).message})`);
   }
   add(await exists(join(t.dataDir, "token")), "token", join(t.dataDir, "token"));
-  if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
-  else add(true, "skill ukagai-explain", "not handled");
+  if (t.claude) {
+    if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
+    else add(true, "skill ukagai-explain", "not handled");
+  }
 
   const ss = findManaged(settings, "SessionStart");
   const off = Array.isArray(ss?.["args"]) && (ss["args"] as unknown[]).includes("--no-autostart");

@@ -1,0 +1,36 @@
+model = "gpt-5.6-sol"
+model_reasoning_effort = "low"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[projects."/tmp/scratchpad/codex-verify/proj"]
+trust_level = "trusted"
+
+[tui]
+screen_reader_detection_done = true
+
+[tui.model_availability_nux]
+"gpt-6.1-sol" = 2
+
+[hooks.state]
+
+[hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:ee4ed1fc1a0c5519adbf26b501fe23c771075a0d153e5aa82bf05e6796b8c331"
+
+[hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:permission_request:0:0"]
+trusted_hash = "sha256:9da4686c48b44fbe8dda3cf5927eac5147760e27b3a7c92a26f364fd7801ff05"
+
+[hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:post_tool_use:0:0"]
+trusted_hash = "sha256:721da2c3e6dd740af129e0511336e0a35237f40b5bc69880905276d88196aba4"
+
+[hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:session_start:0:0"]
+trusted_hash = "sha256:6fd592054b8a32b9b383a616e5bc76a0b3cc414941fbb8554fa21fbc00b2ec2a"
+
+[hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:c9d460481854a031105c6ec81010cd42daf2a6685dffe0b99808238ab97f79f7"
+
+[hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:stop:0:0"]
+trusted_hash = "sha256:6b5f29625f6f6e5d21b3f51be1ede4d05c15ca656bbe4352aff50567b9a99de4"
+
+[hooks.state."/tmp/scratchpad/codex-verify/proj/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:ec4e5b824b57629f9fca1e03511a3440dc3f2b088c58ac349e23303bb865d58b"
