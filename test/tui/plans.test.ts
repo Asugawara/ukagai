@@ -97,28 +97,16 @@ test("a new plan arriving on the idle screen comes up by itself: header, folded 
   assert.ok(jd.text.includes("読んだ (Esc)"));
 });
 
-test("Esc is Done reading: the read POST, then the idle screen lists the plan dim with no dot", async () => {
+test("Esc is Done reading: the read POST, then the idle screen with no plan on it", async () => {
   const { app, effects } = setup();
   await arrive(app);
   const out = press(app, esc);
   assert.deepEqual(out, [{ type: "read", name: "b.md", mtime: FILES["b.md"]!.mtime }]);
   assert.equal(app.shownPlan, null);
-  const { text, lines } = draw(app);
-  assert.ok(text.includes("No pending decisions") && text.includes("Recent plans"));
-  const row = lines.find((l) => l.includes("Export retry"))!;
-  assert.ok(row && row.includes("9 sections · 200 lines") && !row.includes("●"), row);
+  const { text } = draw(app);
+  assert.ok(text.includes("No pending decisions") && !text.includes("Recent plans") && !text.includes("Export retry"));
   assert.equal(app.count(clock), 0);
   assert.deepEqual(effects, []);
-});
-
-test("Recent plans: j/k Enter opens one; a plan already read is not marked again on Esc", async () => {
-  const { app } = setup();
-  await arrive(app);
-  press(app, esc);
-  press(app, ch("j"), enter);
-  assert.equal(app.shownPlan, "b.md");
-  assert.deepEqual(press(app, esc), []);
-  assert.equal(app.shownPlan, null);
 });
 
 test("live update: a changed section turns unread with `updated`, unchanged ones keep their state, the scroll stays", async () => {
@@ -218,20 +206,23 @@ test("a plan with a pending approval is not shown or counted twice", async () =>
   assert.equal(app.count(clock), 1);
 });
 
-test("a plan unread for 30 hours is not shown by itself or counted; it is in Recent plans without a dot", async () => {
+test("the idle screen shows no plan row: a read plan and a plan unread for 30 hours are not listed anywhere", async () => {
   const { app } = setup();
   app.planUpdated(summary(FILES["old.md"]!), clock);
+  app.planUpdated(summary(FILES["c.md"]!, true), clock);
   await tick();
   assert.equal(app.shownPlan, null);
   assert.equal(app.count(clock), 0);
-  const { text, lines } = draw(app);
-  assert.ok(text.includes("Recent plans"));
-  const row = lines.find((l) => l.includes("Old plan"))!;
-  assert.ok(row && !row.includes("●"), row);
-  // a new one shows the dot
-  app.planUpdated(summary(FILES["c.md"]!), clock);
+  const { text } = draw(app);
+  assert.ok(text.includes("No pending decisions"));
+  assert.ok(!text.includes("Old plan") && !text.includes("Short plan C") && !text.includes("Recent plans"));
+  press(app, ch("j"), enter);
+  assert.equal(app.shownPlan, null);
+  // a new one still shows by itself
+  FILES["n.md"] = file("n.md", "Fresh plan", SHORT_C, 60_000);
+  app.planUpdated(summary(FILES["n.md"]), clock);
   await tick();
-  assert.equal(app.shownPlan, "c.md");
+  assert.equal(app.shownPlan, "n.md");
 });
 
 test("a plan removed while shown goes to the idle screen without a word", async () => {
@@ -252,7 +243,7 @@ test("p does nothing (the plan browser is gone) and the footer has no p hint", a
   assert.ok(!draw(app).lines.at(-1)!.includes("p Plans"));
 });
 
-test("works at 100x24 stacked: the plan screen and the recent list", async () => {
+test("works at 100x24 stacked: the plan screen and the idle screen", async () => {
   const { app } = setup();
   await arrive(app);
   const { text, lines } = draw(app, 100, 24);
@@ -262,7 +253,7 @@ test("works at 100x24 stacked: the plan screen and the recent list", async () =>
   assert.ok(!text.includes("Approve"));
   press(app, esc);
   const idle = draw(app, 100, 24);
-  assert.ok(idle.text.includes("Recent plans") && idle.text.includes("Export retry"));
+  assert.ok(idle.text.includes("No pending decisions") && !idle.text.includes("Export retry"));
 });
 
 test("a short plan shows the whole document with no contents", async () => {
@@ -274,7 +265,7 @@ test("a short plan shows the whole document with no contents", async () => {
   assert.ok(!/[☐☑]/.test(text));
 });
 
-test("the list (b) holds decisions first, then plans newest first with the `plan` word and the dot on new ones", async () => {
+test("the list (b) holds decisions first, then new plans newest first with the `plan` word and the dot", async () => {
   const { app } = setup();
   app.planUpdated(summary(FILES["old.md"]!), clock);
   await arrive(app, "c.md");
@@ -286,8 +277,7 @@ test("the list (b) holds decisions first, then plans newest first with the `plan
   const plan = lines.findIndex((l) => l.includes("●") && l.includes("Short plan C"));
   assert.ok(plan > 0);
   assert.ok(lines[plan + 1]!.includes("plan") && lines[plan + 1]!.includes("2 sections"), lines[plan + 1]);
-  const old = lines.find((l) => l.includes("Old plan"))!;
-  assert.ok(old && !old.includes("●"));
+  assert.ok(!lines.some((l) => l.includes("Old plan")), "a plan unread for 30 hours is not in the list");
 });
 
 test("section hashes computed in the TUI equal the server's", () => {
@@ -302,7 +292,6 @@ test("TUI and GUI use the same words for plans", async () => {
     plan_updated_ago: ["updated {age}", "更新 {age}"],
     plan_done_reading: ["Done reading", "読んだ"],
     plan_section_updated: ["updated", "更新"],
-    plan_recent: ["Recent plans", "最近の計画"],
   } as const;
   for (const [k, [en, ja]] of Object.entries(table)) {
     assert.equal(MESSAGES.en[k as keyof typeof MESSAGES.en], en, `en.${k}`);

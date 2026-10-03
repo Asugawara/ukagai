@@ -60,7 +60,6 @@ const en = {
   plan_updated_ago: "updated {age}",
   plan_done_reading: "Done reading",
   plan_section_updated: "updated",
-  plan_recent: "Recent plans",
   hint_plan_input: "Enter send rejection · Esc cancel",
   // question card
   free_text: "Free text",
@@ -199,7 +198,6 @@ const ja: Record<MessageKey, string> = {
   plan_updated_ago: "更新 {age}",
   plan_done_reading: "読んだ",
   plan_section_updated: "更新",
-  plan_recent: "最近の計画",
   hint_plan_input: "Enter 却下を送る · Esc 取りやめ",
   free_text: "自由記述",
   hint_unsupported: "h/l 保留の切替",

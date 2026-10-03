@@ -383,15 +383,7 @@ pre code.hljs { background: none; padding: 0; }
 /* Room below the last section so that any section can be scrolled up to the top of the left column */
 .md.plan-long { padding-bottom: 55vh; }
 
-/* Plans as items: the idle screen's recent list, the `updated` word on a section, the Done reading text action */
-.recent { width: min(760px, calc(100% - 32px)); margin-top: 22px; font-size: 13px; color: var(--muted); }
-.recent-cap { font-size: 12px; margin: 0 0 4px 10px; }
-.recent-row { display: flex; gap: 10px; align-items: baseline; padding: 3px 8px; border-left: 2px solid transparent; cursor: pointer; }
-.recent-row.sel { border-left-color: var(--accent); background: var(--panel); }
-.recent-row.fresh { color: var(--fg); }
-.recent-row .mark { flex: none; width: 1em; color: var(--accent); }
-.recent-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-row .age, .recent-stats { flex: none; font-size: 12px; white-space: nowrap; }
+/* Plans as items: the `updated` word on a section, the Done reading text action */
 .plan-row .mark { color: var(--accent); }
 .ps-upd { flex: none; margin-left: 8px; font-size: 11px; font-weight: 400; color: var(--muted); }
 .done-reading { align-self: flex-start; padding: 0 2px; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 20px; }

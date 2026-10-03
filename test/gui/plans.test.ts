@@ -1,5 +1,5 @@
 // Plans flow in like questions (PL3b): a new plan in ~/.claude/plans appears by itself, is read with Done reading, upgrades in place when its
-// approval arrives, and is listed as a recent plan on the idle screen. A real server (temp HOME) and a real browser (agent-browser). Skipped when agent-browser is not on PATH. Keys are sent as KeyboardEvents (eval), not with `press`.
+// approval arrives, and is not listed anywhere afterwards. A real server (temp HOME) and a real browser (agent-browser). Skipped when agent-browser is not on PATH. Keys are sent as KeyboardEvents (eval), not with `press`.
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -223,25 +223,20 @@ gui("a new plan shows itself within 2 s: read-only, 9 sections with only the fir
   assert.equal(ev(openCount), 1);
 });
 
-gui("Esc is Done reading: POST read, then idle with the plan under Recent plans (dim, no dot); a reload stays idle", async () => {
+gui("Esc is Done reading: POST read, then the plain idle screen with no plan on it; a reload stays idle", async () => {
   await arrive("done.md");
   key("Escape");
   await waitFor("idle", IDLE);
   await waitFor("read posted", `window.__posts.some((u) => u.endsWith("/api/plans/done.md/read"))`);
-  assert.equal(ev(`document.querySelector(".recent-cap").textContent`), "Recent plans");
-  assert.equal(ev(`document.querySelectorAll(".recent-row").length`), 1);
-  assert.ok(ev<string>(`document.querySelector(".recent-row").textContent`).includes("Plan: add retry to the export job"));
-  assert.ok(ev<string>(`document.querySelector(".recent-row").textContent`).includes("9 sections · 200 lines"));
-  assert.equal(ev(`document.querySelector(".recent-row").classList.contains("fresh")`), false);
-  assert.equal(ev(`document.querySelector(".recent-row .mark").textContent`), "");
+  assert.equal(ev(`document.getElementById("recent")`), null);
+  assert.ok(!ev<string>(`document.getElementById("empty").textContent`).includes("Plan: add retry"));
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "0");
   assert.equal(await planRead("done.md"), true);
   await reopen(IDLE);
-  await waitFor("recent row", `document.querySelector(".recent-row")`);
   await sleep(800);
   assert.equal(ev(`document.getElementById("empty").hidden`), false);
   assert.equal(ev(`document.getElementById("main").hidden`), true);
-  assert.equal(ev(`document.querySelector(".recent-row").classList.contains("fresh")`), false);
+  assert.ok(!ev<string>(`document.body.textContent`).includes("Plan: add retry"));
 });
 
 gui("live update: unchanged sections keep their state, the changed and the new one are unread and say updated; scroll and age follow", async () => {
@@ -329,39 +324,28 @@ gui("upgrade in place: the approval for the shown plan keeps the sections' state
   await waitFor("idle", IDLE);
 });
 
-gui("an old unread plan is not shown or counted but listed dim; a read plan opened from the list is not marked again", async () => {
+gui("the idle screen shows no plan row: a read plan and a plan unread for 30 hours appear nowhere", async () => {
   writePlan("old.md", SHORT_A, 30 * 3600_000);
   await reopen(IDLE);
-  await spyPosts();
-  await waitFor("recent row", `document.querySelector(".recent-row")`);
-  await sleep(500);
+  await sleep(800);
   assert.equal(ev(`document.getElementById("main").hidden`), true);
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "0");
-  assert.equal(ev(`document.querySelector(".recent-row").classList.contains("fresh")`), false);
-  assert.equal(ev(`document.querySelector(".recent-row .mark").textContent`), "");
+  assert.equal(ev(`document.getElementById("recent")`), null);
+  assert.equal(ev(`document.querySelectorAll(".recent-row, .plan-row").length`), 0);
+  // neither the 30 h old plan nor the plan read earlier (done.md) is named anywhere on the page
+  const body = ev<string>(`document.body.textContent`);
+  assert.ok(!body.includes("Text with") && !body.includes("Plan: add retry to the export job") && !body.includes("old.md"));
+  assert.equal(ev(`document.getElementById("empty-title").textContent`), "Nothing to decide");
   key("Enter");
-  await waitFor("opened", `document.querySelector("#background .md")?.textContent.includes("Text with")`);
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 0, "a short plan has no contents");
-  assert.equal(ev(`document.querySelector("#decision .done-reading")`) !== null, true);
-  assert.deepEqual(posts(), []);
-  key("Escape"); // the plan is unread: it is marked now
-  await waitFor("idle", IDLE);
-  await waitFor("read posted", `window.__posts.length === 1`);
-  assert.equal(await planRead("old.md"), true);
-  await spyPosts();
-  ev(`document.querySelector(".recent-row").click(), "ok"`);
-  await waitFor("opened again", `document.querySelector("#background .md")?.textContent.includes("Text with")`);
-  key("Escape");
-  await waitFor("idle again", IDLE);
-  await sleep(500);
-  assert.deepEqual(posts(), []);
+  key("j");
+  await sleep(200);
+  assert.equal(ev(`document.getElementById("main").hidden`), true);
 });
 
 gui("plan.removed while shown returns to idle; p does nothing", async () => {
   await arrive("gone.md");
   rmSync(join(PLANS(), "gone.md"));
   await waitFor("idle", IDLE, 4000);
-  assert.equal(ev(`document.querySelectorAll(".recent-row").length`), 0);
   key("p");
   await sleep(200);
   assert.equal(ev(`document.querySelectorAll(".overlay").length`), 0);
@@ -369,7 +353,7 @@ gui("plan.removed while shown returns to idle; p does nothing", async () => {
   assert.equal(ev(`document.getElementById("foot").hidden`), true);
 });
 
-gui("ja words: row 2, Done reading, Recent plans, the drawer's plan word", async () => {
+gui("ja words: row 2, Done reading, the drawer's plan word", async () => {
   await arrive("ja.md", LONG, 3 * 60_000);
   await setLang("ja", `document.querySelector("#decision .done-reading")?.textContent.startsWith("読んだ")`);
   try {
@@ -392,22 +376,16 @@ gui("ja words: row 2, Done reading, Recent plans, the drawer's plan word", async
     await api(`/api/decisions/${id}/cancel`, {});
     key("Escape");
     await waitFor("idle", IDLE);
-    assert.equal(ev(`document.querySelector(".recent-cap").textContent`), "最近の計画");
+    assert.equal(ev(`document.getElementById("recent")`), null);
   } finally {
-    await setLang("en", `document.querySelector(".recent-cap")?.textContent === "Recent plans"`);
+    await setLang("en", `document.getElementById("empty-title")?.textContent === "Nothing to decide"`);
   }
-  key("Enter");
-  await waitFor("plan", `${SEC}.length === 10 || ${SEC}.length === 9`);
-  assert.ok(line2().startsWith("Plan"));
-  assert.equal(ev(`document.querySelector("#decision .done-reading").textContent`), "Done readingEsc");
-  key("Escape");
 });
 
-gui("screenshot: the idle screen with recent plans at 1440x900", async () => {
+gui("screenshot: the idle screen at 1440x900 (no plan list)", async () => {
   writePlan("r1.md", LONG, 26 * 3600_000);
-  writePlan("r2.md", SHORT_A, 30 * 3600_000);
-  writePlan("r3.md", "# Short plan C\n\n## One\n\nText.\n\n## Two\n\nMore.\n", 50 * 3600_000);
   await reopen(IDLE);
-  await waitFor("rows", `document.querySelectorAll(".recent-row").length === 3`);
-  ab("screenshot", join(SHOTS, "PL3b-idle-recent.png"));
+  await sleep(500);
+  assert.equal(ev(`document.getElementById("recent")`), null);
+  ab("screenshot", join(SHOTS, "PL3e-idle.png"));
 });

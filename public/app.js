@@ -512,7 +512,7 @@ function syncHistory() {
 // ---- Plans: the files in ~/.claude/plans flow in like decisions ----
 
 // A plan is an item next to the pending decisions. Its id is `plan:<file name>` (shownId may hold one). A plan is "new" while it is unread
-// and was written in the last 24 h: only new plans are auto-shown and counted; the others stay in the idle screen's "Recent plans".
+// and was written in the last 24 h: only new plans are auto-shown and counted; the others are not shown anywhere (they stay on disk and in the API).
 // One plan and its approval decision are one item: a pending approve_plan whose planFilePath names the file hides the plan row.
 const plans = new Map(); // name -> PlanSummary (from GET /api/plans and SSE)
 const planData = new Map(); // name -> { name, title, mtime, markdown, read, sections } (fetched when shown or new)
@@ -595,11 +595,10 @@ function onPlanUpdated(p) {
   refreshItems();
 }
 
-// The header count, the drawer and (idle) the recent list; the shown screen is untouched
+// The header count and the drawer; the shown screen is untouched
 function refreshItems() {
   renderHeader();
   renderList();
-  if (shownId == null) renderRecent();
 }
 
 // The shown plan changed on disk: fetch it, carry the open / read state over by section hash, and re-render in place (scroll kept)
@@ -649,7 +648,7 @@ function remapPlanState(key, old, data) {
   planStates.set(key, next);
 }
 
-// ---- The plan screen (read only) and the idle screen's recent list ----
+// ---- The plan screen (read only) ----
 
 function renderPlanHead(pd) {
   const head = $("head");
@@ -692,33 +691,6 @@ function doneReading() {
   if (!isPlanId(shownId)) return;
   markPlanRead(planNameOf(shownId));
   advance();
-}
-
-let recentSel = 0;
-function renderRecent() {
-  const box = $("recent");
-  const list = [...plans.values()].sort((a, b) => b.mtime.localeCompare(a.mtime)).slice(0, 10);
-  box.hidden = !list.length;
-  box.replaceChildren();
-  if (!list.length) return;
-  recentSel = clamp(recentSel, list.length);
-  box.append(el("div", { class: "recent-cap", text: t("plan_recent") }));
-  list.forEach((p, i) => {
-    const fresh = isNewPlan(p);
-    box.append(el("div", { class: "recent-row" + (fresh ? " fresh" : "") + (i === recentSel ? " sel" : ""), role: "button", "data-name": p.name, onclick: () => { recentSel = i; show(PLAN_ID + p.name); } },
-      el("span", { class: "mark", text: fresh ? "●" : "" }),
-      el("span", { class: "recent-title", title: p.name, text: p.title }),
-      el("span", { class: "age", "data-created": p.mtime, text: ageText(p.mtime) }),
-      el("span", { class: "recent-stats", text: planStatsText(p) })));
-  });
-}
-
-function moveRecent(step) {
-  const rows = $("recent").querySelectorAll(".recent-row");
-  if (!rows.length) return;
-  recentSel = clamp(recentSel + step, rows.length);
-  rows.forEach((r, i) => r.classList.toggle("sel", i === recentSel));
-  rows[recentSel].scrollIntoView({ block: "nearest" });
 }
 
 function planViewKey(ev) {
@@ -2496,7 +2468,6 @@ function renderAll() {
   const left = renderLeft(d);
   renderHead(d);
   renderRight(d);
-  if (!d) renderRecent();
   refreshWide();
   left?.then?.(refreshWide);
 }
@@ -2683,14 +2654,7 @@ document.addEventListener("keydown", (ev) => {
   // [ ] cycle through the items, except where they walk the contents of a long plan (h l ← → Tab always cycle)
   if (!typing && (key === "[" || key === "]") && !ui?.toc) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }
   if (isPlanId(shownId)) { planViewKey(ev); return; }
-  if (shownId == null) {
-    // The idle screen: j k pick a recent plan, Enter opens it
-    const row = $("recent").querySelectorAll(".recent-row")[recentSel];
-    if (!typing && (key === "j" || key === "ArrowDown")) { ev.preventDefault(); moveRecent(1); }
-    else if (!typing && (key === "k" || key === "ArrowUp")) { ev.preventDefault(); moveRecent(-1); }
-    else if (!typing && key === "Enter" && row) { ev.preventDefault(); show(PLAN_ID + row.dataset.name); }
-    return;
-  }
+  if (shownId == null) return;
   if (!typing && key === "s") {
     // Not while the "Can't answer" / "None of these" panel is open (those keep the key for themselves)
     const sd = decisions.get(shownId);
@@ -2871,7 +2835,7 @@ $("backdrop").addEventListener("click", () => setDrawer(false));
 
 setInterval(() => {
   for (const e of document.querySelectorAll(".age")) {
-    const age = e.dataset.tpl ? ageText(e.dataset.created) : e.closest(".recent-row, .plan-row") ? ageText(e.dataset.created) : elapsed(e.dataset.created);
+    const age = e.dataset.tpl ? ageText(e.dataset.created) : e.closest(".plan-row") ? ageText(e.dataset.created) : elapsed(e.dataset.created);
     e.textContent = e.dataset.tpl ? t(e.dataset.tpl, { age }) : age;
   }
 }, 10000);
