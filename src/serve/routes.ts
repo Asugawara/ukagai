@@ -6,6 +6,7 @@ import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import {
   AnswerRequest,
+  PlanReadRequest,
   CreateDecisionRequest,
   DecisionStatus,
   EventInput,
@@ -18,7 +19,8 @@ import {
 import type { Lang } from "../settings/config.js";
 import type { SseHub } from "./sse.js";
 import { collectHistory } from "./history.js";
-import { PlanError, listPlans, readPlan } from "./plans.js";
+import { PlanError, isPlanName, listPlans, planSummary, plansDir, readPlan } from "./plans.js";
+import type { PlanReadStore } from "./plan-read.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
@@ -35,6 +37,8 @@ export type AppDeps = {
   token: string;
   publicDir: string;
   home: string;
+  /** Plan read marks (<dataDir>/plans-read.json) */
+  planRead: PlanReadStore;
   /** Display language of the GUI / TUI (config.json, read at startup). Defaults to en */
   lang?: Lang;
   getPort: () => number;
@@ -215,18 +219,39 @@ export function createApp(deps: AppDeps): Hono {
     return d ? c.json(d) : c.json({ error: "decision not found" }, 404);
   });
 
-  // Read-only view of ~/.claude/plans (the GUI polls it; nothing goes through SSE)
-  app.get("/api/plans", auth("any"), async (c) => c.json({ plans: await listPlans(deps.home) }));
+  // ~/.claude/plans: read-only files, plus a per-plan read mark kept by ukagai (plan.updated / plan.removed come over SSE)
+  const isRead = (name: string, mtime: string) => deps.planRead.isRead(name, mtime);
+  app.get("/api/plans", auth("any"), async (c) => c.json({ plans: await listPlans(deps.home, isRead) }));
 
   app.get("/api/plans/:name", auth("any"), async (c) => {
     try {
-      const plan = await readPlan(deps.home, c.req.param("name"), c.req.query("since"));
+      const plan = await readPlan(deps.home, c.req.param("name"), c.req.query("since"), isRead);
       return plan ? c.json(plan) : c.body(null, 304);
     } catch (e) {
       if (e instanceof PlanError) return c.json({ error: e.message }, e.status);
       throw e;
     }
   });
+
+  const setPlanRead = async (c: Context, read: boolean) => {
+    const name = c.req.param("name") ?? "";
+    if (!isPlanName(name) || !name.endsWith(".md")) return c.json({ error: "invalid plan name" }, 400);
+    let mtime: string | undefined;
+    if (read) {
+      const body = PlanReadRequest.safeParse(await c.req.json().catch(() => undefined));
+      if (!body.success) return c.json({ error: "mtime required" }, 400);
+      mtime = body.data.mtime;
+    }
+    const dir = plansDir(deps.home);
+    if (!(await planSummary(dir, name))) return c.json({ error: "plan not found" }, 404);
+    if (mtime !== undefined) deps.planRead.mark(name, mtime);
+    else deps.planRead.unmark(name);
+    const summary = await planSummary(dir, name, isRead);
+    if (summary) hub.broadcast("plan.updated", summary);
+    return c.json({ name, read });
+  };
+  app.post("/api/plans/:name/read", auth("any"), (c) => setPlanRead(c, true));
+  app.delete("/api/plans/:name/read", auth("any"), (c) => setPlanRead(c, false));
 
   app.get("/api/decisions/:id/history", auth("any"), async (c) => {
     const d = store.get(c.req.param("id"));

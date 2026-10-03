@@ -471,13 +471,37 @@ export const PlanSummary = z.object({
   /** Number of H2 headings */
   sections: z.number().int().nonnegative(),
   lines: z.number().int().nonnegative(),
+  /** The stored read mark equals the current `mtime` (see POST /api/plans/:name/read) */
+  read: z.boolean(),
 });
 export type PlanSummary = z.infer<typeof PlanSummary>;
+
+/** An H2 / H3 section. `hash` = first 12 hex of sha256 of the section text (heading line through the line before the next heading of level <= its own, code fences respected) */
+export const PlanSection = z.object({
+  heading: z.string(),
+  level: z.union([z.literal(2), z.literal(3)]),
+  hash: z.string(),
+});
+export type PlanSection = z.infer<typeof PlanSection>;
 
 export const PlanContent = z.object({
   name: z.string(),
   title: z.string(),
   mtime: z.string(),
   markdown: z.string(),
+  read: z.boolean(),
+  sections: z.array(PlanSection),
 });
 export type PlanContent = z.infer<typeof PlanContent>;
+
+/** SSE `plan.updated` */
+export const PlanEvent = PlanSummary;
+export type PlanEvent = PlanSummary;
+
+/** SSE `plan.removed` */
+export const PlanRemovedEvent = z.object({ name: z.string() });
+export type PlanRemovedEvent = z.infer<typeof PlanRemovedEvent>;
+
+/** POST /api/plans/:name/read */
+export const PlanReadRequest = z.object({ mtime: z.string().min(1) });
+export type PlanReadRequest = z.infer<typeof PlanReadRequest>;

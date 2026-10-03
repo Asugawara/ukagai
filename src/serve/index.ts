@@ -10,6 +10,9 @@ import { LEASE_GRACE_MS } from "../contract.js";
 import { readConfig } from "../settings/config.js";
 import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
+import { PlanReadStore } from "./plan-read.js";
+import { startPlanWatcher } from "./plan-watch.js";
+import { planSummary, plansDir } from "./plans.js";
 import { createApp } from "./routes.js";
 import { SseHub } from "./sse.js";
 import { Store } from "./store.js";
@@ -23,6 +26,9 @@ export type ServeOptions = {
   leaseGraceMs?: number;
   /** Base of the allowed range for transcript / explanation paths. Defaults to os.homedir() */
   home?: string;
+  /** Plan watcher timings (tests shorten them) */
+  planPollMs?: number;
+  planDebounceMs?: number;
   /** Run the Codex plan-approval bridge (a second client of the Codex app-server). Off unless asked: `run` turns it on */
   codexBridge?: boolean;
   /** Codex home whose app-server socket the bridge connects to (default: $CODEX_HOME, else ~/.codex) */
@@ -52,8 +58,10 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const { lang } = await readConfig(dataDir);
   const token = randomBytes(32).toString("hex");
 
+  const planRead = new PlanReadStore(dataDir, plansDir(home));
   let port = opts.port ?? DEFAULT_PORT;
   const app = createApp({
+    planRead,
     store,
     hub,
     token,
@@ -79,6 +87,18 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
   chmodSync(tokenFile, 0o600);
   store.startMonitor();
+  const planWatcher = startPlanWatcher({
+    plansDir: plansDir(home),
+    pollMs: opts.planPollMs,
+    debounceMs: opts.planDebounceMs,
+    // Re-read through planSummary so `read` reflects the current mark
+    onChange: (summary) => {
+      void planSummary(plansDir(home), summary.name, (n, m) => planRead.isRead(n, m))
+        .then((s) => hub.broadcast("plan.updated", s ?? { ...summary, read: false }))
+        .catch(() => {});
+    },
+    onRemove: (name) => hub.broadcast("plan.removed", { name }),
+  });
   const codexBridge = opts.codexBridge
     ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, collect: (session) => collectContext(session, { home }) })
     : undefined;
@@ -92,6 +112,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     close: () =>
       new Promise<void>((resolve) => {
         codexBridge?.close();
+        planWatcher.stop();
         store.close();
         hub.closeAll();
         server.close(() => resolve());
