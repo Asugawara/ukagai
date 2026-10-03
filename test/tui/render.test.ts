@@ -19,7 +19,7 @@ test("140x40: heading, chips, recommendation, cards, background, hints, status l
   const lines = out.split("\n");
   assert.equal(lines.length, 40);
   for (const s of [
-    "◈ ukagai", "⎇ feat/tui", "⧉ feat-tui", "Costly to undo", "repo",
+    "ukagai ⎇ feat/tui ⧉ feat-tui", "Costly to undo", "repo",
     "Whether the GUI update channel uses SSE or WebSocket",
     "Why this decision is needed now", "What I checked", "hook", "serve",
     "Recommendation", "I recommend SSE", "▸ ● SSE", "○ WebSocket", "One-way delivery from the", "Free text",
@@ -30,11 +30,9 @@ test("140x40: heading, chips, recommendation, cards, background, hints, status l
   for (const l of lines) assert.ok(width(l) <= 140);
 });
 
-test("colors: chips are magenta/green/yellow, reversibility is a background color, recommended badge", () => {
+test("colors: the origin is bold cyan, reversibility is a background color, recommended badge", () => {
   const raw = render(viewOf(), { cols: 140, rows: 40 });
-  assert.ok(raw.includes("\x1b[35m◈ ukagai"));
-  assert.ok(raw.includes("\x1b[32m⎇ feat/tui"));
-  assert.ok(raw.includes("\x1b[33m⧉ feat-tui"));
+  assert.ok(raw.includes("\x1b[1m\x1b[36mukagai ⎇ feat/tui ⧉ feat-tui"));
   assert.ok(raw.includes("\x1b[43;30m ◐ Costly to undo"));
   assert.ok(raw.includes("\x1b[42;30m Recommended "));
   const irr = viewOf(decision(withExplanation(V2_MD.replace("costly", "irreversible"))));
@@ -96,7 +94,7 @@ test("a view can be rendered from a model alone (buildModel result placed on the
 test("blocker: band on top, 'What you need to do' with code right under the heading, then the 3 options, copy hint", () => {
   const out = stripAnsi(render(viewOf(blockerDecision()), { cols: 140, rows: 40 }));
   const lines = out.split("\n");
-  assert.equal(lines[0]!.trim(), "Waiting for you");
+  assert.ok(lines[0]!.startsWith("ukagai ⎇ feat/tui") && lines[0]!.includes("Waiting for you"));
   for (const s of ["What you need to do", "gcloud auth login", "▸ ● Done. Continue", "○ Skip this step and continue", "○ Stop here", "c copy", "Why I stopped"]) {
     assert.ok(out.includes(s), `missing: ${s}`);
   }
@@ -153,7 +151,7 @@ test("ja: plan buttons, empty state, blocker band", () => {
   app.lang = "ja";
   assert.ok(stripAnsi(render(app.view(NOW), { cols: 100, rows: 20 })).includes("判断待ちはありません"));
   const blocker = stripAnsi(render(viewOf(blockerDecision(), "ja"), { cols: 140, rows: 40 }));
-  assert.equal(blocker.split("\n")[0]!.trim(), "人の作業待ち");
+  assert.ok(blocker.split("\n")[0]!.startsWith("ukagai ⎇ feat/tui") && blocker.split("\n")[0]!.includes("人の作業待ち"));
   assert.ok(blocker.includes("c コピー"));
 });
 
@@ -198,4 +196,14 @@ test("W1: blocker fixed labels are shown in the display language (value unchange
   assert.equal(fixedLabel("対応した。続けて (推奨)"), "done");
   assert.equal(fixedLabel("Stop here"), "stop");
   assert.equal(fixedLabel("Sqlite"), undefined);
+});
+
+test("G1: frame line 1 starts with repo and branch in bold, at 120x40 and 100x24, and on a plan file", () => {
+  for (const [cols, rows] of [[120, 40], [100, 24]] as const) {
+    const raw = render(viewOf(), { cols, rows });
+    assert.ok(stripAnsi(raw.split("\n")[0]!).startsWith("ukagai ⎇ feat/tui"), `${cols}x${rows}`);
+    assert.ok(raw.split("\n")[0]!.startsWith("\x1b[1m"), "bold sequence first");
+  }
+  const blk = render(viewOf(blockerDecision()), { cols: 120, rows: 40 });
+  assert.ok(stripAnsi(blk.split("\n")[0]!).startsWith("ukagai"), "blocker");
 });

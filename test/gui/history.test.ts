@@ -168,7 +168,7 @@ gui("the Goal row is the third header row: first instruction on one line, `· N 
   await seed();
   await reopen(GOAL);
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(rows, ["hd-top", "hd-line2", "hd-goal"]);
+  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2", "hd-goal"]);
   // whitespace and newlines are folded to single spaces
   assert.equal(q1("#head .goal-text"), "Goal: Add a history panel to the decision screen, please. Keep the layout calm.");
   assert.equal(q1("#head .goal-n"), "· 3 instructions");
@@ -306,7 +306,7 @@ gui("no history (missing transcript) leaves the header at two rows and `s` does 
   await reopen();
   await sleep(500);
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(rows, ["hd-top", "hd-line2"]);
+  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2"]);
   press("s");
   assert.equal(ev<boolean>(`!!${PANEL}`), false);
   assert.ok(ev<boolean>(`!!document.querySelector("#decision .opt")`)); // the screen is intact

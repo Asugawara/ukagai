@@ -36,6 +36,13 @@ body {
 .hd-top { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 18px 0; }
 .hd-meta { flex: 0 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12px; color: var(--muted); }
 .where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.where b { color: var(--fg); font-weight: 700; }
+.origin { flex: 0 1 auto; min-width: 0; max-width: 60%; font-size: 18px; line-height: 1.5; font-weight: 400; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.origin.dim { color: var(--muted); }
+.hd-meta { margin-left: auto; }
+.hd-sub { padding: 0 18px; min-width: 0; }
+.hd-sub .v2-title { display: block; font-weight: 500; }
+.hd.blocker .origin { color: #1d1d1f; }
 .rev { flex: none; white-space: nowrap; }
 .hd.blocker .hd-top, .hd.blocker .hd-top .hd-meta, .hd.blocker .hd-top .pending-btn { color: #1d1d1f; }
 .hd-meta .badge { flex: none; }
@@ -313,7 +320,7 @@ pre code.hljs { background: none; padding: 0; }
 }
 @media (max-height: 820px) {
   .q-top { max-height: 58vh; }
-  .headline { font-size: 16px; }
+  .headline, .origin { font-size: 16px; }
   .q .question { font-size: 16px; }
 }
 
