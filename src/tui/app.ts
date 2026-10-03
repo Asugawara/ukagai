@@ -1,4 +1,4 @@
-import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type SessionHistory } from "../contract.js";
+import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type SessionHistory, type SessionSummary } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
 import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { Frame, ListItem, View } from "./render.js";
@@ -37,6 +37,8 @@ export const HSCROLL_STEP = 8;
 export const FULL_HINT_MS = 6000;
 /** A plan is new (shown by itself, counted) while unread and written within this long */
 export const NEW_PLAN_MS = 24 * 3600_000;
+/** A progress checkpoint has three cards: continue, instruct, stop */
+const CHECKPOINT_CARDS = 3;
 
 const STATUS_KEY: Record<string, MessageKey> = {
   answer_submitted: "status_answer_submitted",
@@ -119,10 +121,27 @@ export class App {
 
   // ---- Data ----
 
+  /** Screen order: blockers, then questions and plans, then progress checkpoints (each group oldest first); the plan files come after all of them */
   pending(): Decision[] {
+    const rank = (d: Decision): number => (d.kind === "checkpoint" ? 2 : isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}) ? 0 : 1);
     return [...this.decisions.values()]
       .filter((d) => d.status === "pending")
-      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      .sort((a, b) => rank(a) - rank(b) || a.created_at.localeCompare(b.created_at));
+  }
+
+  /** The state of every session (GET /api/sessions, `session.updated`): a checkpoint's idle note reads it */
+  private sessions = new Map<string, SessionSummary>();
+
+  setSessions(list: SessionSummary[]): void {
+    this.sessions = new Map(list.map((s) => [s.session_id, s]));
+  }
+
+  sessionUpdated(s: SessionSummary): void {
+    this.sessions.set(s.session_id, s);
+  }
+
+  private idle(d: Decision | undefined): boolean {
+    return !!d && this.sessions.get(d.session.session_id)?.state === "idle";
   }
 
   /** The list at startup / refetch (pending only). Decisions still pending locally but missing from the list are returned to be re-fetched */
@@ -147,6 +166,7 @@ export class App {
   }
 
   upsert(d: Decision, now: number): void {
+    const prev = this.decisions.get(d.id);
     this.decisions.set(d.id, d);
     if (d.status !== "pending" && this.sent.has(d.id)) {
       const key = STATUS_KEY[d.status];
@@ -158,6 +178,9 @@ export class App {
     } else if (this.shownId == null && d.status === "pending") {
       // A decision needs an answer, a plan does not: it takes the screen. Its own plan on screen turns into the approval in place
       this.show(d.id, planNameOf(d) !== null && planNameOf(d) === this.shownPlan);
+    } else if (!prev && d.status === "pending" && d.kind !== "checkpoint" && this.shownId && this.decisions.get(this.shownId)?.kind === "checkpoint" && !this.drafts.get(this.shownId)?.free.text.trim() && this.mode === "normal") {
+      // A question or a plan approval outranks a checkpoint on screen (unless an instruction is half typed)
+      this.show(d.id);
     }
   }
 
@@ -413,7 +436,7 @@ export class App {
                 blocker: isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}),
                 title: titleOf(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation!.markdown) : {}, this.lang),
                 chips: chipsOf(d),
-                kindLabel: t(this.lang, d.kind === "approve_plan" ? "kind_plan" : "kind_question"),
+                kindLabel: t(this.lang, d.kind === "approve_plan" ? "kind_plan" : d.kind === "checkpoint" ? "checkpoint_kind" : "kind_question"),
                 createdAt: d.created_at,
                 noExplanation: d.kind === "answer_question" && !hasExplanation(d),
                 current: d.id === this.shownId,
@@ -438,6 +461,7 @@ export class App {
       list,
       history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
       histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
+      idle: m?.checkpoint ? this.idle(this.decisions.get(m.id)) : false,
       copy: this.copySupported,
       recFull: this.shownId !== null && this.recFull.has(this.shownId),
       plan: m?.plan ? this.planState(m) : null,
@@ -733,6 +757,7 @@ export class App {
   /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, 2 buttons for a plan */
   private slots(m: ScreenModel): number {
     if (m.kind === "plan") return 2;
+    if (m.checkpoint) return CHECKPOINT_CARDS;
     return m.question ? m.question.cards.length + 3 : 0;
   }
 
@@ -765,6 +790,7 @@ export class App {
 
   /** `1`-`9`: send the card at once. A heavy card (irreversible) first moves the cursor there and asks for the same key (or Enter) again */
   private pick(m: ScreenModel, dr: Draft, i: number, now: number): Effect[] {
+    if (m.checkpoint) return this.checkpointCard(m, dr, i);
     const q = m.question;
     if (!q || q.multi || i >= q.cards.length) return [];
     const heavy = m.reversibility === "irreversible" || !!q.cards[i]!.heavy;
@@ -841,7 +867,21 @@ export class App {
     return [];
   }
 
+  /** A checkpoint's three cards, one press each: continue and stop send at once, the instruction card opens the text box (Enter there sends it) */
+  private checkpointCard(m: ScreenModel, dr: Draft, i: number): Effect[] {
+    dr.cursor = i;
+    if (i === 0) return this.emit(m.id, { kind: "continue" });
+    if (i === 2) return this.emit(m.id, { kind: "stop" });
+    return this.startFree(m, dr);
+  }
+
   private startFree(m: ScreenModel, dr: Draft): Effect[] {
+    if (m.checkpoint) {
+      dr.cursor = 1;
+      this.input = { kind: "free", text: dr.free.text };
+      this.mode = "input";
+      return [];
+    }
     const q = m.question;
     if (!q) return [];
     dr.cursor = q.cards.length + 2;
@@ -881,6 +921,12 @@ export class App {
       return this.emit(m.id, { approve: false, reason });
     }
     dr.free.text = inp.text;
+    if (m.checkpoint) {
+      this.input = null;
+      this.mode = "normal";
+      // Enter on typed text sends it as the instruction; an empty box sends nothing
+      return inp.text.trim() ? this.emit(m.id, { kind: "instruct", text: inp.text.trim() }) : [];
+    }
     if (!inp.text.trim()) dr.free.on = false;
     this.input = null;
     this.mode = "normal";
@@ -897,6 +943,7 @@ export class App {
   }
 
   private submit(m: ScreenModel, dr: Draft, now: number): Effect[] {
+    if (m.checkpoint) return dr.cursor === 1 && dr.free.text.trim() ? this.emit(m.id, { kind: "instruct", text: dr.free.text.trim() }) : this.checkpointCard(m, dr, dr.cursor);
     if (m.kind === "plan") {
       if (dr.cursor === 0) return this.approve(m);
       this.startReason(dr);

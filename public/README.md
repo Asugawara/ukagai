@@ -54,6 +54,16 @@ The display language is `en` (default) or `ja`. The server reads `<data-dir>/con
 - Each question card shows "Free text" under the options (a radio for single select, a checkbox for multi select) with a text input. When chosen, the answer value is that string (in multi select it is appended after the chosen labels). An empty string cannot be sent.
 - `GET /` appends a version to the `app.js` / `app.css` URLs (`?v=<mtimeMs in base 36>`; `/public/*` ignores the query), and `app.js` shows a dim `build <v>` at the end of the hint line (bottom right in the empty state), so you can tell whether you are looking at a stale build.
 
+## Progress checkpoints (`kind: "checkpoint"`)
+
+A recap Claude Code wrote into the transcript becomes a non-blocking card (the server makes it; nothing waits on the answer).
+
+- **Header.** Row 1 keeps the origin first, then the title `Progress check · <session title or cwd basename>` (`進捗確認 · …`); row 2 is the first sentence of the recap (`firstSentence`), then a dim line `The agent keeps working if you do not answer`. The Goal row works as for any decision.
+- **Left column**: the recap in full (`.cp-recap`, plain text, line breaks kept).
+- **Right column** (`renderCheckpointRight`): three cards, keys `1`-`3`, `↑↓ j k` move, Enter acts on the cursor card. `Continue` (recommended, `1`) sends `{kind:"continue"}` and `Stop here` (`3`) sends `{kind:"stop"}`, both on one press (no second press). `Give an instruction…` (`2`, `i`, or a click) only focuses its text box; Enter in the box sends `{kind:"instruct", text}` (an empty box sends nothing). There is no None of these / Can't answer and no free-text row. A dim note `The agent is idle; your reply arrives at its next tool call` (`.cp-idle`) is shown while the session state (`GET /api/sessions`, SSE `session.updated`) is `idle`.
+- **Order and count.** Blockers, then questions and plans, then checkpoints (each oldest first), then the new plan files. A question or plan approval that arrives while a checkpoint is shown takes the screen (unless an instruction is half typed). Checkpoints count in `Pending N`; the drawer row shows the dim word `recap` / `進捗` in place of `Question`.
+- **After.** An answered checkpoint leaves like any decision. A `cancelled` update (superseded, new prompt, session end, expired) removes it with no toast.
+
 ## Rich decision screen (explanation file extras)
 
 All extra sections are optional and are matched exactly (English first, Japanese alias): Terms / 用語, What only you know / あなたにしか分からないこと, Assumptions / 前提, Counterargument / 反論, Affected / 影響を受けるもの. They are read only for a single question whose Options table maps onto the options (the cards); otherwise they stay in the left column as plain text. Terms, unknowns, assumptions, counterargument and affected leave the body and go to the lead of the left column.
