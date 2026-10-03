@@ -46,6 +46,11 @@ body {
 .hd-line2:empty { display: none; }
 .hd.blocker .hd-top { background: var(--blocker); color: #1d1d1f; padding-bottom: 6px; }
 .hd.blocker .hd-line2 { padding-top: 6px; }
+.hd-goal { display: flex; gap: 8px; min-width: 0; padding: 0 18px 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.hd-goal .goal-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-goal .goal-n { flex: none; white-space: nowrap; }
+.hd-goal:hover .goal-text { text-decoration: underline dotted; }
+.hs[hidden] { display: none; }
 .blocker-band { flex: none; font-weight: 700; font-size: 13px; white-space: nowrap; }
 .cwd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .banner { grid-row: 1; background: var(--red); color: #fff; padding: 8px 16px; } /* Normal flow. While shown it pushes the rows below (header / main / .empty) down */
@@ -261,6 +266,14 @@ button.btn.primary.confirming { background: var(--yellow); border-color: var(--y
 .overlay-title { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 8px; }
 .overlay-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .terms-list { margin: 0; max-width: 560px; }
+.overlay-card.history { width: min(760px, 100%); }
+.hist-list { max-height: 60vh; overflow: auto; }
+.hist-row { display: flex; gap: 10px; align-items: baseline; padding: 4px 8px; border-left: 2px solid transparent; cursor: pointer; }
+.hist-row.sel { border-left-color: var(--accent); background: var(--bg); }
+.hist-at { flex: none; width: 5.5em; font-size: 12px; color: var(--muted); }
+.hist-first { flex: none; width: 3em; font-size: 12px; color: var(--muted); }
+.hist-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-full { margin: 0; max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .terms-list dt { font-weight: 700; margin-top: 8px; }
 .terms-list dd { margin: 2px 0 0; color: var(--muted); }
 table.cmp { display: table; font-size: 13px; }
