@@ -86,8 +86,8 @@ test("s opens the list: first marked, chronological, the first one is not repeat
   press(app, ch("s"));
   assert.equal(app.mode, "history");
   const text = draw(app);
-  assert.match(text, /Session instructions/);
-  const rows = text.split("\n").filter((l) => /instruction|Implement/.test(l) && !l.includes("Session"));
+  assert.match(text, /This session's instructions/);
+  const rows = text.split("\n").filter((l) => /instruction|Implement/.test(l) && !l.includes("session's"));
   assert.equal(rows.length, 3, text);
   assert.match(rows[0]!, /30h\s+first Implement the history view/);
   assert.match(rows[1]!, /5h\s+second instruction/);

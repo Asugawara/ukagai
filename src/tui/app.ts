@@ -630,7 +630,8 @@ export class App {
     if (!inp.text.trim()) dr.free.on = false;
     this.input = null;
     this.mode = "normal";
-    return [];
+    // Single select: Enter on the typed text sends it (an empty text sends nothing). Multi select only confirms: the ticked options go with it on the next Enter
+    return m.question && !m.question.multi && inp.text.trim() ? this.submit(m, dr, now) : [];
   }
 
   private complete(m: ScreenModel, dr: Draft): boolean {

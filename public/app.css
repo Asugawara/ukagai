@@ -46,6 +46,7 @@ body {
 .hd-line2:empty { display: none; }
 .hd.blocker .hd-top { background: var(--blocker); color: #1d1d1f; padding-bottom: 6px; }
 .hd.blocker .hd-line2 { padding-top: 6px; }
+.hd.blocker .v2-title { color: #1d1d1f; }
 .hd-cond { min-width: 0; padding: 0 18px 4px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expanded .hd-cond { white-space: normal; overflow-wrap: anywhere; }
 .hd-goal { display: flex; gap: 8px; min-width: 0; padding: 0 18px 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
@@ -83,7 +84,7 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 .qs { flex: 1 0 auto; }
 .q { margin-bottom: 18px; }
 .q .header { font-size: 12px; color: var(--muted); }
-.approval-q { margin: 0 0 8px; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.approval-q { white-space: pre-wrap; margin: 0 0 8px; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
 .approval-cmd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; font-weight: 700; padding: 1px 4px; background: rgba(127, 127, 127, .15); border-radius: 3px; }
 .q .question { font-size: 17px; font-weight: 700; line-height: 1.5; margin-bottom: 8px; overflow-wrap: anywhere; }
 .opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; }
@@ -342,3 +343,12 @@ pre code.hljs { background: none; padding: 0; }
 .cardkey { flex: none; width: 10px; margin-top: 1px; color: var(--muted); font-size: 12px; opacity: .7; }
 .confirm-inline { margin-top: 4px; color: var(--red); font-size: 12px; font-weight: 600; }
 .confirm-inline[hidden] { display: none; }
+
+/* Q8: the free-text card is one row (label and input side by side); below 1100px the card bodies fold to one line so 3 cards + free text + hint fit at 1000x700 */
+.opt.free .grow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.opt.free .lab { flex: none; }
+.opt.free .free-text { flex: 1 1 0; min-width: 0; margin-top: 0; }
+@media (max-width: 1100px) {
+  .opt .desc.clampable { -webkit-line-clamp: 1; line-clamp: 1; }
+}
+.v2-title .approval-cmd { font-size: 13px; }

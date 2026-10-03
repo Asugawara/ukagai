@@ -838,7 +838,8 @@ gui("a Japanese-headed explanation renders the same card as an English one", asy
   assert.equal(ev<number>(`document.querySelectorAll("#decision .opt").length`), 4);
   assert.equal(ev<string>(`document.querySelector("#head .headline").textContent.length > 0`), true);
   assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent === "A が選ばれる"`), true);
-  assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes("なぜ今この判断が要るか")`), true);
+  // the Why heading follows the display language (English here), not the file's own heading
+  assert.equal(ev<boolean>(`document.querySelector("#background .why h2").textContent === "Why this decision is needed now"`), true);
   assert.equal(ev<boolean>(`!document.querySelector("#background").textContent.includes("選択肢")`), true); // the options section moved to the right
 });
 
@@ -942,7 +943,7 @@ gui("weight: on an irreversible decision Enter needs a second press within 3 sec
   assert.equal(bar(), false);
   press("Enter");
   assert.equal(bar(), true);
-  assert.equal(q1("#decision .confirm-inline:not([hidden])"), "Click again to send (3s)");
+  assert.equal(q1("#decision .confirm-inline:not([hidden])"), "Press the same key or click again (3s)");
   assert.equal((await api(`/api/decisions/${id}`)).status, "pending"); // one Enter does not send
   await sleep(3400);
   assert.equal(bar(), false); // released after 3 seconds
@@ -1183,7 +1184,7 @@ gui("ja: the shape, You decide, Against, None of these and the confirmation foll
     assert.equal(q1("#background .against-cap"), "反論:");
     assert.equal(q1("#decision .none-card").startsWith("どれでもない…"), true);
     press("Enter");
-    assert.equal(q1("#decision .confirm-inline:not([hidden])"), "もう一度クリックで送信(3 秒)");
+    assert.equal(q1("#decision .confirm-inline:not([hidden])"), "同じキーかクリックをもう一度(3 秒)");
     press("n");
     assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .none-type")].map(e => e.textContent))`), ["選択肢が足りない", "前提が違う", "証拠が足りない", "あとで聞いて"]);
   } finally {
@@ -1693,4 +1694,74 @@ gui("X1 (b): an Approval shows the backticked command in monospace, and Deny is 
   ab("click", "#decision .opt:nth-of-type(2)");
   // sent at once (no "Click again" confirmation)
   await waitFor("sent", `!document.querySelector("#decision .opt")  || document.querySelector("#empty") && !document.querySelector("#empty").hidden`);
+});
+
+// ---- Y3 (Q8 findings) ----
+
+gui("Y3 M-1: a free-text-only question does not advertise n / x in the footer (full and short hint)", async () => {
+  await seedQuestion({ options: [], explain: false, question: "Which of the two approaches do you prefer?" });
+  await reopen("document.querySelector('#decision .q-cards, #decision input[type=text]')");
+  const full = q1("#foot .hint-full");
+  const short = q1("#foot .hint-short");
+  assert.equal(/None|Can't answer/.test(full), false, full);
+  assert.equal(/\bn\b|\bx\b/.test(short), false, short);
+  // a question with options still shows them
+  await cancelAll();
+  await seedQuestion();
+  await reopen();
+  assert.equal(q1("#foot .hint-full").includes("n None"), true);
+  assert.equal(q1("#foot .hint-full").includes("x Can't answer"), true);
+});
+
+gui("Y3 M-3: an approval has its command in monospace in the header, keeps the blank line, and offers no None of these / Can't answer", async () => {
+  await seedQuestion({
+    header: "Approval", title: "Allow `curl -sI https://example.com`?", question: "Run a request to the site.\n\n`curl -sI https://example.com`", explain: false,
+    options: [{ label: "Allow", description: "Runs the command" }, { label: "Deny", description: "Skips it" }],
+  });
+  await reopen();
+  assert.equal(count("#head .v2-title code.approval-cmd"), 1);
+  assert.equal(q1("#head .v2-title code.approval-cmd"), "curl -sI https://example.com");
+  assert.equal(q1("#head .v2-title").includes("`"), false);
+  assert.match(ev<string>(`getComputedStyle(document.querySelector("#head .approval-cmd")).fontFamily`), /mono|Menlo|Courier/i);
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#decision .approval-q")).whiteSpace`), "pre-wrap");
+  assert.equal(q1("#decision .approval-q").includes("site.\n\n"), true);
+  assert.equal(count("#decision .escape-row, #decision .none-card, #decision .cannot-card"), 0);
+  assert.equal(/None|Can't answer/.test(q1("#foot .hint-full")), false);
+  fire("KeyN"); fire("KeyX"); // letter keys go through KeyboardEvent (agent-browser press does not deliver them, Q6 3-A)
+  assert.equal(count("#decision .esc-panel"), 0);
+  await cancelAll();
+});
+
+gui("Y3 M-4: the Why / Why I stopped headings follow the display language, and the blocker band's title is dark", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  try {
+    assert.equal(q1("#background .why h2"), "Why this decision is needed now");
+    await setLang("ja", `document.querySelector("#background .why h2")?.textContent === "なぜ今この判断が要るか"`);
+    await cancelAll();
+    const b = await seedBlocker();
+    await reopen();
+    await setLang("ja", `document.querySelector("#background .why h2")?.textContent === "なぜ止まったか"`);
+    assert.equal(b.whyHeading, "Why I stopped");
+    assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .v2-title")).color`), "rgb(29, 29, 31)");
+  } finally {
+    ev(`document.documentElement.dataset.lang = "en", "ok"`);
+  }
+});
+
+gui("Y3 M-5: at 1000x700 (ja) three cards, the one-row free-text card and the hint all fit without scrolling the cards", async () => {
+  await seedRich();
+  try {
+    ab("set", "viewport", "1000", "700");
+    await reopen(RICH_READY);
+    await setLang("ja", `document.querySelector("#head .badge.costly")?.textContent?.includes("コスト")`);
+    assert.equal(count("#decision .opt"), 4);
+    for (const sel of ["#decision .opt:nth-of-type(1)", "#decision .opt.free", "#foot .hint"]) assert.equal(visible(sel), true, `${sel} ${JSON.stringify(rectIn(sel))}`);
+    assert.equal(ev<boolean>(`(c => c.scrollHeight <= c.clientHeight + 1)(document.querySelector("#decision .q-cards"))`), true, "the cards area does not scroll");
+    // label and input share one row
+    assert.equal(ev<boolean>(`(f => Math.abs(f.querySelector(".lab").getBoundingClientRect().top - f.querySelector(".free-text").getBoundingClientRect().top) < 20)(document.querySelector("#decision .opt.free"))`), true);
+  } finally {
+    ev(`document.documentElement.dataset.lang = "en", "ok"`);
+    ab("set", "viewport", "1440", "900");
+  }
 });
