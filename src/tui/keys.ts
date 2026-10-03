@@ -110,7 +110,7 @@ export class KeyParser {
 // ---- Actions ----
 
 export type Mode = "normal" | "input" | "list" | "none" | "cannot" | "history";
-export type Kind = "question" | "plan";
+export type Kind = "question" | "plan" | "checkpoint";
 /** The column that arrows and j/k act on. background = the left explanation, decision = the right-hand decision */
 export type Focus = "background" | "decision";
 

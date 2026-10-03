@@ -28,6 +28,8 @@ export interface View {
   model: ScreenModel | null;
   /** Display language */
   lang: Lang;
+  /** The shown checkpoint's session is idle (its note says the reply arrives at the next tool call) */
+  idle: boolean;
   /** The `s` overlay (the session's instructions, chronological; cursor); null when closed */
   history: { index: number; items: HistoryItem[] } | null;
   /** One instruction shown in full in place of the background column */
@@ -283,6 +285,26 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     };
   }
 
+  if (m.checkpoint) {
+    if (v.idle) lines.push(...wrap(`${DIM}${t(lang, "checkpoint_idle")}${RESET}`, w), "");
+    (["continue", "instruct", "stop"] as const).forEach((k, i) => {
+      const start = lines.length;
+      const on = v.cursor === i;
+      const lead = `${DIM}${i + 1}${RESET} ${on ? `${BOLD}▸${RESET}` : " "} `;
+      lines.push(`${lead}${on ? BOLD : ""}${OPT_COLORS[i]}${t(lang, `checkpoint_${k}`)}${RESET}${i === 0 ? `  ${BADGE_REC} ${t(lang, "recommended_badge")} ${RESET}` : ""}`);
+      if (i === 1) {
+        const typing = v.input?.kind === "free";
+        const typed = typing ? `${v.input!.text}▏` : v.free.text;
+        const pad = " ".repeat(width(lead));
+        if (typed) for (const x of wrap(typed, Math.max(8, w - width(lead)))) lines.push(pad + x);
+        else if (on) lines.push(`${pad}${DIM}${t(lang, "checkpoint_placeholder")}${RESET}`);
+      }
+      if (on) focus = [start, lines.length];
+      lines.push("");
+    });
+    return { lines, focus, hint: v.input ? t(lang, "hint_input_send") : t(lang, "hint_checkpoint") };
+  }
+
   const q = m.question!;
   if (q.approval) {
     // A Codex approval: the question with its backticked command in bold cyan, so the command stands out
@@ -470,6 +492,10 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
 }
 
 function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean, rows: number): Left {
+  if (m.checkpoint) {
+    const lines = [`${DIM}${t(lang, "checkpoint_kind")}${RESET}`, ...wrap(m.checkpoint.recap, w)];
+    return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
+  }
   if (m.backgroundNote) {
     const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
     return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
@@ -632,7 +658,9 @@ export function renderFrame(v: View, size: Size): Frame {
     return fin(body, []);
   }
 
-  const head = m.readonly
+  const head = m.checkpoint
+    ? [metaLine(m, v.now, cols, v.lang), truncate(`${BOLD}${m.title}${RESET}`, cols), ...wrap(m.checkpoint.headline, cols).slice(0, 1), truncate(`${DIM}${t(v.lang, "checkpoint_optional")}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
+    : m.readonly
     ? [truncate(`${BOLD}${CYAN}plans/${RESET}  ${planFileMeta(m, v.now, v.lang)}`, cols), truncate(`${BOLD}${m.title}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
     : [metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
   const bodyRows = Math.max(1, rows - head.length - 1);

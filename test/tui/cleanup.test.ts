@@ -12,18 +12,22 @@ import type { PlanContent } from "../../src/contract.js";
 const LONG = readFileSync(new URL("../gui/fixtures/long-plan.md", import.meta.url), "utf8");
 const NOW = Date.parse("2026-10-03T12:00:00.000Z");
 
-test("parseSse: session.updated and heartbeats are dropped without JSON.parse; plan events are validated", () => {
+test("parseSse: heartbeats are dropped without JSON.parse; session and plan events are validated", () => {
   const real = JSON.parse;
   let parses = 0;
   JSON.parse = ((...a: Parameters<typeof JSON.parse>) => (parses++, real(...a))) as typeof JSON.parse;
   try {
-    assert.equal(parseSse("event: session.updated\ndata: {not json"), null);
     assert.equal(parseSse(": ping"), null);
-    assert.equal(parseSse("event: session.updated\ndata: {\"id\":\"s\"}"), null);
+    assert.equal(parseSse("event: session.created\ndata: {\"id\":\"s\"}"), null);
     assert.equal(parses, 0);
   } finally {
     JSON.parse = real;
   }
+  // session.updated is read now (a checkpoint's idle note follows the session state); a payload that is not a SessionSummary is dropped
+  assert.equal(parseSse("event: session.updated\ndata: {not json"), null);
+  assert.equal(parseSse("event: session.updated\ndata: {\"id\":\"s\"}"), null);
+  const sess = { session_id: "s", state: "idle", last_event_at: "2026-10-03T00:00:00.000Z", cwd: "/w" };
+  assert.deepEqual(parseSse(`event: session.updated\ndata: ${JSON.stringify(sess)}`), { event: "session.updated", session: sess });
   const plan = { name: "a.md", title: "A", mtime: "2026-10-03T00:00:00.000Z", bytes: 1, sections: 0, lines: 1, read: true };
   assert.deepEqual(parseSse(`event: plan.updated\ndata: ${JSON.stringify(plan)}`), { event: "plan.updated", plan });
   assert.equal(parseSse(`event: plan.updated\ndata: ${JSON.stringify({ name: "a.md" })}`), null, "a payload that is not a PlanSummary");

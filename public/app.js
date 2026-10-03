@@ -237,6 +237,7 @@ const NONE_REASON_KEYS = { loop_guard: "none_loop_guard", plan_mode: "none_plan_
 // A title with its backticked spans in monospace (only for approvals; elsewhere the text stays as written)
 const codeSpans = (text, cls, on) => (on ? text.split(/(`[^`]+`)/).filter(Boolean) : [text]).map((p) => (/^`[^`]+`$/.test(p) && on ? el("code", { class: cls, text: p.slice(1, -1) }) : p));
 
+const isCheckpoint = (d) => d.kind === "checkpoint";
 const hasExplanation = (d) => !!d.explanation && d.explanation.attached_via !== "none";
 
 function cwdTail(d) {
@@ -253,6 +254,7 @@ function rawTitleOf(d) {
   if (!title && hasExplanation(d) && d.kind === "answer_question") title = parseFrontMatter(d.explanation.markdown).fm.title;
   if (title) return title;
   if (d.readonly) return d.title;
+  if (isCheckpoint(d)) return `${t("checkpoint_title")} · ${d.session.title || cwdTail(d)}`;
   if (d.kind === "approve_plan") return /^#[ \t]+(.+?)[ \t]*$/m.exec(d.request.plan ?? "")?.[1] ?? t("plan_approval");
   return d.session.title || d.request.questions[0]?.question || t("question");
 }
@@ -313,10 +315,22 @@ function diffBlock(text) {
   return pre;
 }
 
+// Screen order: blockers, then questions and plans, then progress checkpoints (each group oldest first); the plan files come after all of them
+const rank = (d) => (isCheckpoint(d) ? 2 : isBlocker(d) ? 0 : 1);
 const pendingList = () =>
-  [...decisions.values()].filter((d) => d.status === "pending").sort((a, b) => a.created_at.localeCompare(b.created_at));
+  [...decisions.values()].filter((d) => d.status === "pending").sort((a, b) => rank(a) - rank(b) || a.created_at.localeCompare(b.created_at));
 
-const kindLabel = (d) => (d.kind === "approve_plan" ? t("kind_plan") : t("kind_question"));
+const kindLabel = (d) => (d.kind === "approve_plan" ? t("kind_plan") : isCheckpoint(d) ? t("checkpoint_kind") : t("kind_question"));
+
+// Session state by id (GET /api/sessions, SSE session.updated): the idle note of a checkpoint reads it
+const sessions = new Map();
+const sessionIdle = (d) => sessions.get(d.session.session_id)?.state === "idle";
+function syncIdleNote(sid) {
+  const d = decisions.get(shownId);
+  if (!d || !isCheckpoint(d) || d.session.session_id !== sid) return;
+  const note = document.querySelector("#decision .cp-idle");
+  if (note) note.hidden = !sessionIdle(d);
+}
 
 // ---- Toasts ----
 // Stacked vertically right above the submit button in the right column (on top of the .actions edge), at most 3. Bottom right when nothing is shown
@@ -340,6 +354,7 @@ const LOST_KEYS = { answer_lost: "lost_answer_lost", hook_disconnected: "lost_ho
 // When the status of a decision that is not shown changes
 function notifyBackground(prev, d) {
   if (!prev || prev.status === d.status) return;
+  if (isCheckpoint(d) && d.status === "cancelled") return; // superseded / expired / new prompt: removed silently
   const title = clip(titleOf(d));
   if (d.status === "cancelled" && prev.status === "pending") toast(t("cancelled_title", { title }), { kind: "lost", ms: 4000 });
   else if (LOST_KEYS[d.status]) toast(t(LOST_KEYS[d.status], { title }), { kind: "lost", ms: 4000 });
@@ -408,6 +423,12 @@ function fitTitle(head) {
   sub.hidden = false;
 }
 
+// First sentence of a recap (ends at 。！？!? or a full stop followed by a space); the whole text when there is no end mark
+const firstSentence = (text) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return /^(.+?(?:[。！？!?]+|\.(?=\s|$)))/u.exec(flat)?.[1] ?? flat;
+};
+
 // The header (full width, above both columns). Row 1: title + chips, reversibility, scope, pending pill. Row 2: the headline (the first
 // sentence of the recommendation, or the raw question / the plan prompt). Both rows are one / two lines and end in … (click or `.` shows all)
 function renderHead(d) {
@@ -421,7 +442,8 @@ function renderHead(d) {
   const dr = draftOf(d);
   const title = titleOf(d);
   let line2;
-  if (d.kind === "approve_plan") line2 = el("div", { class: "headline plain clampable", text: t("plan_question") });
+  if (isCheckpoint(d)) line2 = el("div", { class: "headline plain clampable", text: firstSentence(d.request.recap) });
+  else if (d.kind === "approve_plan") line2 = el("div", { class: "headline plain clampable", text: t("plan_question") });
   else if (d.request.questions.length === 1 && modelFor(d).v2) line2 = modelFor(d).v2.headline;
   else if (d.request.questions.length === 1 && title !== d.request.questions[0].question) line2 = el("div", { class: "headline plain clampable", text: d.request.questions[0].question });
   const blocker = isBlocker(d);
@@ -438,6 +460,7 @@ function renderHead(d) {
     if (e.target.closest(".hd-goal")) openHistory(d);
     else if (e.target.closest(".headline, .v2-title")) toggleExpand(dr);
   };
+  if (isCheckpoint(d)) head.append(el("div", { class: "cp-optional", text: t("checkpoint_optional") }));
   const cond = d.kind === "answer_question" && d.request.questions.length === 1 ? modelFor(d).v2?.cond : null;
   if (cond) head.append(el("div", { class: "hd-cond clampable", title: cond, text: `${t("cond_prefix")} ${cond}` }));
   renderGoal(d);
@@ -1409,6 +1432,8 @@ function renderRightBody(d) {
     return;
   }
 
+  if (isCheckpoint(d)) { renderCheckpointRight(d, dr, closed, root); return; }
+
   // approve_plan
   const qsBox = el("div", { class: "qs" });
   const impact = impactBox(d);
@@ -1453,6 +1478,67 @@ function renderRightBody(d) {
   if (!closed) ui.setCursor(dr.cursor ?? 0);
   markClamps(root, dr);
   if (outline) syncPlan(d);
+}
+
+// A progress checkpoint: three cards (continue / instruct / stop), one press each. The instruction card holds the free-text box (Enter sends it).
+// Nothing blocks on it, so there is no None of these / Can't answer and no second press for Stop here
+function renderCheckpointRight(d, dr, closed, root) {
+  root.classList.add("split");
+  const free = dr.free.get(0) ?? dr.free.set(0, { on: false, text: "" }).get(0);
+  const top = el("div", { class: "q-top" }, el("div", { class: "cp-idle", hidden: !sessionIdle(d), text: t("checkpoint_idle") }));
+  const cardsBox = el("div", { class: "q-cards" });
+  const cards = [];
+  const instruct = el("input", {
+    type: "text", class: "free-text", placeholder: t("checkpoint_placeholder"), value: free.text, disabled: closed,
+    onfocus: () => ui?.setCursor(1),
+    oninput: (ev) => { free.text = ev.target.value; },
+  });
+  const defs = [
+    { key: "continue", rec: true, body: { kind: "continue" } },
+    { key: "instruct", input: instruct },
+    { key: "stop", body: { kind: "stop" } },
+  ];
+  defs.forEach((def, idx) => {
+    const lab = el("div", { class: "lab" }, el("span", { text: t(`checkpoint_${def.key}`) }), def.rec ? el("span", { class: "rec-badge", text: `★ ${t("recommended")}` }) : null);
+    const card = el("label", { class: "opt" + (def.rec ? " recommended" : ""), "data-card": def.key },
+      el("span", { class: "cardkey", text: String(idx + 1) }),
+      el("span", { class: "grow" }, lab, def.input ?? null));
+    card.addEventListener("click", (ev) => {
+      if (ev.target === instruct) return;
+      ev.preventDefault();
+      if (closed || !ui) return;
+      if (idx === 1) ui.openInstruct(); else { ui.setCursor(idx); ui.sendCard(idx); }
+    });
+    cards.push({ card, def });
+    cardsBox.append(card);
+  });
+  root.append(el("div", { class: "qs" }, el("div", { class: "q split" }, top, cardsBox)));
+  root.append(el("div", { class: "actions" }));
+  setHint(el("div", { class: "hint" }, t("hint_checkpoint")));
+  ui = {
+    kind: "checkpoint", cards, closed, instruct,
+    setCursor(i) {
+      i = clamp(i, cards.length);
+      dr.cursor = i;
+      cards.forEach((c, k) => c.card.classList.toggle("cursor", k === i));
+      revealCard(cards[i].card);
+    },
+    get cursor() { return dr.cursor ?? 0; },
+    toggleExpand: () => toggleExpand(dr),
+    openInstruct() { if (closed) return; ui.setCursor(1); instruct.focus(); },
+    // Continue and Stop go at once; the instruction card sends its text (an empty box takes the focus instead)
+    sendCard(idx) {
+      if (closed) return;
+      const def = cards[idx]?.def;
+      if (!def) return;
+      if (def.body) { send(d, def.body); return; }
+      const text = free.text.trim();
+      if (text) send(d, { kind: "instruct", text });
+      else instruct.focus();
+    },
+  };
+  if (!closed) ui.setCursor(dr.cursor ?? 0);
+  markClamps(root, dr);
 }
 
 // "None of these…": open the type picker under the card (the answer is `None of these — <type>: <note>`)
@@ -2413,6 +2499,10 @@ function renderLeft(d) {
   if (!d) return;
   const ex = d.explanation;
 
+  if (isCheckpoint(d)) {
+    root.append(el("div", { class: "cp-recap-cap", text: t("checkpoint_kind") }), el("div", { class: "cp-recap", text: d.request.recap }));
+    return;
+  }
   if (d.kind === "approve_plan") {
     const plan = el("div", { class: "md" });
     root.append(plan);
@@ -2494,7 +2584,7 @@ function upsert(d) {
   if (d.id !== shownId) notifyBackground(prev, d);
   if (d.id === shownId) {
     if (d.status !== "pending") {
-      toast(statusText(d.status, "updated"));
+      if (!(isCheckpoint(d) && d.status === "cancelled")) toast(statusText(d.status, "updated"));
       advance();
     } else if (!prev || prev.status !== d.status) {
       renderAll();
@@ -2506,12 +2596,19 @@ function upsert(d) {
     show(d.id);
     return;
   }
+  // A question or a plan approval outranks a checkpoint on screen (unless an instruction is half typed)
+  const cur = decisions.get(shownId);
+  if (d.status === "pending" && !prev && !isCheckpoint(d) && cur && isCheckpoint(cur) && !draftOf(cur).free.get(0)?.text.trim()) {
+    show(d.id);
+    return;
+  }
   if (shownId == null) renderAll(); else refreshItems();
 }
 
 async function loadAll() {
   const plansReq = api("/api/plans"); // independent of the decisions: fetched alongside
   plansReq.catch(() => {});
+  const sessionsReq = api("/api/sessions").then((list) => { for (const x of Array.isArray(list) ? list : []) sessions.set(x.session_id, x); }).catch(() => {});
   const ds = await api("/api/decisions?status=pending");
   const seen = new Set();
   for (const d of ds) {
@@ -2529,6 +2626,8 @@ async function loadAll() {
       drafts.delete(d.id);
     }
   }));
+  await sessionsReq;
+  syncIdleNote(decisions.get(shownId)?.session.session_id);
   try { await loadPlans(await plansReq); } catch (e) { if (e.message === "unauthorized") throw e; }
   if (isPlanId(shownId)) {
     if (plans.has(planNameOf(shownId)) && planData.has(planNameOf(shownId))) refreshItems(); else advance();
@@ -2549,6 +2648,7 @@ function connect() {
   es = new EventSource("/api/stream");
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
+  es.addEventListener("session.updated", (e) => { const x = JSON.parse(e.data); sessions.set(x.session_id, x); syncIdleNote(x.session_id); });
   es.addEventListener("plan.updated", (e) => onPlanUpdated(JSON.parse(e.data)));
   es.addEventListener("plan.removed", (e) => onPlanRemoved(JSON.parse(e.data).name));
   es.addEventListener("open", () => {
@@ -2655,6 +2755,24 @@ document.addEventListener("keydown", (ev) => {
   }
   if (!ui || ui.closed) return;
   const isBtn = t instanceof HTMLButtonElement;
+
+  if (ui.kind === "checkpoint") {
+    if (typing) {
+      if (key === "Enter") { ev.preventDefault(); ui.sendCard(1); }
+      else if (key === "Escape") { ev.preventDefault(); t.blur(); }
+      else if (key === "ArrowUp" || key === "ArrowDown") { ev.preventDefault(); t.blur(); ui.setCursor(ui.cursor + (key === "ArrowDown" ? 1 : -1)); }
+      return;
+    }
+    if (key === "Enter" && isBtn) return;
+    if (t instanceof HTMLInputElement) t.blur();
+    if (key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
+    else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
+    else if (key === "i" || key === "2") { ev.preventDefault(); ui.openInstruct(); }
+    else if (key === ".") { ev.preventDefault(); ui.toggleExpand(); }
+    else if (key === "1" || key === "3") { ev.preventDefault(); ui.setCursor(Number(key) - 1); ui.sendCard(Number(key) - 1); }
+    else if (key === "Enter") { ev.preventDefault(); ui.sendCard(ui.cursor); }
+    return;
+  }
 
   if (ui.kind === "question") {
     const n = ui.cards.length;

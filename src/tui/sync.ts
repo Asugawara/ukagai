@@ -1,6 +1,6 @@
 import { ApiError, type StreamEvent } from "./api.js";
 import type { App } from "./app.js";
-import type { Decision, PlanSummary } from "../contract.js";
+import type { Decision, PlanSummary, SessionSummary } from "../contract.js";
 
 // Sync with the server (does I/O, no screen): SSE reconnection and re-fetching the list after reconnecting.
 
@@ -9,6 +9,8 @@ export interface SyncApi {
   get(id: string): Promise<Decision>;
   /** The plan files (absent in tests that do not need them) */
   plans?(): Promise<PlanSummary[]>;
+  /** The session states (absent in tests that do not need them) */
+  sessions?(): Promise<SessionSummary[]>;
   stream(onEvent: (e: StreamEvent) => void, signal: AbortSignal, onOpen?: () => void): Promise<void>;
 }
 
@@ -27,6 +29,8 @@ export async function refetch(api: SyncApi, app: App, now: () => number = Date.n
   // Plans are best effort: a failure leaves what is known
   const [pending, files] = await Promise.all([api.listPending(), plans && api.plans ? api.plans().catch(() => null) : null]);
   const stale = app.replacePending(pending, now());
+  const states = api.sessions ? await api.sessions().catch(() => null) : null;
+  if (states) app.setSessions(states);
   if (files) app.replacePlans(files, now());
   await Promise.all(
     stale.map(async (id) => {
@@ -55,7 +59,8 @@ export async function streamLoop(api: SyncApi, app: App, signal: AbortSignal, o:
     try {
       await api.stream(
         (ev) => {
-          if (ev.event === "plan.updated") app.planUpdated(ev.plan, now());
+          if (ev.event === "session.updated") app.sessionUpdated(ev.session);
+          else if (ev.event === "plan.updated") app.planUpdated(ev.plan, now());
           else if (ev.event === "plan.removed") app.planRemoved(ev.name, now());
           else app.upsert(ev.decision, now());
           o.onChange();

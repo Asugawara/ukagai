@@ -59,6 +59,7 @@ export async function run(argv: string[]): Promise<number> {
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());
+    app.setSessions(await api.sessions().catch(() => []));
   } catch (e) {
     const why = e instanceof ApiError ? `(${e.message})` : "";
     process.stderr.write(`ukagai tui: cannot connect to the server (${opts.server})${why}. It starts automatically when you launch claude\n`);

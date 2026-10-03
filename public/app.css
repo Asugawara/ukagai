@@ -398,3 +398,11 @@ pre code.hljs { background: none; padding: 0; }
 .done-reading span { text-decoration: underline; text-underline-offset: 2px; }
 .done-reading:hover { color: var(--fg); }
 .done-reading kbd { margin-left: 8px; font: inherit; font-size: 11px; color: var(--muted); }
+
+/* Progress checkpoint */
+.cp-optional { padding: 0 18px 8px; font-size: 12px; color: var(--muted); }
+.cp-recap-cap { font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
+.cp-recap { white-space: pre-wrap; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.cp-idle { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.cp-idle[hidden] { display: none; }
+.opt[data-card] .free-text { margin-top: 6px; }

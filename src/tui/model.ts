@@ -1,5 +1,5 @@
 import { planOutline, type PlanOutline } from "./plan.js";
-import { AskUserQuestionInput, ExitPlanModeInput, type Decision, type SessionHistory } from "../contract.js";
+import { AskUserQuestionInput, CheckpointRequest, ExitPlanModeInput, type Decision, type SessionHistory } from "../contract.js";
 import {
   COLUMN_HAPPENS,
   COLUMN_RISK,
@@ -76,7 +76,7 @@ export type Reversibility = "reversible" | "costly" | "irreversible";
 
 export interface ScreenModel {
   id: string;
-  kind: "question" | "plan";
+  kind: "question" | "plan" | "checkpoint";
   title: string;
   chips: Chip[];
   /** Path with ~ for the home directory */
@@ -135,6 +135,8 @@ export interface ScreenModel {
     /** Whether the options were read from a table (v2) */
     v2: boolean;
   };
+  /** A progress checkpoint: the recap and its first sentence (three fixed answers; nothing waits on it) */
+  checkpoint?: { recap: string; headline: string };
   /** Two or more questions (the TUI cannot answer them) */
   unsupported?: string;
   hasExplanation: boolean;
@@ -207,6 +209,7 @@ export function titleOf(d: Decision, fm: Record<string, string>, lang: Lang = "e
   if (d.kind === "approve_plan") {
     return /^#[ \t]+(.+?)[ \t]*$/m.exec(planOf(d))?.[1] ?? t(lang, "default_plan_title");
   }
+  if (d.kind === "checkpoint") return `${t(lang, "checkpoint_title")} · ${d.session.title || tail(d.session.cwd)}`;
   const q = questionsOf(d)[0]?.question;
   return stripSuffix(d.session.title || q || t(lang, "default_question_title"));
 }
@@ -352,6 +355,11 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     d.kind === "answer_question" && explained && questionsOf(d).length === 1
       ? findCoinedTerms(md, questionsOf(d)[0]!.options.map((o) => stripSuffix(o.label)))
       : [];
+
+  if (d.kind === "checkpoint") {
+    const recap = CheckpointRequest.safeParse(d.request).data?.recap ?? "";
+    return { ...base, ...NO_RICH, kind: "checkpoint", background: null, recommendation: null, checkpoint: { recap, headline: splitHeadline(recap).headline } };
+  }
 
   if (d.kind === "approve_plan") {
     const plan = planOf(d);
