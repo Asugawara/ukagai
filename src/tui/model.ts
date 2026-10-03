@@ -112,6 +112,8 @@ export interface ScreenModel {
   impact?: string | null;
   /** A long plan folded into sections: its outline, the plan text and what the hook appended after it (null for a short plan) */
   plan?: { outline: PlanOutline; text: string; extra: string } | null;
+  /** A plan file opened from the plan browser: no decision behind it, no buttons */
+  readonly?: { name: string };
   /** Waiting for the human (explanation.type === "blocker") */
   blocker: boolean;
   /** Body of the blocker "What you need to do" section (Markdown), shown at the top of the right column */
@@ -482,5 +484,29 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
       initialCursor: Math.max(0, cards.findIndex((c, i) => c.recommended || (i >= parsed.cards.length && SUFFIX_RE.test(c.value)))),
       v2: true,
     },
+  };
+}
+
+/** The screen model of a plan file shown read-only (the plan browser, `p`): the PL1 folding view with no decision behind it */
+export function buildPlanFileModel(name: string, title: string, markdown: string, mtime: string): ScreenModel {
+  const outline = planOutline(markdown);
+  return {
+    ...NO_RICH,
+    id: `plan:${name}`,
+    kind: "plan",
+    title,
+    chips: [],
+    cwd: "",
+    createdAt: mtime,
+    background: markdown,
+    recommendation: null,
+    impact: null,
+    plan: outline.long ? { outline, text: markdown, extra: "" } : null,
+    readonly: { name },
+    blocker: false,
+    todo: null,
+    todoCode: [],
+    hasExplanation: false,
+    history: null,
   };
 }

@@ -353,7 +353,7 @@ function placePending() {
 function renderHeader() {
   const n = pendingList().length;
   pendingCount.textContent = String(n);
-  pendingBtn.hidden = n < 2; // with one decision only the shown one exists, so hide it
+  pendingBtn.hidden = n < (planUi?.view ? 1 : 2); // with one decision only the shown one exists, so hide it (the plan view has none shown)
   const blocked = pendingList().some(isBlocker);
   document.title = n > 0 ? `(${n}) ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
 }
@@ -506,6 +506,204 @@ function syncHistory() {
   hintEl.textContent = t(full ? "history_full_hint" : "history_hint");
   for (const r of listEl.children) r.classList.toggle("sel", Number(r.dataset.i) === sel);
   listEl.children[sel]?.scrollIntoView({ block: "nearest" });
+}
+
+// ---- Plan browser (`p`): a read-only list of ~/.claude/plans and a read-only plan view ----
+
+// planUi = { items, sel, view, dirty, timer, stash }. view = { item, pd, mtime } while a plan is shown. The decision screen (or the idle
+// screen) is parked in `stash` while a plan is shown and put back untouched on Esc; renderAll defers to the close (dirty)
+let planUi = null;
+const PLAN_POLL_MS = 10000;
+const screenId = () => planUi?.view?.pd.id ?? shownId;
+
+function closePlanTimer() { clearInterval(planUi?.timer); if (planUi) planUi.timer = null; }
+
+async function fetchPlans() {
+  const data = await api("/api/plans");
+  return Array.isArray(data?.plans) ? data.plans : [];
+}
+
+async function openPlans() {
+  if (planUi) return;
+  planUi = { items: [], sel: 0, view: null, dirty: false, timer: null, stash: null };
+  renderHeader();
+  try { planUi.items = await fetchPlans(); } catch {}
+  if (!planUi) return;
+  showPlanList();
+  planUi.timer = setInterval(pollPlans, PLAN_POLL_MS);
+}
+
+function showPlanList() {
+  const u = planUi;
+  const list = el("div", { class: "hist-list plan-list" });
+  const hint = el("div", { class: "overlay-hint", text: t("plans_hint") });
+  openOverlay("plans", t("plans_title"), el("div", {}, list, hint), { items: u.items, listEl: list });
+  fillPlans();
+}
+
+function fillPlans() {
+  const u = planUi;
+  if (overlay?.kind !== "plans" || !u) return;
+  overlay.items = u.items;
+  overlay.listEl.replaceChildren();
+  if (!u.items.length) overlay.listEl.append(el("div", { class: "hist-row plan-empty", style: "cursor:default", text: t("plans_empty") }));
+  u.items.forEach((it, i) => {
+    overlay.listEl.append(el("div", { class: "hist-row", "data-i": String(i), onclick: () => { u.sel = i; openPlan(it); } },
+      el("span", { class: "hist-text", title: it.name, text: it.title }),
+      el("span", { class: "hist-at", text: t("history_ago", { t: elapsed(it.mtime) }) }),
+      el("span", { class: "hist-first plan-counts", text: [count("plan_sections", it.sections), count("plan_lines", it.lines)].join(" · ") })));
+  });
+  u.sel = u.items.length ? clamp(u.sel, u.items.length) : 0;
+  syncPlans();
+}
+
+function syncPlans() {
+  if (overlay?.kind !== "plans" || !planUi) return;
+  for (const r of overlay.listEl.children) r.classList.toggle("sel", Number(r.dataset.i) === planUi.sel);
+  overlay.listEl.children[planUi.sel]?.scrollIntoView({ block: "nearest" });
+}
+
+async function pollPlans() {
+  if (!planUi) return;
+  if (planUi.view) { fetchPlanFile(planUi.view.item, planUi.view.mtime).then((r) => { if (r && planUi?.view?.item === r.item) refreshPlanView(r.data); }).catch(() => {}); return; }
+  try {
+    const items = await fetchPlans();
+    if (!planUi || planUi.view) return;
+    planUi.items = items;
+    fillPlans();
+  } catch {}
+}
+
+// The plan body, or null on 304
+async function fetchPlanFile(item, since) {
+  const url = `/api/plans/${encodeURIComponent(item.name)}${since ? `?since=${encodeURIComponent(since)}` : ""}`;
+  const res = await fetch(url, { credentials: "same-origin" });
+  if (res.status === 304) return null;
+  if (res.status === 401 && (await refreshAuth())) return fetchPlanFile(item, since);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return { item, data: await res.json() };
+}
+
+const planPd = (data) => ({ id: `plan:${data.name}`, kind: "approve_plan", readonly: true, status: "pending", request: { plan: data.markdown, planFilePath: data.name } });
+const outlineSig = (md) => planOutlineOf(md).entries.map((e) => `${e.level}${e.title}`).join("\n");
+
+async function openPlan(item) {
+  let r;
+  try { r = await fetchPlanFile(item); } catch { return; }
+  if (!planUi || !r) return;
+  const root = (id) => $(id);
+  const park = (node) => { const f = document.createDocumentFragment(); f.append(...node.childNodes); return f; };
+  stashPending();
+  planUi.stash = {
+    head: park(root("head")), headClass: root("head").className, headHidden: root("head").hidden,
+    bg: park(root("background")), bgTop: root("background").scrollTop,
+    dec: park(root("decision")), decClass: root("decision").className, decTop: root("decision").scrollTop,
+    foot: park(root("foot")), footHidden: root("foot").hidden,
+    mainHidden: root("main").hidden, emptyHidden: root("empty").hidden,
+    headOnclick: root("head").onclick,
+  };
+  closeOverlay();
+  planUi.view = { item, pd: planPd(r.data), mtime: r.data.mtime, sig: outlineSig(r.data.markdown), data: r.data };
+  renderPlanView();
+  renderHeader();
+}
+
+function renderPlanView() {
+  const { pd, data } = planUi.view;
+  const head = $("head");
+  head.replaceChildren();
+  head.hidden = false;
+  head.className = "hd";
+  head.onclick = null;
+  head.append(
+    el("div", { class: "hd-top" },
+      el("div", { class: "v2-title", title: data.title, text: data.title }),
+      el("div", { class: "hd-meta" })),
+    el("div", { class: "hd-line2" }, el("div", { class: "headline plain", text: t("plan_readonly") }), planMetaLine(pd)));
+  placePending();
+  $("main").hidden = false;
+  $("empty").hidden = true;
+  const left = $("background");
+  left.replaceChildren();
+  left.scrollTop = 0;
+  const md = el("div", { class: "md" });
+  left.append(md);
+  const outline = planOutline(pd);
+  const right = $("decision");
+  right.replaceChildren();
+  right.className = "";
+  right.scrollTop = 0;
+  if (outline) right.append(el("div", { class: "qs" }, planToc(pd, outline)));
+  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}${t("hint_back")}` }));
+  const job = renderPlanMarkdown(md, pd).catch(() => {});
+  job.then(refreshWide);
+  if (outline) syncPlan(pd);
+  refreshWide();
+}
+
+function refreshPlanView(data) {
+  const v = planUi.view;
+  const sig = outlineSig(data.markdown);
+  if (sig !== v.sig) { drafts.delete(v.pd.id); outlines.delete(v.pd.id); }
+  v.pd = planPd(data);
+  v.mtime = data.mtime;
+  v.sig = sig;
+  v.data = data;
+  const keep = $("background").scrollTop;
+  renderPlanView();
+  $("background").scrollTop = keep;
+}
+
+function closePlanView() {
+  const u = planUi;
+  const s = u.stash;
+  drafts.delete(u.view.pd.id);
+  outlines.delete(u.view.pd.id);
+  u.view = null;
+  u.stash = null;
+  stashPending();
+  $("head").replaceChildren(s.head);
+  $("head").className = s.headClass;
+  $("head").hidden = s.headHidden;
+  $("head").onclick = s.headOnclick;
+  $("background").replaceChildren(s.bg);
+  $("background").scrollTop = s.bgTop;
+  $("decision").replaceChildren(s.dec);
+  $("decision").className = s.decClass;
+  $("decision").scrollTop = s.decTop;
+  $("foot").replaceChildren(s.foot);
+  $("foot").hidden = s.footHidden;
+  $("main").hidden = s.mainHidden;
+  $("empty").hidden = s.emptyHidden;
+  placePending();
+  renderHeader();
+  refreshWide();
+}
+
+function closePlans() {
+  if (!planUi) return;
+  if (planUi.view) closePlanView();
+  closePlanTimer();
+  const dirty = planUi.dirty;
+  planUi = null;
+  closeOverlay();
+  if (dirty) renderAll(); else renderHeader();
+}
+
+function planViewKey(ev) {
+  const key = logicalKey(ev);
+  ev.preventDefault();
+  const pd = planUi.view.pd;
+  const o = planOutline(pd);
+  if (key === "Escape") { closePlanView(); showPlanList(); renderHeader(); return; }
+  if (!o) return;
+  const st = planState(pd, o);
+  if (key === "ArrowUp" || key === "k") planMoveCursor(pd, -1);
+  else if (key === "ArrowDown" || key === "j") planMoveCursor(pd, 1);
+  else if (key === "Enter" || key === " ") planSetOpen(pd, st.cur, !st.open.has(st.cur));
+  else if (key === "o") planToggleAll(pd);
+  else if (key === "[") planReveal(pd, Math.max(0, st.cur - 1));
+  else if (key === "]") planReveal(pd, Math.min(o.entries.length - 1, st.cur + 1));
 }
 
 // ---- Drawer ----
@@ -818,7 +1016,7 @@ function closeOverlay() {
 function openOverlay(kind, title, body, extra = {}) {
   closeOverlay();
   const card = el("div", { class: `overlay-card ${kind}` }, el("div", { class: "overlay-title" }, el("span", { text: title })), body);
-  const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-label": title, onclick: (e) => { if (e.target === root) closeOverlay(); } }, card);
+  const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-label": title, onclick: (e) => { if (e.target === root) { if (kind === "plans") closePlans(); else closeOverlay(); } } }, card);
   document.body.append(root);
   overlay = { kind, el: root, ...extra };
 }
@@ -865,6 +1063,15 @@ function overlayKey(ev) {
   const key = logicalKey(ev);
   ev.preventDefault();
   const d = decisions.get(shownId);
+  if (overlay.kind === "plans") {
+    const n = overlay.items.length;
+    if (key === "Escape" || key === "p") closePlans();
+    else if (key === "ArrowDown" || key === "j") { planUi.sel = clamp(planUi.sel + 1, n); syncPlans(); }
+    else if (key === "ArrowUp" || key === "k") { planUi.sel = clamp(planUi.sel - 1, n); syncPlans(); }
+    else if (key === "Home" || key === "End") { planUi.sel = key === "Home" ? 0 : n - 1; syncPlans(); }
+    else if (key === "Enter" && n) openPlan(overlay.items[planUi.sel]);
+    return;
+  }
   if (overlay.kind === "history") {
     // Digits, x and n do nothing here. `?` swaps to the term list, `s` closes
     if (overlay.full) {
@@ -939,7 +1146,7 @@ function renderRightBody(d) {
   if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
-  setHint(null);
+  setHint(d ? null : el("div", { class: "hint" }, `p ${t("hint_plans")}`));
   if (!d) return;
   const dr = draftOf(d);
   const closed = d.status !== "pending";
@@ -1865,7 +2072,7 @@ const metaText = (e) => [count("plan_lines", e.lines), e.files.size ? count("pla
 // Mirror the state onto the left column (open, marks) and the contents (marks, cursor)
 function syncPlan(d) {
   const o = planOutline(d);
-  if (!o || d.id !== shownId) return;
+  if (!o || d.id !== screenId()) return;
   const st = planState(d, o);
   for (const e of o.entries) {
     const det = document.querySelector(`#background details[data-i="${e.i}"]`);
@@ -1875,8 +2082,7 @@ function syncPlan(d) {
     row?.classList.toggle("cursor", st.cur === e.i);
     row?.classList.toggle("open", st.open.has(e.i));
   }
-  const dr = draftOf(d);
-  syncConfirm(dr);
+  if (!d.readonly) syncConfirm(draftOf(d));
 }
 
 function planSetOpen(d, i, open) {
@@ -2206,6 +2412,7 @@ function renderLeft(d) {
 // ---- Switching the view ----
 
 function renderAll() {
+  if (planUi) { planUi.dirty = true; renderHeader(); renderList(); return; } // the plan browser keeps the screen; closing it re-renders
   document.body.classList.remove("fullwide");
   closeOverlay();
   const d = decisions.get(shownId);
@@ -2316,7 +2523,7 @@ function cycle(step) {
 // With an IME enabled, keydown has key "Process" and keyCode 229, so the character is lost.
 // Outside text fields, decide the bound key from the physical key (code)
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyO: "o", BracketLeft: "[", BracketRight: "]", Slash: "/", Period: ".",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyO: "o", KeyP: "p", BracketLeft: "[", BracketRight: "]", Slash: "/", Period: ".",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -2367,9 +2574,14 @@ document.addEventListener("keydown", (ev) => {
     else if (k === "Enter") ev.preventDefault(); // no submit while full width
     return;
   }
+  if (planUi?.view) { planViewKey(ev); return; }
   if (overlay) { overlayKey(ev); return; }
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
+  if (!typing && key === "p") {
+    const pd = decisions.get(shownId);
+    if (!(pd && ui?.kind === "question" && (draftOf(pd).cannot || draftOf(pd).none))) { ev.preventDefault(); openPlans(); return; }
+  }
   if (!typing && key === "f" && hasWide()) { ev.preventDefault(); setFullwide(true); return; }
   if (key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
   if (!typing && (key === "h" || key === "l" || key === "ArrowLeft" || key === "ArrowRight")) {
@@ -2553,7 +2765,7 @@ document.addEventListener("keydown", (ev) => {
   else if (key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });
 
-pendingBtn.addEventListener("click", () => setDrawer(!drawerOpen()));
+pendingBtn.addEventListener("click", () => { if (planUi) closePlans(); else setDrawer(!drawerOpen()); });
 $("backdrop").addEventListener("click", () => setDrawer(false));
 
 setInterval(() => {

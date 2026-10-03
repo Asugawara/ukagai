@@ -55,6 +55,8 @@ export interface View {
   plan: PlanState | null;
   /** When the list is open */
   list: { items: ListItem[]; index: number } | null;
+  /** The plan browser's list (`p`); `loaded` is false until the first answer, so an empty screen is not flashed */
+  plans: { items: { title: string; mtime: string; sections: number; lines: number }[]; index: number; loaded: boolean } | null;
   /** First row of the background (the whole screen in the stacked layout) */
   scroll: number;
   /** First row of the decision column; null follows the cursor */
@@ -226,11 +228,12 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
 
   if (m.kind === "plan") {
     if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, lang, title: t(lang, "impact_title"), always: true }), "");
+    const ro = !!m.readonly;
     const toc = m.plan && v.plan ? { p: m.plan, st: v.plan } : null;
     if (toc) {
       // The contents: a window of rows around the cursor so the buttons stay on screen (the rest is "▲ n" / "▼ n")
       const es = toc.p.outline.entries;
-      const budget = Math.max(4, rows - lines.length - 1 - 2 - 4 - 2 - (v.input?.kind === "reason" || v.reason ? 2 : 0));
+      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (v.input?.kind === "reason" || v.reason ? 2 : 0));
       const size = Math.min(es.length, budget);
       const start = Math.max(0, Math.min(toc.st.cur - Math.floor(size / 2), es.length - size));
       lines.push(`${BOLD}${t(lang, "toc_title")}${RESET}`);
@@ -248,6 +251,8 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
       if (start + size < es.length) lines.push(`${DIM}  ▼ ${es.length - start - size}${RESET}`);
       lines.push("");
     }
+    // A plan file opened from the plan browser: the contents and nothing to answer
+    if (ro) return { lines, focus, hint: t(lang, toc ? "hint_planview_toc" : "hint_planview") };
     lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
     const buttons: [string, string][] = [["y", t(lang, "approve")], ["a", t(lang, "approve_auto")], ["n", t(lang, "reject")]];
     buttons.forEach(([k, label], i) => {
@@ -500,12 +505,14 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   const lang = v.lang;
   let left: string;
   if (v.notice) return truncate(`${BOLD}${YELLOW}${v.notice}${RESET}`, cols);
-  if (v.list) left = `${DIM}${t(lang, "footer_list")}${RESET}`;
+  if (v.plans) left = `${v.pending ? `${t(lang, "pending_n", { n: v.pending })}  ` : ""}${DIM}${t(lang, "footer_plans")}${RESET}`;
+  else if (v.model?.readonly) left = `${v.pending ? `${t(lang, "pending_n", { n: v.pending })}  ` : ""}${DIM}${t(lang, o.full ? "footer_full" : "footer_planview")}${RESET}`;
+  else if (v.list) left = `${DIM}${t(lang, "footer_list")}${RESET}`;
   else if (v.history) left = `${DIM}${t(lang, "footer_history_list")}${RESET}`;
   else if (v.histDetail) left = `${DIM}${t(lang, "footer_history_detail")}${RESET}`;
   else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_full")}${RESET}`;
   else {
-    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
+    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}  ${t(lang, "footer_plans_key")}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
   }
   if (v.conn?.state === "down") left = `${BOLD}${RED}${t(lang, "cannot_connect", { server: v.conn.server })}${RESET}  ${left}`;
   else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}${t(lang, "reconnected")}${RESET}  ${left}`;
@@ -527,6 +534,33 @@ function listBody(v: View, cols: number, rows: number): string[] {
     out.push(truncate(`    ${chipsText(it.chips)}  ${DIM}${meta}${RESET}`, cols));
   });
   return window(out, rows, 0);
+}
+
+/** The plan browser list: `title  ·  age  ·  N sections · M lines`, the cursor kept in view */
+function plansBody(v: View, cols: number, rows: number): string[] {
+  const l = v.plans!;
+  const head = [`${BOLD}${t(v.lang, "plans_title")}${RESET}`, ""];
+  if (!l.loaded) return window(head, rows, 0);
+  if (!l.items.length) return window([...head, `${DIM}${t(v.lang, "plans_empty")}${RESET}`], rows, 0);
+  const size = Math.max(1, rows - head.length);
+  const off = Math.max(0, Math.min(l.index - Math.floor(size / 2), l.items.length - size));
+  const body = l.items.slice(off, off + size).map((it, k) => {
+    const on = off + k === l.index;
+    const counts = `${DIM}${planCount(v.lang, "plan_sections", it.sections)} · ${planCount(v.lang, "plan_lines", it.lines)}${RESET}`;
+    return truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${on ? BOLD : ""}${it.title}${RESET}  ${DIM}·  ${elapsed(it.mtime, v.now, v.lang)}  ·${RESET}  ${counts}`, cols);
+  });
+  return window([...head, ...body], rows, 0);
+}
+
+const planCount = (lang: Lang, key: "plan_sections" | "plan_lines" | "plan_files", n: number): string => t(lang, n === 1 ? `${key}_one` : key, { n });
+
+/** Header of a plan file shown read-only: "Plan (read only)", the stats of a long plan (n sections · m lines · k files) and the file name */
+function planFileMeta(m: ScreenModel, lang: Lang): string {
+  const o = m.plan?.outline;
+  const parts = [`${t(lang, "plan_readonly")}`];
+  if (o) parts.push(`${planCount(lang, "plan_sections", o.h2)} · ${planCount(lang, "plan_lines", o.lines)} · ${planCount(lang, "plan_files", o.files)}`);
+  parts.push(m.readonly!.name);
+  return `${DIM}${parts.join("  ")}${RESET}`;
 }
 
 /** The `s` overlay: when · first line of each instruction, the cursor kept in view */
@@ -579,6 +613,7 @@ export function renderFrame(v: View, size: Size): Frame {
 
   if (v.list) return fin(listBody(v, cols, rows - 1), []);
   if (v.history) return fin(historyBody(v, cols, rows - 1), []);
+  if (v.plans) return fin(plansBody(v, cols, rows - 1), []);
 
   if (!m) {
     const body = new Array<string>(Math.max(0, rows - 1)).fill("");
@@ -588,7 +623,9 @@ export function renderFrame(v: View, size: Size): Frame {
     return fin(body, []);
   }
 
-  const head = [...(m.blocker ? [`${BADGE_BLOCKER} ${t(v.lang, "waiting_for_you")} ${RESET}`] : []), metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
+  const head = m.readonly
+    ? [truncate(planFileMeta(m, v.lang), cols), ...wrap(`${BOLD}${m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`]
+    : [...(m.blocker ? [`${BADGE_BLOCKER} ${t(v.lang, "waiting_for_you")} ${RESET}`] : []), metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
   const bodyRows = Math.max(1, rows - head.length - 1);
 
   if (cols >= WIDE_COLS) {

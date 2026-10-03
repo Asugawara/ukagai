@@ -18,6 +18,22 @@ export interface StreamEvent {
   decision: Decision;
 }
 
+export interface PlanSummary {
+  name: string;
+  title: string;
+  mtime: string;
+  bytes: number;
+  sections: number;
+  lines: number;
+}
+
+export interface PlanFile {
+  name: string;
+  title: string;
+  mtime: string;
+  markdown: string;
+}
+
 export class TuiApi {
   private token: string | null = null;
 
@@ -80,6 +96,24 @@ export class TuiApi {
     const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}/history`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
     return SessionHistory.parse(await res.json());
+  }
+
+  /** The plan files Claude Code wrote (newest first). Throws on any failure */
+  async plans(): Promise<PlanSummary[]> {
+    const res = await this.fetch("/api/plans", { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    const j = (await res.json()) as { plans?: unknown };
+    if (!Array.isArray(j.plans)) throw new ApiError("unexpected response");
+    return j.plans as PlanSummary[];
+  }
+
+  /** One plan file; null when `since` equals its current mtime (304) */
+  async plan(name: string, since?: string): Promise<PlanFile | null> {
+    const q = since ? `?since=${encodeURIComponent(since)}` : "";
+    const res = await this.fetch(`/api/plans/${encodeURIComponent(name)}${q}`, { signal: AbortSignal.timeout(5000) });
+    if (res.status === 304) return null;
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    return (await res.json()) as PlanFile;
   }
 
   async answer(id: string, body: Record<string, unknown>): Promise<Decision> {

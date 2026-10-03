@@ -1,6 +1,7 @@
 import { MULTI_SELECT_SEPARATOR, type Decision, type SessionHistory } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
-import { buildModel, hasExplanation, isBlocker, titleOf, chipsOf, type ScreenModel } from "./model.js";
+import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, titleOf, chipsOf, type ScreenModel } from "./model.js";
+import type { PlanFile, PlanSummary } from "./api.js";
 import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
@@ -8,7 +9,7 @@ import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 import { historyItems, type HistoryItem } from "./history.js";
-import { initialPlanState, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
+import { initialPlanState, planOutline, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -76,6 +77,14 @@ export class App {
   /** The `s` overlay cursor, and the instruction shown in full in the background column (index into the items) */
   private hist = { index: 0 };
   private histDetail: number | null = null;
+  /** The plan browser (`p`): the list of plan files, and the plan file shown read-only (the decision screen is left as it was and comes back on Esc) */
+  fetchPlans: (() => Promise<PlanSummary[]>) | null = null;
+  fetchPlan: ((name: string, since?: string) => Promise<PlanFile | null>) | null = null;
+  onPlans: () => void = () => {};
+  private browser: { items: PlanSummary[]; index: number; loaded: boolean } | null = null;
+  private pv: { name: string; mtime: string; model: ScreenModel; saved: { scroll: number; rscroll: number | null; focus: Focus; hscroll: number; full: boolean } } | null = null;
+  /** A decision arrived or changed while the plan browser was open: the screen is reset when it closes */
+  private stale = false;
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
@@ -166,6 +175,11 @@ export class App {
 
   private show(id: string | null): void {
     this.shownId = id;
+    // The plan browser keeps the screen (and its scroll); the new decision is shown when it closes
+    if (this.mode === "plans" || this.mode === "planview") {
+      this.stale = true;
+      return;
+    }
     // Focus does not carry over between decisions (left on the background, j / Enter would scroll it and cause wrong answers)
     this.focus = "decision";
     this.scroll = 0;
@@ -213,6 +227,7 @@ export class App {
   // ---- Accessors ----
 
   model(): ScreenModel | null {
+    if (this.pv) return this.pv.model;
     const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
     if (!d) return null;
     let m = this.models.get(d.id);
@@ -266,6 +281,7 @@ export class App {
       lang: this.lang,
       conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
       list,
+      plans: this.mode === "plans" && this.browser ? { items: this.browser.items, index: this.browser.index, loaded: this.browser.loaded } : null,
       history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
       histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
       copy: this.copySupported,
@@ -358,11 +374,11 @@ export class App {
       this.confirm = null;
     }
     if (key.name === "hwheel") {
-      if (this.mode === "normal") this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
+      if (this.mode === "normal" || this.mode === "planview") this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
       return [];
     }
     if (key.name === "wheel") {
-      if (this.mode === "normal") this.wheel(key.dir, key.x);
+      if (this.mode === "normal" || this.mode === "planview") this.wheel(key.dir, key.x);
       return [];
     }
     const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, lastG: this.lastG, now });
@@ -407,6 +423,11 @@ export class App {
         this.mode = "normal";
         return [];
       case "history-close": this.mode = "normal"; return [];
+      case "plans": this.openPlans(); return [];
+      case "plans-move": if (this.browser) this.browser.index = clamp(this.browser.index + a.delta, this.browser.items.length); return [];
+      case "plans-pick": this.pickPlan(); return [];
+      case "plans-close": this.closePlans(); return [];
+      case "plan-back": this.planBack(); return [];
       case "history-back": {
         this.histDetail = null;
         this.focus = "decision";
@@ -525,6 +546,83 @@ export class App {
       }
       default: return [];
     }
+  }
+
+  // ---- Plan browser ----
+
+  private openPlans(): void {
+    this.browser = { items: this.browser?.items ?? [], index: 0, loaded: this.browser?.loaded ?? false };
+    this.mode = "plans";
+    void this.refreshPlans();
+  }
+
+  private closePlans(): void {
+    this.mode = "normal";
+    this.browser = null;
+    if (this.stale) {
+      this.stale = false;
+      this.show(this.shownId);
+    }
+  }
+
+  private pickPlan(): void {
+    const b = this.browser;
+    const item = b?.items[clamp(b.index, b.items.length)];
+    if (!item || !this.fetchPlan) return;
+    void this.fetchPlan(item.name).then(
+      (file) => {
+        if (!file || this.mode !== "plans") return;
+        const saved = { scroll: this.scroll, rscroll: this.rscroll, focus: this.focus, hscroll: this.hscroll, full: this.full };
+        this.pv = { name: file.name, mtime: file.mtime, model: buildPlanFileModel(file.name, file.title, file.markdown, file.mtime), saved };
+        this.scroll = 0;
+        this.rscroll = null;
+        this.focus = "decision";
+        this.hscroll = 0;
+        this.full = false;
+        this.reveal = null;
+        this.mode = "planview";
+        this.onPlans();
+      },
+      () => {},
+    );
+  }
+
+  private planBack(): void {
+    const pv = this.pv;
+    if (!pv) return;
+    Object.assign(this, pv.saved);
+    this.drafts.delete(pv.model.id);
+    this.plans.delete(pv.model.id);
+    this.reveal = null;
+    this.pv = null;
+    this.mode = "plans";
+    void this.refreshPlans();
+  }
+
+  /** Every 10 seconds (index.ts): refresh the open list, or re-fetch the shown plan with its mtime and rebuild it only when the file changed */
+  async refreshPlans(): Promise<void> {
+    try {
+      if (this.mode === "plans" && this.browser && this.fetchPlans) {
+        const items = await this.fetchPlans();
+        if (this.mode === "plans" && this.browser) {
+          this.browser.items = items;
+          this.browser.loaded = true;
+          this.browser.index = clamp(this.browser.index, items.length);
+        }
+      } else if (this.mode === "planview" && this.pv && this.fetchPlan) {
+        const pv = this.pv;
+        const file = await this.fetchPlan(pv.name, pv.mtime);
+        if (!file || this.pv !== pv) return;
+        const sig = (md: string) => planOutline(md).entries.map((e) => `${e.level}${e.title}`).join("\n");
+        // Open and read marks stay while the headings are the same; a changed outline starts over
+        if (sig(file.markdown) !== sig(pv.model.background ?? "")) this.plans.delete(pv.model.id);
+        pv.mtime = file.mtime;
+        pv.model = buildPlanFileModel(file.name, file.title, file.markdown, file.mtime);
+      }
+    } catch {
+      // Keep what is shown; the next tick retries
+    }
+    this.onPlans();
   }
 
   private cycle(step: number): void {
