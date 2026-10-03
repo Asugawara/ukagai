@@ -112,7 +112,9 @@ export interface RunningHook {
 /** runHook that can send a signal to the child process */
 export function spawnHook(args: string[], input: string): RunningHook {
   const t0 = Date.now();
-  const p = spawn(process.execPath, ["--import", "tsx", cli, "hook", ...args], { stdio: ["pipe", "pipe", "pipe"] });
+  // A fresh HOME per child: a hook under test must never reach the real ~/.ukagai (hook.log, token) or ~/.claude.
+  const env = { ...process.env, HOME: tmpDir("ukagai-hook-home-") };
+  const p = spawn(process.execPath, ["--import", "tsx", cli, "hook", ...args], { stdio: ["pipe", "pipe", "pipe"], env });
   let stdout = "";
   let stderr = "";
   p.stdout.on("data", (c) => (stdout += c));
