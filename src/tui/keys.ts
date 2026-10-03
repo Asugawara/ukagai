@@ -109,7 +109,7 @@ export class KeyParser {
 
 // ---- Actions ----
 
-export type Mode = "normal" | "input" | "list" | "none" | "cannot";
+export type Mode = "normal" | "input" | "list" | "none" | "cannot" | "history";
 export type Kind = "question" | "plan";
 /** The column that arrows and j/k act on. background = the left explanation, decision = the right-hand decision */
 export type Focus = "background" | "decision";
@@ -162,7 +162,13 @@ export type Action =
   | { type: "input-cancel" }
   | { type: "list-move"; delta: 1 | -1 }
   | { type: "list-pick" }
-  | { type: "list-close" };
+  | { type: "list-close" }
+  /** `s`: open / close the session's instruction list; move in it; Enter shows one in full in the background column; Esc leaves the full text */
+  | { type: "history" }
+  | { type: "history-move"; delta: 1 | -1 }
+  | { type: "history-pick" }
+  | { type: "history-close" }
+  | { type: "history-back" };
 
 export interface KeyContext {
   mode: Mode;
@@ -174,6 +180,8 @@ export interface KeyContext {
   full?: boolean;
   /** Whether there is a diagram that can be shifted sideways */
   hscrollable?: boolean;
+  /** Whether one instruction is shown in full in the background column (Esc leaves it) */
+  histDetail?: boolean;
   /** Time of the first g of gg (0 if none) */
   lastG: number;
   now: number;
@@ -229,8 +237,19 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     return done(null);
   }
 
+  if (ctx.mode === "history") {
+    if (down) return done({ type: "history-move", delta: 1 });
+    if (up) return done({ type: "history-move", delta: -1 });
+    if (key.name === "enter") return done({ type: "history-pick" });
+    if (key.name === "esc" || (key.name === "char" && key.ch === "s")) return done({ type: "history-close" });
+    if (key.name === "char" && key.ch === "q") return done({ type: "quit" });
+    return done(null);
+  }
+
   const ch = key.name === "char" ? key.ch : null;
   if (ch === "q") return done({ type: "quit" });
+  if (ch === "s") return done({ type: "history" });
+  if (ctx.histDetail && key.name === "esc") return done({ type: "history-back" });
   const goLeft = key.name === "left" || ch === "h";
   const goRight = key.name === "right" || ch === "l";
 

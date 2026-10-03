@@ -1,4 +1,4 @@
-import { AskUserQuestionInput, ExitPlanModeInput, type Decision } from "../contract.js";
+import { AskUserQuestionInput, ExitPlanModeInput, type Decision, type SessionHistory } from "../contract.js";
 import {
   COLUMN_HAPPENS,
   COLUMN_RISK,
@@ -107,6 +107,8 @@ export interface ScreenModel {
   /** Two or more questions (the TUI cannot answer them) */
   unsupported?: string;
   hasExplanation: boolean;
+  /** The session's human instructions (lazily fetched); null until they arrive or when the fetch failed */
+  history: SessionHistory | null;
 }
 
 // Accepts both the English and the Japanese suffix
@@ -263,7 +265,7 @@ export function splitHeadline(text: string): { headline: string; rest: string } 
 
 const NO_RICH = { headline: null, recRest: null, unknowns: [], assumptions: [], against: null, affects: [], terms: [], coinedTerms: [] as string[], footnotes: [] };
 
-export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
+export function buildModel(d: Decision, lang: Lang = "en", history: SessionHistory | null = null): ScreenModel {
   const explained = hasExplanation(d);
   const md = explained ? (d.explanation?.markdown ?? "") : "";
   const all = toLines(md);
@@ -279,6 +281,7 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
     ...(metaOf(d, fm, "scope") ? { scope: metaOf(d, fm, "scope") as string } : {}),
     createdAt: d.created_at,
     hasExplanation: explained,
+    history,
     blocker: isBlocker(d, fm),
     todo: null as string | null,
     todoCode: [] as string[],

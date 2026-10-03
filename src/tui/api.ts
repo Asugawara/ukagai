@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Decision } from "../contract.js";
+import { Decision, SessionHistory } from "../contract.js";
 
 // Thin fetch wrapper for the server. Auth is the Bearer token in <data-dir>/token (same as the hook client).
 
@@ -73,6 +73,13 @@ export class TuiApi {
     const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
     return Decision.parse(await res.json());
+  }
+
+  /** The human instructions of the decision's session (first + the last 20). Throws on any failure; callers ignore it */
+  async history(id: string): Promise<SessionHistory> {
+    const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}/history`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    return SessionHistory.parse(await res.json());
   }
 
   async answer(id: string, body: Record<string, unknown>): Promise<Decision> {

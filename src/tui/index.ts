@@ -54,6 +54,7 @@ export async function run(argv: string[]): Promise<number> {
   const app = new App();
   app.server = opts.server;
   app.lang = await resolveLang(opts);
+  app.fetchHistory = (id) => api.history(id);
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());
@@ -83,6 +84,8 @@ export async function run(argv: string[]): Promise<number> {
   const schedule = () => {
     if (!paintTimer) paintTimer = setTimeout(paint, 10);
   };
+
+  app.onHistory = schedule;
 
   const refetch = async () => {
     try {

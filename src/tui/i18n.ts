@@ -114,6 +114,13 @@ const en = {
   term_undefined_tip: "Not defined under Terms",
   hint_cannot_pick: "j/k move · Space tick · Enter send · i note · Esc back",
   hint_numbers: "1-9 send",
+  goal_label: "Goal:",
+  footer_history: "s history",
+  history_title: "Session instructions",
+  history_first: "first",
+  footer_history_list: "j/k move  Enter full text  Esc close",
+  history_detail_title: "Instruction",
+  footer_history_detail: "Esc back to the list  j/k PgUp/PgDn scroll",
   cannot_need_term: "Tick at least one term, or type one with i",
 };
 
@@ -219,6 +226,13 @@ const ja: Record<MessageKey, string> = {
   term_undefined_tip: "Terms に定義なし",
   hint_cannot_pick: "j/k 移動 · Space チェック · Enter 送る · i 記述 · Esc 戻る",
   hint_numbers: "1-9 送信",
+  goal_label: "目的:",
+  footer_history: "s 履歴",
+  history_title: "このセッションの指示",
+  history_first: "最初",
+  footer_history_list: "j/k 移動  Enter 全文  Esc 閉じる",
+  history_detail_title: "指示",
+  footer_history_detail: "Esc 一覧へ戻る  j/k PgUp/PgDn 縦",
   cannot_need_term: "用語を 1 つ以上チェックするか、i で入力してください",
 };
 
