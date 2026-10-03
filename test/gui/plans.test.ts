@@ -1,5 +1,5 @@
-// The plan browser in the GUI (`p`): the list of ~/.claude/plans and the read-only plan view, against a real server (temp HOME) and a real
-// browser (agent-browser). Skipped when agent-browser is not on PATH. Keys are sent as KeyboardEvents (eval), not with `press`.
+// Plans flow in like questions (PL3b): a new plan in ~/.claude/plans appears by itself, is read with Done reading, upgrades in place when its
+// approval arrives, and is listed as a recent plan on the idle screen. A real server (temp HOME) and a real browser (agent-browser). Skipped when agent-browser is not on PATH. Keys are sent as KeyboardEvents (eval), not with `press`.
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -119,26 +119,26 @@ async function seedQuestion(): Promise<{ id: string }> {
   return { id: d.id };
 }
 
+const PLANS = () => join(home, ".claude", "plans");
 const SHORT_A = "# Short plan A\n\n## One\n\nText with `src/a.ts`.\n";
-const SHORT_C = "# Short plan C\n\n## One\n\nText.\n\n## Two\n\nMore.\n";
 
-function writePlans(names: Record<string, [string, number]>) {
-  const dir = join(home, ".claude", "plans");
-  mkdirSync(dir, { recursive: true });
-  for (const f of readdirSync(dir)) rmSync(join(dir, f), { force: true });
-  for (const [name, [text, ageMs]] of Object.entries(names)) {
-    writeFileSync(join(dir, name), text);
-    const t = new Date(Date.now() - ageMs);
-    utimesSync(join(dir, name), t, t);
-  }
+/** Write a plan file whose mtime is `ageMs` in the past (set in the same tick, so the server's debounced stat sees it) */
+function writePlan(name: string, text: string, ageMs = 0) {
+  mkdirSync(PLANS(), { recursive: true });
+  writeFileSync(join(PLANS(), name), text);
+  const t = new Date(Date.now() - ageMs);
+  utimesSync(join(PLANS(), name), t, t);
 }
-const THREE = () => writePlans({ "a.md": [SHORT_A, 3 * 3600_000], "b.md": [LONG, 3600_000], "c.md": [SHORT_C, 5 * 60_000] });
+function cleanPlans() {
+  mkdirSync(PLANS(), { recursive: true });
+  for (const f of readdirSync(PLANS())) rmSync(join(PLANS(), f), { force: true });
+}
 
 before(async () => {
   if (!HAS_BROWSER) return;
   home = mkdtempSync(join(tmpdir(), "ukagai-plans-"));
   dataDir = join(home, "data");
-  THREE();
+  mkdirSync(PLANS(), { recursive: true });
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
   serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home, UKAGAI_DISABLE: "1" } });
@@ -162,211 +162,252 @@ after(async () => {
 function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   test(`GUI plans: ${name}`, { skip: HAS_BROWSER ? false : "agent-browser is not installed" }, async (t) => {
     await cancelAll();
-    THREE();
+    cleanPlans();
     ab("set", "viewport", "1440", "900");
-    try { await fn(t); } finally { await cancelAll(); }
+    try { await fn(t); } finally { await cancelAll(); cleanPlans(); }
   });
 }
 
-const rows = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll(".overlay.plans .hist-row")].map(r => r.textContent))`);
-const selRow = () => ev<string>(`document.querySelector(".overlay.plans .hist-row.sel .hist-text")?.textContent ?? ""`);
-const listOpen = `document.querySelector(".overlay.plans")`;
+const IDLE = "document.getElementById('empty') && !document.getElementById('empty').hidden";
+const SEC = `document.querySelectorAll("#background details.plan-sec")`;
 const openCount = `document.querySelectorAll("#background details.plan-sec[open]").length`;
-const countPosts = () => ev<number>(`window.__posts.length`);
-const spyPosts = () => ev(`(() => { window.__posts = []; if (!window.__spied) { window.__spied = true; const f = window.fetch; window.fetch = (u, i) => { if (i && i.method === "POST") window.__posts.push(String(u)); return f(u, i); }; } return "ok"; })()`);
+const spyPosts = () => ev(`(() => { window.__posts = []; if (!window.__spied) { window.__spied = true; const f = window.fetch; window.fetch = (u, i) => { if (i && i.method === "POST") window.__posts.push(String(u)); return f(u, i); }; } else window.__posts = []; return "ok"; })()`);
+const posts = () => ev<string[]>(`JSON.stringify(window.__posts)`);
+const line2 = () => ev<string>(`document.querySelector("#head .hd-line2 .headline").textContent`);
+const marks = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background details.plan-sec > summary > .ps-mark")].map((m) => m.textContent))`);
+const planRead = async (name: string) => ((await api("/api/plans")).plans as { name: string; read: boolean }[]).find((p) => p.name === name)?.read;
 
-async function openLong() {
-  key("p");
-  await waitFor("list", `document.querySelectorAll(".overlay.plans .hist-row").length === 3`);
-  key("j");
-  key("Enter");
-  await waitFor("long plan shown", `document.querySelectorAll("#background details.plan-sec").length === 9`);
+/** A new plan arrives while the GUI is idle and takes the screen by itself (no key) */
+async function arrive(name: string, text = LONG, ageMs = 0) {
+  await reopen(IDLE);
+  await spyPosts();
+  writePlan(name, text, ageMs);
+  await waitFor("plan screen", `document.querySelector("#head .hd-line2 .headline")?.textContent.includes("updated") && document.querySelector("#background .md")`, 4000);
 }
 
-gui("p on the idle screen lists the three plans newest first with section and line counts; j k move, Esc closes", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  key("p");
-  await waitFor("list", `document.querySelectorAll(".overlay.plans .hist-row").length === 3`);
-  const r = rows();
-  assert.ok(r[0]!.startsWith("Short plan C") && r[0]!.includes("5m ago") && r[0]!.includes("2 sections · 9 lines"), r[0]);
-  assert.ok(r[1]!.startsWith("Plan: add retry to the export job") && r[1]!.includes("1h ago") && r[1]!.includes("9 sections · 200 lines"), r[1]);
-  assert.ok(r[2]!.startsWith("Short plan A") && r[2]!.includes("3h ago") && r[2]!.includes("1 section · 5 lines"), r[2]);
-  assert.equal(selRow(), "Short plan C");
-  key("j");
-  assert.equal(selRow(), "Plan: add retry to the export job");
-  key("ArrowDown");
-  key("ArrowDown");
-  assert.equal(selRow(), "Short plan A");
-  key("k");
-  assert.equal(selRow(), "Plan: add retry to the export job");
-  key("Escape");
-  assert.equal(ev(`!!${listOpen}`), false);
-  key("p");
-  await waitFor("list again", listOpen);
-  key("p");
-  assert.equal(ev(`!!${listOpen}`), false);
-  // the idle hint
-  assert.ok(ev<string>(`document.querySelector("#foot .hint").textContent`).includes("p Plans"));
-});
+async function seedPlanDecision(file: string, plan: string): Promise<{ id: string }> {
+  const n = ++seq;
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_plans_ap_${process.pid}_${n}`,
+    kind: "approve_plan",
+    session: { session_id: `00000000-0000-0000-0003-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan, planFilePath: join(PLANS(), file) },
+  });
+  assert.ok(d.id, `cannot create decision: ${JSON.stringify(d)}`);
+  return { id: d.id };
+}
 
-gui("Enter on the long plan: 9 sections with only the first open, 15 contents rows, the read-only header, no buttons; y does not POST", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
+gui("a new plan shows itself within 2 s: read-only, 9 sections with only the first open, no buttons; y a n do nothing", async () => {
+  await reopen(IDLE);
   await spyPosts();
-  await openLong();
+  const t0 = Date.now();
+  writePlan("auto.md", LONG);
+  await waitFor("plan screen", `document.querySelectorAll("#background details.plan-sec").length === 9`, 2000);
+  assert.ok(Date.now() - t0 < 2500);
   assert.equal(ev(openCount), 1);
   assert.equal(ev(`document.querySelector("#background details.plan-sec").open`), true);
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 15);
   assert.equal(ev(`document.querySelector("#head .v2-title").textContent`), "Plan: add retry to the export job");
-  assert.equal(ev(`document.querySelector("#head .hd-line2 .headline").textContent`), "Plan (read only)");
+  const l2 = line2();
+  assert.ok(l2.startsWith("Plan") && l2.includes("updated"), l2);
   assert.equal(ev(`document.querySelector("#head .plan-stats").textContent`), "9 sections · 200 lines · 12 files");
-  assert.equal(ev(`document.querySelector("#head .plan-file").textContent`), "b.md");
-  assert.equal(ev(`document.querySelectorAll(".approve, .reject, .btn, .free-text, .none-btn, .cannot-btn").length`), 0);
+  assert.equal(ev(`document.querySelector("#head .plan-file").textContent`), "auto.md");
+  assert.equal(ev(`document.querySelectorAll(".btn, .opt, .free-text, .none-card, .cannot-card, .escape-row").length`), 0);
   const text = ev<string>(`document.getElementById("main").textContent`);
-  for (const w of ["Approve", "Reject", "Answer", "None of these", "Can't answer"]) assert.ok(!text.includes(w), w);
-  assert.equal(ev(`document.querySelector("#foot .hint").textContent`), "↑↓ Contents · Enter Open · o All · [ ] Section · Esc Back");
-  for (const k of ["y", "a", "n"]) key(k);
-  assert.equal(await countPosts(), 0);
+  for (const w of ["Approve", "Reject", "Answer", "None of these", "Can't answer", "read only"]) assert.ok(!text.includes(w), w);
+  assert.equal(ev(`document.querySelector("#decision .done-reading").textContent`), "Done readingEsc");
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
+  assert.equal(ev(`document.getElementById("pending-btn").hidden`), true);
+  assert.ok(ev<string>(`document.title`).startsWith("(1)"));
+  for (const k of ["y", "a", "n", "p"]) key(k);
+  assert.deepEqual(posts(), []);
   assert.equal(ev(openCount), 1);
-  // o opens all, o again closes all; j then Enter opens the second row's section
-  key("o");
-  assert.equal(ev(openCount), 9);
-  key("o");
-  assert.equal(ev(openCount), 0);
-  key("j");
-  key("Enter");
-  assert.equal(ev(`document.querySelectorAll("#background details[open]").length`), 1);
-  assert.equal(await countPosts(), 0);
-  // Esc back to the list, Esc again to the idle screen
+});
+
+gui("Esc is Done reading: POST read, then idle with the plan under Recent plans (dim, no dot); a reload stays idle", async () => {
+  await arrive("done.md");
   key("Escape");
-  await waitFor("list back", listOpen);
-  assert.equal(ev(`document.getElementById("main").hidden`), true);
-  key("Escape");
-  assert.equal(ev(`!!${listOpen}`), false);
+  await waitFor("idle", IDLE);
+  await waitFor("read posted", `window.__posts.some((u) => u.endsWith("/api/plans/done.md/read"))`);
+  assert.equal(ev(`document.querySelector(".recent-cap").textContent`), "Recent plans");
+  assert.equal(ev(`document.querySelectorAll(".recent-row").length`), 1);
+  assert.ok(ev<string>(`document.querySelector(".recent-row").textContent`).includes("Plan: add retry to the export job"));
+  assert.ok(ev<string>(`document.querySelector(".recent-row").textContent`).includes("9 sections · 200 lines"));
+  assert.equal(ev(`document.querySelector(".recent-row").classList.contains("fresh")`), false);
+  assert.equal(ev(`document.querySelector(".recent-row .mark").textContent`), "");
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "0");
+  assert.equal(await planRead("done.md"), true);
+  await reopen(IDLE);
+  await waitFor("recent row", `document.querySelector(".recent-row")`);
+  await sleep(800);
   assert.equal(ev(`document.getElementById("empty").hidden`), false);
-  assert.equal(ev(`document.getElementById("head").hidden`), true);
+  assert.equal(ev(`document.getElementById("main").hidden`), true);
+  assert.equal(ev(`document.querySelector(".recent-row").classList.contains("fresh")`), false);
 });
 
-gui("ja: list rows, header and hint use Japanese words", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  await setLang("ja", `document.querySelector("#foot .hint")?.textContent.includes("p 計画")`);
+gui("live update: unchanged sections keep their state, the changed and the new one are unread and say updated; scroll and age follow", async () => {
+  await arrive("live.md", LONG, 120_000);
+  assert.ok(line2().includes("2m ago"), line2());
+  key("o");
+  assert.equal(ev(openCount), 9);
+  ev(`document.getElementById("background").scrollTop = 300, "ok"`);
+  const top = ev<number>(`document.getElementById("background").scrollTop`);
+  assert.ok(top > 100, `the left column should scroll (got ${top})`);
+  writePlan("live.md", LONG.replace("Three pieces change; each is described below.", "Three pieces change; each is described below, and one more sentence.") .replace("## Scope and reversibility", "## Epilogue\n\nNew words here.\n\n## Scope and reversibility"));
+  await waitFor("new section", `${SEC}.length === 10`, 4000);
+  const m = marks();
+  assert.equal(m.length, 10);
+  assert.equal(m[0], "☑");
+  assert.equal(m[1], "☐", "the changed section is unread");
+  assert.equal(m[8], "☐", "the new section is unread");
+  assert.ok([...m.slice(2, 8), m[9]].every((x) => x === "☑"), `unchanged sections stay read: ${m.join("")}`);
+  const sec = (i: number) => `${SEC}[${i}]`;
+  assert.equal(ev(`${sec(0)}.open`), true);
+  assert.equal(ev(`${sec(1)}.open`), false);
+  assert.equal(ev(`${sec(8)}.open`), false);
+  assert.equal(ev(`${sec(8)}.querySelector(":scope > summary > .ps-title").textContent`), "Epilogue");
+  assert.equal(ev(`${sec(1)}.querySelector(":scope > summary > .ps-upd").hidden`), false);
+  assert.equal(ev(`${sec(1)}.querySelector(":scope > summary > .ps-upd").textContent`), "updated");
+  assert.equal(ev(`${sec(8)}.querySelector(":scope > summary > .ps-upd").hidden`), false);
+  assert.equal(ev(`${sec(9)}.querySelector(":scope > summary > .ps-upd").hidden`), true);
+  assert.equal(ev(`${sec(0)}.querySelector(":scope > summary > .ps-upd").hidden`), true);
+  assert.equal(ev(`${sec(5)}.querySelector(":scope > summary > .ps-upd").hidden`), true);
+  assert.equal(ev(`document.getElementById("background").scrollTop`), top);
+  assert.ok(line2().includes("0s ago"), line2());
+  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 16);
+  ab("screenshot", join(SHOTS, "PL3b-plan-live.png"));
+  // opening the updated section clears the word and marks it read
+  ev(`${sec(1)}.querySelector(":scope > summary").click(), "ok"`);
+  assert.equal(ev(`${sec(1)}.open`), true);
+  assert.equal(ev(`${sec(1)}.querySelector(":scope > summary > .ps-upd").hidden`), true);
+  assert.equal(marks()[1], "☑");
+});
+
+gui("a decision takes the screen from a plan: count 2, ] goes to the plan, h back, answering returns to the plan", async () => {
+  await arrive("prec.md");
+  const { id } = await seedQuestion();
+  await waitFor("decision screen", `document.querySelector("#decision .opt")`);
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "2");
+  assert.equal(ev(`document.getElementById("pending-btn").hidden`), false);
+  key("]");
+  await waitFor("plan again", `${SEC}.length === 9`);
+  assert.equal(ev(`document.querySelectorAll("#decision .opt").length`), 0);
+  key("h");
+  await waitFor("decision again", `document.querySelector("#decision .opt")`);
+  key("[");
+  await waitFor("plan via [", `${SEC}.length === 9`);
+  key("ArrowLeft");
+  await waitFor("decision via arrow", `document.querySelector("#decision .opt")`);
+  key("Enter"); // answers the recommended card at once
+  await waitStatus(id, "answer_submitted").catch(() => waitStatus(id, "answered"));
+  await waitFor("plan after the answer", `${SEC}.length === 9`);
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
+});
+
+gui("upgrade in place: the approval for the shown plan keeps the sections' state, has one drawer row, y names the unread ones, answering reads the plan", async () => {
+  await arrive("up.md");
+  ev(`(() => { const s = document.querySelectorAll("#background details.plan-sec > summary"); s[1].click(); s[2].click(); return "ok"; })()`);
+  const before = marks();
+  assert.equal(before.filter((m) => m === "☑").length, 4, "the first section, the two clicked and the scope section");
+  const openBefore = ev<number>(openCount);
+  const { id } = await seedPlanDecision("up.md", LONG);
+  await waitFor("approval screen", `document.querySelector("#decision .btn.primary")`);
+  assert.deepEqual(marks(), before);
+  assert.equal(ev(openCount), openBefore);
+  assert.equal(line2(), "Approve this plan?");
+  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 3);
+  assert.equal(ev(`document.querySelectorAll("#pending-list .row").length`), 1);
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
+  key("y");
+  await waitFor("unread names", `document.querySelector("#decision .confirm-bar") && !document.querySelector("#decision .confirm-bar").hidden`);
+  const bar = ev<string>(`document.querySelector("#decision .confirm-bar").textContent`);
+  assert.ok(bar.startsWith("Unread sections (5):"), bar);
+  assert.deepEqual(posts().filter((u) => u.includes("/answer")), []);
+  key("y");
+  await waitStatus(id, "answer_submitted").catch(() => waitStatus(id, "answered"));
+  await waitFor("plan is read", `window.__posts.some((u) => u.endsWith("/api/plans/up.md/read"))`);
+  assert.equal(await planRead("up.md"), true);
+  await waitFor("idle", IDLE);
+});
+
+gui("an old unread plan is not shown or counted but listed dim; a read plan opened from the list is not marked again", async () => {
+  writePlan("old.md", SHORT_A, 30 * 3600_000);
+  await reopen(IDLE);
+  await spyPosts();
+  await waitFor("recent row", `document.querySelector(".recent-row")`);
+  await sleep(500);
+  assert.equal(ev(`document.getElementById("main").hidden`), true);
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "0");
+  assert.equal(ev(`document.querySelector(".recent-row").classList.contains("fresh")`), false);
+  assert.equal(ev(`document.querySelector(".recent-row .mark").textContent`), "");
+  key("Enter");
+  await waitFor("opened", `document.querySelector("#background .md")?.textContent.includes("Text with")`);
+  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 0, "a short plan has no contents");
+  assert.equal(ev(`document.querySelector("#decision .done-reading")`) !== null, true);
+  assert.deepEqual(posts(), []);
+  key("Escape"); // the plan is unread: it is marked now
+  await waitFor("idle", IDLE);
+  await waitFor("read posted", `window.__posts.length === 1`);
+  assert.equal(await planRead("old.md"), true);
+  await spyPosts();
+  ev(`document.querySelector(".recent-row").click(), "ok"`);
+  await waitFor("opened again", `document.querySelector("#background .md")?.textContent.includes("Text with")`);
+  key("Escape");
+  await waitFor("idle again", IDLE);
+  await sleep(500);
+  assert.deepEqual(posts(), []);
+});
+
+gui("plan.removed while shown returns to idle; p does nothing", async () => {
+  await arrive("gone.md");
+  rmSync(join(PLANS(), "gone.md"));
+  await waitFor("idle", IDLE, 4000);
+  assert.equal(ev(`document.querySelectorAll(".recent-row").length`), 0);
+  key("p");
+  await sleep(200);
+  assert.equal(ev(`document.querySelectorAll(".overlay").length`), 0);
+  assert.equal(ev(`document.getElementById("main").hidden`), true);
+  assert.equal(ev(`document.getElementById("foot").hidden`), true);
+});
+
+gui("ja words: row 2, Done reading, Recent plans, the drawer's plan word", async () => {
+  await arrive("ja.md", LONG, 3 * 60_000);
+  await setLang("ja", `document.querySelector("#decision .done-reading")?.textContent.startsWith("読んだ")`);
   try {
-    key("p");
-    await waitFor("list", `document.querySelectorAll(".overlay.plans .hist-row").length === 3`);
-    const r = rows();
-    assert.ok(r[1]!.includes("1時間前") && r[1]!.includes("9 節 · 200 行"), r[1]);
-    assert.equal(ev(`document.querySelector(".overlay.plans .overlay-title").textContent`), "計画");
-    key("j");
-    key("Enter");
-    await waitFor("plan", `document.querySelectorAll("#background details.plan-sec").length === 9`);
-    assert.equal(ev(`document.querySelector("#head .hd-line2 .headline").textContent`), "計画(読むだけ)");
+    const l2 = line2();
+    assert.ok(l2.startsWith("計画") && l2.includes("更新") && l2.includes("3分前"), l2);
     assert.equal(ev(`document.querySelector("#head .plan-stats").textContent`), "9 節 · 200 行 · 12 ファイル");
-    assert.ok(ev<string>(`document.querySelector("#foot .hint").textContent`).endsWith("Esc 戻る"));
+    assert.ok(ev<string>(`document.querySelector("#foot .hint").textContent`).includes("Esc 読んだ"));
+    const { id } = await seedQuestion();
+    await waitFor("decision", `document.querySelector("#decision .opt")`);
+    key("b");
+    await waitFor("drawer", `document.querySelector("#pending-list .plan-row")`);
+    assert.ok(ev<string>(`document.querySelector("#pending-list .plan-row .meta").textContent`).includes("計画"));
+    key("Escape");
+    ev(`document.querySelector("#pending-list .plan-row").click(), "ok"`);
+    await waitFor("plan", `${SEC}.length === 9`);
+    // update one section to see the ja word
+    writePlan("ja.md", LONG.replace("Three pieces change; each is described below.", "Three pieces change; ja."));
+    await waitFor("updated word", `${SEC}[1]?.querySelector(":scope > summary > .ps-upd")?.hidden === false`, 4000);
+    assert.equal(ev(`${SEC}[1].querySelector(":scope > summary > .ps-upd").textContent`), "更新");
+    await api(`/api/decisions/${id}/cancel`, {});
+    key("Escape");
+    await waitFor("idle", IDLE);
+    assert.equal(ev(`document.querySelector(".recent-cap").textContent`), "最近の計画");
   } finally {
-    key("Escape");
-    key("Escape");
-    await setLang("en", `document.querySelector("#foot .hint")?.textContent.includes("p Plans")`);
+    await setLang("en", `document.querySelector(".recent-cap")?.textContent === "Recent plans"`);
   }
-});
-
-gui("a short plan shows the whole document with no contents", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  key("p");
-  await waitFor("list", `document.querySelectorAll(".overlay.plans .hist-row").length === 3`);
-  key("Enter"); // Short plan C
-  await waitFor("short plan", `document.querySelector("#background .md")?.textContent.includes("More.")`);
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 0);
-  assert.equal(ev(`document.querySelectorAll("#background details").length`), 0);
-  assert.equal(ev(`document.querySelector("#head .plan-stats")`), null);
-  assert.equal(ev(`document.querySelector("#foot .hint").textContent`), "Esc Back");
-});
-
-gui("an empty plans directory shows the dim line", async () => {
-  writePlans({});
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  key("p");
-  await waitFor("empty line", `document.querySelector(".overlay.plans .plan-empty")`);
-  assert.equal(ev(`document.querySelector(".overlay.plans .plan-empty").textContent`), "No plans in ~/.claude/plans");
-  assert.equal(ev(`document.querySelectorAll(".overlay.plans .hist-row[data-i]").length`), 0);
-  key("Escape");
-});
-
-gui("with a pending decision: p overlays it, and Esc restores it with the cursor where it was", async () => {
-  await seedQuestion();
-  await reopen("document.querySelector('#decision .opt')");
-  key("ArrowDown");
-  const cursor = ev<number>(`[...document.querySelectorAll("#decision .opt")].findIndex(o => o.classList.contains("cursor"))`);
-  const hint = ev<string>(`document.querySelector("#foot .hint").textContent`);
-  assert.ok(cursor >= 0);
-  key("p");
-  await waitFor("list", `document.querySelectorAll(".overlay.plans .hist-row").length === 3`);
   key("Enter");
-  await waitFor("plan", `document.querySelector("#head .hd-line2 .headline")?.textContent === "Plan (read only)"`);
-  key("Escape");
-  await waitFor("list", listOpen);
-  key("Escape");
-  await waitFor("decision back", `document.querySelector("#decision .opt")`);
-  assert.equal(ev<number>(`[...document.querySelectorAll("#decision .opt")].findIndex(o => o.classList.contains("cursor"))`), cursor);
-  assert.equal(ev<string>(`document.querySelector("#foot .hint").textContent`), hint);
-  assert.equal(ev(`document.querySelector("#head .v2-title").textContent`).includes("Plans check"), true);
-});
-
-gui("a decision that arrives while a plan is open does not steal the screen; the pending indicator shows and Esc reaches it", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  await openLong();
-  await seedQuestion();
-  await waitFor("pending indicator", `!document.getElementById("pending-btn").hidden`);
-  assert.equal(ev(`document.querySelector("#head .hd-line2 .headline").textContent`), "Plan (read only)");
-  assert.equal(ev(`document.querySelectorAll("#background details.plan-sec").length`), 9);
-  assert.equal(ev(`document.querySelector("#head .hd-meta #pending-btn") !== null`), true);
-  key("Escape");
-  key("Escape");
-  await waitFor("decision shown", `document.querySelector("#decision .opt")`);
-});
-
-gui("at 1000x700 the hint and the contents cursor row stay visible", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  ab("set", "viewport", "1000", "700");
-  await openLong();
-  keyN("j", 14);
-  const vis = ev<{ hint: boolean; row: boolean }>(`(() => {
-    const inView = (e) => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; };
-    return JSON.stringify({ hint: inView(document.querySelector("#foot .hint")), row: inView(document.querySelector("#decision .toc-row.cursor")) });
-  })()`);
-  assert.deepEqual(vis, { hint: true, row: true });
-  assert.equal(ev(`document.documentElement.scrollWidth <= innerWidth`), true);
-});
-
-gui("the shown plan re-fetches on change (open state kept when the headings are the same, reset when they change); the list refreshes", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  await openLong();
-  key("o");
-  assert.equal(ev(openCount), 9);
-  const file = join(home, ".claude", "plans", "b.md");
-  writeFileSync(file, LONG.replace("## Context", "## Background"));
-  // the poll is 10 s: wait for the change to arrive
-  await waitFor("plan reloaded with new headings", `document.querySelector("#background details.plan-sec > summary .ps-title")?.textContent === "Background"`, 15000);
-  assert.equal(ev(openCount), 1, "a changed outline starts over: only the first section is open");
-  key("o");
-  assert.equal(ev(openCount), 9);
-  writeFileSync(file, LONG.replace("## Context", "## Background") + "\nOne more line.\n");
-  await waitFor("same headings, new text", `document.querySelector("#background")?.textContent.includes("One more line.")`, 15000);
-  assert.equal(ev(openCount), 9, "same headings: the open state is kept");
-  key("Escape");
-  await waitFor("list", listOpen);
-  writePlans({ "a.md": [SHORT_A, 3 * 3600_000], "d.md": ["# Brand new\n\n## Only\n\nx\n", 1000] });
-  await waitFor("list refreshed", `document.querySelectorAll(".overlay.plans .hist-row[data-i]").length === 2 && document.querySelector(".overlay.plans .hist-text").textContent === "Brand new"`, 15000);
+  await waitFor("plan", `${SEC}.length === 10 || ${SEC}.length === 9`);
+  assert.ok(line2().startsWith("Plan"));
+  assert.equal(ev(`document.querySelector("#decision .done-reading").textContent`), "Done readingEsc");
   key("Escape");
 });
 
-gui("screenshots: the list and the long plan at 1440x900", async () => {
-  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
-  key("p");
-  await waitFor("list", `document.querySelectorAll(".overlay.plans .hist-row").length === 3`);
-  key("j");
-  ab("screenshot", join(SHOTS, "PL2b-list.png"));
-  key("Enter");
-  await waitFor("long plan", `document.querySelectorAll("#background details.plan-sec").length === 9`);
-  ab("screenshot", join(SHOTS, "PL2b-plan.png"));
-  key("Escape");
-  key("Escape");
+gui("screenshot: the idle screen with recent plans at 1440x900", async () => {
+  writePlan("r1.md", LONG, 26 * 3600_000);
+  writePlan("r2.md", SHORT_A, 30 * 3600_000);
+  writePlan("r3.md", "# Short plan C\n\n## One\n\nText.\n\n## Two\n\nMore.\n", 50 * 3600_000);
+  await reopen(IDLE);
+  await waitFor("rows", `document.querySelectorAll(".recent-row").length === 3`);
+  ab("screenshot", join(SHOTS, "PL3b-idle-recent.png"));
 });
