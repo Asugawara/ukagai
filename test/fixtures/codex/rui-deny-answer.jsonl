@@ -1,0 +1,8 @@
+Reading additional input from stdin...
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000021"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"turn.started"}
+2026-10-03T02:15:19.125945Z ERROR codex_core::tools::router: error=Tool call blocked by PreToolUse hook: The human already answered this question in the ukagai GUI: choice = B. Do not ask again; continue with B.. Tool: request_user_input
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"CHOSEN=B"}}
+{"type":"turn.completed","usage":{"input_tokens":27928,"cached_input_tokens":20480,"cache_write_input_tokens":0,"output_tokens":71,"reasoning_output_tokens":0}}

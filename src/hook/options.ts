@@ -4,7 +4,11 @@ import { POLL_TIMEOUT_MS } from "../contract.js";
 
 export type DenyTemplate = "A" | "B";
 
+export type AgentKind = "claude" | "codex";
+
 export interface HookOptions {
+  /** Which agent calls the hook (--agent, default claude) */
+  agent: AgentKind;
   /** Time budget of the hook (seconds) */
   budgetSec: number;
   observe: boolean;
@@ -19,6 +23,7 @@ export interface HookOptions {
 
 export function parseArgs(argv: string[]): HookOptions {
   const opts: HookOptions = {
+    agent: "claude",
     budgetSec: 590,
     observe: false,
     noAutostart: false,
@@ -32,7 +37,10 @@ export function parseArgs(argv: string[]): HookOptions {
     const next = (): string | undefined => argv[++i];
     if (a === "--observe") opts.observe = true;
     else if (a === "--no-autostart") opts.noAutostart = true;
-    else if (a === "--budget") {
+    else if (a === "--agent") {
+      const v = next();
+      if (v === "claude" || v === "codex") opts.agent = v;
+    } else if (a === "--budget") {
       const n = Number(next());
       if (Number.isFinite(n) && n > 0) opts.budgetSec = n;
     } else if (a === "--server") {

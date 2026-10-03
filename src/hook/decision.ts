@@ -89,6 +89,8 @@ export async function handleDecision(
   opts: HookOptions,
   client: Client,
   startedAt: number,
+  /** Maps the human's answer to stdout. Claude: allow + updatedInput; Codex: deny carrying the answer */
+  build: typeof buildOutput = buildOutput,
 ): Promise<Out | null> {
   const kind = input.tool_name === "ExitPlanMode" ? "approve_plan" : "answer_question";
   const toolInput = input.tool_input;
@@ -100,6 +102,7 @@ export async function handleDecision(
     permission_mode: input.permission_mode,
     agent_id: input.agent_id,
     agent_type: input.agent_type,
+    agent: input.agent,
   };
   const base = { tool_use_id: input.tool_use_id, kind, session, request: toolInput } as CreateDecisionRequest;
 
@@ -260,7 +263,7 @@ export async function handleDecision(
       const r = await client.wait(created.id, opts.pollTimeoutMs);
       if (r.kind === "timeout") continue;
       if (r.kind === "error") return null;
-      const out = buildOutput(kind, toolInput, r.response);
+      const out = build(kind, toolInput, r.response);
       if (!out) return null;
       if (!(await client.ack(created.id))) return null;
       return out;

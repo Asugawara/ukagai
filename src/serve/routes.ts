@@ -27,6 +27,8 @@ const MAX_COOKIES = 1000;
 const WAIT_GONE: readonly DecisionStatus[] = ["answered", "hook_disconnected", "answer_lost", "cancelled", "denied_explain"];
 
 export type AppDeps = {
+  /** The server's data directory (explanations under <dataDir>/explain/ are allowed) */
+  dataDir?: string;
   store: Store;
   hub: SseHub;
   token: string;
@@ -170,10 +172,12 @@ export function createApp(deps: AppDeps): Hono {
 
   app.post("/api/decisions", auth("bearer"), jsonOnly, async (c) => {
     const req = await parse(c, CreateDecisionRequest);
-    if (!isAllowedTranscriptPath(req.session.transcript_path, deps.home)) {
+    // Codex has no transcript with --ephemeral: the hook sends "" for it (never allowed for Claude)
+    const noTranscript = req.session.agent === "codex" && req.session.transcript_path === "";
+    if (!noTranscript && !isAllowedTranscriptPath(req.session.transcript_path, deps.home)) {
       return c.json({ error: "transcript_path not allowed" }, 400);
     }
-    if (req.explanation && req.explanation.path !== "" && !isAllowedExplanationPath(req.explanation.path, req.session.scratchpad_dir, deps.home)) {
+    if (req.explanation && req.explanation.path !== "" && !isAllowedExplanationPath(req.explanation.path, req.session.scratchpad_dir, deps.home, deps.dataDir)) {
       return c.json({ error: "explanation.path not allowed" }, 400);
     }
     const existing = store.findByToolUse(req.tool_use_id);

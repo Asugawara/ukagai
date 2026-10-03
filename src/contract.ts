@@ -18,6 +18,10 @@ export const CANCEL_WINDOW_MS = 10000;
 
 // ---- hook stdin (unknown keys pass through) ----
 
+/** The agent a hook / decision comes from. Absent means "claude" */
+export const AgentName = z.enum(["claude", "codex"]);
+export type AgentName = z.infer<typeof AgentName>;
+
 export const HookInputBase = z.looseObject({
   session_id: z.string(),
   transcript_path: z.string(),
@@ -27,6 +31,7 @@ export const HookInputBase = z.looseObject({
   hook_event_name: z.string(),
   agent_id: z.string().optional(),
   agent_type: z.string().optional(),
+  agent: AgentName.optional(),
 });
 export type HookInputBase = z.infer<typeof HookInputBase>;
 
@@ -36,6 +41,34 @@ export const PreToolUseInput = HookInputBase.extend({
   tool_use_id: z.string(),
 });
 export type PreToolUseInput = z.infer<typeof PreToolUseInput>;
+
+/** Codex PreToolUse stdin for `request_user_input` (the hook maps it to the AskUserQuestion shape). `transcript_path` is null with --ephemeral */
+export const CodexRequestUserInputInput = z.looseObject({
+  session_id: z.string(),
+  turn_id: z.string().optional(),
+  transcript_path: z.string().nullable().optional(),
+  cwd: z.string(),
+  hook_event_name: z.literal("PreToolUse"),
+  model: z.string().optional(),
+  permission_mode: z.string().optional(),
+  tool_name: z.literal("request_user_input"),
+  tool_input: z.looseObject({
+    questions: z
+      .array(
+        z.looseObject({
+          header: z.string().optional(),
+          id: z.string().optional(),
+          question: z.string(),
+          isOther: z.boolean().optional(),
+          options: z.array(z.looseObject({ label: z.string(), description: z.string().optional() })).optional(),
+        }),
+      )
+      .min(1)
+      .max(4),
+  }),
+  tool_use_id: z.string(),
+});
+export type CodexRequestUserInputInput = z.infer<typeof CodexRequestUserInputInput>;
 
 export const AskUserQuestionOption = z.looseObject({
   label: z.string(),
@@ -132,6 +165,8 @@ export const DecisionSession = z.object({
   permission_mode: z.string().optional(),
   agent_id: z.string().optional(),
   agent_type: z.string().optional(),
+  /** Which agent the session belongs to. Absent means "claude" */
+  agent: AgentName.optional(),
   title: z.string().optional(),
 });
 export type DecisionSession = z.infer<typeof DecisionSession>;
@@ -390,11 +425,13 @@ function isUnder(p: string, base: string): boolean {
 }
 
 export function isAllowedTranscriptPath(p: string, home: string): boolean {
-  return isUnder(p, join(home, ".claude", "projects"));
+  return isUnder(p, join(home, ".claude", "projects")) || isUnder(p, join(home, ".codex", "sessions"));
 }
 
-export function isAllowedExplanationPath(p: string, scratchpadDir: string | undefined, home: string): boolean {
+export function isAllowedExplanationPath(p: string, scratchpadDir: string | undefined, home: string, dataDir?: string): boolean {
   if (scratchpadDir && isUnder(p, join(scratchpadDir, "ukagai"))) return true;
+  // The hook falls back to <data-dir>/explain/<session_id>/ (always so for Codex, which has no scratchpad)
+  if (dataDir && isUnder(p, join(dataDir, "explain"))) return true;
   return isUnder(p, join(home, ".ukagai", "explain"));
 }
 

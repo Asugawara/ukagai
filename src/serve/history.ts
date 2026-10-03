@@ -91,6 +91,8 @@ export async function collectHistory(session: DecisionSession, opts: HistoryOpti
   const home = opts.home ?? homedir();
   const now = opts.now ?? Date.now;
   const empty: SessionHistory = { session_id: session.session_id, total: 0, first: null, recent: [] };
+  // Codex rollout format not examined yet: no history
+  if (session.agent === "codex") return empty;
   const path = session.transcript_path;
   if (!isAllowedTranscriptPath(path, home)) return empty;
   let mtimeMs: number;

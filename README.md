@@ -62,6 +62,10 @@ npm run dev:serve
 
 TUI diagrams are rendered with beautiful-mermaid (MIT).
 
+## Codex CLI (experimental)
+
+The same hook can serve Codex CLI: `node dist/cli.js hook --agent codex` (default `--agent claude`). Codex PreToolUse `request_user_input` is mapped to the usual question flow (explanation file under `<data-dir>/explain/<session_id>/`), and the human's answer from the GUI comes back as a `deny` whose reason carries the answer. A prose question at Stop is registered too; if the human answers in the GUI the turn continues with the answer. Plan approval is not reachable by Codex hooks. `install --codex` does not exist yet; see `docs/verification/02-codex-hooks.md` for running it by hand.
+
 ## Uninstall
 
 ```sh

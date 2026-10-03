@@ -56,6 +56,7 @@ const EVENT_KEYS = [
   "tool_use_id",
   "agent_id",
   "agent_type",
+  "agent",
   "received_at",
   "escaped_question",
   "blocker_detected",

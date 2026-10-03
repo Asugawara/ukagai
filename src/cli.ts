@@ -68,10 +68,11 @@ Options:
 `,
   hook: `Usage: ukagai hook [options]   (hook JSON on stdin)
 
-Called from Claude Code hooks. Prints nothing and exits 0 even on failure.
+Called from Claude Code hooks (or Codex CLI hooks with --agent codex). Prints nothing and exits 0 even on failure.
 With UKAGAI_DISABLE=1 in the environment it does nothing at all (for every event).
 
 Options:
+  --agent <claude|codex>  Which agent calls the hook (default: claude)
   --budget <sec>        Time the hook may take (default: 590)
   --observe             Observe only
   --no-autostart        Do not auto-start the server on SessionStart
