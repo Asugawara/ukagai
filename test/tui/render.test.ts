@@ -22,7 +22,7 @@ test("140x40: heading, chips, recommendation, cards, background, hints, status l
     "◈ ukagai", "⎇ feat/tui", "⧉ feat-tui", "Costly to undo", "repo",
     "Whether the GUI update channel uses SSE or WebSocket",
     "Why this decision is needed now", "What I checked", "hook", "serve",
-    "Recommendation", "I recommend SSE", "▸ ● SSE", "○ WebSocket", "One-way delivery from the server to the GUI", "Free text",
+    "Recommendation", "I recommend SSE", "▸ ● SSE", "○ WebSocket", "One-way delivery from the", "Free text",
     "j/k move Enter send i text", "Pending 1", "h/l switch  b list  q quit",
   ]) assert.ok(out.includes(s), `missing: ${s}`);
   assert.ok(lines.some((l) => l.includes(" │ ") && l.includes("◄") === false && l.includes("SSE")), "two columns");
@@ -161,7 +161,7 @@ test("Japanese heading aliases in the file give the same screen as the English h
   const en = strip(V2_MD);
   const ja = strip(V2_MD_JA);
   // The option table and recommendation are recognized in both: same cards, same recommendation box
-  for (const s of ["▸ ● SSE", "○ WebSocket", "One-way delivery from the server to the GUI", "┌─ Recommendation", "I recommend SSE"]) {
+  for (const s of ["▸ ● SSE", "○ WebSocket", "One-way delivery from the", "┌─ Recommendation", "I recommend SSE"]) {
     assert.ok(ja.includes(s), `ja alias: missing ${s}`);
     assert.ok(en.includes(s), `en: missing ${s}`);
   }

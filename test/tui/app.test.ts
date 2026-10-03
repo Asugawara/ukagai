@@ -57,7 +57,7 @@ test("gg / G go to the top / bottom (the bottom is free text)", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
   press(app, ch("G"));
-  assert.equal(app.view(t).cursor, 3, "cards, None of these, free text");
+  assert.equal(app.view(t).cursor, 4, "cards, None of these, Can't answer this, free text");
   press(app, ch("g"), ch("g"));
   assert.equal(app.view(t).cursor, 0);
 });

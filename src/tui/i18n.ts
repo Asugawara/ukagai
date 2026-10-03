@@ -104,6 +104,17 @@ const en = {
   hint_evidence: "e src",
   hint_none_pick: "j/k choose · Enter send · i note · Esc back",
   confirm_again: "Press Enter again to confirm (3s)",
+  cannot_answer: "Can't answer this…",
+  cannot_terms: "Undefined terms",
+  cannot_unclear: "Explanation unclear",
+  cannot_much: "Too much at once",
+  cannot_terms_hint: "Untick what you understood; type to add",
+  cannot_detail_hint: "One line: what was unclear",
+  hint_cannot: "x Can't answer",
+  term_undefined_tip: "Not defined under Terms",
+  hint_cannot_pick: "j/k move · Space tick · Enter send · i note · Esc back",
+  hint_numbers: "1-9 send",
+  cannot_need_term: "Tick at least one term, or type one with i",
 };
 
 export type MessageKey = keyof typeof en;
@@ -198,6 +209,17 @@ const ja: Record<MessageKey, string> = {
   hint_evidence: "e 根拠",
   hint_none_pick: "j/k 選ぶ · Enter 送る · i 補足 · Esc 戻る",
   confirm_again: "もう一度 Enter で確定(3 秒)",
+  cannot_answer: "返答不可…",
+  cannot_terms: "分からない用語がある",
+  cannot_unclear: "説明が分からない",
+  cannot_much: "一度に聞きすぎ",
+  cannot_terms_hint: "分かった語はチェックを外す。入力で追加",
+  cannot_detail_hint: "何が分からなかったか 1 行",
+  hint_cannot: "x 返答不可",
+  term_undefined_tip: "Terms に定義なし",
+  hint_cannot_pick: "j/k 移動 · Space チェック · Enter 送る · i 記述 · Esc 戻る",
+  hint_numbers: "1-9 送信",
+  cannot_need_term: "用語を 1 つ以上チェックするか、i で入力してください",
 };
 
 export const MESSAGES: Record<Lang, Record<MessageKey, string>> = { en, ja };

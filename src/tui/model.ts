@@ -5,6 +5,7 @@ import {
   SECTION,
   UNDO_BAD_WORDS,
   UNDO_WORDS,
+  findCoinedTerms,
   findSection,
   findTables,
   normalizeLabel,
@@ -80,6 +81,8 @@ export interface ScreenModel {
   against: string | null;
   affects: string[];
   terms: { term: string; definition: string }[];
+  /** Identifier-like tokens that Terms does not define (the hook's coined_term rule); the default checklist of "Can't answer this…" */
+  coinedTerms: string[];
   /** Ids of the footnotes referenced from the text and defined in the file */
   footnotes: string[];
   /** Body of the "Scope and reversibility" section of the plan (Markdown), shown in the right column of the plan card */
@@ -258,7 +261,7 @@ export function splitHeadline(text: string): { headline: string; rest: string } 
   return m ? { headline: m[1]!.trim(), rest: m[2]!.trim() } : { headline: flat, rest: "" };
 }
 
-const NO_RICH = { headline: null, recRest: null, unknowns: [], assumptions: [], against: null, affects: [], terms: [], footnotes: [] };
+const NO_RICH = { headline: null, recRest: null, unknowns: [], assumptions: [], against: null, affects: [], terms: [], coinedTerms: [] as string[], footnotes: [] };
 
 export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
   const explained = hasExplanation(d);
@@ -280,6 +283,10 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
     todo: null as string | null,
     todoCode: [] as string[],
   };
+  const coinedTerms =
+    d.kind === "answer_question" && explained && questionsOf(d).length === 1
+      ? findCoinedTerms(md, questionsOf(d)[0]!.options.map((o) => stripSuffix(o.label)))
+      : [];
 
   if (d.kind === "approve_plan") {
     const plan = planOf(d);
@@ -343,6 +350,7 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
       kind: "question",
       background: body.join("\n"),
       recommendation: null,
+      coinedTerms,
       question: { ...plainQuestion, cards, initialCursor: pref(cards), v2: false },
     };
   }
@@ -396,6 +404,7 @@ export function buildModel(d: Decision, lang: Lang = "en"): ScreenModel {
     against,
     affects,
     terms,
+    coinedTerms,
     footnotes: fns.defs.map((x) => x.id),
     todo,
     todoCode: todo ? codeBlocks(todo) : [],
