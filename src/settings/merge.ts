@@ -101,13 +101,17 @@ export function hasManaged(existing: Settings, event: string): boolean {
   );
 }
 
-export function findManaged(existing: Settings, event: string): Record<string, unknown> | undefined {
+export function findManaged(
+  existing: Settings,
+  event: string,
+  where: (h: Record<string, unknown>) => boolean = () => true,
+): Record<string, unknown> | undefined {
   const groups = hooksOf(existing)[event];
   if (!Array.isArray(groups)) return undefined;
   for (const g of groups) {
     const inner = (g as { hooks?: unknown })?.hooks;
     if (!Array.isArray(inner)) continue;
-    const h = inner.find(isManagedHook);
+    const h = inner.find((x) => isManagedHook(x) && where(x as Record<string, unknown>));
     if (h) return h as Record<string, unknown>;
   }
   return undefined;

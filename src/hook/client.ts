@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { PendingRewrite, WaitResponse, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
+import { Instruction, PendingRewrite, WaitResponse, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
 
 const SHORT_TIMEOUT_MS = 1000;
 /** Registration gets a longer timeout because the server's context collection takes up to 1.5 seconds */
@@ -207,6 +207,14 @@ export class Client {
     );
     if (!r || r.status !== 200) return null;
     const parsed = PendingRewrite.safeParse(Client.json(r.text));
+    return parsed.success ? parsed.data : null;
+  }
+
+  /** Take (consume) the session's checkpoint instruction. Null on 404, any failure, timeout or an unexpected body */
+  async takeInstruction(sessionId: string, timeoutMs: number): Promise<Instruction | null> {
+    const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/instruction`, undefined, timeoutMs);
+    if (!r || r.status !== 200) return null;
+    const parsed = Instruction.safeParse((Client.json(r.text) as { instruction?: unknown } | undefined)?.instruction);
     return parsed.success ? parsed.data : null;
   }
 

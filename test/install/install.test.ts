@@ -71,7 +71,7 @@ test("--data-dir / --server go into every hook's args when given, and not when o
   await ukagai(e, ["install", "--settings", e.settings, "--data-dir", dd, "--server", "http://127.0.0.1:9999/"]);
   const s = await readJson(e.settings);
   const hooks = Object.values<any[]>(s.hooks).flatMap((g) => g.flatMap((x) => x.hooks));
-  assert.equal(hooks.length, EVENTS.length);
+  assert.equal(hooks.length, EVENTS.length + 1); // + the checkpoint group
   for (const h of hooks) {
     assert.equal(h.args[h.args.indexOf("--data-dir") + 1], dd);
     assert.equal(h.args[h.args.indexOf("--server") + 1], "http://127.0.0.1:9999");
