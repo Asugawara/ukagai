@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { SECTION, normalizeHeading } from "../hook/explain.js";
+import { SECTION, normalizeHeading, scanFences, scanHeadings, toLines } from "../hook/explain.js";
 
 // The outline of a long plan: its ## / ### sections, with line and file counts. No I/O.
 // The same rules as planOutlineOf in public/app.js (test/gui/plan.test.ts and test/tui/plan.test.ts pin the same numbers on one fixture).
@@ -19,6 +19,8 @@ export interface PlanEntry {
   lines: number;
   /** Distinct backticked file paths in the section's prose (children included) */
   files: Set<string>;
+  /** First 12 hex of the sha256 of the section's lines joined with "\n": what a live update matches a section by */
+  hash: string;
   /** The "Scope and reversibility" section: shown in the right column, so it counts as read */
   scope: boolean;
 }
@@ -48,29 +50,14 @@ const IMPACT = SECTION.impact.map(normalizeHeading);
 const isImpactTitle = (title: string): boolean => IMPACT.some((n) => normalizeHeading(plainMd(title)).includes(n));
 
 export function planOutline(md: string): PlanOutline {
-  const lines = md.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
-  let fence = "";
-  const marks: { level: number; at: number; title: string }[] = [];
-  const prose = lines.map(() => true);
-  lines.forEach((ln, i) => {
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(ln);
-    if (f) {
-      if (!fence) fence = f[1]![0]!;
-      else if (f[1]![0] === fence) fence = "";
-      prose[i] = false;
-      return;
-    }
-    if (fence) {
-      prose[i] = false;
-      return;
-    }
-    const m = /^(#{1,3})[ \t]+(.+?)[ \t#]*$/.exec(ln);
-    if (m) marks.push({ level: m[1]!.length, at: i, title: m[2]! });
-  });
+  const lines = toLines(md);
+  while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const { inFence } = scanFences(lines);
+  const marks = scanHeadings(lines, inFence).filter((h) => h.level <= 3);
   const filesIn = (from: number, to: number): Set<string> => {
     const out = new Set<string>();
     for (let i = from; i < to; i++) {
-      if (!prose[i]) continue;
+      if (inFence[i]) continue;
       for (const c of lines[i]!.matchAll(/`([^`\n]+)`/g)) {
         const p = pathOf(c[1]!);
         if (p) out.add(p);
@@ -81,8 +68,9 @@ export function planOutline(md: string): PlanOutline {
   const entries: PlanEntry[] = [];
   marks.forEach((m, k) => {
     if (m.level === 1) return;
-    const end = marks.slice(k + 1).find((n) => n.level <= m.level)?.at ?? lines.length;
-    entries.push({ i: entries.length, level: m.level as 2 | 3, title: m.title, plain: plainMd(m.title), at: m.at, lines: end - m.at, files: filesIn(m.at, end), scope: isImpactTitle(m.title) });
+    const end = marks.slice(k + 1).find((n) => n.level <= m.level)?.line ?? lines.length;
+    const hash = createHash("sha256").update(lines.slice(m.line, end).join("\n")).digest("hex").slice(0, 12);
+    entries.push({ i: entries.length, level: m.level as 2 | 3, title: m.title, plain: plainMd(m.title), at: m.line, lines: end - m.line, files: filesIn(m.line, end), hash, scope: isImpactTitle(m.title) });
   });
   const h2 = entries.filter((e) => e.level === 2).length;
   return { lines: lines.length, entries, h2, files: filesIn(0, lines.length).size, long: h2 > PLAN_SHORT_H2 && lines.length > PLAN_SHORT_LINES };
@@ -103,15 +91,6 @@ export function initialPlanState(o: PlanOutline): PlanState {
   return { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), updated: new Set(), cur: first?.i ?? 0 };
 }
 
-/**
- * One hash per outline entry: the first 12 hex digits of the SHA-256 of the section's lines (heading through the line before the next heading
- * of the same or a shallower level, joined with "\n"). The same rule as `sectionsOf` in src/serve/plans.ts (test/tui/plans.test.ts pins them equal).
- */
-export function sectionHashes(o: PlanOutline, text: string): string[] {
-  const lines = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
-  return o.entries.map((e) => createHash("sha256").update(lines.slice(e.at, e.at + e.lines).join("\n")).digest("hex").slice(0, 12));
-}
-
 /** `level:title` per outline entry: how a changed section is matched with its earlier self */
 export const headings = (o: PlanOutline): string[] => o.entries.map((e) => `${e.level}:${e.title}`);
 
@@ -119,16 +98,19 @@ export const headings = (o: PlanOutline): string[] => o.entries.map((e) => `${e.
  * The state of a plan whose text changed (a live update, or a plan file turning into its approval screen): a section whose hash is unchanged keeps
  * its open / read state; a changed one keeps its open state but turns unread and `updated`, a new one is folded, unread and `updated`; removed ones are gone. The contents cursor follows its section.
  */
-export function remapState(o: PlanOutline, hashes: string[], prev: { st: PlanState; hashes: string[]; heads?: string[] }): PlanState {
+export function remapState(o: PlanOutline, prev: { st: PlanState; outline: PlanOutline }): PlanState {
   const used = new Set<number>();
   const heads = headings(o);
+  const prevHeads = headings(prev.outline);
+  const prevHashes = prev.outline.entries.map((e) => e.hash);
+  const hashes = o.entries.map((e) => e.hash);
   const st: PlanState = { open: new Set(), read: new Set(), updated: new Set(), cur: 0 };
   let cur: number | null = null;
   o.entries.forEach((e, j) => {
-    const i = prev.hashes.findIndex((h, k) => h === hashes[j] && !used.has(k));
+    const i = prevHashes.findIndex((h, k) => h === hashes[j] && !used.has(k));
     if (i < 0) {
       // A changed section keeps its open / folded state (matched by level and heading); a new one arrives folded
-      const m = prev.heads ? prev.heads.findIndex((h, k) => h === heads[j] && !used.has(k) && !hashes.includes(prev.hashes[k]!)) : -1;
+      const m = prevHeads.findIndex((h, k) => h === heads[j] && !used.has(k) && !hashes.includes(prevHashes[k]!));
       if (m >= 0) {
         used.add(m);
         if (prev.st.open.has(m)) st.open.add(j);

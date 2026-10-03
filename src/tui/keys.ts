@@ -324,11 +324,12 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   // Nothing to answer on a plan file: j/k only scroll (the contents cursor moved above)
   if (ctx.planOnly && down) return done({ type: "scroll", delta: 1, unit: "line" });
   if (ctx.planOnly && up) return done({ type: "scroll", delta: -1, unit: "line" });
+  // Nothing else to answer on a plan file
+  if (ctx.planOnly) return done(null);
   if (down) return done({ type: "move", delta: 1 });
   if (up) return done({ type: "move", delta: -1 });
   if (key.name === "enter") return done({ type: "submit" });
 
-  if (ctx.planOnly) return done(null);
   if (ctx.kind === "plan") {
     if (ch === "y") return done({ type: "approve" });
     if (ch === "n") return done({ type: "reject" });

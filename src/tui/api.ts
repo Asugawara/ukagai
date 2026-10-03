@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Decision, SessionHistory } from "../contract.js";
+import { Decision, PlanRemovedEvent, PlanSummary, SessionHistory, type PlanContent } from "../contract.js";
 
 // Thin fetch wrapper for the server. Auth is the Bearer token in <data-dir>/token (same as the hook client).
 
@@ -17,25 +17,6 @@ export type StreamEvent =
   | { event: "decision.created" | "decision.updated"; decision: Decision }
   | { event: "plan.updated"; plan: PlanSummary }
   | { event: "plan.removed"; name: string };
-
-export interface PlanSummary {
-  name: string;
-  title: string;
-  mtime: string;
-  bytes: number;
-  sections: number;
-  lines: number;
-  /** The human pressed Done reading at this mtime */
-  read: boolean;
-}
-
-export interface PlanFile {
-  name: string;
-  title: string;
-  mtime: string;
-  markdown: string;
-  read?: boolean;
-}
 
 export class TuiApi {
   private token: string | null = null;
@@ -107,16 +88,17 @@ export class TuiApi {
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
     const j = (await res.json()) as { plans?: unknown };
     if (!Array.isArray(j.plans)) throw new ApiError("unexpected response");
-    return j.plans as PlanSummary[];
+    return j.plans.flatMap((x) => {
+      const r = PlanSummary.safeParse(x);
+      return r.success ? [r.data] : [];
+    });
   }
 
-  /** One plan file; null when `since` equals its current mtime (304) */
-  async plan(name: string, since?: string): Promise<PlanFile | null> {
-    const q = since ? `?since=${encodeURIComponent(since)}` : "";
-    const res = await this.fetch(`/api/plans/${encodeURIComponent(name)}${q}`, { signal: AbortSignal.timeout(5000) });
-    if (res.status === 304) return null;
+  /** One plan file. Throws on any failure */
+  async plan(name: string): Promise<PlanContent> {
+    const res = await this.fetch(`/api/plans/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
-    return (await res.json()) as PlanFile;
+    return (await res.json()) as PlanContent;
   }
 
   /** Mark a plan read at the `mtime` the human actually read. Throws on any failure; callers ignore it */
@@ -160,7 +142,9 @@ export class TuiApi {
   }
 }
 
-/** Text of one event: decision.created / decision.updated, plan.updated and plan.removed; others are dropped */
+const HANDLED = new Set(["decision.created", "decision.updated", "plan.updated", "plan.removed"]);
+
+/** Text of one event: decision.created / decision.updated, plan.updated and plan.removed; others (session.updated, heartbeats) are dropped without parsing */
 export function parseSse(block: string): StreamEvent | null {
   let event = "";
   const data: string[] = [];
@@ -168,19 +152,19 @@ export function parseSse(block: string): StreamEvent | null {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
   }
+  if (!HANDLED.has(event)) return null;
   try {
     const j: unknown = JSON.parse(data.join("\n"));
     if (event === "decision.created" || event === "decision.updated") {
       const r = Decision.safeParse(j);
       return r.success ? { event, decision: r.data } : null;
     }
-    if (event === "plan.updated" && j && typeof j === "object" && typeof (j as PlanSummary).name === "string") {
-      return { event, plan: { ...(j as PlanSummary), read: (j as PlanSummary).read === true } };
+    if (event === "plan.updated") {
+      const r = PlanSummary.safeParse(j);
+      return r.success ? { event, plan: r.data } : null;
     }
-    if (event === "plan.removed" && j && typeof j === "object" && typeof (j as { name?: unknown }).name === "string") {
-      return { event, name: (j as { name: string }).name };
-    }
-    return null;
+    const r = PlanRemovedEvent.safeParse(j);
+    return r.success ? { event: "plan.removed", name: r.data.name } : null;
   } catch {
     return null;
   }

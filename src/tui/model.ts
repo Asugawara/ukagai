@@ -291,6 +291,9 @@ function rawCard(o: { label: string; description?: string | undefined }, recomme
 }
 
 /** Extract the body of the "Scope and reversibility" section from a plan (exact match first, then partial); null if absent */
+/** The `ScreenModel.planKey` / id of a plan file: `plan:<file name>` */
+export const planKeyOf = (name: string): string => `plan:${name}`;
+
 export function impactOf(plan: string): string | null {
   const body = toLines(plan);
   const { inFence } = scanFences(body);
@@ -362,7 +365,7 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     }
     const outline = planOutline(plan);
     const name = planNameOf(d);
-    return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan), plan: outline.long ? { outline, text: plan, extra } : null, ...(name ? { planKey: `plan:${name}` } : {}) };
+    return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan), plan: outline.long ? { outline, text: plan, extra } : null, ...(name ? { planKey: planKeyOf(name) } : {}) };
   }
 
   const qs = questionsOf(d);
@@ -502,7 +505,7 @@ export function buildPlanFileModel(name: string, title: string, markdown: string
   const outline = planOutline(markdown);
   return {
     ...NO_RICH,
-    id: `plan:${name}`,
+    id: planKeyOf(name),
     kind: "plan",
     title,
     chips: [],

@@ -1,6 +1,6 @@
-import { ApiError, type PlanSummary, type StreamEvent } from "./api.js";
+import { ApiError, type StreamEvent } from "./api.js";
 import type { App } from "./app.js";
-import type { Decision } from "../contract.js";
+import type { Decision, PlanSummary } from "../contract.js";
 
 // Sync with the server (does I/O, no screen): SSE reconnection and re-fetching the list after reconnecting.
 
@@ -19,25 +19,25 @@ export const RECONNECT_MAX_MS = 5000;
 export const reconnectDelay = (failures: number): number =>
   Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** Math.max(0, failures - 1));
 
-/** Re-fetch the pending list. A decision still pending locally but missing from the list is fetched individually and dropped if the server no longer has it */
-export async function refetch(api: SyncApi, app: App, now: () => number = Date.now): Promise<void> {
-  const stale = app.replacePending(await api.listPending(), now());
-  for (const id of stale) {
-    try {
-      app.upsert(await api.get(id), now());
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) app.drop(id, now());
-      // Anything else is retried on the next fetch
-    }
-  }
+/**
+ * Re-fetch the pending list (and the plans unless `plans` is false: the safety poll skips them while SSE is up, since its reconnect refetch and `plan.*` events cover them).
+ * A decision still pending locally but missing from the list is fetched individually and dropped if the server no longer has it
+ */
+export async function refetch(api: SyncApi, app: App, now: () => number = Date.now, plans = true): Promise<void> {
   // Plans are best effort: a failure leaves what is known
-  if (api.plans) {
-    try {
-      app.replacePlans(await api.plans(), now());
-    } catch {
-      // The next fetch retries
-    }
-  }
+  const [pending, files] = await Promise.all([api.listPending(), plans && api.plans ? api.plans().catch(() => null) : null]);
+  const stale = app.replacePending(pending, now());
+  if (files) app.replacePlans(files, now());
+  await Promise.all(
+    stale.map(async (id) => {
+      try {
+        app.upsert(await api.get(id), now());
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) app.drop(id, now());
+        // Anything else is retried on the next fetch
+      }
+    }),
+  );
 }
 
 export interface LoopOptions {

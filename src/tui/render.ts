@@ -244,7 +244,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
         if (on) focus = [lines.length, lines.length + 1];
         // A long title is cut with … so the line count at its end always shows
         const lead = `${on ? `${BOLD}▸${RESET}` : " "} ${e.level === 3 ? "  " : ""}${toc.st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} `;
-        const count = t(lang, e.lines === 1 ? "toc_lines_one" : "toc_lines", { n: e.lines });
+        const count = planCount(lang, "plan_lines", e.lines);
         const room = Math.max(4, w - width(lead) - width(count) - 2);
         const title = width(e.plain) > room ? `${truncate(e.plain, room - 1)}…` : e.plain;
         lines.push(`${lead}${on ? BOLD : ""}${title}${RESET}  ${DIM}${count}${RESET}`);
@@ -403,6 +403,11 @@ function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true, rows = 
   };
 }
 
+/** Counts of the memoized section renders (tests check that a repaint does not render again) */
+export const richStats = { renders: 0 };
+/** Rendered sections of a plan: per screen model, by section (-1 the text before the first, -2 the extra), width, hint and language. A repaint without changes renders nothing */
+const richCache = new WeakMap<ScreenModel, Map<string, Rendered>>();
+
 /** A long plan: the text before the first section, then one `▸ ☐ Heading (n lines)` row per H2 / H3 with its body under it while open */
 function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean): Left {
   const { outline: o, text, extra } = m.plan!;
@@ -410,20 +415,30 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
   const src = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
   const tm = termMarks(m);
   const out: Left = { lines: [], wide: [], footnotes: [], secRows: [] };
-  const add = (md: string, width: number, indent: string) => {
-    if (!md.trim()) return;
-    const r = renderMarkdownRich(md, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS });
-    out.footnotes.push(...r.footnotes.map((x) => ({ ...x, row: x.row + out.lines.length })));
-    out.lines.push(...r.lines.map((l, i) => (r.wide[i] ? l : indent + l)));
-    out.wide.push(...r.wide);
+  let cache = richCache.get(m);
+  if (!cache) richCache.set(m, (cache = new Map()));
+  const popBlank = () => {
     while (out.lines.length && out.lines.at(-1) === "") {
       out.lines.pop();
       out.wide.pop();
     }
+  };
+  const add = (sec: number, md: string, width: number, indent: string) => {
+    if (!md.trim()) return;
+    const key = `${sec}:${width}:${fullHint}:${lang}`;
+    let r = cache.get(key);
+    if (!r) {
+      richStats.renders++;
+      cache.set(key, (r = renderMarkdownRich(md, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS })));
+    }
+    out.footnotes.push(...r.footnotes.map((x) => ({ ...x, row: x.row + out.lines.length })));
+    out.lines.push(...r.lines.map((l, i) => (r.wide[i] ? l : indent + l)));
+    out.wide.push(...r.wide);
+    popBlank();
     out.lines.push("");
     out.wide.push(null);
   };
-  add(src.slice(0, o.entries[0]?.at ?? src.length).join("\n"), w, "");
+  add(-1, src.slice(0, o.entries[0]?.at ?? src.length).join("\n"), w, "");
   let parentRow = 0;
   let parentOpen = true;
   o.entries.forEach((e, k) => {
@@ -437,20 +452,17 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     if (e.level === 2) parentRow = row;
     const open = st.open.has(e.i);
     const ind = e.level === 3 ? "  " : "";
-    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${st.cur === e.i ? `${BOLD}${CYAN}` : BOLD}${e.plain}${RESET} ${DIM}(${t(lang, e.lines === 1 ? "toc_lines_one" : "toc_lines", { n: e.lines })})${RESET}${st.updated.has(e.i) ? ` ${DIM}${t(lang, "plan_section_updated")}${RESET}` : ""}`;
+    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${st.cur === e.i ? `${BOLD}${CYAN}` : BOLD}${e.plain}${RESET} ${DIM}(${planCount(lang, "plan_lines", e.lines)})${RESET}${st.updated.has(e.i) ? ` ${DIM}${t(lang, "plan_section_updated")}${RESET}` : ""}`;
     for (const l of wrap(head, w)) {
       out.lines.push(l);
       out.wide.push(null);
     }
     if (!open) return;
     const next = o.entries[k + 1]?.at ?? src.length;
-    add(src.slice(e.at + 1, next).join("\n"), Math.max(8, w - ind.length - 2), `${ind}  `);
+    add(e.i, src.slice(e.at + 1, next).join("\n"), Math.max(8, w - ind.length - 2), `${ind}  `);
   });
-  add(extra, w, "");
-  while (out.lines.length && out.lines.at(-1) === "") {
-    out.lines.pop();
-    out.wide.pop();
-  }
+  add(-2, extra, w, "");
+  popBlank();
   return out;
 }
 
