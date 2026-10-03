@@ -1,3 +1,4 @@
+import { planOutline, type PlanOutline } from "./plan.js";
 import { AskUserQuestionInput, ExitPlanModeInput, type Decision, type SessionHistory } from "../contract.js";
 import {
   COLUMN_HAPPENS,
@@ -109,6 +110,8 @@ export interface ScreenModel {
   footnotes: string[];
   /** Body of the "Scope and reversibility" section of the plan (Markdown), shown in the right column of the plan card */
   impact?: string | null;
+  /** A long plan folded into sections: its outline, the plan text and what the hook appended after it (null for a short plan) */
+  plan?: { outline: PlanOutline; text: string; extra: string } | null;
   /** Waiting for the human (explanation.type === "blocker") */
   blocker: boolean;
   /** Body of the blocker "What you need to do" section (Markdown), shown at the top of the right column */
@@ -339,12 +342,15 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
   if (d.kind === "approve_plan") {
     const plan = planOf(d);
     let background = plan;
+    let extra = "";
     // The hook puts the plan body in explanation.markdown, so only append it when it differs from the plan
     if (explained && md.trim() !== plan.trim()) {
       const lines = toLines(md);
-      background += "\n\n---\n\n" + lines.slice(parseFrontMatter(lines).bodyStart).join("\n");
+      extra = "\n\n---\n\n" + lines.slice(parseFrontMatter(lines).bodyStart).join("\n");
+      background += extra;
     }
-    return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan) };
+    const outline = planOutline(plan);
+    return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan), plan: outline.long ? { outline, text: plan, extra } : null };
   }
 
   const qs = questionsOf(d);

@@ -352,3 +352,33 @@ pre code.hljs { background: none; padding: 0; }
   .opt .desc.clampable { -webkit-line-clamp: 1; line-clamp: 1; }
 }
 .v2-title .approval-cmd { font-size: 13px; }
+
+/* Long plans: one folding block per ## section, ### inside it; the contents in the right column */
+/* --pad-top is #background's top padding: a sticky summary is placed below it, so it is pulled back up by that much */
+.md { --sum-h: 32px; --pad-top: 14px; }
+.md details.plan-sec, .md details.plan-sub { margin: 0; border-top: 1px solid var(--line); }
+.md details.plan-sub { border-top-style: dashed; scroll-margin-top: var(--sum-h); }
+.md details.plan-sec > summary, .md details.plan-sub > summary { display: flex; align-items: baseline; gap: 8px; min-height: var(--sum-h); box-sizing: border-box; padding: 6px 0; list-style: none; cursor: pointer; background: var(--bg); color: var(--fg); font-size: 13px; font-weight: 700; line-height: 1.4; position: sticky; z-index: 2; }
+.md details.plan-sec > summary { top: calc(-1 * var(--pad-top)); z-index: 3; }
+.md details.plan-sub > summary { top: calc(var(--sum-h) - var(--pad-top)); font-weight: 600; padding-left: 14px; }
+.md details.plan-sec > summary::-webkit-details-marker, .md details.plan-sub > summary::-webkit-details-marker { display: none; }
+.md details.plan-sec > summary::before, .md details.plan-sub > summary::before { content: "▸"; color: var(--muted); flex: none; width: 10px; }
+.md details.plan-sec[open] > summary::before, .md details.plan-sub[open] > summary::before { content: "▾"; }
+.ps-mark { flex: none; color: var(--muted); font-weight: 400; }
+.ps-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.ps-meta { flex: none; font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
+.md details.plan-sec > :not(summary) { margin-left: 2px; }
+.plan-toc { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 4px; margin-bottom: 12px; font-size: 13px; max-height: 36vh; overflow: auto; }
+.plan-toc .impact-cap { padding: 0 8px 2px; }
+.toc-row { display: flex; align-items: baseline; gap: 6px; padding: 2px 8px; border-radius: 4px; cursor: pointer; }
+.toc-row.l3 { padding-left: 24px; }
+.toc-row:hover { background: var(--accent-bg); }
+.toc-row.cursor { background: var(--accent-bg); box-shadow: inset 2px 0 0 var(--accent); }
+.toc-mark { flex: none; color: var(--muted); }
+.toc-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toc-row.l2 .toc-title { font-weight: 600; }
+.toc-n { flex: none; font-size: 12px; color: var(--muted); }
+.plan-meta { flex: none; display: flex; gap: 10px; margin-top: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.plan-file { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+/* Room below the last section so that any section can be scrolled up to the top of the left column */
+.md.plan-long { padding-bottom: 55vh; }

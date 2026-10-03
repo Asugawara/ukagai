@@ -8,6 +8,7 @@ import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 import { historyItems, type HistoryItem } from "./history.js";
+import { initialPlanState, setOpen, toggleAll, unreadNames, unreadSections, type PlanState } from "./plan.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
 
@@ -58,8 +59,8 @@ export class App {
   /** Show the background at full width (hides the decision column) */
   full = false;
   /** Dimensions of the last drawn screen (used for scroll amounts and ranges) */
-  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax" | "footRows"> = {
-    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0, footRows: [],
+  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax" | "footRows" | "secRows"> = {
+    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0, footRows: [], secRows: [],
   };
   /** The "f for full width" hint is shown once per decision: which decisions have had it, and until when */
   private hinted = new Set<string>();
@@ -86,6 +87,10 @@ export class App {
   private confirm: { id: string; kind: string; until: number } | null = null;
   private prior: { id: string; kind: string; until: number } | null = null;
   private footIdx = -1;
+  /** A long plan's open / read sections and contents cursor, by decision */
+  private plans = new Map<string, PlanState>();
+  /** The section (contents row) the background should scroll to once the next frame has told where it is */
+  private reveal: number | null = null;
   private listIndex = 0;
   private lastG = 0;
   /** Decisions showing a long recommendation in full */
@@ -147,6 +152,7 @@ export class App {
     this.decisions.delete(id);
     this.models.delete(id);
     this.drafts.delete(id);
+    this.plans.delete(id);
     this.recFull.delete(id);
     this.hinted.delete(id);
     this.sending.delete(id);
@@ -172,6 +178,7 @@ export class App {
     this.cannot = null;
     this.confirm = null;
     this.footIdx = -1;
+    this.reveal = null;
     this.histDetail = null;
     if (this.mode === "input" || this.mode === "none" || this.mode === "cannot" || this.mode === "history") this.mode = "normal";
     this.loadHistory(id);
@@ -263,6 +270,7 @@ export class App {
       histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
       copy: this.copySupported,
       recFull: this.shownId !== null && this.recFull.has(this.shownId),
+      plan: m?.plan ? this.planState(m) : null,
       scroll: this.scroll,
       rscroll: this.rscroll,
       focus: this.focus,
@@ -275,14 +283,38 @@ export class App {
 
   /** The prompt shown in the footer: "Press Enter again" */
   private notice(now: number): string | null {
-    if (this.confirm && this.confirm.until >= now) return t(this.lang, "confirm_again");
-    return null;
+    if (!this.confirm || this.confirm.until < now) return null;
+    const unread = this.unreadText(this.confirm.id);
+    return unread ? `${unread} · ${t(this.lang, "confirm_again")}` : t(this.lang, "confirm_again");
+  }
+
+  private planState(m: ScreenModel): PlanState {
+    let st = this.plans.get(m.id);
+    if (!st) this.plans.set(m.id, (st = initialPlanState(m.plan!.outline)));
+    return st;
+  }
+
+  /** `Unread sections (3): a, b, c` for a long plan with sections never opened; "" otherwise */
+  private unreadText(id: string): string {
+    const m = this.models.get(id);
+    if (!m?.plan) return "";
+    const un = unreadSections(m.plan.outline, this.planState(m));
+    return un.length ? t(this.lang, "plan_unread", { n: un.length, names: unreadNames(un) }) : "";
   }
 
   /** Take the drawn screen dimensions and clamp the scroll positions. Returns true when a hint just started (redraw) */
   syncFrame(f: Frame, now = Date.now()): boolean {
     this.frame = f;
     this.scroll = Math.max(0, Math.min(this.scroll, f.scrollMax));
+    if (this.reveal !== null) {
+      // The section the contents / [ ] / Enter asked for: its heading row is only known now. One more frame puts it at the top
+      const row = f.secRows[this.reveal];
+      this.reveal = null;
+      if (row !== undefined && row !== this.scroll) {
+        this.scroll = Math.max(0, Math.min(row, f.scrollMax));
+        return true;
+      }
+    }
     if (this.rscroll != null) this.rscroll = Math.max(0, Math.min(this.rscroll, f.rightMax));
     this.hscroll = Math.max(0, Math.min(this.hscroll, f.hMax));
     if (f.figOver && this.shownId && !this.hinted.has(this.shownId)) {
@@ -333,7 +365,7 @@ export class App {
       if (this.mode === "normal") this.wheel(key.dir, key.x);
       return [];
     }
-    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, lastG: this.lastG, now });
+    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, lastG: this.lastG, now });
     this.lastG = lastG;
     return action ? this.apply(action, m, now) : [];
   }
@@ -464,6 +496,33 @@ export class App {
       case "approve": dr.cursor = 0; return this.approve(m, false, now);
       case "approve-auto": dr.cursor = 1; return this.approve(m, true, now);
       case "reject": dr.cursor = 2; this.startReason(dr); return [];
+      case "toc-move": {
+        if (!m.plan) return [];
+        const st = this.planState(m);
+        st.cur = clamp(st.cur + a.delta, m.plan.outline.entries.length);
+        this.rscroll = null;
+        return [];
+      }
+      case "toc-toggle": {
+        if (!m.plan) return [];
+        const st = this.planState(m);
+        setOpen(m.plan.outline, st, st.cur, !st.open.has(st.cur));
+        if (st.open.has(st.cur)) this.reveal = st.cur;
+        return [];
+      }
+      case "toc-all": {
+        if (m.plan) toggleAll(m.plan.outline, this.planState(m));
+        return [];
+      }
+      case "toc-section": {
+        if (!m.plan) return [];
+        const st = this.planState(m);
+        st.cur = clamp(st.cur + a.delta, m.plan.outline.entries.length);
+        setOpen(m.plan.outline, st, st.cur, true);
+        this.reveal = st.cur;
+        this.rscroll = null;
+        return [];
+      }
       default: return [];
     }
   }
@@ -483,7 +542,9 @@ export class App {
 
   /** Approve a plan (Enter twice when the decision is irreversible) */
   private approve(m: ScreenModel, auto: boolean, now: number): Effect[] {
-    if (!this.guard(m, auto ? "approve-auto" : "approve", m.reversibility === "irreversible", now)) return [];
+    // A second press is needed when the decision is irreversible, or when a section of a long plan was never opened (the footer names them)
+    const heavy = m.reversibility === "irreversible" || !!this.unreadText(m.id);
+    if (!this.guard(m, auto ? "approve-auto" : "approve", heavy, now)) return [];
     return this.emit(m.id, { approve: true, set_mode_auto: auto });
   }
 
