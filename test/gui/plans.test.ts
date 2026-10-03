@@ -292,6 +292,32 @@ gui("live update: unchanged sections keep their state, the changed and the new o
   await waitFor("idle", IDLE);
 });
 
+gui("live update by text: an unchanged heading with changed text marks only that section; a changed heading is a new section", async () => {
+  await arrive("diff.md", LONG);
+  key("o");
+  assert.equal(ev(openCount), 9);
+  const sec = (i: number) => `${SEC}[${i}]`;
+  const title = ev<string>(`${sec(3)}.querySelector(":scope > summary > .ps-title").textContent`);
+  assert.ok(LONG.includes(`## ${title}\n`), title);
+  writePlan("diff.md", LONG.replace(`## ${title}\n`, `## ${title}\n\nOne more line.\n`));
+  await waitFor("changed section marked", `${SEC}[3]?.querySelector(":scope > summary > .ps-upd")?.hidden === false`, 4000);
+  const m = marks();
+  assert.equal(m.length, 9);
+  assert.equal(m[3], "☐");
+  assert.deepEqual(m.filter((x, i) => i !== 3 && x !== "☑"), [], `only section 3 is unread: ${m.join("")}`);
+  assert.equal(ev(`[...${SEC}].filter((d) => !d.querySelector(":scope > summary > .ps-upd").hidden).length`), 1);
+  assert.equal(ev(`${sec(3)}.open`), true, "a changed section that was open stays open");
+  // a renamed heading is a new section: folded, unread, updated
+  writePlan("diff.md", LONG.replace(`## ${title}\n`, `## ${title} renamed\n`));
+  await waitFor("renamed section new", `${SEC}[3]?.querySelector(":scope > summary > .ps-title")?.textContent === ${JSON.stringify(`${title} renamed`)}`, 4000);
+  assert.equal(ev(`${sec(3)}.open`), false, "a new section arrives folded");
+  assert.equal(marks()[3], "☐");
+  assert.equal(ev(`${sec(3)}.querySelector(":scope > summary > .ps-upd").hidden`), false);
+  assert.equal(marks().filter((x) => x === "☐").length, 1);
+  key("Escape");
+  await waitFor("idle", IDLE);
+});
+
 gui("a decision takes the screen from a plan: count 2, ] goes to the plan, h back, answering returns to the plan", async () => {
   await arrive("prec.md");
   const { id } = await seedQuestion();
@@ -335,8 +361,7 @@ gui("upgrade in place: the approval for the shown plan keeps the sections' state
   assert.equal(ev(`document.querySelectorAll("#decision .confirm-bar").length`), 0);
   key("y"); // once
   await waitStatus(id, "answer_submitted").catch(() => waitStatus(id, "answered"));
-  // The server marks the plan read when the approval resolves and the GUI also POSTs read unless the SSE echo
-  // (read: true) arrives first, so wait on the server state, not on the GUI's request.
+  // The server marks the plan read when the approval resolves (the GUI sends no read POST on answer), so wait on the server state.
   for (let i = 0; i < 50 && !(await planRead("up.md")); i++) await new Promise((r) => setTimeout(r, 100));
   assert.equal(await planRead("up.md"), true, "plan is read");
   await waitFor("idle", IDLE);

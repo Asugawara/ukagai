@@ -222,6 +222,12 @@ function dropExternalImages(container) {
   }
 }
 
+// Markdown into a container: sanitized, external images dropped
+function setMarkdown(container, md) {
+  container.innerHTML = sanitize(window.marked.parse(md ?? "", { async: false }));
+  dropExternalImages(container);
+}
+
 // ---- Display helpers ----
 
 // Plain text for headings (Markdown marks removed)
@@ -515,7 +521,7 @@ function syncHistory() {
 // and was written in the last 24 h: only new plans are auto-shown and counted; the others are not shown anywhere (they stay on disk and in the API).
 // One plan and its approval decision are one item: a pending approve_plan whose planFilePath names the file hides the plan row.
 const plans = new Map(); // name -> PlanSummary (from GET /api/plans and SSE)
-const planData = new Map(); // name -> { name, title, mtime, markdown, read, sections } (fetched when shown or new)
+const planData = new Map(); // name -> { name, title, mtime, markdown, read, } (fetched when shown or new)
 const PLAN_ID = "plan:";
 const PLAN_NEW_MS = 24 * 3600 * 1000;
 const isPlanId = (id) => typeof id === "string" && id.startsWith(PLAN_ID);
@@ -523,12 +529,12 @@ const planNameOf = (id) => id.slice(PLAN_ID.length);
 const baseName = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
 const isNewPlan = (p) => !p.read && Date.now() - Date.parse(p.mtime) < PLAN_NEW_MS;
 const planFileOf = (d) => (d?.kind === "approve_plan" ? baseName(d.request?.planFilePath) : "");
-const answering = new Set(); // plan files whose approval is being sent: the plan is on its way to read, so it is not "new" any more
 const newPlans = () => {
-  const paired = new Set([...pendingList().map(planFileOf).filter(Boolean), ...answering]);
+  const paired = new Set(pendingList().map(planFileOf).filter(Boolean));
   return [...plans.values()].filter((p) => isNewPlan(p) && !paired.has(p.name)).sort((a, b) => b.mtime.localeCompare(a.mtime));
 };
 // Every item in order: pending decisions (oldest first), then new plans (newest first)
+const isNewName = (name) => newPlans().some((x) => x.name === name);
 const itemIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
 const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name } });
 const shownPlanPd = () => (isPlanId(shownId) && planData.has(planNameOf(shownId)) ? planPd(planData.get(planNameOf(shownId))) : null);
@@ -553,19 +559,23 @@ function markPlanRead(name) {
 }
 
 // Replace the whole list (page load, SSE reconnect). A shown plan whose file changed or vanished meanwhile is brought up to date
-async function loadPlans() {
-  const data = await api("/api/plans");
+async function loadPlans(data) {
   const list = Array.isArray(data?.plans) ? data.plans : [];
   const seen = new Set(list.map((p) => p.name));
   for (const name of [...plans.keys()]) if (!seen.has(name)) dropPlan(name);
-  for (const p of list) {
-    const cached = planData.get(p.name);
-    plans.set(p.name, p);
-    if (cached && cached.mtime !== p.mtime) {
-      if (shownId === PLAN_ID + p.name) await refreshPlanData(p.name); else planData.delete(p.name);
-    }
-  }
-  await Promise.all(newPlans().map((p) => ensurePlanData(p.name)));
+  for (const p of list) await applyPlan(p);
+  const first = newPlans()[0]; // the one advance() shows; the rest load when shown
+  if (first) await ensurePlanData(first.name);
+}
+
+// Take a plan summary in. A cached body that is stale is refetched when the plan is on screen (the returned promise) and dropped otherwise
+function applyPlan(p) {
+  plans.set(p.name, p);
+  const cached = planData.get(p.name);
+  if (!cached || cached.mtime === p.mtime) return null;
+  if (shownId === PLAN_ID + p.name) return refreshPlanData(p.name);
+  planData.delete(p.name);
+  return null;
 }
 
 function dropPlan(name) {
@@ -582,14 +592,9 @@ function onPlanRemoved(name) {
 }
 
 function onPlanUpdated(p) {
-  plans.set(p.name, p);
-  const cached = planData.get(p.name);
-  if (cached && cached.mtime !== p.mtime) {
-    if (shownId === PLAN_ID + p.name) { refreshPlanData(p.name); return; }
-    planData.delete(p.name);
-  }
-  if (shownId == null && isNewPlan(p) && newPlans().some((x) => x.name === p.name)) {
-    ensurePlanData(p.name).then((ok) => { if (ok && shownId == null && newPlans().some((x) => x.name === p.name)) show(PLAN_ID + p.name); });
+  if (applyPlan(p)) return;
+  if (shownId == null && isNewName(p.name)) {
+    ensurePlanData(p.name).then((ok) => { if (ok && shownId == null && isNewName(p.name)) show(PLAN_ID + p.name); });
     return;
   }
   refreshItems();
@@ -601,51 +606,19 @@ function refreshItems() {
   renderList();
 }
 
-// The shown plan changed on disk: fetch it, carry the open / read state over by section hash, and re-render in place (scroll kept)
+// The shown plan changed on disk: fetch it and re-render in place (scroll kept); planOutline carries the open / read state over to the new text
 async function refreshPlanData(name) {
   let data;
   try { data = await fetchPlan(name); } catch { return; }
   const old = planData.get(name);
   planData.set(name, data);
-  const key = PLAN_ID + name;
-  if (shownId !== key) return;
+  if (shownId !== PLAN_ID + name) return;
   if (old?.markdown === data.markdown) return; // only the mtime moved: nothing to redraw (the age text keeps ticking)
-  remapPlanState(key, old, data);
   const keep = $("background").scrollTop;
   const keepRight = $("decision").scrollTop;
   renderAll();
   $("background").scrollTop = keep;
   $("decision").scrollTop = keepRight;
-}
-
-// Unchanged sections (same heading, level and hash) keep their open / read state; changed ones keep their open state but turn unread and are marked
-// `updated` until opened; new ones are folded, unread and marked; removed ones are gone. The server's sections[] and the GUI's outline split the file the same way (H2 / H3 outside fences)
-function remapPlanState(key, old, data) {
-  const o = planOutlineOf(data.markdown);
-  outlines.set(key, { plan: data.markdown, outline: o });
-  const st = planStates.get(key);
-  if (!st || !old || o.entries.length !== data.sections.length) { if (st) planStates.delete(key); return; }
-  const used = new Set();
-  const same = new Map(); // new index -> old index
-  data.sections.forEach((s, j) => {
-    const k = old.sections.findIndex((x, k) => !used.has(k) && x.level === s.level && x.heading === s.heading && x.hash === s.hash);
-    if (k >= 0) { used.add(k); same.set(j, k); }
-  });
-  const next = { open: new Set(), read: new Set(), upd: new Set(), cur: 0 };
-  data.sections.forEach((s, j) => {
-    const k = same.get(j);
-    if (k === undefined) {
-      const m = old.sections.findIndex((x, m) => !used.has(m) && x.level === s.level && x.heading === s.heading);
-      if (m >= 0) { used.add(m); if (st.open.has(m)) next.open.add(j); } // a changed section keeps its open / folded state; only the read mark and `updated` change
-      next.upd.add(j);
-      return;
-    }
-    if (st.open.has(k)) next.open.add(j);
-    if (st.read.has(k)) next.read.add(j);
-    if (st.upd.has(k)) next.upd.add(j);
-  });
-  next.cur = clamp([...same.entries()].find(([, k]) => k === st.cur)?.[0] ?? 0, o.entries.length);
-  planStates.set(key, next);
 }
 
 // ---- The plan screen (read only) ----
@@ -699,15 +672,27 @@ function planViewKey(ev) {
   if (!pd) return;
   ev.preventDefault();
   if (key === "Escape") { doneReading(); return; }
-  const o = planOutline(pd);
-  if (!o) return;
-  const st = planState(pd, o);
-  if (key === "ArrowUp" || key === "k") planMoveCursor(pd, -1);
-  else if (key === "ArrowDown" || key === "j") planMoveCursor(pd, 1);
-  else if (key === "Enter" || key === " ") planSetOpen(pd, st.cur, !st.open.has(st.cur));
-  else if (key === "o") planToggleAll(pd);
-  else if (key === "[") planReveal(pd, Math.max(0, st.cur - 1));
-  else if (key === "]") planReveal(pd, Math.min(o.entries.length - 1, st.cur + 1));
+  tocKey(pd, key, ev);
+}
+
+// The contents keys of a long plan: the arrows walk the contents; Enter / Space fold the section under the cursor, o opens / closes all, [ ] go to the previous / next section.
+// true when the key was one of them
+function tocKey(d, key, ev) {
+  const o = planOutline(d);
+  if (!o) return false;
+  const st = planState(d, o);
+  let go;
+  if (key === "ArrowUp" || key === "k") go = () => planMoveCursor(d, -1);
+  else if (key === "ArrowDown" || key === "j") go = () => planMoveCursor(d, 1);
+  else if (key === "Enter" || key === " ") go = () => planSetOpen(d, st.cur, !st.open.has(st.cur));
+  else if (key === "o") go = () => planToggleAll(d);
+  else if (key === "[") go = () => planReveal(d, Math.max(0, st.cur - 1));
+  else if (key === "]") go = () => planReveal(d, Math.min(o.entries.length - 1, st.cur + 1));
+  else return false;
+  ev.preventDefault();
+  ev.target?.blur?.();
+  go();
+  return true;
 }
 
 // ---- Drawer ----
@@ -755,7 +740,7 @@ function renderList() {
     const id = PLAN_ID + p.name;
     const meta = el("div", { class: "meta" },
       el("span", { text: t("plan_kind") }),
-      el("span", { class: "age", "data-created": p.mtime, text: ageText(p.mtime) }),
+      el("span", { class: "age", "data-created": p.mtime, "data-tpl": "plan_row_age", text: ageText(p.mtime) }),
       el("span", { text: planStatsText(p) }),
       el("span", { class: "mark", title: id === shownId ? t("badge_shown") : "", text: id === shownId ? "▸" : "●" }));
     list.append(el("li", {}, el("button", { class: "row plan-row" + (id === shownId ? " current" : ""), type: "button", "data-name": p.name, onclick: () => { show(id); setDrawer(false); } },
@@ -823,24 +808,18 @@ const statusText = (status, fallbackKey) => t(STATUS_KEYS[status] ?? fallbackKey
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
-  const file = d.kind === "approve_plan" ? planFileOf(d) : "";
-  if (file) answering.add(file); // the SSE echo of the answer can arrive before the POST returns and must not bring the plan back
   try {
     const updated = await post(`/api/decisions/${d.id}/answer`, body);
     decisions.set(updated.id, updated);
-    if (file) markPlanRead(file); // the plan was read and decided
     if (shownId === d.id) {
       toast(statusText(updated.status, "sent"));
       advance();
     } else {
-      renderHeader();
-      renderList();
+      refreshItems();
     }
   } catch (e) {
     if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
     if (shownId === d.id) renderRight(decisions.get(d.id));
-  } finally {
-    if (file) answering.delete(file);
   }
 }
 
@@ -904,8 +883,7 @@ function renderRight(d) {
 // The caption is the heading as written in the file
 function impactBox(d) {
   const tmp = el("div", { class: "md" });
-  tmp.innerHTML = sanitize(window.marked.parse(d.request.plan ?? "", { async: false }));
-  dropExternalImages(tmp);
+  setMarkdown(tmp, d.request.plan);
   const sec = findSection(sectionsOf(tmp), SECTION.impact);
   const nodes = sec?.nodes.slice(1) ?? [];
   if (!nodes.some((n) => (n.textContent ?? "").trim())) return null;
@@ -1026,7 +1004,7 @@ function closeOverlay() {
 function openOverlay(kind, title, body, extra = {}) {
   closeOverlay();
   const card = el("div", { class: `overlay-card ${kind}` }, el("div", { class: "overlay-title" }, el("span", { text: title })), body);
-  const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-label": title, onclick: (e) => { if (e.target === root) { if (kind === "plans") closePlans(); else closeOverlay(); } } }, card);
+  const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-label": title, onclick: (e) => { if (e.target === root) closeOverlay(); } }, card);
   document.body.append(root);
   overlay = { kind, el: root, ...extra };
 }
@@ -1923,8 +1901,7 @@ function highlightCode(container) {
 }
 
 async function renderMarkdown(container, md) {
-  container.innerHTML = sanitize(window.marked.parse(md, { async: false }));
-  dropExternalImages(container);
+  setMarkdown(container, md);
   await enhance(container);
 }
 
@@ -2025,7 +2002,8 @@ function planOutlineOf(md) {
       if (!prose[i]) continue;
       for (const c of lines[i].matchAll(/`([^`\n]+)`/g)) { const p = pathOf(c[1]); if (p) files.add(p); }
     }
-    entries.push({ i: entries.length, level: m.level, title: m.title, plain: plainMd(m.title), at: m.at, lines: end - m.at, files, scope: isImpactTitle(m.title) });
+    const own = marks.find((n) => n.at > m.at)?.at ?? lines.length; // the section's own text, without its subsections
+    entries.push({ i: entries.length, level: m.level, title: m.title, plain: plainMd(m.title), at: m.at, lines: end - m.at, text: lines.slice(m.at, own).join("\n"), files, scope: isImpactTitle(m.title) });
   });
   const all = new Set();
   lines.forEach((ln, i) => { if (prose[i]) for (const c of ln.matchAll(/`([^`\n]+)`/g)) { const p = pathOf(c[1]); if (p) all.add(p); } });
@@ -2035,7 +2013,7 @@ function planOutlineOf(md) {
 
 // The state of a plan is keyed by its file name when there is one (`plan:<name>`), so the read-only plan screen and the approval
 // decision for the same file share it; a decision without planFilePath keeps its own id
-const planKey = (d) => (d.readonly ? d.id : planFileOf(d) ? PLAN_ID + planFileOf(d) : d.id);
+const planKey = (d) => (planFileOf(d) ? PLAN_ID + planFileOf(d) : d.id);
 const outlines = new Map(); // plan key -> { plan, outline }
 const planStates = new Map(); // plan key -> { open, read, upd, cur }
 // The outline of a plan, or null when the plan is short (shown as one open document, no contents)
@@ -2046,23 +2024,28 @@ function planOutline(d) {
   let c = outlines.get(key);
   if (!c || c.plan !== plan) {
     const outline = planOutlineOf(plan);
-    // The text under a kept state changed (the decision's copy differs from the file): carry the state over by heading
-    if (c && planStates.has(key)) planStates.set(key, remapByHeading(planStates.get(key), c.outline, outline));
+    // The text under a kept state changed (a live update, or the decision's copy differs from the file): carry the state over
+    if (c && planStates.has(key)) planStates.set(key, remapPlanState(c.outline, outline, planStates.get(key)));
     outlines.set(key, (c = { plan, outline }));
   }
   return c.outline.long ? c.outline : null;
 }
 
-function remapByHeading(st, from, to) {
+// Carry a plan's state over to new text, keyed by (level, heading). Matched sections keep their open state; when their text differs they turn unread and
+// are marked `updated` until opened. Sections without a match are new: folded, unread and marked. Removed ones are gone
+function remapPlanState(from, to, st) {
   const used = new Set();
   const next = { open: new Set(), read: new Set(), upd: new Set(), cur: 0 };
   for (const e of to.entries) {
-    const k = from.entries.findIndex((x) => !used.has(x.i) && x.level === e.level && x.plain === e.plain);
-    if (k < 0) { next.upd.add(e.i); continue; }
-    used.add(from.entries[k].i);
-    if (st.open.has(from.entries[k].i)) next.open.add(e.i);
-    if (st.read.has(from.entries[k].i)) next.read.add(e.i);
-    if (from.entries[k].i === st.cur) next.cur = e.i;
+    const o = from.entries.find((x) => !used.has(x.i) && x.level === e.level && x.plain === e.plain);
+    if (!o) { next.upd.add(e.i); continue; }
+    used.add(o.i);
+    if (st.open.has(o.i)) next.open.add(e.i);
+    if (o.text === e.text) {
+      if (st.read.has(o.i)) next.read.add(e.i);
+      if (st.upd.has(o.i)) next.upd.add(e.i);
+    } else next.upd.add(e.i);
+    if (o.i === st.cur) next.cur = e.i;
   }
   return next;
 }
@@ -2106,7 +2089,6 @@ function syncPlan(d) {
     for (const w of document.querySelectorAll(`#background details[data-i="${e.i}"] > summary > .ps-upd`)) w.hidden = !st.upd.has(e.i);
     const row = document.querySelector(`#decision .toc-row[data-i="${e.i}"]`);
     row?.classList.toggle("cursor", st.cur === e.i);
-    row?.classList.toggle("open", st.open.has(e.i));
   }
   if (!d.readonly) {
     syncConfirm(draftOf(d));
@@ -2210,8 +2192,7 @@ function pathBadges(container) {
 
 // The plan body into the left column: long plans fold into sections, short ones stay one document
 async function renderPlanMarkdown(container, d) {
-  container.innerHTML = sanitize(window.marked.parse(d.request.plan ?? "", { async: false }));
-  dropExternalImages(container);
+  setMarkdown(container, d.request.plan);
   const o = planOutline(d);
   if (o && foldPlanSections(container, o, d)) container.classList.add("plan-long");
   pathBadges(container);
@@ -2223,7 +2204,7 @@ async function renderPlanMarkdown(container, d) {
 function planToc(d, o) {
   const st = planState(d, o);
   const rows = o.entries.map((e) => el("div", {
-    class: `toc-row l${e.level}${st.cur === e.i ? " cursor" : ""}${st.open.has(e.i) ? " open" : ""}`, "data-i": String(e.i), title: e.plain,
+    class: `toc-row l${e.level}${st.cur === e.i ? " cursor" : ""}`, "data-i": String(e.i), title: e.plain,
     onclick: () => planReveal(d, e.i),
   }, el("span", { class: "toc-mark", text: st.read.has(e.i) ? "☑" : "☐" }), el("span", { class: "toc-title", text: e.plain }), el("span", { class: "toc-n", text: String(e.lines) })));
   return el("div", { class: "plan-toc" }, el("div", { class: "impact-cap", text: t("plan_toc") }), ...rows);
@@ -2236,7 +2217,7 @@ function planMetaLine(d) {
   if (!o && !file) return null;
   const meta = el("span", { class: "plan-meta" });
   if (o) meta.append(el("span", { class: "plan-stats", text: [count("plan_sections", o.h2), count("plan_lines", o.lines), count("plan_files", o.files)].join(" · ") }));
-  if (file) meta.append(el("span", { class: "plan-file", title: file, text: file.split(/[\\/]/).filter(Boolean).pop() ?? file }));
+  if (file) meta.append(el("span", { class: "plan-file", title: file, text: baseName(file) || file }));
   return meta;
 }
 
@@ -2253,8 +2234,7 @@ function buildModel(d) {
   const { fm, body } = parseFrontMatter(d.explanation.markdown);
   const left = el("div", { class: "md" });
   const fn = extractFootnotes(body);
-  left.innerHTML = sanitize(window.marked.parse(fn.md, { async: false }));
-  dropExternalImages(left);
+  setMarkdown(left, fn.md);
   m.left = left;
   m.fnCount = fn.defs.size;
   const qs = d.request.questions;
@@ -2511,6 +2491,8 @@ function upsert(d) {
 }
 
 async function loadAll() {
+  const plansReq = api("/api/plans"); // independent of the decisions: fetched alongside
+  plansReq.catch(() => {});
   const ds = await api("/api/decisions?status=pending");
   const seen = new Set();
   for (const d of ds) {
@@ -2519,18 +2501,16 @@ async function loadAll() {
     else decisions.set(d.id, d);
   }
   // Refetch decisions that are still pending locally but changed or vanished (missed SSE events, server restart)
-  for (const d of [...decisions.values()]) {
-    if (d.status === "pending" && !seen.has(d.id)) {
-      try { upsert(await api(`/api/decisions/${d.id}`)); }
-      catch (e) {
-        if (e.message === "unauthorized") throw e;
-        decisions.delete(d.id); // cannot fetch (404 etc.) = gone
-        models.delete(d.id);
-        drafts.delete(d.id);
-      }
+  await Promise.all([...decisions.values()].filter((d) => d.status === "pending" && !seen.has(d.id)).map(async (d) => {
+    try { upsert(await api(`/api/decisions/${d.id}`)); }
+    catch (e) {
+      if (e.message === "unauthorized") throw e;
+      decisions.delete(d.id); // cannot fetch (404 etc.) = gone
+      models.delete(d.id);
+      drafts.delete(d.id);
     }
-  }
-  try { await loadPlans(); } catch (e) { if (e.message === "unauthorized") throw e; }
+  }));
+  try { await loadPlans(await plansReq); } catch (e) { if (e.message === "unauthorized") throw e; }
   if (isPlanId(shownId)) {
     if (plans.has(planNameOf(shownId)) && planData.has(planNameOf(shownId))) refreshItems(); else advance();
     return;
@@ -2803,16 +2783,7 @@ document.addEventListener("keydown", (ev) => {
   }
   if (key === "Enter" && isBtn) return;
   if (ui.toc && !isBtn) {
-    // A long plan: the arrows walk the contents; Enter / Space fold the section under the cursor, o opens / closes all, [ ] go to the previous / next section
-    const d = decisions.get(shownId);
-    const st = planState(d, planOutline(d));
-    const toc = (fn) => { ev.preventDefault(); t.blur?.(); fn(); };
-    if (key === "ArrowUp" || key === "k") return toc(() => planMoveCursor(d, -1));
-    if (key === "ArrowDown" || key === "j") return toc(() => planMoveCursor(d, 1));
-    if (key === "Enter" || key === " ") return toc(() => planSetOpen(d, st.cur, !st.open.has(st.cur)));
-    if (key === "o") return toc(() => planToggleAll(d));
-    if (key === "[") return toc(() => planReveal(d, Math.max(0, st.cur - 1)));
-    if (key === "]") return toc(() => planReveal(d, Math.min(planOutline(d).entries.length - 1, st.cur + 1)));
+    if (tocKey(decisions.get(shownId), key, ev)) return;
   }
   if (key === ".") { ev.preventDefault(); ui.toggleExpand(); }
   else if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
@@ -2828,8 +2799,7 @@ $("backdrop").addEventListener("click", () => setDrawer(false));
 
 setInterval(() => {
   for (const e of document.querySelectorAll(".age")) {
-    const age = e.dataset.tpl ? ageText(e.dataset.created) : e.closest(".plan-row") ? ageText(e.dataset.created) : elapsed(e.dataset.created);
-    e.textContent = e.dataset.tpl ? t(e.dataset.tpl, { age }) : age;
+    e.textContent = e.dataset.tpl ? t(e.dataset.tpl, { age: ageText(e.dataset.created) }) : elapsed(e.dataset.created);
   }
 }, 10000);
 
