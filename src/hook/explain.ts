@@ -1012,6 +1012,18 @@ function forAgent(text: string, agent: string | undefined): string {
     .replace(/AskUserQuestion/g, "request_user_input");
 }
 
+/** The deny at the end of a hook leg: the question stays open in ukagai, the agent is asked to call the tool again */
+export function handoffReason(kind: "answer_question" | "approve_plan", agent: string | undefined): string {
+  const call =
+    kind === "approve_plan"
+      ? "Call ExitPlanMode again now with the same plan"
+      : "Call AskUserQuestion again now with exactly the same question and options";
+  return forAgent(
+    `[ukagai, not a failure] The human has not answered yet; the question stays open in ukagai. ${call} to keep waiting for the answer. Do not ask in prose and do not change the question.`,
+    agent,
+  );
+}
+
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
   return forAgent(composeRaw(template, p, missingText, withTail), p.agent);
 }

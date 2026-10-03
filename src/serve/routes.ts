@@ -276,6 +276,12 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(store.ack(c.req.param("id")));
   });
 
+  // The hook's budget for this leg ended; the agent is asked to call the tool again and the hook re-attaches (GET /api/sessions/:id/open)
+  app.post("/api/decisions/:id/handoff", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, z.object({ session_id: z.string() }));
+    return c.json(store.handoff(c.req.param("id"), body.session_id));
+  });
+
   app.post("/api/decisions/:id/cancel", auth("bearer"), jsonOnly, (c) => {
     return c.json(store.cancel(c.req.param("id")));
   });
@@ -304,6 +310,15 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.get("/api/sessions", auth("any"), (c) => c.json(store.listSessions()));
+
+  app.get("/api/sessions/:id/open", auth("bearer"), (c) => {
+    const fingerprint = c.req.query("fingerprint");
+    const toolUseId = c.req.query("tool_use_id");
+    if (!fingerprint || !toolUseId) return c.json({ error: "fingerprint and tool_use_id are required" }, 400);
+    const open = store.findOpen(c.req.param("id"), fingerprint);
+    if (!open) return c.json({ error: "no open decision" }, 404);
+    return c.json({ decision: store.reattach(open, toolUseId) });
+  });
 
   app.get("/api/sessions/:id/pending-mode-switch", auth("bearer"), (c) => {
     return c.json(store.getModeSwitch(c.req.param("id")));

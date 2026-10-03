@@ -202,3 +202,36 @@ test("(cancel) POST /cancel: answer_submitted is answer_lost, terminal is 409, n
   assert.equal(c3.status, 200);
   assert.equal(((await c3.json()) as any).status, "answer_lost");
 });
+
+test("(handoff) budget end hands off with a deny; the second hook run re-attaches to the same decision and gets the answer", async () => {
+  const env = await setup();
+  const planned = ["--budget", "8", "--poll-timeout-ms", "1000"];
+  // plan mode: no explanation file is needed for the first leg
+  const first = await runHook([...env.hookArgs, ...planned], stdin(env, tmp(), "AskUserQuestion", askInput, "plan", "tu-h1"));
+  assert.equal(first.code, 0);
+  const deny = JSON.parse(first.stdout).hookSpecificOutput;
+  assert.equal(deny.permissionDecision, "deny");
+  assert.match(deny.permissionDecisionReason, /^\[ukagai, not a failure\] The human has not answered yet/);
+  const pending = (await (await call(env, "/api/decisions?status=pending")).json()) as any[];
+  assert.equal(pending.length, 1);
+  const id = pending[0].id;
+  assert.equal(pending[0].handoffs, 1);
+
+  // The agent calls the tool again (new tool_use_id, and no explanation anywhere): the same decision is waited for
+  const second = runHook([...env.hookArgs, ...planned], stdin(env, tmp(), "AskUserQuestion", askInput, "default", "tu-h2"));
+  for (let i = 0; i < 100; i++) {
+    const d = (await (await call(env, `/api/decisions/${id}`)).json()) as any;
+    if (d.tool_use_id === "tu-h2") break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const cur = (await (await call(env, `/api/decisions/${id}`)).json()) as any;
+  assert.equal(cur.tool_use_id, "tu-h2");
+  assert.deepEqual(cur.previous_tool_use_ids, ["tu-h1"]);
+  assert.equal(((await (await call(env, "/api/decisions?status=pending")).json()) as any[]).length, 1);
+  assert.equal((await call(env, `/api/decisions/${id}/answer`, { answers: { [QUESTION]: "B" } })).status, 200);
+  const out = await second;
+  const j = JSON.parse(out.stdout);
+  assert.equal(j.hookSpecificOutput.permissionDecision, "allow");
+  assert.deepEqual(j.hookSpecificOutput.updatedInput.answers, { [QUESTION]: "B" });
+  assert.equal(((await (await call(env, `/api/decisions/${id}`)).json()) as any).status, "answered");
+});

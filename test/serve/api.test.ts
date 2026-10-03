@@ -4,7 +4,7 @@ import { request as httpRequest } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bodyHash } from "../../src/contract.js";
+import { bodyHash, decisionFingerprint } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const tmpRoots: string[] = [];
@@ -23,10 +23,10 @@ function tmp(): string {
 
 type Env = { h: ServeHandle; home: string; dataDir: string; url: string };
 
-async function setup(opts: { leaseGraceMs?: number; dataDir?: string; home?: string } = {}): Promise<Env> {
+async function setup(opts: { leaseGraceMs?: number; handoffGraceMs?: number; dataDir?: string; home?: string } = {}): Promise<Env> {
   const home = opts.home ?? tmp();
   const dataDir = opts.dataDir ?? tmp();
-  const h = await start({ port: 0, dataDir, home, leaseGraceMs: opts.leaseGraceMs });
+  const h = await start({ port: 0, dataDir, home, leaseGraceMs: opts.leaseGraceMs, handoffGraceMs: opts.handoffGraceMs });
   handles.push(h);
   return { h, home, dataDir, url: `http://127.0.0.1:${h.port}` };
 }
@@ -59,6 +59,11 @@ function decisionBody(env: Env, toolUseId: string, extra: Record<string, unknown
     ...extra,
   };
 }
+
+/** A request whose question differs per `n`: a second open decision of the same session must not look like a re-call */
+const distinct = (n: number) => ({
+  request: { questions: [{ question: `Another question ${n}?`, header: "Choice", options: [{ label: "A" }, { label: "B" }], multiSelect: false }] },
+});
 
 async function register(env: Env, toolUseId: string, extra: Record<string, unknown> = {}) {
   const r = await api(env, "/api/decisions", { body: decisionBody(env, toolUseId, extra) });
@@ -231,7 +236,7 @@ test("authorization and input validation: bad Host 400 / no token 401 / no Conte
   const textCt = await api(env, `/api/decisions/${d.id}/answer`, { body: { fallback: true }, contentType: "text/plain" });
   assert.equal(textCt.status, 415);
 
-  const badPath = decisionBody(env, "toolu_bad");
+  const badPath = decisionBody(env, "toolu_bad", distinct(1));
   badPath.session.transcript_path = "/etc/passwd";
   const bp = await api(env, "/api/decisions", { body: badPath });
   assert.equal(bp.status, 400);
@@ -253,7 +258,7 @@ test("authorization and input validation: bad Host 400 / no token 401 / no Conte
   assert.equal(invalid.status, 400);
   assert.ok(Array.isArray(((await invalid.json()) as { issues: unknown[] }).issues));
 
-  const ok = await api(env, "/api/decisions", { body: decisionBody(env, "toolu_nocwd") });
+  const ok = await api(env, "/api/decisions", { body: decisionBody(env, "toolu_nocwd", distinct(7)) });
   assert.equal(ok.status, 201);
   assert.deepEqual(((await ok.json()) as { context: unknown }).context, {});
 });
@@ -313,7 +318,7 @@ test("restart keeps pending / answer_submitted live with a fresh lease; they exp
   const dataDir = tmp();
   const env1 = await setup({ home, dataDir });
   const p = await register(env1, "toolu_r1");
-  const s = await register(env1, "toolu_r2");
+  const s = await register(env1, "toolu_r2", distinct(2));
   await api(env1, `/api/decisions/${s.id}/answer`, { body: { answers: { q: "A" } } });
   await env1.h.close();
 
@@ -386,9 +391,9 @@ test("/api/metrics: (b) baseline, (d) after_deny / plan_mode exclusion, escaped_
   assert.equal(((await denied.json()) as { status: string }).status, "denied_explain");
   const after = await register(env, "d1", { explanation: expl("after_deny") });
   assert.ok(after.first_denied_at);
-  await register(env, "d2", { explanation: expl("first_call") });
-  await register(env, "d3", { explanation: expl("none", "plan_mode") });
-  await register(env, "d4", { explanation: expl("none", "loop_guard") });
+  await register(env, "d2", { ...distinct(3), explanation: expl("first_call") });
+  await register(env, "d3", { ...distinct(4), explanation: expl("none", "plan_mode") });
+  await register(env, "d4", { ...distinct(5), explanation: expl("none", "loop_guard") });
 
   // denied_explain is not listed
   const list = (await (await api(env, "/api/decisions")).json()) as unknown[];
@@ -477,7 +482,7 @@ test("context: collect recent text, tools and title from an allowed transcript (
     { name: "Bash", summary: "x".repeat(80) },
   ]);
 
-  const body2 = decisionBody(env, "toolu_ctx2");
+  const body2 = decisionBody(env, "toolu_ctx2", distinct(6));
   const d2 = (await (await api(env, "/api/decisions", { body: body2 })).json()) as { context: any; session: { title?: string } };
   assert.equal(d2.context.last_assistant_text, "parent text");
   assert.equal(d2.context.ai_title, "parent title");
@@ -645,4 +650,117 @@ test("Cannot answer: the pending-rewrite endpoints need the bearer token, and me
   const m = (await (await api(env, "/api/metrics")).json()) as any;
   assert.equal(m.a.cannot_answer, 1);
   assert.equal(m.a.total, 0);
+});
+
+// ---- hand-off and re-attach ----
+
+const open = (env: Env, fp: string, toolUseId = "tu-new", session = "sess-1") =>
+  api(env, `/api/sessions/${session}/open?${new URLSearchParams({ fingerprint: fp, tool_use_id: toolUseId })}`);
+const FP = decisionFingerprint("answer_question", decisionBody({ home: "" } as Env, "x").request);
+
+test("fingerprint: stable across key order and option descriptions, different for a changed label or plan", () => {
+  const q = (o: object[]) => ({ questions: [{ question: "Q?", header: "H", options: o }] });
+  const a = decisionFingerprint("answer_question", q([{ label: "A", description: "one" }, { label: "B" }]));
+  assert.equal(a, decisionFingerprint("answer_question", q([{ description: "other", label: "A" }, { label: "B" }])));
+  assert.notEqual(a, decisionFingerprint("answer_question", q([{ label: "A" }, { label: "C" }])));
+  assert.match(a, /^[0-9a-f]{64}$/);
+  assert.equal(decisionFingerprint("approve_plan", { plan: " P\n", planFilePath: "/a" }), decisionFingerprint("approve_plan", { plan: "P", planFilePath: "/b" }));
+  assert.equal(decisionFingerprint("approve_plan", { plan: "", planFilePath: "/a" }), decisionFingerprint("approve_plan", { planFilePath: "/a" }));
+  assert.notEqual(decisionFingerprint("approve_plan", { plan: "P" }), decisionFingerprint("approve_plan", { plan: "Q" }));
+});
+
+test("create stores fingerprint and handoffs: 0", async () => {
+  const env = await setup();
+  const d = await register(env, "tu-1");
+  assert.equal(d.fingerprint, FP);
+  assert.equal(d.handoffs, 0);
+});
+
+test("handoff: 200 keeps pending, counts, re-arms the lease with handoffGraceMs; 409 when not pending; 401; 403 for another session", async () => {
+  const env = await setup({ handoffGraceMs: 60_000 });
+  const d = await register(env, "tu-1");
+  assert.equal((await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "sess-1" }, auth: false })).status, 401);
+  assert.equal((await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "other" } })).status, 403);
+  assert.equal((await api(env, "/api/decisions/nope/handoff", { body: { session_id: "sess-1" } })).status, 404);
+  const before = Date.now();
+  const r = await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "sess-1" } });
+  assert.equal(r.status, 200);
+  const j = (await r.json()) as any;
+  assert.equal(j.status, "pending");
+  assert.equal(j.handoffs, 1);
+  assert.ok(j.handoff_at);
+  assert.ok(Date.parse(j.lease_until) >= before + 59_000);
+  await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { "Which do you choose, A or B?": "A" } } });
+  assert.equal((await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "sess-1" } })).status, 409);
+});
+
+test("open: hit on a pending decision swaps tool_use_id, keeps the old one, clears handoff_at, re-arms the lease", async () => {
+  const env = await setup({ handoffGraceMs: 60_000 });
+  const d = await register(env, "tu-1");
+  await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "sess-1" } });
+  const r = await open(env, FP, "tu-2");
+  assert.equal(r.status, 200);
+  const got = ((await r.json()) as any).decision;
+  assert.equal(got.id, d.id);
+  assert.equal(got.tool_use_id, "tu-2");
+  assert.deepEqual(got.previous_tool_use_ids, ["tu-1"]);
+  assert.equal(got.handoff_at, undefined);
+  assert.equal(got.status, "pending");
+  assert.ok(Date.parse(got.lease_until) < Date.now() + 15_000);
+  // both ids map to the same decision: a register with the old id returns it
+  const again = await register(env, "tu-1");
+  assert.equal(again.id, d.id);
+  // a hook that crashed before handing off can also re-attach (pending, not handed off)
+  const r3 = await open(env, FP, "tu-3");
+  assert.deepEqual((((await r3.json()) as any).decision).previous_tool_use_ids, ["tu-1", "tu-2"]);
+});
+
+test("open: hook_disconnected is revived to pending; metrics count the decision once", async () => {
+  const env = await setup({ leaseGraceMs: 60 });
+  const d = await register(env, "tu-1");
+  await waitForStatus(env, d.id, "hook_disconnected");
+  const r = await open(env, FP, "tu-2");
+  assert.equal(r.status, 200);
+  assert.equal(((await r.json()) as any).decision.status, "pending");
+  assert.equal((await getDecision(env, d.id)).status, "pending");
+  await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { "Which do you choose, A or B?": "A" } } });
+  await api(env, `/api/decisions/${d.id}/ack`, { body: {} });
+  const m = (await (await api(env, "/api/metrics")).json()) as any;
+  assert.equal(m.a.answered, 1);
+  assert.equal(m.a.hook_disconnected, 0);
+  assert.equal(m.a.total, 1);
+  assert.equal(m.a.reattached, 1);
+});
+
+test("open: miss for another fingerprint, another session, a closed decision; 400 without parameters; 401", async () => {
+  const env = await setup();
+  const d = await register(env, "tu-1");
+  assert.equal((await open(env, "0".repeat(64))).status, 404);
+  assert.equal((await open(env, FP, "tu-2", "sess-other")).status, 404);
+  assert.equal((await api(env, "/api/sessions/sess-1/open")).status, 400);
+  assert.equal((await api(env, `/api/sessions/sess-1/open?fingerprint=${FP}&tool_use_id=x`, { auth: false })).status, 401);
+  await api(env, `/api/decisions/${d.id}/cancel`, { body: {} });
+  assert.equal((await open(env, FP)).status, 404);
+});
+
+test("create with an open same-fingerprint decision returns it (old hook builds re-attach too)", async () => {
+  const env = await setup();
+  const d = await register(env, "tu-1");
+  const r = await api(env, "/api/decisions", { body: decisionBody(env, "tu-2") });
+  assert.equal(r.status, 200);
+  const j = (await r.json()) as any;
+  assert.equal(j.id, d.id);
+  assert.equal(j.tool_use_id, "tu-2");
+  assert.deepEqual(j.previous_tool_use_ids, ["tu-1"]);
+  assert.equal(((await (await api(env, "/api/decisions")).json()) as any[]).length, 1);
+});
+
+test("lease expiry after a hand-off without a re-attach: hook_disconnected as usual; metrics sum handoffs", async () => {
+  const env = await setup({ leaseGraceMs: 10_000, handoffGraceMs: 80 });
+  const d = await register(env, "tu-1");
+  await api(env, `/api/decisions/${d.id}/handoff`, { body: { session_id: "sess-1" } });
+  await waitForStatus(env, d.id, "hook_disconnected");
+  const m = (await (await api(env, "/api/metrics")).json()) as any;
+  assert.equal(m.a.handoffs, 1);
+  assert.equal(m.a.reattached, 0);
 });

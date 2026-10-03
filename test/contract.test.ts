@@ -99,7 +99,7 @@ test("AnswerRequest: accepts the 4 shapes and rejects invalid ones", () => {
   assert.ok(!AnswerRequest.safeParse({}).success);
 });
 
-test("canTransition: the 7 allowed transitions are true", () => {
+test("canTransition: the 8 allowed transitions are true", () => {
   const allowed: [string, string][] = [
     ["pending", "answer_submitted"],
     ["pending", "fallback"],
@@ -108,14 +108,15 @@ test("canTransition: the 7 allowed transitions are true", () => {
     ["answer_submitted", "answered"],
     ["answer_submitted", "answer_lost"],
     ["hook_disconnected", "cancelled"],
+    ["hook_disconnected", "pending"],
   ];
   for (const [from, to] of allowed) {
     assert.equal(canTransition(from as DecisionStatus, to as DecisionStatus), true, `${from}→${to}`);
   }
-  // everything outside the allow table is false (only 7 of all 64 pairs are true)
+  // everything outside the allow table is false (only 8 of all 64 pairs are true)
   let trues = 0;
   for (const from of DecisionStatus.options) for (const to of DecisionStatus.options) if (canTransition(from, to)) trues++;
-  assert.equal(trues, 7);
+  assert.equal(trues, 8);
 });
 
 test("canTransition: invalid transitions and terminal states", () => {

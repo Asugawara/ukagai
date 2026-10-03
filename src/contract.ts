@@ -9,6 +9,8 @@ import { z } from "zod";
 export const MULTI_SELECT_SEPARATOR = ", ";
 export const POLL_TIMEOUT_MS = 25000;
 export const LEASE_GRACE_MS = 10000;
+/** After a hand-off the agent re-calls the tool within seconds: the lease is armed for this long */
+export const HANDOFF_GRACE_MS = 120000;
 export const DENY_LINK_WINDOW_MS = 120000;
 export const RECENCY_WINDOW_MS = 600000;
 /** How long an "approve and auto" record lasts before it expires */
@@ -94,6 +96,23 @@ export const ExitPlanModeInput = z.looseObject({
   planFilePath: z.string(),
 });
 export type ExitPlanModeInput = z.infer<typeof ExitPlanModeInput>;
+
+/**
+ * Identity of a question across hand-off legs: sha256 hex of the questions with their option labels
+ * (descriptions and key order do not count), or of the trimmed plan text (the plan file path when the plan is empty)
+ */
+export function decisionFingerprint(kind: "answer_question" | "approve_plan", toolInput: Record<string, unknown>): string {
+  let canonical: string;
+  if (kind === "answer_question") {
+    const qs = Array.isArray(toolInput["questions"]) ? (toolInput["questions"] as { question?: unknown; options?: { label?: unknown }[] }[]) : [];
+    canonical = JSON.stringify(qs.map((q) => ({ question: q.question, options: (q.options ?? []).map((o) => o.label) })));
+  } else {
+    const plan = typeof toolInput["plan"] === "string" ? toolInput["plan"].trim() : "";
+    const file = typeof toolInput["planFilePath"] === "string" ? toolInput["planFilePath"] : "";
+    canonical = plan !== "" ? plan : file;
+  }
+  return createHash("sha256").update(canonical).digest("hex");
+}
 
 // ---- hook stdout ----
 
@@ -228,6 +247,14 @@ export const Decision = z.object({
   lease_until: z.string().optional(),
   created_at: z.string(),
   response: DecisionResponse.optional(),
+  /** decisionFingerprint of the request: how a re-called tool finds its still-open decision */
+  fingerprint: z.string().optional(),
+  /** Number of hand-off cycles (the hook's budget ended and the agent was asked to call the tool again) */
+  handoffs: z.number().int().nonnegative().optional(),
+  /** Set by a hand-off, cleared when the tool is called again */
+  handoff_at: z.string().optional(),
+  /** `tool_use_id` is the current one; the ones before a re-attach are kept here */
+  previous_tool_use_ids: z.array(z.string()).optional(),
 });
 export type Decision = z.infer<typeof Decision>;
 
@@ -301,6 +328,9 @@ export const Metrics = z.object({
     escaped_question: z.number().int().nonnegative(),
     // Number of times Stop detected blocker vocabulary. Not included in the denominator (total)
     blocker_detected: z.number().int().nonnegative(),
+    // Hand-off cycles (sum of Decision.handoffs) and how many times an open decision was re-attached
+    handoffs: z.number().int().nonnegative(),
+    reattached: z.number().int().nonnegative(),
     // Answers of the form "Cannot answer — ...". Counted among answers, not an extra term of total
     cannot_answer: z.number().int().nonnegative(),
     total: z.number().int().nonnegative(),
@@ -388,7 +418,7 @@ export const ConsumeRewriteResponse = z.object({ consumed: z.boolean() });
 const TRANSITIONS: Record<DecisionStatus, readonly DecisionStatus[]> = {
   pending: ["answer_submitted", "fallback", "hook_disconnected", "cancelled"],
   answer_submitted: ["answered", "answer_lost"],
-  hook_disconnected: ["cancelled"],
+  hook_disconnected: ["pending", "cancelled"],
   answered: [],
   fallback: [],
   answer_lost: [],

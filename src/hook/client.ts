@@ -149,6 +149,21 @@ export class Client {
     return r?.status === 200;
   }
 
+  /** The budget of this leg ended: the server keeps the decision open for the agent's next call. False when it could not be recorded */
+  async handoff(id: string, sessionId: string): Promise<boolean> {
+    const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/handoff`, { session_id: sessionId }, SHORT_TIMEOUT_MS);
+    return r?.status === 200;
+  }
+
+  /** The still-open decision of this session with the same fingerprint (the server swaps in the new tool_use_id). Null on a miss or any failure */
+  async findOpen(sessionId: string, fingerprint: string, toolUseId: string): Promise<Decision | null> {
+    const q = new URLSearchParams({ fingerprint, tool_use_id: toolUseId });
+    const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/open?${q}`, undefined, SHORT_TIMEOUT_MS);
+    if (!r || r.status !== 200) return null;
+    const d = (Client.json(r.text) as { decision?: Decision } | undefined)?.decision;
+    return d && typeof d.id === "string" ? d : null;
+  }
+
   async cancel(id: string, timeoutMs: number): Promise<boolean> {
     const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/cancel`, undefined, timeoutMs);
     return r?.status === 200;
