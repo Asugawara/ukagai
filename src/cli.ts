@@ -70,6 +70,8 @@ Options:
   --host <host>           127.0.0.1 only (anything else is rejected)
   --data-dir <dir>        Data directory (default: ~/.ukagai)
   --lease-grace-ms <ms>   Lease grace period (default: 10000)
+  --no-codex-bridge       Do not attach to the Codex app-server (plan approval from Codex stays in the terminal)
+  --codex-home <dir>      Codex home whose app-server socket the bridge uses (default: $CODEX_HOME, else ~/.codex)
   -h, --help              Show this help
 `,
   hook: `Usage: ukagai hook [options]   (hook JSON on stdin)

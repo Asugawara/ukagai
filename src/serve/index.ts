@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
 import { LEASE_GRACE_MS } from "../contract.js";
 import { readConfig } from "../settings/config.js";
+import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
 import { createApp } from "./routes.js";
 import { SseHub } from "./sse.js";
@@ -22,6 +23,10 @@ export type ServeOptions = {
   leaseGraceMs?: number;
   /** Base of the allowed range for transcript / explanation paths. Defaults to os.homedir() */
   home?: string;
+  /** Run the Codex plan-approval bridge (a second client of the Codex app-server). Off unless asked: `run` turns it on */
+  codexBridge?: boolean;
+  /** Codex home whose app-server socket the bridge connects to (default: $CODEX_HOME, else ~/.codex) */
+  codexHome?: string;
 };
 
 export type ServeHandle = {
@@ -29,6 +34,7 @@ export type ServeHandle = {
   token: string;
   dataDir: string;
   store: Store;
+  codexBridge?: CodexBridge;
   close: () => Promise<void>;
 };
 
@@ -73,14 +79,19 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
   chmodSync(tokenFile, 0o600);
   store.startMonitor();
+  const codexBridge = opts.codexBridge
+    ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, collect: (session) => collectContext(session, { home }) })
+    : undefined;
 
   return {
     port,
     token,
     dataDir,
     store,
+    codexBridge,
     close: () =>
       new Promise<void>((resolve) => {
+        codexBridge?.close();
         store.close();
         hub.closeAll();
         server.close(() => resolve());
@@ -99,6 +110,8 @@ export async function run(argv: string[]): Promise<number> {
         host: { type: "string" },
         "data-dir": { type: "string" },
         "lease-grace-ms": { type: "string" },
+        "no-codex-bridge": { type: "boolean" },
+        "codex-home": { type: "string" },
       },
       strict: true,
     }));
@@ -123,7 +136,13 @@ export async function run(argv: string[]): Promise<number> {
 
   let handle: ServeHandle;
   try {
-    handle = await start({ port, dataDir: values["data-dir"], leaseGraceMs });
+    handle = await start({
+      port,
+      dataDir: values["data-dir"],
+      leaseGraceMs,
+      codexBridge: !values["no-codex-bridge"],
+      codexHome: values["codex-home"],
+    });
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     const msg = e?.code === "EADDRINUSE" ? `Port ${port} is in use (a server may already be running)` : err instanceof Error ? err.message : String(err);
