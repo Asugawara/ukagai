@@ -1,6 +1,7 @@
 /** `install --codex` / `uninstall --codex` / doctor: Codex CLI's hooks.json plus the trust hashes in config.toml */
-import { copyFile, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { copyFile, mkdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { MANAGED_FLAG, MANAGED_VALUE } from "../settings/hooks-spec.js";
 import { CODEX_EVENT_LABEL, editState, hookHash, readState, stateKey, type CodexHandler } from "./codex-trust.js";
 
@@ -125,6 +126,65 @@ export interface CodexPlan {
   configAfter: string;
   /** state key → hash of the ukagai handlers after the change */
   managed: Map<string, string>;
+  /** Delete the file instead of writing `*After` (a file install created and uninstall leaves empty) */
+  hooksDelete: boolean;
+  configDelete: boolean;
+  /** The first install over files without ukagai: backups made now are the originals */
+  fresh: boolean;
+  /** The record to keep (null: remove it); `backups` is filled in by apply */
+  record: CodexRecord | null;
+  recordBefore: string | null;
+  /** uninstall: remove the (now empty) CODEX_HOME install had to create */
+  removeHome: boolean;
+}
+
+/** What install did to the files, kept in `<CODEX_HOME>/.ukagai-codex.json` so uninstall can undo it exactly */
+export interface CodexRecord {
+  /** Files install created (they did not exist) */
+  created: { hooks: boolean; config: boolean };
+  /** config.toml had no final newline, so install added one */
+  configNoFinalNewline: boolean;
+  /** The `.bak-*` made by the first install (basenames) */
+  backups: { hooks?: string; config?: string };
+  createdHome: boolean;
+}
+
+const RECORD = ".ukagai-codex.json";
+
+/** Indent and final newline of an existing hooks.json, so ukagai's groups are added in the same style */
+function hooksFormat(text: string): { indent: string | number; finalNewline: boolean; crlf: boolean } {
+  const m = /^[ \t]+(?=")/m.exec(text);
+  const compact = !text.includes("\n");
+  return { indent: text.trim() === "" ? 2 : compact ? 0 : (m ? m[0] : 2), finalNewline: text.trim() === "" ? true : /\n$/.test(text), crlf: text.includes("\r\n") };
+}
+
+function serializeHooks(doc: Json, text: string): string {
+  const f = hooksFormat(text);
+  let out = JSON.stringify(doc, null, f.indent) + (f.finalNewline ? "\n" : "");
+  if (f.crlf) out = out.replace(/\n/g, "\r\n");
+  return out;
+}
+
+const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
+
+async function readRecord(home: string): Promise<{ raw: string | null; rec: CodexRecord | null }> {
+  const raw = await read(join(home, RECORD)).then((t) => (t === "" ? null : t));
+  if (raw === null) return { raw, rec: null };
+  try {
+    const v = JSON.parse(raw) as Partial<CodexRecord>;
+    return { raw, rec: { created: { hooks: !!v.created?.hooks, config: !!v.created?.config }, configNoFinalNewline: !!v.configNoFinalNewline, backups: v.backups ?? {}, createdHome: !!v.createdHome } };
+  } catch {
+    return { raw, rec: null };
+  }
+}
+
+const trimEnd = (s: string): string => s.replace(/(\r?\n)+$/, "");
+
+/** The backup made by the first install, when it still exists */
+async function original(home: string, name: string | undefined): Promise<string | null> {
+  if (!name) return null;
+  const f = join(home, basename(name));
+  return (await exists(f)) ? readFile(f, "utf8") : null;
 }
 
 const read = (f: string): Promise<string> =>
@@ -159,14 +219,19 @@ async function codexPath(home: string, name: string): Promise<string> {
 export async function plan(o: CodexInstallOptions, mode: "install" | "uninstall"): Promise<CodexPlan> {
   const hooksFile = await codexPath(o.home, "hooks.json");
   const configFile = join(o.home, "config.toml");
+  const hooksExisted = await exists(join(o.home, "hooks.json"));
+  const configExisted = await exists(configFile);
+  const homeExisted = await exists(o.home);
   const hooksBefore = await read(join(o.home, "hooks.json"));
   const configBefore = await read(configFile);
+  const { raw: recordBefore, rec } = await readRecord(o.home);
   const doc = await parseHooks(hooksFile, hooksBefore);
   const before = slots(doc);
   const wasManaged = new Map<object, string>();
   for (const [h, s] of before) if (isManagedCommand(s.command)) wasManaged.set(h, stateKey(hooksFile, s.event, s.group, s.handler));
 
   const at = stripManaged(doc);
+  const stripped = structuredClone(doc);
   if (mode === "install") addManaged(doc, at, o);
   const after = slots(doc);
 
@@ -185,9 +250,37 @@ export async function plan(o: CodexInstallOptions, mode: "install" | "uninstall"
   }
   const drop = [...wasManaged.values()].filter((k) => !managed.has(k));
   const untouched = mode === "uninstall" && wasManaged.size === 0;
-  const hooksAfter = untouched ? hooksBefore : JSON.stringify(doc, null, 2) + "\n";
-  const configAfter = editState(configBefore, { drop, rename, set: managed });
-  return { hooksFile, configFile, hooksBefore, hooksAfter, configBefore, configAfter, managed };
+  let hooksAfter = untouched ? hooksBefore : serializeHooks(doc, hooksBefore);
+  let configAfter = editState(configBefore, { drop, rename, set: managed });
+  const fresh = mode === "install" && wasManaged.size === 0;
+  let record: CodexRecord | null = rec;
+  let hooksDelete = false;
+  let configDelete = false;
+
+  if (mode === "install") {
+    if (fresh || !rec)
+      record = { created: { hooks: !hooksExisted, config: !configExisted }, configNoFinalNewline: configBefore !== "" && !/\n$/.test(configBefore), backups: {}, createdHome: !homeExisted };
+  } else if (!untouched && rec) {
+    // Undo exactly: files install created go away; the others come back to the original bytes when they are semantically the original
+    const hooksOrig = await original(o.home, rec.backups.hooks);
+    const configOrig = await original(o.home, rec.backups.config);
+    const emptyDoc = Object.keys(stripped).every((k) => k === "hooks") && Object.keys(eventsOf(stripped)).length === 0;
+    if (rec.created.hooks && emptyDoc) hooksDelete = true;
+    else if (hooksOrig !== null) {
+      try {
+        if (isDeepStrictEqual(JSON.parse(hooksOrig), stripped)) hooksAfter = hooksOrig;
+      } catch {
+        // the backup is not JSON: keep the line-for-line result
+      }
+    }
+    if (rec.created.config && configAfter.trim() === "") configDelete = true;
+    else if (configOrig !== null && trimEnd(configOrig) === trimEnd(configAfter)) configAfter = configOrig;
+    else if (rec.configNoFinalNewline && /\n$/.test(configAfter)) configAfter = configAfter.replace(/\r?\n$/, "");
+    record = null;
+  } else if (!untouched) record = null;
+  if (hooksDelete) hooksAfter = "";
+  if (configDelete) configAfter = "";
+  return { hooksFile, configFile, hooksBefore, hooksAfter, configBefore, configAfter, managed, hooksDelete, configDelete, fresh, record, recordBefore, removeHome: mode === "uninstall" && record === null && !!rec?.createdHome && !untouched };
 }
 
 async function backup(file: string): Promise<string | null> {
@@ -204,15 +297,35 @@ async function backup(file: string): Promise<string | null> {
 /** Write what changed (with a .bak next to each changed file that existed). Returns the backups made */
 export async function apply(home: string, p: CodexPlan): Promise<string[]> {
   const baks: string[] = [];
+  const made: { hooks?: string; config?: string } = {};
   await mkdir(home, { recursive: true });
-  for (const [file, before, after] of [
-    [join(home, "hooks.json"), p.hooksBefore, p.hooksAfter],
-    [p.configFile, p.configBefore, p.configAfter],
+  for (const [key, file, before, after, del] of [
+    ["hooks", join(home, "hooks.json"), p.hooksBefore, p.hooksAfter, p.hooksDelete],
+    ["config", p.configFile, p.configBefore, p.configAfter, p.configDelete],
   ] as const) {
+    if (del) {
+      await rm(file, { force: true });
+      continue;
+    }
     if (before === after) continue;
     const bak = await backup(file);
-    if (bak) baks.push(bak);
+    if (bak) {
+      baks.push(bak);
+      made[key] = basename(bak);
+    }
     await writeFile(file, after);
+  }
+  const recFile = join(home, RECORD);
+  if (p.record === null) {
+    if (p.recordBefore !== null) {
+      await rm(recFile, { force: true });
+      if (p.removeHome) await rmdir(home).catch(() => undefined);
+    }
+  } else {
+    const rec: CodexRecord = { ...p.record, backups: { ...p.record.backups } };
+    if (p.fresh) rec.backups = made;
+    const text = JSON.stringify(rec, null, 2) + "\n";
+    if (text !== p.recordBefore) await writeFile(recFile, text);
   }
   return baks;
 }
