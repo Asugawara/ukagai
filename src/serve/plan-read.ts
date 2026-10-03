@@ -18,6 +18,17 @@ export class PlanReadStore {
     }
   }
 
+  /** Whether the marks file exists (a fresh data dir has none) */
+  exists(): boolean {
+    return existsSync(this.file);
+  }
+
+  /** First run: mark every given plan read at its mtime and create the file */
+  seed(plans: { name: string; mtime: string }[]): void {
+    for (const p of plans) this.marks[p.name] = p.mtime;
+    this.save();
+  }
+
   isRead(name: string, mtime: string): boolean {
     return this.marks[name] === mtime;
   }
