@@ -1020,15 +1020,15 @@ function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, 
   const isPlan = p.path === undefined || p.question === undefined;
   if (isPlan) {
     return template === "A"
-      ? `The plan (ExitPlanMode) is incomplete. Missing: ${missingText}.` +
+      ? `[ukagai, not a failure] The plan (ExitPlanMode) is incomplete. Missing: ${missingText}.` +
           (withTail ? "\nFix the plan text following skill ukagai-explain, then call ExitPlanMode again with the same plan." : "")
-      : `This plan does not meet the requirements yet. Missing: ${missingText}.` +
+      : `[ukagai, not a failure] This plan does not meet the requirements yet. Missing: ${missingText}.` +
           (withTail ? "\nThe format is described in skill ukagai-explain. Could you fix it and call ExitPlanMode again?" : "");
   }
   const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
   if (template === "A") {
     return (
-      `First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
+      `[ukagai, not a failure] First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
       (tpl
         ? `Save to: ${p.path} (any name in the same directory). Write it in this shape; question: already holds the question text verbatim.${tpl}`
         : `Save to: ${p.path} (any name in the same directory). Put exactly this string in the front matter question: ${p.question}`) +
@@ -1036,7 +1036,7 @@ function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, 
     );
   }
   return (
-    `Could you first read skill ukagai-explain (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
+    `[ukagai, not a failure] Could you first read skill ukagai-explain (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
     (tpl
       ? `Could you write ${p.path} in this shape (any name in the same directory is fine)? question: is identical to the question text.${tpl}`
       : `Could you write ${p.path} (any name in the same directory is fine)? The front matter question: must be identical to "${p.question}".`) +
