@@ -1,6 +1,6 @@
 import { readdir, readFile, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { RECENCY_WINDOW_MS } from "../contract.js";
+import { RECENCY_WINDOW_MS, bodyHash, type PendingRewrite } from "../contract.js";
 import type { DenyTemplate } from "./options.js";
 
 // Implements the rules in docs/spec/explain.md.
@@ -553,6 +553,103 @@ export function coinedTermLabel(tokens: string[]): string {
   const shown = tokens.slice(0, 8).join(", ");
   const more = tokens.length > 8 ? ` and ${tokens.length - 8} more` : "";
   return MISSING_LABELS.coined_term.replace("(plan codes", `(${shown}${more}; plan codes`);
+}
+
+// ---- "Cannot answer" enforcement (spec section 15) ----
+
+/** Recommendation limits after an "Unclear" answer: half of the usual ones */
+export const UNCLEAR_LIMITS = { chars: 200, sentences: 3 };
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** `term` as a whole word (ASCII edges must not touch a letter / digit), case-insensitive, NFKC */
+function termRegex(term: string): RegExp {
+  const t = term.normalize("NFKC").trim();
+  const left = /^[A-Za-z0-9]/.test(t) ? "(?<![A-Za-z0-9])" : "";
+  const right = /[A-Za-z0-9]$/.test(t) ? "(?![A-Za-z0-9])" : "";
+  return new RegExp(left + escapeRe(t) + right, "i");
+}
+
+/**
+ * Which of `terms` (words the human said they could not understand) the explanation still uses without defining them:
+ * they appear in the title or the body outside code fences, and Terms has no definition (see termDefines) naming them.
+ * Option labels, the first column of the Options tables, `question` and `recommended` are exempt, as for coined terms.
+ */
+export function findUndefinedTerms(markdown: string, terms: string[], labels: string[] = []): string[] {
+  const all = toLines(markdown);
+  const fm = parseFrontMatter(all);
+  const lines = all.slice(fm.bodyStart);
+  const { inFence } = scanFences(lines);
+  const exemptText = [fm.fields["question"] ?? "", fm.fields["recommended"] ?? "", ...labels];
+  const options = findSection(scanHeadings(lines, inFence), lines.length, SECTION.options);
+  if (options) for (const t of findTables(lines, inFence, options.start + 1, options.end)) for (const r of t.rows) exemptText.push(r[0] ?? "");
+  const exempt = exemptText.join("\n").normalize("NFKC");
+  const defined = parseTerms(markdown).filter((d) => termDefines(d.definition));
+  const text = [fm.fields["title"] ?? "", ...lines.filter((_, i) => !inFence[i])].join("\n").normalize("NFKC");
+  const out: string[] = [];
+  for (const term of terms) {
+    const re = termRegex(term);
+    if (!re.test(text) || re.test(exempt) || defined.some((d) => re.test(d.term.normalize("NFKC")))) continue;
+    if (!out.includes(term)) out.push(term);
+  }
+  return out;
+}
+
+export interface RewriteIssue {
+  code: MissingCode;
+  /** The sentence for the deny reason, in the same register as MISSING_LABELS */
+  text: string;
+}
+
+/** Sentence equal to the question once whitespace, punctuation and case are squashed */
+function sameQuestion(a: string, b: string): boolean {
+  const x = squash(a);
+  return x !== "" && x === squash(b);
+}
+
+/**
+ * What the human's last "Cannot answer" still demands of this explanation (spec section 15). Empty when nothing is violated.
+ * 1. identical body (hash) -> coined_term; 2. Undefined terms still used undefined -> coined_term;
+ * 3. Unclear and the Recommendation over 200 characters / 3 sentences -> recommend_long;
+ * 4. Too much at once and the same question -> multi.
+ */
+export function checkRewrite(memo: PendingRewrite, markdown: string, question: string, labels: string[] = []): RewriteIssue[] {
+  if (!memo) return [];
+  const issues: RewriteIssue[] = [];
+  if (bodyHash(markdown) === memo.body_hash) {
+    issues.push({
+      code: "coined_term",
+      text: "the human could not answer the previous explanation; this one is identical. Rewrite it",
+    });
+  }
+  if (memo.reason === "Undefined terms") {
+    const left = findUndefinedTerms(markdown, memo.terms, labels);
+    if (left.length > 0) {
+      issues.push({
+        code: "coined_term",
+        text: `the human said they could not understand: ${left.join(", ")}. Replace each with plain words or define it under Terms`,
+      });
+    }
+  } else if (memo.reason === "Unclear") {
+    const all = toLines(markdown);
+    const lines = all.slice(parseFrontMatter(all).bodyStart);
+    const { inFence } = scanFences(lines);
+    const rec = findSection(scanHeadings(lines, inFence), lines.length, SECTION.recommendation);
+    if (rec) {
+      const text = sectionText(lines, inFence, rec);
+      if (cpLength(text) > UNCLEAR_LIMITS.chars || countSentences(text) > UNCLEAR_LIMITS.sentences) {
+        issues.push({
+          code: "recommend_long",
+          text: "the human said the explanation was unclear; keep the Recommendation to 3 sentences",
+        });
+      }
+    }
+  } else if (sameQuestion(question, memo.question)) {
+    issues.push({ code: "multi", text: "the human said it was too much at once; split it: ask the first decision only" });
+  }
+  return issues;
 }
 
 // ---- validation ----

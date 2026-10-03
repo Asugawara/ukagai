@@ -10,7 +10,9 @@ import {
 } from "../contract.js";
 import type { Client } from "./client.js";
 import {
+  checkRewrite,
   denyReason,
+  type RewriteIssue,
   multiDenyReason,
   explainDir,
   findExplanation,
@@ -132,7 +134,11 @@ export async function handleDecision(
         }
       }
       const found = await findExplanation(dir, q0.question);
-      const v = found ? validateExplanation(found.markdown, "answer_question", q0.options.map((o) => o.label)) : null;
+      const labels = q0.options.map((o) => o.label);
+      const v = found ? validateExplanation(found.markdown, "answer_question", labels) : null;
+      // The human's last "Cannot answer" (null when none or the server is unreachable: ignored)
+      const memo = found ? await client.getPendingRewrite(input.session_id) : null;
+      const rewriteIssues: RewriteIssue[] = found ? checkRewrite(memo, found.markdown, q0.question, labels) : [];
       const denied = await client.listDeniedExplain(input.session_id);
       if (!denied) return null; // server absent: skip the safeguard and fall back to the normal UI
       const now = Date.now();
@@ -146,7 +152,7 @@ export async function handleDecision(
             now - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
         )
         .sort((a, b) => a.created_at.localeCompare(b.created_at));
-      if (found && v?.valid) {
+      if (found && v?.valid && rewriteIssues.length === 0) {
         const fm = parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields;
         explanation = {
           path: found.path,
@@ -164,13 +170,15 @@ export async function handleDecision(
       } else if (linked.length > 0 || multiGuarded) {
         explanation = noExplanation("loop_guard");
       } else {
-        const codes = v ? v.missing : ["file" as const];
+        const own = v ? v.missing : ["file" as const];
+        const codes = [...own, ...rewriteIssues.map((i) => i.code).filter((c) => !own.includes(c))];
         const reason = denyReason(opts.denyTemplate, {
           path: join(dir, "explain.md"),
           question: q0.question,
-          missing: codes.map((c) =>
-            c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, q0.options.map((o) => o.label))) : MISSING_LABELS[c],
-          ),
+          missing: [
+            ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels)) : MISSING_LABELS[c])),
+            ...rewriteIssues.map((i) => i.text),
+          ],
           codes,
           blocker: found ? parseFrontMatter(found.markdown.replace(/\r\n?/g, "\n").split("\n")).fields["type"] === "blocker" : false,
         });
@@ -213,6 +221,8 @@ export async function handleDecision(
     explanation,
   });
   if (!created) return null;
+  // The explanation got through: the human's "Cannot answer" has been answered with a new one
+  if (kind === "answer_question" && input.permission_mode !== "plan") await client.consumeRewrite(input.session_id);
   if (usedPath) {
     try {
       await markUsed(usedPath);

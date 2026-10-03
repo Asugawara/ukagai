@@ -16,7 +16,7 @@ Write the explanation a human needs to decide as Markdown, then ask the same que
 - If you cannot state in one sentence **why only a human can decide** (taste, external circumstances, responsibility for an irreversible change, premises the agent cannot know), do not ask. Proceed with the recommendation and report it afterwards.
 - **One AskUserQuestion call = one question.** If there are several, ask them **from the start** one at a time, writing one explanation file per question and calling them in order (a call with two or more questions is denied by the hook and the rewrite costs time).
 - **A `reversible` + `file` decision is not asked: proceed and report it.**
-- **Never use internal identifiers in the explanation: plan item codes (W-T2, P-GH), phase / gate / step numbers, worker or session names, ticket-like codes. The reader did not write your plan and cannot know them. Say what the thing is in plain words ("the GitHub repository", "the restore test on the Cloud Run deployment"). If you must name one, define it under Terms with what it is and why it matters here, not where it came from.** The hook denies undefined ones (`coined_term`, below).
+- **Never use internal identifiers in the explanation: plan item codes (W-T2, P-GH), phase / gate / step numbers, worker or session names, ticket-like codes. The reader did not write your plan and cannot know them. Say what the thing is in plain words ("the GitHub repository", "the restore test on the Cloud Run deployment"). If you must name one, define it under Terms with what it is and why it matters here, not where it came from.** The hook denies undefined ones (`coined_term`, below). If the human answers Cannot answer — Undefined terms, the hook will refuse the next explanation that still uses those words undefined.
 
 ### Decide scope and reversibility before asking
 
@@ -139,6 +139,18 @@ The GUI offers "None of these…" after the options. If the answer starts with `
 | `Wrong premise` | Fix the premise (see Assumptions), then ask again |
 | `Need more evidence` | Add what is missing to "What I checked" (run the commands), then ask again |
 | `Ask me later` | Do not ask now: proceed with the work that does not depend on it and ask later |
+
+## When the answer is "Cannot answer"
+
+The GUI / TUI also offers "Can't answer this…" next to "None of these…": the human could not read the explanation (not a complaint about the options). An answer starting with `Cannot answer — ` is **not a choice: do not proceed on any option.** The format is `Cannot answer — <reason>: <detail>` (`<detail>` may be empty except for Undefined terms). Act on the reason, then ask the same question again with a new explanation file:
+
+| Reason | Do |
+|---|---|
+| `Undefined terms` | `<detail>` lists the words the human did not know. Replace each with plain words, or define it under Terms (what it is and why this decision needs it, at least 12 characters) |
+| `Unclear` | Cut it down: a 1-sentence Recommendation and 2–3 options, then rewrite |
+| `Too much at once` | Split it into single decisions and ask only the first one now |
+
+The hook remembers the last Cannot answer of the session and denies the next explanation if it is identical, still uses the listed terms undefined (`coined_term`), keeps a long Recommendation after Unclear (`recommend_long`), or asks the same question after Too much at once (`multi`).
 
 ## Emphasis
 

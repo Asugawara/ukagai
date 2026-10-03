@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { z } from "zod";
@@ -263,6 +264,8 @@ export const Metrics = z.object({
     escaped_question: z.number().int().nonnegative(),
     // Number of times Stop detected blocker vocabulary. Not included in the denominator (total)
     blocker_detected: z.number().int().nonnegative(),
+    // Answers of the form "Cannot answer — ...". Counted among answers, not an extra term of total
+    cannot_answer: z.number().int().nonnegative(),
     total: z.number().int().nonnegative(),
     rate: z.number().nullable(),
   }),
@@ -295,6 +298,53 @@ export type PendingModeSwitch = z.infer<typeof PendingModeSwitch>;
 /** POST /api/sessions/:id/pending-mode-switch/consume. True if there was an unconsumed record */
 export const ConsumeModeSwitchResponse = z.object({ consumed: z.boolean() });
 export type ConsumeModeSwitchResponse = z.infer<typeof ConsumeModeSwitchResponse>;
+
+// ---- "Cannot answer" ----
+
+/** The human could not read the explanation. Always English, whatever the display language: `Cannot answer — <reason>[: <detail>]` */
+export const CANNOT_PREFIX = "Cannot answer — ";
+export const CANNOT_REASONS = ["Undefined terms", "Unclear", "Too much at once"] as const;
+export type CannotReason = (typeof CANNOT_REASONS)[number];
+
+export interface CannotAnswer {
+  reason: CannotReason;
+  /** Undefined terms only: the words the human did not know (comma-separated in the answer) */
+  terms: string[];
+  /** The free-text detail (for Undefined terms, the raw comma-separated list); may be empty */
+  text: string;
+}
+
+/** Parses an answer value. null when it is not a Cannot answer (an unknown reason is not one either) */
+export function parseCannotAnswer(answer: string): CannotAnswer | null {
+  if (!answer.startsWith(CANNOT_PREFIX)) return null;
+  const rest = answer.slice(CANNOT_PREFIX.length);
+  const reason = CANNOT_REASONS.find((r) => rest === r || rest.startsWith(r + ":"));
+  if (!reason) return null;
+  const text = rest.slice(reason.length).replace(/^:\s*/, "").trim();
+  const terms = reason === "Undefined terms" ? text.split(/[,、，]/).map((t) => t.trim()).filter((t) => t !== "") : [];
+  return { reason, terms, text };
+}
+
+/** SHA-256 (hex) of an explanation without its front matter (CRLF normalized, trimmed). Server and hook must agree */
+export function bodyHash(markdown: string): string {
+  const body = markdown.replace(/\r\n?/g, "\n").replace(/^---[ \t]*\n[\s\S]*?\n---[ \t]*(?:\n|$)/, "").trim();
+  return createHash("sha256").update(body).digest("hex");
+}
+
+/** The last Cannot answer of a session, kept until an explanation passes the hook */
+export const PendingRewrite = z
+  .object({
+    question: z.string(),
+    reason: z.enum(CANNOT_REASONS),
+    terms: z.array(z.string()),
+    body_hash: z.string(),
+    at: z.number(),
+  })
+  .nullable();
+export type PendingRewrite = z.infer<typeof PendingRewrite>;
+
+/** POST /api/sessions/:id/pending-rewrite/consume (GET /api/sessions/:id/pending-rewrite returns a PendingRewrite as is) */
+export const ConsumeRewriteResponse = z.object({ consumed: z.boolean() });
 
 // ---- State transitions ----
 

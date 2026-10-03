@@ -417,6 +417,35 @@ None of these — <type>: <text>
 
 `<type>` is one of `Missing option` / `Wrong premise` / `Need more evidence` / `Ask me later`; `<text>` may be empty (then `None of these — <type>`). The hook does not check it. The skill tells the agent to act on the type: add the missing option (read `<text>`) and ask again; fix the premise and ask again; add the missing evidence to "What I checked" and ask again; do not ask now and proceed with work that does not depend on the answer.
 
+## 15. The "Cannot answer" answer
+
+Next to "None of these…" the GUI / TUI offers "Can't answer this…" (ja 「返答不可…」, key `x`), sent at once. It means the explanation could not be read, not that the options are wrong. The answer reaches the agent as a free-text answer in this exact form (English, whatever the display language):
+
+```
+Cannot answer — <reason>: <detail>
+```
+
+| `<reason>` | `<detail>` |
+|---|---|
+| `Undefined terms` | the words the human did not know, comma-separated (at least one) |
+| `Unclear` | one line of free text; may be empty (then `Cannot answer — Unclear`) |
+| `Too much at once` | one line of free text; may be empty |
+
+`parseCannotAnswer` (`src/contract.ts`) reads it; an unknown reason is not a Cannot answer.
+
+**Memo.** When the server stores such an answer it keeps one memo per session (a later one overwrites): `{question, reason, terms, body_hash, at}`, where `body_hash` is the SHA-256 of the answered explanation without its front matter (`bodyHash`). The hook reads it with `GET /api/sessions/:id/pending-rewrite` before it checks the next AskUserQuestion explanation (plan mode and a missing explanation file skip it; an unreachable server or a bad body means no memo, so the hook stays fail-open). The memo is held in server memory (lost on restart, like `pending-mode-switch`).
+
+**Enforcement.** With a memo, the hook denies the explanation (the sentences are added to the usual deny reason) when:
+
+1. its body hash equals `body_hash` (code `coined_term`): "the human could not answer the previous explanation; this one is identical. Rewrite it";
+2. `Undefined terms`: any memo term appears (whole word, case-insensitive) in the title or the body outside code fences and Terms does not define it with a definition that says something (see section 3.8; option labels, the first column of the Options tables, `question` and `recommended` are exempt) — code `coined_term`, "the human said they could not understand: <terms>. Replace each with plain words or define it under Terms";
+3. `Unclear`: the Recommendation is over 200 characters or 3 sentences, half of the usual limits (code `recommend_long`): "keep the Recommendation to 3 sentences";
+4. `Too much at once`: the explanation's question equals the memo's question (whitespace, punctuation and case ignored) (code `multi`): "split it: ask the first decision only".
+
+The usual loop guard still applies: a second try for the same question within the deny-link window is let through without an explanation.
+
+**Lifetime.** The memo is consumed (`POST /api/sessions/:id/pending-rewrite/consume`) when the next AskUserQuestion decision of the session is registered after the hook's checks. `a.cannot_answer` of `GET /api/metrics` counts decisions answered this way.
+
 ## Known limitations
 
 - The `missing` codes of a deny remain in the `denied_explain` Decision (`missing?: string[]`). A multi-question deny is `["multi"]`.

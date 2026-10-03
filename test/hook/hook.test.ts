@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bodyHash } from "../../src/contract.js";
 import { contextText, isEscapedQuestion } from "../../src/hook/context-hooks.js";
 import { dataDirWithToken, fakeServer, json, runHook, tmpDir, writeFile, type Fake, type Handler } from "./helpers.js";
 
@@ -592,5 +593,106 @@ test("multiple questions in plan mode → none / plan_mode without any requireme
     assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.explanation.none_reason, "plan_mode");
+  });
+});
+
+// ---- "Cannot answer" memo enforcement ----
+
+const rewriteHandler = (memo: unknown): Handler => (req, res) => {
+  if (req.method === "GET" && req.path.endsWith("/pending-rewrite")) return json(res, 200, memo);
+  return answerHandler({ [Q]: "A" })(req, res);
+};
+
+const memoOf = (over: Record<string, unknown>) => ({ question: "Another question?", reason: "Unclear", terms: [], body_hash: "0".repeat(64), at: Date.now(), ...over });
+
+async function runWithMemo(md: string, memo: unknown) {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), md);
+  return withServer(rewriteHandler(memo), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    return { r, f, out: r.stdout ? JSON.parse(r.stdout) : null };
+  });
+}
+
+const reasonOf = (out: any): string => out.hookSpecificOutput.permissionDecisionReason;
+const consumed = (f: Fake) => f.calls.some((c) => c.method === "POST" && c.path.endsWith("/pending-rewrite/consume"));
+const withTerms = (defs: string) => explanationFor(Q).replace("It has to be decided.", "The step must be idempotent.") + defs;
+
+test("Cannot answer memo: an identical body is denied as coined_term; a new one passes and consumes the memo", async () => {
+  const same = await runWithMemo(explanationFor(Q), memoOf({ body_hash: bodyHash(explanationFor(Q)) }));
+  assert.equal(same.out.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(reasonOf(same.out), /this one is identical\. Rewrite it/);
+  assert.ok(!consumed(same.f));
+  assert.deepEqual(same.f.calls.find((c) => c.path === "/api/decisions")?.body.missing, ["coined_term"]);
+
+  const changed = await runWithMemo(explanationFor(Q).replace("It has to be decided.", "Pick one today."), memoOf({ body_hash: bodyHash(explanationFor(Q)) }));
+  assert.equal(changed.out.hookSpecificOutput.permissionDecision, "allow");
+  assert.ok(consumed(changed.f));
+});
+
+test("Cannot answer memo: Undefined terms still used undefined are denied; defined or removed ones pass", async () => {
+  const memo = memoOf({ reason: "Undefined terms", terms: ["idempotent"], question: Q });
+  const used = await runWithMemo(withTerms(""), memo);
+  assert.equal(used.out.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(reasonOf(used.out), /the human said they could not understand: idempotent\. Replace each with plain words or define it under Terms/);
+  assert.ok(!consumed(used.f));
+
+  const defined = await runWithMemo(withTerms("\n## Terms\n- **idempotent** — safe to run twice with the same result\n"), memo);
+  assert.equal(defined.out.hookSpecificOutput.permissionDecision, "allow");
+  assert.ok(consumed(defined.f));
+
+  const stub = await runWithMemo(withTerms("\n## Terms\n- **idempotent** — see plan\n"), memo);
+  assert.equal(stub.out.hookSpecificOutput.permissionDecision, "deny");
+
+  const gone = await runWithMemo(explanationFor(Q), memo);
+  assert.equal(gone.out.hookSpecificOutput.permissionDecision, "allow");
+});
+
+test("Cannot answer memo: after Unclear a Recommendation over 3 sentences is denied as recommend_long", async () => {
+  const long = explanationFor(Q).replace("I recommend A. If C, choose B.", "I recommend A. It is simple. It is cheap. It is fast. If C, choose B.");
+  const memo = memoOf({ reason: "Unclear" });
+  const denied = await runWithMemo(long, memo);
+  assert.equal(denied.out.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(reasonOf(denied.out), /keep the Recommendation to 3 sentences/);
+  assert.deepEqual(denied.f.calls.find((c) => c.path === "/api/decisions")?.body.missing, ["recommend_long"]);
+
+  const ok = await runWithMemo(explanationFor(Q), memo);
+  assert.equal(ok.out.hookSpecificOutput.permissionDecision, "allow");
+  assert.ok(consumed(ok.f));
+});
+
+test("Cannot answer memo: after Too much at once the same question is denied as multi; another question passes", async () => {
+  const same = await runWithMemo(explanationFor(Q), memoOf({ reason: "Too much at once", question: Q }));
+  assert.equal(same.out.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(reasonOf(same.out), /split it: ask the first decision only/);
+  assert.deepEqual(same.f.calls.find((c) => c.path === "/api/decisions")?.body.missing, ["multi"]);
+
+  const other = await runWithMemo(explanationFor(Q), memoOf({ reason: "Too much at once", question: "Something else entirely?" }));
+  assert.equal(other.out.hookSpecificOutput.permissionDecision, "allow");
+  assert.ok(consumed(other.f));
+});
+
+test("Cannot answer memo: an unreachable or broken memo endpoint changes nothing (fail-open); no memo still consumes nothing harmful", async () => {
+  for (const memo of [null, "garbage", { reason: "nope" }]) {
+    const r = await runWithMemo(explanationFor(Q), memo);
+    assert.equal(r.out.hookSpecificOutput.permissionDecision, "allow");
+  }
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(
+    (req, res) => (req.path.endsWith("/pending-rewrite") ? (res.writeHead(500).end(), true) : answerHandler({ [Q]: "A" })(req, res)),
+    async (f, d) => {
+      const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+      assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
+    },
+  );
+});
+
+test("Cannot answer memo: plan mode never reads it", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  await withServer(rewriteHandler(memoOf({ body_hash: bodyHash(explanationFor(Q)) })), async (f, d) => {
+    await runHook(args(f, d), JSON.stringify(t1(sp, { permission_mode: "plan" })));
+    assert.ok(!f.calls.some((c) => c.path.includes("pending-rewrite")));
   });
 });

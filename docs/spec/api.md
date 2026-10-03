@@ -19,6 +19,8 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/sessions` | GUI | State per session |
 | `GET /api/sessions/:id/pending-mode-switch` | hook | Read the unconsumed "approve and switch to auto" record |
 | `POST /api/sessions/:id/pending-mode-switch/consume` | hook | Delete the record above |
+| `GET /api/sessions/:id/pending-rewrite` | hook | The session's last "Cannot answer" memo, or `null` |
+| `POST /api/sessions/:id/pending-rewrite/consume` | hook | Delete the memo above |
 | `GET /api/metrics` | GUI | Aggregates for (a')(b)(d) |
 | `GET /api/decisions/:id/history` | GUI / TUI (cookie or Bearer) | The human instructions of the decision's session (first + last 20), read from the transcript on request |
 | `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja" }`, the display language from `<data-dir>/config.json`, read once when the server starts (missing/malformed → `"en"`) |
@@ -198,13 +200,24 @@ The bodies are `PendingModeSwitch` / `ConsumeModeSwitchResponse` in `contract.ts
 
 `POST .../consume` deletes the record if there is an unconsumed, unexpired one and returns `{ "consumed": true }`; otherwise `{ "consumed": false }` (consume requires `Content-Type: application/json`, so send `{}`).
 
+### GET /api/sessions/:id/pending-rewrite / POST .../consume
+
+`PendingRewrite` / `ConsumeRewriteResponse` in `contract.ts`. `POST /api/decisions/:id/answer` with an `answers` value of the form `Cannot answer — <reason>[: <detail>]` (see `docs/spec/explain.md` section 15) stores one memo per session (a later one overwrites). The memo is kept in memory until consumed; it has no expiry and is lost on restart.
+
+```json
+null
+{ "question": "Which store?", "reason": "Undefined terms", "terms": ["W-T2", "FT4"], "body_hash": "<sha-256 hex of the explanation without front matter>", "at": 1790000000000 }
+```
+
+`terms` is empty unless `reason` is `Undefined terms`. `POST .../consume` (send `{}`) returns `{ "consumed": true }` if there was a memo, otherwise `{ "consumed": false }`.
+
 ### GET /api/metrics
 
 `Metrics`:
 
 ```json
 {
-  "a": { "answered": 9, "fallback": 1, "hook_disconnected": 0, "answer_lost": 0, "cancelled": 0, "escaped_question": 0, "blocker_detected": 0, "total": 10, "rate": 0.9 },
+  "a": { "answered": 9, "fallback": 1, "hook_disconnected": 0, "answer_lost": 0, "cancelled": 0, "escaped_question": 0, "blocker_detected": 0, "cannot_answer": 0, "total": 10, "rate": 0.9 },
   "b": {
     "human": { "count": 9, "median_ms": 21000, "mean_ms": 25000 },
     "agent": { "count": 3, "median_ms": 18000, "mean_ms": 19000 },
@@ -270,7 +283,7 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 
 | Authorization | Endpoints |
 |---|---|
-| Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `GET /api/sessions/:id/pending-mode-switch`, `POST .../consume` |
+| Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
 | cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
 | none | `GET /healthz`, `GET /`, `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
@@ -324,4 +337,5 @@ Hook-side conventions aligned with the W3 implementation.
 - wait returns 200 only for `answer_submitted` / `fallback`. A fallback has `response.via: "terminal"`, and the hook prints nothing and does not ack.
 - The `explanation` for no explanation (`attached_via: none`) and for ExitPlanMode has `path: ""` (for plan, `markdown` holds the plan body; for none, `markdown: ""`) and a fixed `match: "question"`. The server does not reject an empty `path`.
 - `GET /api/sessions/:id/pending-mode-switch` is 200 + `{"pending": boolean}`, and `POST .../consume` is 2xx.
+- `GET /api/sessions/:id/pending-rewrite` is 200 + a memo or `null`; the hook treats anything else as no memo.
 - Hook arguments: `--poll-timeout-ms` (for tests), `--deny-template A|B` (default A).

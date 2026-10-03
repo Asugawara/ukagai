@@ -5,7 +5,9 @@ import {
   CANCEL_WINDOW_MS,
   DENY_LINK_WINDOW_MS,
   MODE_SWITCH_TTL_MS,
+  bodyHash,
   canTransition,
+  parseCannotAnswer,
   type CreateDecisionRequest,
   type Decision,
   type DecisionContext,
@@ -14,6 +16,7 @@ import {
   type EventInput,
   type Metrics,
   type PendingModeSwitch,
+  type PendingRewrite,
   type SessionState,
   type SessionSummary,
 } from "../contract.js";
@@ -80,6 +83,7 @@ export class Store {
   private byToolUse = new Map<string, string>();
   private sessions = new Map<string, SessionSummary>();
   private modeSwitches = new Map<string, { set_at: number }>();
+  private rewrites = new Map<string, NonNullable<PendingRewrite>>();
   private expiredAt = new Map<string, number>();
   private waiters = new Map<string, Set<() => void>>();
   private monitor: NodeJS.Timeout | undefined;
@@ -256,9 +260,26 @@ export class Store {
     if (patch.kind === "approve" && patch.set_mode_auto) {
       this.modeSwitches.set(d.session.session_id, { set_at: Date.now() });
     }
+    if (patch.kind === "answers") this.rememberCannotAnswer(d, patch.answers);
     this.emit("decision.updated", d);
     this.notify(d.id);
     return d;
+  }
+
+  /** "Cannot answer — ..." keeps one memo per session (overwritten) for the hook to enforce on the next explanation */
+  private rememberCannotAnswer(d: Decision, answers: Record<string, string>): void {
+    for (const [question, value] of Object.entries(answers)) {
+      const c = parseCannotAnswer(value);
+      if (!c) continue;
+      this.rewrites.set(d.session.session_id, {
+        question: firstQuestion(d) ?? question,
+        reason: c.reason,
+        terms: c.terms,
+        body_hash: bodyHash(d.explanation?.markdown ?? ""),
+        at: Date.now(),
+      });
+      return;
+    }
   }
 
   /** Notification when the hook exits on SIGTERM / SIGINT / SIGHUP. pending becomes cancelled, answer_submitted becomes answer_lost */
@@ -460,6 +481,16 @@ export class Store {
     return pending;
   }
 
+  // ---- "Cannot answer" ----
+
+  getRewrite(sessionId: string): PendingRewrite {
+    return this.rewrites.get(sessionId) ?? null;
+  }
+
+  consumeRewrite(sessionId: string): boolean {
+    return this.rewrites.delete(sessionId);
+  }
+
   // ---- Aggregation ----
 
   metrics(): Metrics {
@@ -467,9 +498,11 @@ export class Store {
     const human: number[] = [];
     const agent: number[] = [];
     const d = { first_call: 0, after_deny: 0, none: 0 };
+    let cannot = 0;
     for (const x of this.decisions.values()) {
       if (x.status === "denied_explain") continue;
       if (x.status in count) count[x.status as keyof typeof count]++;
+      if (x.response?.answers && Object.values(x.response.answers).some((v) => parseCannotAnswer(v))) cannot++;
       if (x.response?.via === "gui") {
         human.push(Math.max(0, Date.parse(x.response.decided_at) - Date.parse(x.created_at)));
       }
@@ -482,7 +515,7 @@ export class Store {
     const total = count.answered + count.fallback + count.hook_disconnected + count.answer_lost + count.cancelled + this.escapedQuestions;
     const dTotal = d.first_call + d.after_deny + d.none;
     return {
-      a: { ...count, escaped_question: this.escapedQuestions, blocker_detected: this.blockersDetected, total, rate: total === 0 ? null : count.answered / total },
+      a: { ...count, escaped_question: this.escapedQuestions, blocker_detected: this.blockersDetected, cannot_answer: cannot, total, rate: total === 0 ? null : count.answered / total },
       b: { human: stat(human), agent: stat(agent), baseline: stat(this.baseline) },
       c: { session_panel_opens: this.panelOpens },
       d: { ...d, total: dTotal, attach_rate: dTotal === 0 ? null : (d.first_call + d.after_deny) / dTotal },
