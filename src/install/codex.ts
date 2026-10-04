@@ -20,6 +20,7 @@ export const CODEX_SPECS: CodexSpec[] = [
   { event: "PermissionRequest" },
   { event: "Stop" },
   { event: "SessionStart", timeout: 30 },
+  { event: "SessionEnd", timeout: 5 },
 ];
 
 export interface CodexInstallOptions {
@@ -43,7 +44,7 @@ export function hookCommand(o: CodexInstallOptions, spec: CodexSpec): string {
   const parts = [o.node, o.cli, "hook", "--agent", "codex"];
   if (spec.event === "SessionStart") {
     if (o.noAutostart) parts.push("--no-autostart");
-  } else parts.push("--budget", String(o.timeout - 10));
+  } else if (spec.event !== "SessionEnd") parts.push("--budget", String(o.timeout - 10));
   parts.push(...o.hookArgs, MANAGED_FLAG, MANAGED_VALUE);
   return parts.map(shq).join(" ");
 }

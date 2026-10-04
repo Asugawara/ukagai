@@ -108,6 +108,9 @@ test("install --codex: merges into hooks.json, appends the managed groups, write
   assert.equal(hooks.Stop.length, 2);
   assert.equal(hooks.SessionStart[0].hooks[0].timeout, 30);
   assert.ok(!hooks.SessionStart[0].hooks[0].command.includes("--budget"));
+  assert.equal(hooks.SessionEnd[0].hooks[0].timeout, 5);
+  assert.match(hooks.SessionEnd[0].hooks[0].command, /hook --agent codex .*--managed-by ukagai$/);
+  assert.ok(!hooks.SessionEnd[0].hooks[0].command.includes("--budget"));
 
   const cfg = await readFile(join(e.codex, "config.toml"), "utf8");
   assert.ok(cfg.startsWith(CONFIG), "existing bytes untouched");
@@ -117,8 +120,9 @@ test("install --codex: merges into hooks.json, appends the managed groups, write
   assert.equal(st.get(`${hf}:permission_request:0:0`), hookHash("PermissionRequest", undefined, hooks.PermissionRequest[0].hooks[0]));
   assert.equal(st.get(`${hf}:stop:1:0`), hookHash("Stop", undefined, hooks.Stop[1].hooks[0]));
   assert.equal(st.get(`${hf}:session_start:0:0`), hookHash("SessionStart", undefined, hooks.SessionStart[0].hooks[0]));
+  assert.equal(st.get(`${hf}:session_end:0:0`), hookHash("SessionEnd", undefined, hooks.SessionEnd[0].hooks[0]));
   assert.equal(st.get("OLD:stop:0:0"), "sha256:00");
-  assert.equal(st.size, 5);
+  assert.equal(st.size, 6);
   assert.ok(!(await readdir(e.fakeHome)).length, "nothing written to HOME");
   assert.ok(!(await readdir(e.fakeHome).then((l) => l.includes(".claude"))), "Claude settings untouched");
 });
@@ -203,6 +207,7 @@ test("doctor --codex: trusted after install, modified when the command is edited
   let r = await ukagai(e, ["doctor", ...args]);
   assert.match(r.out, /○ +codex hook PreToolUse +trusted/);
   assert.match(r.out, /○ +codex hook Stop +trusted/);
+  assert.match(r.out, /○ +codex hook SessionEnd +trusted/);
   const doc = JSON.parse(await readFile(join(e.codex, "hooks.json"), "utf8"));
   doc.hooks.Stop[0].hooks[0].command += " --extra";
   await writeFile(join(e.codex, "hooks.json"), JSON.stringify(doc));
@@ -287,7 +292,7 @@ test("awm-style hooks.json (tabs, no final newline) + 58 KB config.toml: install
   assert.ok(changed.every((l) => /^\t{2,3}[}\]]$/.test(l)), `only closing brackets gain a comma: ${changed.join("|")}`);
   assert.equal(JSON.parse(h1).hooks.Stop.length, 2);
   assert.ok(c1.startsWith(cfg + "\n"), "config: only a newline and the new tables are added");
-  assert.equal(readState(c1).size, 5);
+  assert.equal(readState(c1).size, 6);
 
   const bakCount = (await readdir(e.codex)).filter((f) => f.includes(".bak-")).length;
   await ukagai(e, ["install", ...args, "--lang", "en"]);
