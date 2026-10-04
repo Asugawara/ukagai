@@ -44,6 +44,12 @@ export function startCodexBridge(opts: CodexBridgeOptions): CodexBridge {
   const log = opts.log ?? createBridgeLog(opts.dataDir);
   const bridge = new PlanBridge({ store: opts.store, log, lang: opts.lang, collect: opts.collect, waitMs: opts.waitMs, checkpointDelayMs: opts.checkpointDelayMs });
   opts.store.onCheckpointAnswered = (d) => bridge.onCheckpointAnswered(d);
+  // The store has a single session-event callback (the recap watcher's): chain in front of it, restore on close
+  const prevSessionEvent = opts.store.onSessionEvent;
+  opts.store.onSessionEvent = (id, ev) => {
+    prevSessionEvent?.(id, ev);
+    if (ev === "SessionEnd") bridge.sessionEnded(id);
+  };
   const pollMs = opts.pollMs ?? POLL_MS;
   const backoffStart = opts.backoffMs ?? 1000;
   let stopped = false;
@@ -101,6 +107,7 @@ export function startCodexBridge(opts: CodexBridgeOptions): CodexBridge {
     close: () => {
       stopped = true;
       opts.store.onCheckpointAnswered = undefined;
+      opts.store.onSessionEvent = prevSessionEvent;
       if (timer) clearTimeout(timer);
       bridge.stop();
       client?.close();

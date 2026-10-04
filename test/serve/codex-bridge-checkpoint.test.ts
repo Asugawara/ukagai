@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { start, type ServeHandle } from "../../src/serve/index.js";
+import { startCodexBridge } from "../../src/serve/codex-bridge/index.js";
+import type { Store } from "../../src/serve/store.js";
 import type { Decision } from "../../src/contract.js";
 
 const THREAD = "00000000-0000-4000-8000-000000000026";
@@ -25,6 +27,11 @@ class FakeServer {
   received: any[] = [];
   ephemeral = false;
   noInterrupt = false;
+  /** What thread/loaded/list answers */
+  loaded: string[] = [THREAD];
+  /** thread/loaded/list answers after this many ms (0 = at once) */
+  listDelay = 0;
+  private sent = 0;
   failTurnStart = false;
   /** Pushed while thread/resume is being answered (a replay) */
   replayOnResume: (() => void) | undefined;
@@ -54,7 +61,17 @@ class FakeServer {
       case "initialize":
         return reply({ userAgent: "codex-tui/0.159.3 (fake)", codexHome: "/fake", platformFamily: "unix", platformOs: "macos" });
       case "thread/loaded/list":
-        return reply({ data: [THREAD], nextCursor: null });
+        {
+          if (!this.listDelay) return reply({ data: this.loaded, nextCursor: null });
+          setTimeout(() => {
+            try {
+              reply({ data: this.loaded, nextCursor: null });
+            } catch {
+              // the socket went meanwhile
+            }
+          }, this.listDelay);
+          return;
+        }
       case "thread/resume":
         this.replayOnResume?.();
         return reply({
@@ -67,7 +84,7 @@ class FakeServer {
       case "turn/interrupt":
         return this.noInterrupt ? fail("method not found", -32601) : reply({});
       case "turn/start":
-        return this.failTurnStart ? fail("turn/start refused") : reply({ turn: { id: "t-new" } });
+        return this.failTurnStart ? fail("turn/start refused") : reply({ turn: { id: `sent-${++this.sent}` } });
       default:
         return reply({});
     }
@@ -377,4 +394,175 @@ test("a failed turn/start makes the answer answer_lost", async () => {
   await until(() => env.h.store.get(d.id)!.status === "answer_lost", "answer_lost");
   assert.equal(env.h.store.get(d.id)!.response?.delivered_at, undefined);
   assert.equal((await api(env, `/api/sessions/${THREAD}/instruction`)).status, 404);
+});
+
+test("SessionEnd of the thread (the TUI quit) before the timer fires: no checkpoint", async () => {
+  const env = await setup();
+  env.fake.turn("turn-1", "Done.");
+  await sleep(DELAY / 4);
+  await api(env, "/api/events", { session_id: THREAD, hook_event_name: "SessionEnd", cwd: CWD, transcript_path: "", agent: "codex", received_at: new Date().toISOString() });
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("the timer asks the daemon: a thread missing from thread/loaded/list gets no checkpoint", async () => {
+  const env = await setup();
+  env.fake.loaded = [];
+  env.fake.turn("turn-1", "Done.");
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).length, 0);
+  assert.ok(env.fake.methods("thread/loaded/list").length >= 2, "listed again at fire time");
+});
+
+test("a stop answer: the stop turn's turn/completed arms nothing; the next human turn arms normally", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  await api(env, `/api/decisions/${d.id}/answer`, { kind: "stop" });
+  await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  env.fake.started("sent-1");
+  env.fake.message("sent-1", "Status: done.");
+  env.fake.completed("sent-1");
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).filter((c) => c.status === "pending").length, 0);
+  env.fake.turn("turn-2", "Human asked more; done.");
+  const next = await until(() => live(env)[0], "checkpoint for the next turn");
+  assert.equal((next.request as any).recap, "Human asked more; done.");
+});
+
+test("a stop queued behind a running turn (no turn/interrupt): its turn arms nothing either", async () => {
+  const env = await setup();
+  env.fake.noInterrupt = true;
+  env.fake.started("turn-run");
+  await sleep(30);
+  const seeded = env.h.store.createCheckpoint(
+    { session_id: THREAD, state: "idle", last_event_at: new Date().toISOString(), cwd: CWD, transcript_path: "", agent: "codex" },
+    "recap",
+    new Date().toISOString(),
+  ).decision;
+  await api(env, `/api/decisions/${seeded.id}/answer`, { kind: "stop" });
+  await until(() => env.fake.methods("turn/interrupt").length === 1, "turn/interrupt tried");
+  await sleep(100); // the bridge queues once the interrupt error is back
+  env.fake.completed("turn-run"); // sends the queued stop; its own completion follows
+  await until(() => env.fake.methods("turn/start")[0], "queued turn/start");
+  env.fake.started("sent-1");
+  env.fake.message("sent-1", "Status.");
+  env.fake.completed("sent-1");
+  await sleep(DELAY * 2);
+  assert.equal(live(env).length, 0);
+});
+
+const hookEvent = (env: Env, name: string) =>
+  api(env, "/api/events", { session_id: THREAD, hook_event_name: name, cwd: CWD, transcript_path: "", agent: "codex", received_at: new Date().toISOString() });
+const idleCheckpoint = (env: Env, recap = "recap") =>
+  env.h.store.createCheckpoint({ session_id: THREAD, state: "idle", last_event_at: new Date().toISOString(), cwd: CWD, transcript_path: "", agent: "codex" }, recap, new Date().toISOString()).decision;
+
+test("SessionEnd while thread/loaded/list is in flight: no checkpoint", async () => {
+  const env = await setup();
+  env.fake.listDelay = 200;
+  env.fake.turn("turn-1", "Done.");
+  await sleep(DELAY + 60);
+  await hookEvent(env, "SessionEnd");
+  await sleep(400);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("turn/started while thread/loaded/list is in flight: no checkpoint for the old turn", async () => {
+  const env = await setup();
+  env.fake.listDelay = 200;
+  env.fake.turn("turn-1", "Done.");
+  await sleep(DELAY + 60);
+  env.fake.started("turn-2");
+  await sleep(400);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("the socket closing while thread/loaded/list is in flight: skipped as not_connected, no checkpoint", async () => {
+  const env = await setup();
+  env.fake.listDelay = 400;
+  env.fake.turn("turn-1", "Done.");
+  await sleep(DELAY + 60);
+  for (const ws of env.fake.sockets) ws.terminate();
+  await sleep(150);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("a stop turn that never completes does not suppress the human's later turns", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  await api(env, `/api/decisions/${d.id}/answer`, { kind: "stop" });
+  await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  env.fake.started("sent-1"); // no turn/completed for it ever arrives
+  await sleep(50);
+  env.fake.turn("turn-h1", "Human turn 1 done.");
+  await until(() => live(env)[0], "checkpoint after human turn 1");
+  env.fake.turn("turn-h2", "Human turn 2 done.");
+  await until(() => live(env).some((c) => (c.request as any).recap === "Human turn 2 done."), "checkpoint after human turn 2");
+});
+
+test("a missed turn/started of the stop turn does not claim the human's next turn", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  await api(env, `/api/decisions/${d.id}/answer`, { kind: "stop" });
+  await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  await sleep(50);
+  env.fake.turn("turn-h1", "Human turn 1 done.");
+  await until(() => live(env)[0], "checkpoint after human turn 1");
+});
+
+test("the interrupted turn completing after the stop turn completed arms nothing", async () => {
+  const env = await setup();
+  env.fake.started("turn-run");
+  await sleep(30);
+  const seeded = idleCheckpoint(env);
+  await api(env, `/api/decisions/${seeded.id}/answer`, { kind: "stop" });
+  await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  env.fake.started("sent-1");
+  env.fake.message("sent-1", "Status.");
+  env.fake.completed("sent-1");
+  env.fake.message("turn-run", "partial", "commentary");
+  env.fake.completed("turn-run");
+  await sleep(DELAY * 2);
+  assert.equal(live(env).length, 0);
+});
+
+test("late turn events after SessionEnd do not arm a checkpoint; the thread's next turn/started clears that", async () => {
+  const env = await setup();
+  await hookEvent(env, "SessionEnd");
+  await sleep(30);
+  env.fake.message("turn-1", "Done.");
+  env.fake.completed("turn-1");
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).length, 0);
+  env.fake.settings("default");
+  env.fake.started("turn-2");
+  env.fake.message("turn-2", "Back again.");
+  env.fake.completed("turn-2");
+  await until(() => live(env)[0], "checkpoint after a new turn");
+});
+
+test("SessionEnd and thread/closed cancel the pending card of the thread", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  env.fake.push("thread/closed", { threadId: THREAD });
+  await until(() => env.h.store.get(d.id)!.status === "cancelled", "cancelled by thread/closed");
+  assert.equal(env.h.store.get(d.id)!.status_reason, "thread_closed");
+
+  const env2 = await setup();
+  const d2 = await seedCheckpoint(env2);
+  await hookEvent(env2, "SessionEnd");
+  await until(() => env2.h.store.get(d2.id)!.status === "cancelled", "cancelled by SessionEnd");
+});
+
+test("startCodexBridge chains the session-event callback and restores it on close", () => {
+  const root = mkdtempSync(join(tmpdir(), "ukagai-cbc-chain-"));
+  cleanup.push(() => rmSync(root, { recursive: true, force: true }));
+  const seen: string[] = [];
+  const store = { onSessionEvent: (id: string, ev: string) => void seen.push(`${id}:${ev}`) } as unknown as Store;
+  const prev = store.onSessionEvent;
+  const bridge = startCodexBridge({ store, dataDir: root, lang: "en", codexHome: join(root, "none"), log: () => {} });
+  store.onSessionEvent!("claude-1", "UserPromptSubmit");
+  assert.deepEqual(seen, ["claude-1:UserPromptSubmit"], "the recap watcher's callback still runs");
+  assert.notEqual(store.onSessionEvent, prev);
+  bridge.close();
+  assert.equal(store.onSessionEvent, prev);
 });

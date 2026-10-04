@@ -270,6 +270,30 @@ test("SessionStart gives additionalContext pointing at <data-dir>/explain/<sessi
   }
 });
 
+test("a Codex SessionEnd is forwarded as a session event with agent codex", async () => {
+  const seen: any[] = [];
+  const f = await fakeServer((req, res) => {
+    if (req.path.startsWith("/api/events")) {
+      seen.push(req.body);
+      res.writeHead(204).end();
+      return true;
+    }
+    return false;
+  });
+  try {
+    const d = dataDirWithToken();
+    const raw = { session_id: "01a10494-0000-7000-8000-000000000000", hook_event_name: "SessionEnd", cwd: "/work/proj", transcript_path: null, reason: "other" };
+    const r = await runHook(a(f.url, d), JSON.stringify(raw));
+    assert.equal(r.stdout, "");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].hook_event_name, "SessionEnd");
+    assert.equal(seen[0].agent, "codex");
+    assert.equal(seen[0].session_id, raw.session_id);
+  } finally {
+    await f.close();
+  }
+});
+
 test("PreToolUse for other Codex tools (Bash) prints nothing", async () => {
   const f = await fakeServer();
   try {

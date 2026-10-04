@@ -58,9 +58,13 @@ type Thread = {
   running?: string;
   /** Instructions waiting for the running turn to end (the daemon has no turn/interrupt) */
   queued?: QueuedSend;
+  /** Turns of a `stop` (the one its text started, the one it interrupted): their completion arms no checkpoint. Ids are unique, so nothing here can hit a human's turn */
+  skipTurns: Set<string>;
+  /** Bumped whenever the timer is cancelled, so a timer that awaits the daemon can tell it was cancelled meanwhile */
+  epoch: number;
 };
 
-type QueuedSend = { decisionId: string; text: string };
+type QueuedSend = { decisionId: string; text: string; stop: boolean };
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v !== "" ? v : undefined);
 
@@ -72,6 +76,8 @@ export class PlanBridge {
   private rpc: Rpc | undefined;
   private threads = new Map<string, Thread>();
   private stopped = false;
+  /** Threads that ended (SessionEnd / thread/closed): late events of theirs must not arm a checkpoint. Cleared by the thread's next turn/started or thread/started */
+  private ended = new Set<string>();
   /** True while `attach` resumes threads: turn/completed seen then is a replay and must not arm a checkpoint */
   private attaching = false;
 
@@ -80,7 +86,7 @@ export class PlanBridge {
   private thread(id: string): Thread {
     let t = this.threads.get(id);
     if (!t) {
-      t = { id, cwd: "", ephemeral: false, resumed: false, resuming: false, plans: new Map(), live: new Map(), registered: new Set(), messages: new Map(), armed: new Set() };
+      t = { id, cwd: "", ephemeral: false, resumed: false, resuming: false, plans: new Map(), live: new Map(), registered: new Set(), messages: new Map(), armed: new Set(), skipTurns: new Set(), epoch: 0 };
       this.threads.set(id, t);
     }
     return t;
@@ -92,20 +98,61 @@ export class PlanBridge {
     for (const t of this.threads.values()) {
       t.resumed = false;
       t.resuming = false;
+      t.skipTurns.clear();
     }
     this.attaching = true;
     try {
-      const res = await rpc.request("thread/loaded/list", {});
-      const ids: unknown[] = Array.isArray(res?.data) ? res.data : [];
+      const ids = await this.loadedThreads(rpc);
       this.deps.log("attached", { threads: ids.length });
-      await Promise.all(ids.filter((i): i is string => typeof i === "string").map((id) => this.resume(id)));
+      await Promise.all(ids.map((id) => this.resume(id)));
     } finally {
       this.attaching = false;
     }
   }
 
+  /** `thread/loaded/list` (ThreadLoadedListParams: cursor / limit; result: data = ids, nextCursor), all pages */
+  private async loadedThreads(rpc: Rpc): Promise<string[]> {
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 20; page++) {
+      const res: any = await rpc.request("thread/loaded/list", cursor ? { cursor } : {});
+      if (Array.isArray(res?.data)) for (const i of res.data) if (typeof i === "string") ids.push(i);
+      cursor = str(res?.nextCursor) ?? null;
+      if (!cursor) break;
+    }
+    return ids;
+  }
+
   detach(): void {
     this.rpc = undefined;
+  }
+
+  /** The Codex TUI of the thread quit (Codex `SessionEnd` hook): the daemon keeps the thread loaded, so no `thread/closed` follows */
+  sessionEnded(threadId: string): void {
+    if (this.stopped || !this.threads.has(threadId)) return;
+    this.deps.log("session_ended", { thread: threadId });
+    this.forget(threadId, "session_end");
+  }
+
+  /** Drops the thread: no timer, no waiting instruction (its decision is lost, as when a send fails), no pending card */
+  private forget(id: string, reason: string): void {
+    const t = this.threads.get(id);
+    if (!t) return;
+    this.ended.add(id);
+    this.deps.store.cancelPendingCheckpoints(id, reason);
+    this.cancelTimer(t);
+    if (t.queued) {
+      const q = t.queued;
+      t.queued = undefined;
+      this.checkpointLost(q.decisionId, new Error("thread ended"));
+    }
+    this.threads.delete(id);
+  }
+
+  private cancelTimer(t: Thread): void {
+    clearTimeout(t.checkpointTimer);
+    t.checkpointTimer = undefined;
+    t.epoch++;
   }
 
   stop(): void {
@@ -158,6 +205,7 @@ export class PlanBridge {
         const th = p.thread ?? {};
         const id = str(th.id);
         if (!id) return;
+        this.ended.delete(id);
         const t = this.thread(id);
         t.ephemeral = th.ephemeral === true;
         t.cwd = str(th.cwd) ?? t.cwd;
@@ -172,9 +220,10 @@ export class PlanBridge {
       }
       case "thread/closed": {
         const id = str(p.threadId);
-        const t = id ? this.threads.get(id) : undefined;
-        if (t) clearTimeout(t.checkpointTimer);
-        if (id) this.threads.delete(id);
+        if (id) {
+          this.deps.log("thread_closed", { thread: id });
+          this.forget(id, "thread_closed");
+        }
         return;
       }
       case "thread/name/updated": {
@@ -199,6 +248,7 @@ export class PlanBridge {
         if (!id) return;
         const t = this.thread(id);
         t.running = str(p.turn?.id) ?? t.running;
+        this.ended.delete(id);
         this.withdraw(t, str(p.turn?.id));
         this.checkpointTurnStarted(t);
         return;
@@ -234,11 +284,18 @@ export class PlanBridge {
           t.registered.add(turnId);
           void this.register(t, turnId, plan).catch((err) => this.deps.log("register_failed", { thread: id, error: String(err) }));
         }
-        if (asPlan || t.registered.has(turnId)) t.messages.delete(turnId);
+        if (t.skipTurns.delete(turnId)) {
+          // The status the human asked for (or the turn it interrupted): nothing to check on
+          t.messages.delete(turnId);
+          this.deps.log("checkpoint_skipped", { thread: id, turn: turnId, reason: "after_stop" });
+        } else if (asPlan || t.registered.has(turnId)) t.messages.delete(turnId);
         else this.armCheckpoint(t, turnId, p.turn);
         void this.flushQueued(t);
         return;
       }
+      default:
+        if (n.method.startsWith("thread/") || n.method.startsWith("turn/")) this.deps.log("bridge_notification", { method: n.method, thread: str(p.threadId) });
+        return;
     }
   }
 
@@ -338,9 +395,9 @@ export class PlanBridge {
     log("turn_started", { decision: d.id, thread: t.id, mode });
   }
   /** `turn/start` on the thread with its last known model / effort (never changes anything else of the thread) */
-  private async startTurn(t: Thread, text: string, mode: "default" | "plan"): Promise<void> {
+  private async startTurn(t: Thread, text: string, mode: "default" | "plan"): Promise<string | undefined> {
     if (!this.rpc) throw new Error("not connected");
-    await this.rpc.request("turn/start", {
+    const res = await this.rpc.request("turn/start", {
       threadId: t.id,
       input: [{ type: "text", text, text_elements: [] }],
       collaborationMode: {
@@ -348,6 +405,7 @@ export class PlanBridge {
         settings: { model: t.model ?? null, reasoning_effort: t.effort ?? null, developer_instructions: null },
       },
     });
+    return str(res?.turn?.id);
   }
 
   // ---- Progress checkpoints: a completed turn, then `checkpointDelayMs` without the user ----
@@ -369,6 +427,7 @@ export class PlanBridge {
     if (msg === undefined && Array.isArray(turn?.items)) {
       for (const it of turn.items) if (it?.type === "agentMessage" && typeof it.text === "string" && it.text.trim()) msg = it.text.trim();
     }
+    if (this.ended.has(t.id)) return;
     if (t.ephemeral || this.attaching || t.resuming || t.armed.has(turnId)) return;
     if (msg === undefined) {
       log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "no_agent_message" });
@@ -377,33 +436,53 @@ export class PlanBridge {
     t.armed.add(turnId);
     const recap = msg.length > RECAP_MAX ? msg.slice(0, RECAP_MAX - 1) + "…" : msg;
     const recapAt = new Date().toISOString();
-    clearTimeout(t.checkpointTimer);
-    t.checkpointTimer = setTimeout(() => {
-      t.checkpointTimer = undefined;
-      if (this.stopped || t.running) return;
-      if (!this.rpc) {
-        // Nobody could deliver the answer: not worth asking
-        log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "not_connected" });
+    this.cancelTimer(t);
+    const epoch = t.epoch;
+    t.checkpointTimer = setTimeout(() => void this.fireCheckpoint(t, turnId, recap, recapAt, epoch), this.deps.checkpointDelayMs ?? CHECKPOINT_DELAY_MS);
+    t.checkpointTimer.unref();
+  }
+
+  private async fireCheckpoint(t: Thread, turnId: string, recap: string, recapAt: string, epoch: number): Promise<void> {
+    const log = this.deps.log;
+    t.checkpointTimer = undefined;
+    if (this.stopped || t.running) return;
+    const rpc = this.rpc;
+    if (!rpc) {
+      // Nobody could deliver the answer: not worth asking
+      log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "not_connected" });
+      return;
+    }
+    // The daemon may have dropped the thread (restart) without a thread/closed we saw
+    try {
+      if (!(await this.loadedThreads(rpc)).includes(t.id)) {
+        log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "not_loaded" });
         return;
       }
-      try {
-        const { decision, created } = this.deps.store.createCheckpoint(
-          { session_id: t.id, state: "idle", last_event_at: recapAt, cwd: t.cwd, ...(t.title ? { title: t.title } : {}), transcript_path: "", agent: "codex" },
-          recap,
-          recapAt,
-        );
-        if (created) log("checkpoint_created", { decision: decision.id, thread: t.id, turn: turnId });
-      } catch (err) {
-        log("checkpoint_failed", { thread: t.id, error: String(err) });
-      }
-    }, this.deps.checkpointDelayMs ?? CHECKPOINT_DELAY_MS);
-    t.checkpointTimer.unref();
+    } catch (err) {
+      // Cannot tell: ask anyway
+      log("loaded_check_failed", { thread: t.id, error: err instanceof Error ? err.message : String(err) });
+    }
+    if (this.rpc !== rpc) {
+      log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "not_connected" });
+      return;
+    }
+    // The thread ended or a turn started while we asked
+    if (this.stopped || t.epoch !== epoch || t.running || this.threads.get(t.id) !== t) return;
+    try {
+      const { decision, created } = this.deps.store.createCheckpoint(
+        { session_id: t.id, state: "idle", last_event_at: recapAt, cwd: t.cwd, ...(t.title ? { title: t.title } : {}), transcript_path: "", agent: "codex" },
+        recap,
+        recapAt,
+      );
+      if (created) log("checkpoint_created", { decision: decision.id, thread: t.id, turn: turnId });
+    } catch (err) {
+      log("checkpoint_failed", { thread: t.id, error: String(err) });
+    }
   }
 
   /** The user (or anything) started a new turn: no checkpoint for the previous one */
   private checkpointTurnStarted(t: Thread): void {
-    clearTimeout(t.checkpointTimer);
-    t.checkpointTimer = undefined;
+    this.cancelTimer(t);
     this.deps.store.cancelPendingCheckpoints(t.id, "new_prompt");
   }
 
@@ -419,6 +498,7 @@ export class PlanBridge {
   private async deliverCheckpoint(d: Decision, text: string): Promise<void> {
     const { store, log } = this.deps;
     const t = this.threads.get(d.session.session_id);
+    const stop = d.response?.kind === "stop";
     try {
       if (!t || !this.rpc) throw new Error("not connected");
       if (t.running) {
@@ -428,7 +508,7 @@ export class PlanBridge {
           const msg = err instanceof Error ? err.message : String(err);
           if (METHOD_MISSING.test(msg)) {
             // This daemon cannot interrupt: send when the running turn completes
-            t.queued = { decisionId: d.id, text };
+            t.queued = { decisionId: d.id, text, stop };
             log("checkpoint_queued", { decision: d.id, thread: t.id });
             return;
           }
@@ -436,7 +516,9 @@ export class PlanBridge {
           log("turn_interrupt_failed", { decision: d.id, thread: t.id, error: msg });
         }
       }
-      await this.startTurn(t, text, "default");
+      if (stop && t.running) t.skipTurns.add(t.running);
+      const turnId = await this.startTurn(t, text, "default");
+      if (stop && turnId) t.skipTurns.add(turnId);
     } catch (err) {
       this.checkpointLost(d.id, err);
       return;
@@ -451,7 +533,8 @@ export class PlanBridge {
     if (!q) return;
     t.queued = undefined;
     try {
-      await this.startTurn(t, q.text, "default");
+      const turnId = await this.startTurn(t, q.text, "default");
+      if (q.stop && turnId) t.skipTurns.add(turnId);
     } catch (err) {
       this.checkpointLost(q.decisionId, err);
       return;
