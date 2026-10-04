@@ -1,0 +1,380 @@
+import { after, test } from "node:test";
+import assert from "node:assert/strict";
+import { createServer, type Server } from "node:http";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WebSocketServer, type WebSocket } from "ws";
+import { start, type ServeHandle } from "../../src/serve/index.js";
+import type { Decision } from "../../src/contract.js";
+
+const THREAD = "00000000-0000-4000-8000-000000000026";
+const CWD = "/work/proj";
+const DELAY = 200;
+
+const cleanup: (() => Promise<void> | void)[] = [];
+after(async () => {
+  for (const fn of cleanup.reverse()) await fn();
+});
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A stand-in for the Codex daemon (same idea as codex-bridge.test.ts) with switches for turn/interrupt and turn/start */
+class FakeServer {
+  sockets = new Set<WebSocket>();
+  received: any[] = [];
+  ephemeral = false;
+  noInterrupt = false;
+  failTurnStart = false;
+  /** Pushed while thread/resume is being answered (a replay) */
+  replayOnResume: (() => void) | undefined;
+  private http: Server;
+  private wss: WebSocketServer;
+
+  constructor(public socketPath: string) {
+    this.http = createServer();
+    this.wss = new WebSocketServer({ server: this.http });
+    this.wss.on("connection", (ws) => {
+      this.sockets.add(ws);
+      ws.on("close", () => this.sockets.delete(ws));
+      ws.on("message", (raw) => this.onMessage(ws, JSON.parse(String(raw))));
+    });
+  }
+
+  listen(): Promise<void> {
+    return new Promise((r) => this.http.listen(this.socketPath, r));
+  }
+
+  private onMessage(ws: WebSocket, m: any): void {
+    this.received.push(m);
+    if (m.id === undefined) return;
+    const reply = (result: unknown) => ws.send(JSON.stringify({ id: m.id, result }));
+    const fail = (message: string, code = -32600) => ws.send(JSON.stringify({ id: m.id, error: { code, message } }));
+    switch (m.method) {
+      case "initialize":
+        return reply({ userAgent: "codex-tui/0.159.3 (fake)", codexHome: "/fake", platformFamily: "unix", platformOs: "macos" });
+      case "thread/loaded/list":
+        return reply({ data: [THREAD], nextCursor: null });
+      case "thread/resume":
+        this.replayOnResume?.();
+        return reply({
+          thread: { id: m.params.threadId, preview: "Run echo hi", name: "Run echo hi", ephemeral: this.ephemeral, cwd: CWD },
+          model: "gpt-5.6-sol",
+          cwd: CWD,
+          reasoningEffort: "low",
+          collaborationMode: { mode: "default", settings: { model: "gpt-5.6-sol", reasoning_effort: "low", developer_instructions: "x" } },
+        });
+      case "turn/interrupt":
+        return this.noInterrupt ? fail("method not found", -32601) : reply({});
+      case "turn/start":
+        return this.failTurnStart ? fail("turn/start refused") : reply({ turn: { id: "t-new" } });
+      default:
+        return reply({});
+    }
+  }
+
+  push(method: string, params: unknown): void {
+    for (const ws of this.sockets) ws.send(JSON.stringify({ method, params }));
+  }
+
+  settings(mode: string, effort = "medium"): void {
+    this.push("thread/settings/updated", {
+      threadId: THREAD,
+      threadSettings: { cwd: CWD, model: "gpt-5.6-sol", effort, collaborationMode: { mode, settings: { model: "gpt-5.6-sol", reasoning_effort: effort, developer_instructions: "long" } } },
+    });
+  }
+
+  started(turnId: string): void {
+    this.push("turn/started", { threadId: THREAD, turn: { id: turnId, items: [], status: "inProgress" } });
+  }
+
+  message(turnId: string, text: string, phase = "final_answer"): void {
+    this.push("item/completed", { threadId: THREAD, turnId, item: { type: "agentMessage", id: `${turnId}-m-${phase}`, text, phase } });
+  }
+
+  completed(turnId: string): void {
+    this.push("turn/completed", { threadId: THREAD, turn: { id: turnId, items: [], status: "completed" } });
+  }
+
+  /** settings → turn/started → agent message → turn/completed (D1's event order) */
+  turn(turnId: string, text: string, mode = "default", effort = "medium"): void {
+    this.settings(mode, effort);
+    this.started(turnId);
+    this.message(turnId, text);
+    this.completed(turnId);
+  }
+
+  methods(name: string): any[] {
+    return this.received.filter((m) => m.method === name);
+  }
+
+  close(): Promise<void> {
+    for (const ws of this.sockets) ws.terminate();
+    this.wss.close();
+    return new Promise((r) => {
+      this.http.close(() => r());
+      this.http.closeAllConnections();
+    });
+  }
+}
+
+type Env = { fake: FakeServer; h: ServeHandle; url: string };
+
+async function setup(opts: { ephemeral?: boolean; replay?: (f: FakeServer) => void } = {}): Promise<Env> {
+  const root = mkdtempSync(join(tmpdir(), "ukagai-cbc-"));
+  const short = mkdtempSync("/tmp/ukcc-");
+  cleanup.push(() => rmSync(root, { recursive: true, force: true }));
+  cleanup.push(() => rmSync(short, { recursive: true, force: true }));
+  const codexHome = join(root, "codex");
+  mkdirSync(join(codexHome, "app-server-control"), { recursive: true });
+  const fake = new FakeServer(join(short, "s.sock"));
+  fake.ephemeral = opts.ephemeral === true;
+  if (opts.replay) fake.replayOnResume = () => opts.replay!(fake);
+  await fake.listen();
+  symlinkSync(join(short, "s.sock"), join(codexHome, "app-server-control", "app-server-control.sock"));
+  cleanup.push(() => fake.close());
+  const h = await start({ port: 0, dataDir: join(root, "data"), home: root, codexBridge: true, codexHome, codexCheckpointDelayMs: DELAY });
+  cleanup.push(() => h.close());
+  const env = { fake, h, url: `http://127.0.0.1:${h.port}` };
+  await until(() => fake.methods("thread/resume").length > 0, "thread/resume");
+  await sleep(30);
+  return env;
+}
+
+function api(env: Env, path: string, body?: unknown) {
+  return fetch(env.url + path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { authorization: `Bearer ${env.h.token}`, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+async function until<T>(fn: () => T | undefined | false, what: string, ms = 4000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > end) throw new Error(`timed out: ${what}`);
+    await sleep(20);
+  }
+}
+
+const checkpoints = (env: Env) => env.h.store.list().filter((d) => d.kind === "checkpoint");
+const live = (env: Env) => checkpoints(env).filter((d) => d.status === "pending");
+
+async function seedCheckpoint(env: Env, text = "Done with step 1. Next: step 2.", effort = "medium"): Promise<Decision> {
+  env.fake.turn("turn-1", text, "default", effort);
+  return until(() => live(env)[0], "checkpoint");
+}
+
+test("turn/completed + quiet delay creates one checkpoint with the last agent message", async () => {
+  const env = await setup();
+  env.fake.settings("default");
+  env.fake.started("turn-1");
+  env.fake.message("turn-1", "Working on it.", "commentary");
+  env.fake.message("turn-1", "All done. Next I would add tests.");
+  env.fake.message("turn-1", "late commentary", "commentary");
+  env.fake.completed("turn-1");
+  await sleep(DELAY / 2);
+  assert.equal(checkpoints(env).length, 0, "not before the delay");
+  const d = await until(() => checkpoints(env)[0], "checkpoint");
+  assert.equal(d.status, "pending");
+  assert.deepEqual(d.request, { recap: "All done. Next I would add tests.", recap_at: (d.request as any).recap_at });
+  assert.equal(d.session.agent, "codex");
+  assert.equal(d.session.session_id, THREAD);
+  assert.equal(d.session.cwd, CWD);
+  assert.equal(d.session.transcript_path, "");
+  assert.equal(d.session.title, "Run echo hi");
+  assert.match(d.tool_use_id, new RegExp(`^checkpoint:${THREAD}:`));
+  await sleep(DELAY);
+  assert.equal(checkpoints(env).length, 1);
+});
+
+test("a long message is capped at 2000 characters with an ellipsis", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env, "x".repeat(2500));
+  const recap = (d.request as any).recap as string;
+  assert.equal(recap.length, 2000);
+  assert.ok(recap.endsWith("…"));
+});
+
+test("a turn/started within the delay creates nothing; a pending checkpoint is cancelled as new_prompt", async () => {
+  const env = await setup();
+  env.fake.turn("turn-1", "first");
+  await sleep(DELAY / 3);
+  env.fake.started("turn-2");
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).length, 0);
+  // and a checkpoint that already exists is closed by the next turn
+  env.fake.message("turn-2", "second");
+  env.fake.completed("turn-2");
+  const d = await until(() => live(env)[0], "checkpoint");
+  env.fake.started("turn-3");
+  await until(() => env.h.store.get(d.id)!.status === "cancelled", "cancelled");
+  assert.equal(env.h.store.get(d.id)!.status_reason, "new_prompt");
+});
+
+test("a second turn/completed supersedes the first checkpoint, with its own tool_use_id", async () => {
+  const env = await setup();
+  const a = await seedCheckpoint(env, "first recap");
+  await sleep(5);
+  // no turn/started in between (that would close the first one as new_prompt)
+  env.fake.message("turn-2", "second recap");
+  env.fake.completed("turn-2");
+  await until(() => checkpoints(env).length === 2, "second checkpoint");
+  assert.notEqual(checkpoints(env)[0]!.tool_use_id, checkpoints(env)[1]!.tool_use_id);
+  const first = env.h.store.get(a.id)!;
+  assert.equal(first.status, "cancelled");
+  assert.equal(first.status_reason, "superseded");
+});
+
+test("a plan turn that became an approve_plan decision gets no checkpoint", async () => {
+  const env = await setup();
+  env.fake.settings("plan");
+  env.fake.started("turn-p");
+  env.fake.push("item/completed", { threadId: THREAD, turnId: "turn-p", item: { type: "plan", id: "p", text: "# Plan\n\n1. do it\n" } });
+  env.fake.message("turn-p", "Here is the plan.");
+  env.fake.completed("turn-p");
+  await until(() => env.h.store.list().some((d) => d.kind === "approve_plan"), "approve_plan");
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("turns replayed while the bridge resumes a thread create nothing", async () => {
+  const env = await setup({ replay: (f) => f.turn("turn-old", "old recap") });
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("an ephemeral thread creates nothing; neither does a turn without an agent message", async () => {
+  const eph = await setup({ ephemeral: true });
+  eph.fake.turn("turn-1", "title generation");
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(eph).length, 0);
+
+  const env = await setup();
+  env.fake.settings("default");
+  env.fake.started("turn-1");
+  env.fake.completed("turn-1");
+  await sleep(DELAY * 2);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("instruct: turn/start with the text and the thread's model / effort; delivered; the hook route gets nothing", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env, "Done.", "high");
+  const r = await api(env, `/api/decisions/${d.id}/answer`, { kind: "instruct", text: "run the e2e first" });
+  assert.equal(r.status, 200);
+  const sent = await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  assert.equal(sent.params.threadId, THREAD);
+  assert.deepEqual(sent.params.input, [{ type: "text", text: "run the e2e first", text_elements: [] }]);
+  assert.deepEqual(sent.params.collaborationMode, { mode: "default", settings: { model: "gpt-5.6-sol", reasoning_effort: "high", developer_instructions: null } });
+  assert.equal(env.fake.methods("turn/interrupt").length, 0, "idle thread: no interrupt");
+  await until(() => env.h.store.get(d.id)!.response?.delivered_at, "delivered_at");
+  assert.equal(env.h.store.get(d.id)!.status, "answered");
+  // consumed by the bridge, not left for `hook --checkpoint`
+  assert.equal((await api(env, `/api/sessions/${THREAD}/instruction`)).status, 404);
+});
+
+test("decision.updated is emitted when the instruction is delivered", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  const events: string[] = [];
+  const sse = await fetch(env.url + "/api/stream", { headers: { authorization: `Bearer ${env.h.token}` } });
+  const reader = sse.body!.getReader();
+  void (async () => {
+    const dec = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      events.push(dec.decode(value));
+    }
+  })();
+  await sleep(50);
+  await api(env, `/api/decisions/${d.id}/answer`, { kind: "instruct", text: "go" });
+  await until(() => env.h.store.get(d.id)!.response?.delivered_at, "delivered_at");
+  await until(() => events.join("").split("event: decision.updated").length >= 3, "two decision.updated events");
+  await reader.cancel();
+});
+
+test("stop while a turn runs: turn/interrupt, then turn/start with the stop text and the human's text", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  env.fake.started("turn-run"); // closes the checkpoint (new_prompt)... so answer a fresh one below
+  await until(() => env.h.store.get(d.id)!.status === "cancelled", "cancelled");
+  env.fake.message("turn-run", "still going", "commentary");
+  env.fake.received.length = 0;
+  // a checkpoint of an earlier turn answered while turn-run is in flight: seed through the API
+  const seeded = env.h.store.createCheckpoint(
+    { session_id: THREAD, state: "idle", last_event_at: new Date().toISOString(), cwd: CWD, transcript_path: "", agent: "codex" },
+    "recap",
+    new Date().toISOString(),
+  ).decision;
+  await api(env, `/api/decisions/${seeded.id}/answer`, { kind: "stop", text: "the schema first" });
+  await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  const order = env.fake.received.filter((m) => m.method === "turn/interrupt" || m.method === "turn/start").map((m) => m.method);
+  assert.deepEqual(order, ["turn/interrupt", "turn/start"]);
+  assert.deepEqual(env.fake.methods("turn/interrupt")[0].params, { threadId: THREAD, turnId: "turn-run" });
+  const text = env.fake.methods("turn/start")[0].params.input[0].text as string;
+  assert.match(text, /^The human asked you to stop\. Write a short status \(done \/ in progress \/ next\) and end your turn\./);
+  assert.match(text, /the schema first/);
+  await until(() => env.h.store.get(seeded.id)!.response?.delivered_at, "delivered_at");
+});
+
+test("stop while idle: turn/start only, with the stop text", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  await api(env, `/api/decisions/${d.id}/answer`, { kind: "stop" });
+  const sent = await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  assert.equal(env.fake.methods("turn/interrupt").length, 0);
+  assert.equal(sent.params.input[0].text, "The human asked you to stop. Write a short status (done / in progress / next) and end your turn.");
+});
+
+test("a daemon without turn/interrupt: the instruction waits for turn/completed", async () => {
+  const env = await setup();
+  env.fake.noInterrupt = true;
+  const seeded = env.h.store.createCheckpoint(
+    { session_id: THREAD, state: "idle", last_event_at: new Date().toISOString(), cwd: CWD, transcript_path: "", agent: "codex" },
+    "recap",
+    new Date().toISOString(),
+  ).decision;
+  env.fake.started("turn-run");
+  await sleep(30);
+  // started closed the checkpoint; seed again with the turn running
+  const again = env.h.store.createCheckpoint(
+    { session_id: THREAD, state: "idle", last_event_at: new Date().toISOString(), cwd: CWD, transcript_path: "", agent: "codex" },
+    "recap 2",
+    new Date(Date.now() + 1).toISOString(),
+  ).decision;
+  assert.notEqual(again.id, seeded.id);
+  await api(env, `/api/decisions/${again.id}/answer`, { kind: "instruct", text: "after this turn" });
+  await until(() => env.fake.methods("turn/interrupt").length === 1, "turn/interrupt tried");
+  await sleep(100);
+  assert.equal(env.fake.methods("turn/start").length, 0, "queued while the turn runs");
+  assert.equal(env.h.store.get(again.id)!.response?.delivered_at, undefined);
+  env.fake.message("turn-run", "finished");
+  env.fake.completed("turn-run");
+  const sent = await until(() => env.fake.methods("turn/start")[0], "turn/start after turn/completed");
+  assert.equal(sent.params.input[0].text, "after this turn");
+  await until(() => env.h.store.get(again.id)!.response?.delivered_at, "delivered_at");
+});
+
+test("continue sends nothing", async () => {
+  const env = await setup();
+  const d = await seedCheckpoint(env);
+  await api(env, `/api/decisions/${d.id}/answer`, { kind: "continue" });
+  await sleep(150);
+  assert.equal(env.fake.methods("turn/start").length, 0);
+  assert.equal(env.fake.methods("turn/interrupt").length, 0);
+  assert.equal(env.h.store.get(d.id)!.status, "answered");
+});
+
+test("a failed turn/start makes the answer answer_lost", async () => {
+  const env = await setup();
+  env.fake.failTurnStart = true;
+  const d = await seedCheckpoint(env);
+  await api(env, `/api/decisions/${d.id}/answer`, { kind: "instruct", text: "do x" });
+  await until(() => env.h.store.get(d.id)!.status === "answer_lost", "answer_lost");
+  assert.equal(env.h.store.get(d.id)!.response?.delivered_at, undefined);
+  assert.equal((await api(env, `/api/sessions/${THREAD}/instruction`)).status, 404);
+});

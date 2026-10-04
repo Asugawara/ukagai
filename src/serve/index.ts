@@ -38,6 +38,8 @@ export type ServeOptions = {
   codexBridge?: boolean;
   /** Codex home whose app-server socket the bridge connects to (default: $CODEX_HOME, else ~/.codex) */
   codexHome?: string;
+  /** Quiet time after a completed Codex turn before a progress checkpoint (default 180 s; tests shorten it) */
+  codexCheckpointDelayMs?: number;
 };
 
 export type ServeHandle = {
@@ -119,7 +121,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   });
   const recapWatcher = startRecapWatcher({ store, home, pollMs: opts.recapPollMs });
   const codexBridge = opts.codexBridge
-    ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, collect: (session) => collectContext(session, { home }) })
+    ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, checkpointDelayMs: opts.codexCheckpointDelayMs, collect: (session) => collectContext(session, { home }) })
     : undefined;
 
   return {
