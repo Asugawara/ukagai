@@ -129,6 +129,36 @@ let ui = null; // controls of the shown decision (for the keyboard)
 
 const $ = (id) => document.getElementById(id);
 
+// ---- Settings (GET /api/settings, SSE settings.updated; edited on /settings) ----
+// Same shape as the Settings schema in src/contract.ts. `loaded` below does not depend on it: the defaults apply until the first fetch lands
+const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: true }, notify: { sound: false, browser: false, title_badge: true }, repo_colors: {} };
+let settings = DEFAULT_SETTINGS;
+const isDark = () => settings.theme === "dark" || (settings.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+function applySettings(s) {
+  const prev = settings;
+  settings = { ...DEFAULT_SETTINGS, ...s, plans: { ...DEFAULT_SETTINGS.plans, ...s.plans }, notify: { ...DEFAULT_SETTINGS.notify, ...s.notify }, repo_colors: s.repo_colors ?? {} };
+  const root = document.documentElement;
+  if (settings.theme === "system") delete root.dataset.theme; else root.dataset.theme = settings.theme;
+  // highlight.js ships two stylesheets switched by media query: pin the one that matches the theme
+  // (the links carry data-hljs="light|dark": their media is rewritten here, so it cannot be what finds them)
+  for (const link of document.querySelectorAll("link[data-hljs]")) {
+    const dark = link.dataset.hljs === "dark";
+    link.media = settings.theme === "system" ? `(prefers-color-scheme: ${dark ? "dark" : "light"})` : dark === (settings.theme === "dark") ? "all" : "not all";
+  }
+  const wasDark = prev.theme === "dark" || (prev.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  if (isDark() !== wasDark) mermaidReady = false; // re-initialise with the other theme for the next diagram
+  document.body.classList.toggle("no-hints", !settings.hints);
+  if (settings.lang !== currentLang()) root.dataset.lang = settings.lang; // the MutationObserver below re-renders in the new language
+  else if (loaded) { // colours, plan auto-show and the title badge show without a reload
+    const changed = (k) => JSON.stringify(prev[k]) !== JSON.stringify(settings[k]);
+    if (changed("repo_colors")) { const d = decisions.get(shownId); if (d) renderHead(d); }
+    if (changed("plans") && settings.plans.auto_show && shownId == null) advance();
+    refreshItems();
+  }
+}
+const settingsReq = () => fetch("/api/settings", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : null)).then((s) => { if (s) applySettings(s); }, () => {});
+const openSettings = () => { stashDrafts(); location.href = "/settings"; };
+
 // Show which build of app.js is running (index.html appends ?v=<version>)
 const BUILD = (() => { try { return new URL(import.meta.url).searchParams.get("v") ?? "?"; } catch { return "?"; } })();
 // The key hint lives in the footer row (full width, one line); the build stamp is fixed at the bottom right
@@ -398,10 +428,22 @@ function notifyBackground(prev, d) {
 // Pending button: at the right end of the header's first row. Park it in body before #head is rebuilt so it is not destroyed
 const pendingBtn = $("pending-btn");
 const pendingCount = $("pending-count");
-function stashPending() { if (pendingBtn.parentElement !== document.body) document.body.prepend(pendingBtn); }
+
+// The Settings link sits in the same slot after it (floating at the top right while there is no header)
+const settingsLink = $("settings-link");
+settingsLink.addEventListener("click", () => stashDrafts()); // typed text survives the page change (restored like after a rebuild reload)
+function stashPending() {
+  if (pendingBtn.parentElement !== document.body) document.body.prepend(pendingBtn);
+  if (settingsLink.parentElement !== document.body) document.body.prepend(settingsLink);
+  settingsLink.classList.add("floating");
+}
 function placePending() {
   const slot = document.querySelector("#head .hd-meta");
-  if (slot) { if (pendingBtn.parentElement !== slot) slot.append(pendingBtn); } else stashPending();
+  if (slot) {
+    if (pendingBtn.parentElement !== slot) slot.append(pendingBtn);
+    if (settingsLink.parentElement !== slot || settingsLink.previousElementSibling !== pendingBtn) slot.append(settingsLink);
+    settingsLink.classList.remove("floating");
+  } else stashPending();
 }
 
 let announcedCount = 0;
@@ -411,9 +453,11 @@ function renderHeader() {
   if (loaded && n > announcedCount) announce(t("announce_pending", { n }));
   announcedCount = n;
   pendingCount.textContent = String(n);
-  pendingBtn.hidden = n < 2; // with one item only the shown one exists, so hide it
+  // With one item only the shown one exists, so hide it. With auto-show off a waiting plan is only reachable through the drawer: keep the button
+  pendingBtn.hidden = drawerIds().length < 2 && !(!settings.plans.auto_show && newPlans().length > 0);
   const blocked = pendingList().some(isBlocker);
-  document.title = n > 0 ? `(${n}) ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
+  // title_badge only drops the (N) count; the "waiting" cue of a blocker stays
+  document.title = n > 0 ? `${settings.notify.title_badge ? `(${n}) ` : ""}ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
 }
 
 // Header: repository / branch / worktree chips, reversibility, scope. branch is the only context field that may be rendered
@@ -432,7 +476,13 @@ const repoSlot = (name) => {
   for (const ch of name) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
   return h % 12;
 };
-const repoStyle = (d) => `--repo-hue:${(238 + repoSlot(repoOf(d)) * 27) % 360}`;
+// Settings `repo_colors` override the hash: a hue, or "grey" (no saturation, like plans/)
+const repoColorStyle = (name) => {
+  const o = Object.hasOwn(settings.repo_colors, name) ? settings.repo_colors[name] : undefined;
+  if (o === "grey") return "--repo-hue:0;--repo-sat:0%";
+  return `--repo-hue:${typeof o === "number" ? o : (238 + repoSlot(name) * 27) % 360}`;
+};
+const repoStyle = (d) => repoColorStyle(repoOf(d));
 
 // Where the decision comes from, as one line: `ukagai ⎇ main ⧉ worktree` (the full working directory is the tooltip)
 const whereText = (d) => [repoOf(d), d.context?.branch ? `⎇ ${d.context.branch}` : "", worktreeOf(d) ? `⧉ ${worktreeOf(d)}` : ""].filter(Boolean).join(" ");
@@ -633,7 +683,10 @@ const newPlans = () => {
 };
 // Every item in order: pending decisions (oldest first), then new plans (newest first)
 const isNewName = (name) => newPlans().some((x) => x.name === name);
-const itemIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
+// Settings `plans.auto_show = false`: new plan files stay out of the queue (shown, counted, cycled); the drawer still lists them
+const queuedPlans = () => (settings.plans.auto_show ? newPlans() : []);
+const itemIds = () => [...pendingList().map((d) => d.id), ...queuedPlans().map((p) => PLAN_ID + p.name)];
+const drawerIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
 const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name } });
 const shownPlanPd = () => (isPlanId(shownId) && planData.has(planNameOf(shownId)) ? planPd(planData.get(planNameOf(shownId))) : null);
 const ageText = (iso) => t("history_ago", { t: elapsed(iso) });
@@ -691,7 +744,7 @@ function onPlanRemoved(name) {
 
 function onPlanUpdated(p) {
   if (applyPlan(p)) return;
-  if (shownId == null && isNewName(p.name)) {
+  if (shownId == null && settings.plans.auto_show && isNewName(p.name)) {
     ensurePlanData(p.name).then((ok) => { if (ok && shownId == null && isNewName(p.name)) show(PLAN_ID + p.name); });
     return;
   }
@@ -756,7 +809,7 @@ function renderPlanRight(pd) {
   right.append(el("div", { class: "actions" },
     el("div", { class: "done-reading", role: "button", tabindex: "-1", onclick: doneReading },
       el("span", { text: t("plan_done_reading") }), el("kbd", { text: "Esc" }))));
-  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ←→ ${t("hint_next")}` }));
+  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ←→ ${t("hint_next")} · , ${t("hint_settings")}` }));
   placeToasts();
   if (outline) syncPlan(pd);
 }
@@ -808,7 +861,7 @@ function focusDrawerRow() {
 }
 
 function setDrawer(open) {
-  if (open) drawerIdx = Math.max(0, itemIds().indexOf(shownId));
+  if (open) drawerIdx = Math.max(0, drawerIds().indexOf(shownId));
   else if (drawerOpen()) document.activeElement?.blur?.();
   $("drawer").classList.toggle("open", open);
   $("drawer").inert = !open;
@@ -1459,7 +1512,7 @@ function renderRightBody(d) {
       const sendFull = needSubmit ? `Enter ${t("hint_answer")}` : t("hint_send");
       const sendShort = needSubmit ? `Enter ${t("hint_short_answer")}` : t("hint_short_send");
       const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}${sendFull} · ${extraHints}`;
-      const fullTail = `←→ ${t("hint_next")} · Esc`;
+      const fullTail = `←→ ${t("hint_next")} · , ${t("hint_settings")} · Esc`;
       const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}${sendShort} · ${letters.join(" ")}`;
       const shortTail = ` ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
       setHint(el("div", { class: "hint" },
@@ -1549,7 +1602,7 @@ function renderRightBody(d) {
   }
   actions.append(unread, approve, reject);
   const keysHint = outline ? t("hint_plan_toc") : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")}`;
-  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")}`));
+  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")} · , ${t("hint_settings")}`));
   root.append(actions);
   const buttons = [approve, reject];
   ui = {
@@ -1720,7 +1773,7 @@ function getMermaid() {
     m.initialize({
       startOnLoad: false,
       securityLevel: "strict",
-      theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default",
+      theme: isDark() ? "dark" : "default",
     });
     mermaidReady = true;
   }
@@ -2668,9 +2721,47 @@ function advance() {
   renderAll();
 }
 
+// A short beep (WebAudio) and a browser notification for a new decision, when settings ask for them and the tab is not in front
+// One shared AudioContext: a context made without a user gesture starts suspended, so it is created / resumed on the first key or click
+let audio = null;
+function audioCtx() {
+  try {
+    audio ??= new (window.AudioContext ?? window.webkitAudioContext)();
+    if (audio.state === "suspended") audio.resume?.()?.catch?.(() => {});
+  } catch {}
+  return audio;
+}
+for (const type of ["keydown", "click"]) document.addEventListener(type, () => { if (settings.notify.sound) audioCtx(); }, { capture: true });
+function beep() {
+  const ctx = audioCtx();
+  if (!ctx) return;
+  try {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.27);
+  } catch {}
+}
+function notifyArrival(d) {
+  if (settings.notify.sound && !document.hasFocus()) beep();
+  if (settings.notify.browser && document.hidden && typeof Notification !== "undefined" && Notification.permission === "granted") {
+    try {
+      const n = new Notification(`ukagai · ${kindLabel(d)}`, { body: clip(titleOf(d), 120), tag: d.id });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch {}
+  }
+}
+
 function upsert(d) {
   const prev = decisions.get(d.id);
   decisions.set(d.id, d);
+  if (!prev && d.status === "pending" && loaded) notifyArrival(d);
   if (isCheckpoint(d) && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) toast(t("checkpoint_delivered"), { kind: "ok" });
   if (d.id !== shownId) notifyBackground(prev, d);
   if (d.id === shownId) {
@@ -2741,6 +2832,7 @@ function connect() {
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("session.updated", (e) => { const x = JSON.parse(e.data); sessions.set(x.session_id, x); syncIdleNote(x.session_id); });
+  es.addEventListener("settings.updated", (e) => applySettings(JSON.parse(e.data)));
   es.addEventListener("plan.updated", (e) => onPlanUpdated(JSON.parse(e.data)));
   es.addEventListener("plan.removed", (e) => onPlanRemoved(JSON.parse(e.data).name));
   es.addEventListener("open", () => {
@@ -2748,7 +2840,7 @@ function connect() {
     if (connDown) setConnDown(false);
     else $("banner").hidden = true;
     checkBuild();
-    loadAll().catch(() => {});
+    settingsReq().finally(() => loadAll().catch(() => {}));
   });
   es.addEventListener("error", () => {
     es.close();
@@ -2758,6 +2850,11 @@ function connect() {
     retryTimer = setTimeout(async () => { await refreshAuth(); connect(); }, wait);
   });
 }
+
+// Leaving the page (a link to /settings, back / forward): close the stream so the browser's few connections per host are free for
+// the next page (a page kept in the back/forward cache would hold its stream open); coming back from the cache reconnects and resyncs
+window.addEventListener("pagehide", () => { clearTimeout(retryTimer); es?.close(); });
+window.addEventListener("pageshow", (e) => { if (e.persisted) connect(); });
 
 // ---- Keyboard ----
 
@@ -2774,7 +2871,7 @@ function cycle(step) {
 // With an IME enabled, keydown has key "Process" and keyCode 229, so the character is lost.
 // Outside text fields, decide the bound key from the physical key (code)
 const CODE_KEYS = {
-  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyO: "o", BracketLeft: "[", BracketRight: "]", Slash: "/", Period: ".",
+  KeyJ: "j", KeyK: "k", KeyH: "h", KeyL: "l", KeyB: "b", KeyI: "i", KeyG: "g", KeyC: "c", KeyY: "y", KeyA: "a", KeyN: "n", KeyF: "f", KeyE: "e", KeyV: "v", KeyO: "o", BracketLeft: "[", BracketRight: "]", Slash: "/", Period: ".", Comma: ",",
   Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
 };
 function logicalKey(ev) {
@@ -2787,7 +2884,7 @@ function logicalKey(ev) {
 
 function drawerKey(ev) {
   const key = logicalKey(ev);
-  const list = itemIds();
+  const list = drawerIds();
   if (key === "Escape" || key === "b" || key === "ArrowLeft") { ev.preventDefault(); setDrawer(false); }
   else if (key === "ArrowDown" || key === "ArrowUp" || key === "j" || key === "k") {
     ev.preventDefault();
@@ -2828,6 +2925,7 @@ document.addEventListener("keydown", (ev) => {
   if (overlay) { overlayKey(ev); return; }
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
+  if (!typing && key === ",") { ev.preventDefault(); openSettings(); return; }
   if (!typing && key === "f" && hasWide()) { ev.preventDefault(); setFullwide(true); return; }
   if (key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
   if (!typing && (key === "h" || key === "l" || key === "ArrowLeft" || key === "ArrowRight")) {
@@ -2835,7 +2933,7 @@ document.addEventListener("keydown", (ev) => {
     cycle(key === "l" || key === "ArrowRight" ? 1 : -1);
     return;
   }
-  if (!typing && key === "b" && itemIds().length) { ev.preventDefault(); setDrawer(true); return; }
+  if (!typing && key === "b" && drawerIds().length) { ev.preventDefault(); setDrawer(true); return; }
   // [ ] cycle through the items, except where they walk the contents of a long plan (h l ← → Tab always cycle)
   if (!typing && (key === "[" || key === "]") && !ui?.toc) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }
   if (isPlanId(shownId)) { planViewKey(ev); return; }
@@ -3051,5 +3149,5 @@ renderDrawerKeys();
 renderEmptyText();
 new MutationObserver(applyLang).observe(document.documentElement, { attributes: true, attributeFilter: ["data-lang"] });
 
-loadAll().catch(() => {});
+settingsReq().finally(() => { loadAll().catch(() => {}); });
 connect();

@@ -673,3 +673,49 @@ export function extractExplainBlocks(markdown: string): { question: string | und
 export function stripExplainBlocks(markdown: string): string {
   return markdown.includes(EXPLAIN_BLOCK_OPEN) ? markdown.replace(explainBlockRe(), "") : markdown;
 }
+
+// ---- Settings (<data-dir>/config.json, GET / PUT /api/settings) ----
+
+export const CODEX_DELAY_MIN_S = 30;
+export const CODEX_DELAY_MAX_S = 3600;
+/** A repository colour override: a hue (0-359) or "grey" */
+export const RepoColor = z.union([z.number().int().min(0).max(359), z.literal("grey")]);
+export type RepoColor = z.infer<typeof RepoColor>;
+
+export const Settings = z.object({
+  /** Display language of the GUI / TUI (and the language the agent writes explanations in) */
+  lang: z.enum(["en", "ja"]),
+  theme: z.enum(["system", "light", "dark"]),
+  /** false hides the bottom hint line of the GUI */
+  hints: z.boolean(),
+  checkpoints: z.object({
+    /** false: nothing creates a progress checkpoint (recap watcher, Codex bridge) */
+    enabled: z.boolean(),
+    /** Quiet time after a completed Codex turn before its checkpoint (read at arm time) */
+    codex_delay_s: z.number().int().min(CODEX_DELAY_MIN_S).max(CODEX_DELAY_MAX_S),
+    /** false: a reply is never typed into a herdr pane; it waits for the agent's next tool call */
+    terminal_delivery: z.boolean(),
+  }),
+  plans: z.object({
+    /** false: new plan files neither pop up nor count in Pending (still in the drawer list) */
+    auto_show: z.boolean(),
+  }),
+  notify: z.object({
+    sound: z.boolean(),
+    browser: z.boolean(),
+    title_badge: z.boolean(),
+  }),
+  /** Per-repository header colour overrides: repo name -> hue / "grey" */
+  repo_colors: z.record(z.string().min(1).max(200), RepoColor).refine((r) => Object.keys(r).length <= 500, "too many repo colours"),
+});
+export type Settings = z.infer<typeof Settings>;
+
+export const DEFAULT_SETTINGS: Settings = {
+  lang: "en",
+  theme: "system",
+  hints: true,
+  checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true },
+  plans: { auto_show: true },
+  notify: { sound: false, browser: false, title_badge: true },
+  repo_colors: {},
+};

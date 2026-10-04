@@ -1,10 +1,13 @@
 import { CHECKPOINT_TTL_MS, type Decision } from "../contract.js";
+import type { SettingsStore } from "./settings.js";
 import type { Store } from "./store.js";
 import { replyLine, terminalLabel, TerminalTypeError, type Terminal } from "./terminal.js";
 
 export type DeliveryOptions = {
   store: Store;
   terminal: Terminal;
+  /** Live settings: `checkpoints.terminal_delivery = false` leaves every reply for the hook */
+  settings?: SettingsStore;
   log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
   /** How often and how many times a `working` agent is asked again before the reply is left for the hook (default 6 x 500 ms) */
   pollMs?: number;
@@ -20,12 +23,23 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * is found, or its agent is blocked / unknown, the reply stays queued for the hook. Never throws.
  */
 export function startCheckpointDelivery(opts: DeliveryOptions): void {
-  const { store, terminal, log = () => {}, pollMs = 500, polls = 6 } = opts;
+  const { store, terminal, log = () => {}, pollMs = 500, polls = 6, settings } = opts;
 
   store.onCheckpointCreated = (d) => {
     if (d.session.agent === "codex") return;
+    // Delivery off: no terminal is looked up and none is shown, so the GUI does not promise to type the reply
+    if (settings && !settings.get().checkpoints.terminal_delivery) {
+      store.setTerminal(d.session.session_id, undefined);
+      return;
+    }
     void refreshTerminal(d.session.session_id).catch((err) => log("terminal_find_failed", { session: d.session.session_id, error: String(err) }));
   };
+
+  // Turned off: forget the terminals found while it was on
+  settings?.onChange((s, prev) => {
+    if (s.checkpoints.terminal_delivery || !prev.checkpoints.terminal_delivery) return;
+    for (const x of store.listSessions()) if (x.terminal) store.setTerminal(x.session_id, undefined);
+  });
 
   store.onCheckpointDeliverable = (d: Decision) => {
     void deliver(d).catch((err) => log("terminal_deliver_failed", { decision: d.id, error: String(err) }));
@@ -39,6 +53,10 @@ export function startCheckpointDelivery(opts: DeliveryOptions): void {
 
   async function deliver(d: Decision): Promise<void> {
     if (d.session.agent === "codex") return;
+    if (settings && !settings.get().checkpoints.terminal_delivery) {
+      log("terminal_delivery_skipped", { decision: d.id, reason: "disabled" });
+      return;
+    }
     const sid = d.session.session_id;
     const text = d.response?.text;
     if (!text) return;

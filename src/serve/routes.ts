@@ -6,8 +6,10 @@ import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import {
   AnswerRequest,
+  DEFAULT_SETTINGS,
   CheckpointRequest,
   PlanReadRequest,
+  Settings,
   CreateDecisionRequest,
   DecisionStatus,
   EventInput,
@@ -25,6 +27,7 @@ import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanReadStore } from "./plan-read.js";
+import type { SettingsStore } from "./settings.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
@@ -44,6 +47,8 @@ export type AppDeps = {
   planRead: PlanReadStore;
   /** Display language of the GUI / TUI (config.json, read at startup). Defaults to en */
   lang?: Lang;
+  /** Live settings (<dataDir>/config.json). Without it GET /api/settings serves the defaults and PUT is refused */
+  settings?: SettingsStore;
   getPort: () => number;
   collect: (session: DecisionSession) => Promise<DecisionContext>;
 };
@@ -123,12 +128,13 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/healthz", (c) => c.json({ ok: true }));
 
-  app.get("/", async (c) => {
+  // The two pages (/ and /settings) are served alike: session cookie, mtime-versioned asset URLs, the display language injected into <html>
+  const page = (file: string, assets: string[]) => async (c: Context) => {
     let html: string;
     try {
-      html = await readFile(join(deps.publicDir, "index.html"), "utf8");
+      html = await readFile(join(deps.publicDir, file), "utf8");
     } catch {
-      return c.json({ error: "index.html not found" }, 404);
+      return c.json({ error: `${file} not found` }, 404);
     }
     if (!cookieOk(c)) {
       const value = randomBytes(24).toString("hex");
@@ -137,20 +143,24 @@ export function createApp(deps: AppDeps): Hono {
       setCookie(c, COOKIE_NAME, value, { httpOnly: true, sameSite: "Strict", path: "/" });
     }
     // Add an mtime version to the app.js / app.css URLs so stale copies do not linger (vendor is left unchanged)
-    for (const name of ["app.js", "app.css"]) {
+    for (const name of assets) {
       try {
         const v = Math.floor((await stat(join(deps.publicDir, name))).mtimeMs).toString(36);
         html = html.replace(`"/public/${name}"`, `"/public/${name}?v=${v}"`);
       } catch {}
     }
-    const lang = deps.lang ?? "en";
+    const lang = deps.settings?.get().lang ?? deps.lang ?? "en";
+    const theme = deps.settings?.get().theme ?? "system";
     html = html.replace(/<html(\s[^>]*)?>/i, (_m, attrs: string | undefined) => {
-      const rest = (attrs ?? "").replace(/\s(?:lang|data-lang)="[^"]*"/gi, "");
-      return `<html lang="${lang}" data-lang="${lang}"${rest}>`;
+      const rest = (attrs ?? "").replace(/\s(?:lang|data-lang|data-theme)="[^"]*"/gi, "");
+      return `<html lang="${lang}" data-lang="${lang}"${theme === "system" ? "" : ` data-theme="${theme}"`}${rest}>`;
     });
     c.header("Cache-Control", "no-store");
     return c.html(html);
-  });
+  };
+  app.get("/", page("index.html", ["app.js", "app.css"]));
+  app.get("/settings", page("settings.html", ["settings.js", "app.css"]));
+  app.get("/settings/", page("settings.html", ["settings.js", "app.css"]));
 
   app.get("/public/*", async (c) => {
     let rel: string;
@@ -210,7 +220,20 @@ export function createApp(deps: AppDeps): Hono {
     // Same value as the ?v= on app.js, so the GUI can tell whether it runs the newest build
     let build = "?";
     try { build = Math.floor((await stat(join(deps.publicDir, "app.js"))).mtimeMs).toString(36); } catch {}
-    return c.json({ lang: deps.lang ?? "en", build });
+    // `lang` follows the live settings (the GUI reads the rest from GET /api/settings)
+    return c.json({ lang: deps.settings?.get().lang ?? deps.lang ?? "en", build });
+  });
+
+  app.get("/api/settings", auth("any"), (c) => c.json(deps.settings?.get() ?? DEFAULT_SETTINGS));
+
+  app.put("/api/settings", auth("any"), jsonOnly, async (c) => {
+    if (!deps.settings) return c.json({ error: "settings unavailable" }, 503);
+    let next = await parse(c, Settings);
+    // `install --lang` may have rewritten config.json while serve runs: a PUT that does not change the language keeps the file's
+    if (next.lang === deps.settings.get().lang) next = { ...next, lang: await deps.settings.fileLang() };
+    await deps.settings.update(next);
+    hub.broadcast("settings.updated", next);
+    return c.json(next);
   });
 
   app.get("/api/decisions", auth("any"), (c) => {

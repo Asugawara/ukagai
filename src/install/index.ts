@@ -26,12 +26,12 @@ async function askLang(): Promise<Lang> {
 /** Decide the display language and write config.json. `--lang` wins; otherwise an existing config is kept; otherwise ask on a TTY, else en. */
 async function resolveLang(dataDir: string, flag: Lang | undefined): Promise<Lang> {
   if (flag !== undefined) {
-    await writeConfig(dataDir, { lang: flag });
+    await writeConfig(dataDir, { ...(await readConfig(dataDir)), lang: flag });
     return flag;
   }
   if (await exists(configPath(dataDir))) return (await readConfig(dataDir)).lang;
   const lang = process.stdin.isTTY && process.stdout.isTTY ? await askLang() : "en";
-  await writeConfig(dataDir, { lang });
+  await writeConfig(dataDir, { ...(await readConfig(dataDir)), lang });
   return lang;
 }
 

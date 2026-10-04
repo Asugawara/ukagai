@@ -54,6 +54,13 @@ export async function run(argv: string[]): Promise<number> {
   const app = new App();
   app.server = opts.server;
   app.lang = await resolveLang(opts);
+  app.langLocked = opts.lang !== undefined;
+  // The server's live settings (language, repository colours); the config.json read above stays when it cannot be reached
+  try {
+    app.settingsUpdated(await api.settings());
+  } catch {
+    // Fallback: config.json (lang above); the default colours
+  }
   app.fetchHistory = (id) => api.history(id);
   app.fetchPlan = (name) => api.plan(name);
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;

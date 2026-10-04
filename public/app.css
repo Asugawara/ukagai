@@ -6,8 +6,9 @@
   --opt-0: #d97706; --opt-1: #0d9488; --opt-2: #db2777; --opt-3: #7c3aed;
   color-scheme: light dark;
 }
+/* Dark: the system setting, unless the settings page pinned a theme (<html data-theme="light|dark">, set by the server and app.js) */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #17171a; --fg: #e8e8ec; --muted: #9a9aa2; --line: #34343a; --panel: #1f1f24;
     --repo-l: 74%; --repo: #c084fc; --branch: #4ade80; --worktree: #fb923c; --blocker: #fb923c;
     --accent: #6ea0ff; --accent-bg: #6ea0ff1f; --red: #f87171; --yellow: #facc15; --yellow-bg: #854d0e; --green: #4ade80;
@@ -15,6 +16,15 @@
     --opt-0: #fbbf24; --opt-1: #2dd4bf; --opt-2: #f472b6; --opt-3: #a78bfa;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #17171a; --fg: #e8e8ec; --muted: #9a9aa2; --line: #34343a; --panel: #1f1f24;
+  --repo-l: 74%; --repo: #c084fc; --branch: #4ade80; --worktree: #fb923c; --blocker: #fb923c;
+  --accent: #6ea0ff; --accent-bg: #6ea0ff1f; --red: #f87171; --yellow: #facc15; --yellow-bg: #854d0e; --green: #4ade80;
+  --add: #14352180; --del: #45151580; --hunk: #25306080; --file: #3a3a4280; --code: #26262c;
+  --opt-0: #fbbf24; --opt-1: #2dd4bf; --opt-2: #f472b6; --opt-3: #a78bfa;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -41,6 +51,14 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-delay: 0s !important; scroll-behavior: auto !important; }
 }
+
+/* Settings link: in the header's meta area after Pending; floating at the top right while there is no header */
+.settings-link { flex: none; font-size: 12px; line-height: 1.4; padding: 0 2px; color: var(--muted); white-space: nowrap; text-decoration: underline; text-underline-offset: 2px; }
+.settings-link.floating { position: fixed; top: 8px; right: 14px; z-index: 5; }
+.hd.blocker .settings-link { color: #1d1d1f; }
+@media (pointer: coarse) { .settings-link { min-height: 32px; display: inline-flex; align-items: center; } }
+/* Settings: hints = false hides the bottom hint line */
+body.no-hints .foot { display: none; }
 
 /* Pending button (shown only with 2 or more decisions; it sits at the right end of the header's first row) */
 .pending-btn { flex: none; font: inherit; font-size: 12px; line-height: 1.4; padding: 0 2px; border: 0; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; text-decoration: underline; text-underline-offset: 2px; }
@@ -433,3 +451,32 @@ pre code.hljs { background: none; padding: 0; }
 .cp-idle { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .cp-idle[hidden] { display: none; }
 .opt[data-card] .free-text { margin-top: 6px; }
+
+/* Settings page (/settings): one column of fieldsets; each control saves on change */
+body.settings-page { display: block; height: auto; min-height: 100dvh; overflow: auto; }
+.set { max-width: 720px; margin: 0 auto; padding: 20px 16px 80px; }
+.set h1 { font-size: 22px; font-weight: 600; margin: 8px 0 4px; }
+.set-back { color: var(--muted); font-size: 13px; text-underline-offset: 2px; }
+.set fieldset { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin: 18px 0 0; padding: 4px 16px 12px; min-width: 0; }
+.set legend { font-size: 13px; font-weight: 600; padding: 0 6px; }
+.set-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.set-row:first-of-type { border-top: 0; }
+.set-row > label, .set-row > .set-label { flex: 1 1 260px; min-width: 0; }
+.set-help { flex: 1 1 100%; margin: 0; font-size: 12px; color: var(--muted); text-wrap: pretty; }
+.set-err { flex: 1 1 100%; margin: 0; font-size: 12px; color: var(--red); }
+.set-err:empty { display: none; }
+.set select, .set input[type=number], .set input[type=text] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
+.set input[type=number] { width: 7em; }
+.set button { font: inherit; font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.set button:disabled { opacity: .5; cursor: default; }
+.set-status { position: fixed; right: 16px; bottom: 14px; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.set-status.on { opacity: 1; }
+.set-status.err { color: var(--red); border-color: var(--red); }
+.color-row { display: grid; grid-template-columns: 6px minmax(0, 1fr) minmax(120px, 200px) auto auto; align-items: center; gap: 8px 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.color-row:first-of-type { border-top: 0; }
+.color-swatch { align-self: stretch; border-radius: 3px; background: hsl(var(--repo-hue, 270) var(--repo-sat, 70%) var(--repo-l)); }
+.color-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.color-name .tag { font-size: 11px; color: var(--muted); margin-left: 6px; }
+.color-row input[type=range] { width: 100%; accent-color: var(--accent); }
+.color-add { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); align-items: center; }
+@media (max-width: 560px) { .color-row { grid-template-columns: 6px minmax(0, 1fr) auto; } .color-row input[type=range] { grid-column: 2 / -1; } }

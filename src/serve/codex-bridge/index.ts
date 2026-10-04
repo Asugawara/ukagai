@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { DecisionContext, DecisionSession } from "../../contract.js";
 import type { Lang } from "../../settings/config.js";
+import type { SettingsStore } from "../settings.js";
 import type { Store } from "../store.js";
 import { RpcClient } from "./client.js";
 import { createBridgeLog, type BridgeLog } from "./log.js";
@@ -27,6 +28,8 @@ export type CodexBridgeOptions = {
   waitMs?: number;
   /** Quiet time after a completed turn before a progress checkpoint (default 180 s; for tests) */
   checkpointDelayMs?: number;
+  /** Live settings (see PlanBridgeDeps.settings) */
+  settings?: SettingsStore;
   /** Is a Codex TUI running in this folder? (default: look at the process list; for tests) */
   tuiRunningIn?: (cwd: string) => Promise<boolean | undefined>;
   log?: BridgeLog;
@@ -45,7 +48,7 @@ export function resolveCodexHome(explicit?: string): string {
 export function startCodexBridge(opts: CodexBridgeOptions): CodexBridge {
   const socketPath = join(resolveCodexHome(opts.codexHome), SOCKET_RELATIVE);
   const log = opts.log ?? createBridgeLog(opts.dataDir);
-  const bridge = new PlanBridge({ store: opts.store, log, lang: opts.lang, collect: opts.collect, waitMs: opts.waitMs, checkpointDelayMs: opts.checkpointDelayMs, tuiRunningIn: opts.tuiRunningIn ?? ((cwd) => tuiRunningIn(cwd)) });
+  const bridge = new PlanBridge({ store: opts.store, log, lang: opts.lang, collect: opts.collect, waitMs: opts.waitMs, checkpointDelayMs: opts.checkpointDelayMs, settings: opts.settings, tuiRunningIn: opts.tuiRunningIn ?? ((cwd) => tuiRunningIn(cwd)) });
   opts.store.onCheckpointAnswered = (d) => bridge.onCheckpointAnswered(d);
   // The store has a single session-event callback (the recap watcher's): chain in front of it, restore on close
   const prevSessionEvent = opts.store.onSessionEvent;

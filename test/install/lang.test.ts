@@ -85,3 +85,23 @@ test("install --help documents --lang", async () => {
   const r = await ukagai((await setup()).home, ["install", "--help"]);
   assert.match(r.out, /--lang <en\|ja>/);
 });
+
+test("install --lang keeps the other settings of an existing config.json (with and without --lang)", async () => {
+  const e = await setup();
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(e.dataDir, { recursive: true });
+  const saved = {
+    lang: "en", theme: "dark", hints: false,
+    checkpoints: { enabled: false, codex_delay_s: 600, terminal_delivery: false },
+    plans: { auto_show: false },
+    notify: { sound: true, browser: false, title_badge: false },
+    repo_colors: { ukagai: 120, dotfiles: "grey" },
+  };
+  await writeFile(join(e.dataDir, "config.json"), JSON.stringify(saved));
+  const r = await ukagai(e.home, ["install", "--settings", e.settings, "--data-dir", e.dataDir, "--lang", "ja"]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(JSON.parse(await readFile(join(e.dataDir, "config.json"), "utf8")), { ...saved, lang: "ja" });
+  const r2 = await ukagai(e.home, ["install", "--settings", e.settings, "--data-dir", e.dataDir]);
+  assert.equal(r2.code, 0, r2.err);
+  assert.deepEqual(JSON.parse(await readFile(join(e.dataDir, "config.json"), "utf8")), { ...saved, lang: "ja" });
+});

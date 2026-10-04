@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Decision, PlanRemovedEvent, PlanSummary, SessionHistory, SessionSummary, type PlanContent } from "../contract.js";
+import { Decision, PlanRemovedEvent, PlanSummary, SessionHistory, SessionSummary, Settings, type PlanContent } from "../contract.js";
 
 // Thin fetch wrapper for the server. Auth is the Bearer token in <data-dir>/token (same as the hook client).
 
@@ -17,7 +17,8 @@ export type StreamEvent =
   | { event: "decision.created" | "decision.updated"; decision: Decision }
   | { event: "session.updated"; session: SessionSummary }
   | { event: "plan.updated"; plan: PlanSummary }
-  | { event: "plan.removed"; name: string };
+  | { event: "plan.removed"; name: string }
+  | { event: "settings.updated"; settings: Settings };
 
 export class TuiApi {
   private token: string | null = null;
@@ -95,6 +96,13 @@ export class TuiApi {
     });
   }
 
+  /** The settings (language, repository colours, ...). Throws on any failure */
+  async settings(): Promise<Settings> {
+    const res = await this.fetch("/api/settings", { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    return Settings.parse(await res.json());
+  }
+
   /** The plan files Claude Code wrote (newest first). Throws on any failure */
   async plans(): Promise<PlanSummary[]> {
     const res = await this.fetch("/api/plans", { signal: AbortSignal.timeout(5000) });
@@ -155,7 +163,7 @@ export class TuiApi {
   }
 }
 
-const HANDLED = new Set(["decision.created", "decision.updated", "session.updated", "plan.updated", "plan.removed"]);
+const HANDLED = new Set(["decision.created", "decision.updated", "session.updated", "plan.updated", "plan.removed", "settings.updated"]);
 
 /** Text of one event: decision.created / decision.updated, session.updated, plan.updated and plan.removed; others (heartbeats) are dropped without parsing */
 export function parseSse(block: string): StreamEvent | null {
@@ -179,6 +187,10 @@ export function parseSse(block: string): StreamEvent | null {
     if (event === "plan.updated") {
       const r = PlanSummary.safeParse(j);
       return r.success ? { event, plan: r.data } : null;
+    }
+    if (event === "settings.updated") {
+      const r = Settings.safeParse(j);
+      return r.success ? { event, settings: r.data } : null;
     }
     const r = PlanRemovedEvent.safeParse(j);
     return r.success ? { event: "plan.removed", name: r.data.name } : null;

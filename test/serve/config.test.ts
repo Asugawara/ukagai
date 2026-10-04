@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { start, type ServeHandle } from "../../src/serve/index.js";
-import { writeConfig, type Lang } from "../../src/settings/config.js";
+import { DEFAULT_CONFIG, writeConfig, type Lang } from "../../src/settings/config.js";
 
 const roots: string[] = [];
 const handles: ServeHandle[] = [];
@@ -17,7 +17,7 @@ after(async () => {
 async function boot(lang?: Lang): Promise<{ url: string; token: string }> {
   const dir = mkdtempSync(join(tmpdir(), "ukagai-cfg-serve-"));
   roots.push(dir);
-  if (lang) await writeConfig(dir, { lang });
+  if (lang) await writeConfig(dir, { ...DEFAULT_CONFIG, lang });
   const h = await start({ port: 0, dataDir: dir, home: dir });
   handles.push(h);
   return { url: `http://127.0.0.1:${h.port}`, token: h.token };
