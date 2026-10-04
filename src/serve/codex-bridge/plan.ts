@@ -31,6 +31,8 @@ export type PlanBridgeDeps = {
   waitMs?: number;
   /** Quiet time after a completed turn before a progress checkpoint is created (default 3 min) */
   checkpointDelayMs?: number;
+  /** Is a Codex TUI running in this folder? undefined = cannot tell. The daemon keeps a thread loaded after its TUI quit and says nothing, so this is the "someone is looking" signal */
+  tuiRunningIn?: (cwd: string) => Promise<boolean | undefined>;
 };
 
 type Thread = {
@@ -466,8 +468,26 @@ export class PlanBridge {
       log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "not_connected" });
       return;
     }
+    // The TUI may have quit: the daemon keeps the thread loaded and sends nothing. Cannot tell: ask anyway
+    let alive: boolean | undefined;
+    if (t.cwd && this.deps.tuiRunningIn) {
+      try {
+        alive = await this.deps.tuiRunningIn(t.cwd);
+      } catch {
+        alive = undefined;
+      }
+    }
+    if (this.rpc !== rpc) {
+      log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "not_connected" });
+      return;
+    }
     // The thread ended or a turn started while we asked
     if (this.stopped || t.epoch !== epoch || t.running || this.threads.get(t.id) !== t) return;
+    if (alive === false) {
+      // The thread stays known: `codex resume` brings a turn/started that arms normally
+      log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "tui_gone", cwd: t.cwd });
+      return;
+    }
     try {
       const { decision, created } = this.deps.store.createCheckpoint(
         { session_id: t.id, state: "idle", last_event_at: recapAt, cwd: t.cwd, ...(t.title ? { title: t.title } : {}), transcript_path: "", agent: "codex" },
