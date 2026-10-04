@@ -20,7 +20,8 @@ export const CODEX_SPECS: CodexSpec[] = [
   { event: "PermissionRequest" },
   { event: "Stop" },
   { event: "SessionStart", timeout: 30 },
-  { event: "SessionEnd", timeout: 5 },
+  // Codex clamps SessionEnd handlers to 3 s and hashes the clamped value: a larger timeout would never match the trust hash
+  { event: "SessionEnd", timeout: 3 },
 ];
 
 export interface CodexInstallOptions {

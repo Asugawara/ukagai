@@ -108,7 +108,7 @@ test("install --codex: merges into hooks.json, appends the managed groups, write
   assert.equal(hooks.Stop.length, 2);
   assert.equal(hooks.SessionStart[0].hooks[0].timeout, 30);
   assert.ok(!hooks.SessionStart[0].hooks[0].command.includes("--budget"));
-  assert.equal(hooks.SessionEnd[0].hooks[0].timeout, 5);
+  assert.equal(hooks.SessionEnd[0].hooks[0].timeout, 3);
   assert.match(hooks.SessionEnd[0].hooks[0].command, /hook --agent codex .*--managed-by ukagai$/);
   assert.ok(!hooks.SessionEnd[0].hooks[0].command.includes("--budget"));
 
