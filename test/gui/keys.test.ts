@@ -661,12 +661,11 @@ gui("no explanation: (Recommended) is stripped into a recommended badge and the 
   assert.equal(Object.values(list.at(-1).response.answers)[0], "A (Recommended)");
 });
 
-gui("external and relative img in an explanation are removed, data: stays", async () => {
+gui("external, relative and data: img in an explanation are removed (only local document images go through /api/files)", async () => {
   const imgs = `<img src="https://example.invalid/a.png">\n\n<img src="//example.invalid/b.png">\n\n<img src="x">\n\n<img src="/x">\n\n<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">\n\n`;
   await seedQuestion({ markdown: v2md("An image question?", "Image decision", ROWS, imgs) });
   await reopen();
-  assert.equal(ev<number>(`document.querySelectorAll("#background img").length`), 1);
-  assert.equal(ev<boolean>(`document.querySelector("#background img").src.startsWith("data:")`), true);
+  assert.equal(ev<number>(`document.querySelectorAll("#background img").length`), 0);
 });
 
 gui("v2 cards still render when a label contains <b> (only options that do not match are filled in raw)", async () => {
