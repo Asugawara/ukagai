@@ -14,6 +14,7 @@ import {
   DecisionStatus,
   EventInput,
   POLL_TIMEOUT_MS,
+  PLAN_BLOCK_SUFFIX,
   isAllowedExplanationPath,
   isPlanFile,
   plansDir,
@@ -25,6 +26,7 @@ import type { Lang } from "../settings/config.js";
 import type { SseHub } from "./sse.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
+import { FILE_TYPES, documentDir, resolveDocumentFile, type DocumentScope } from "./files.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
@@ -234,6 +236,34 @@ export function createApp(deps: AppDeps): Hono {
     await deps.settings.update(next);
     hub.broadcast("settings.updated", next);
     return c.json(next);
+  });
+
+  // Images of the document being shown (explanation file or plan file): see docs/spec/markdown.md 2.12. Missing and forbidden are both 404
+  app.get("/api/files", auth("any"), async (c) => {
+    const notFound = () => c.json({ error: "not found" }, 404);
+    const written = c.req.query("path") ?? "";
+    const decisionId = c.req.query("decision");
+    const planName = c.req.query("plan");
+    let scope: DocumentScope | undefined;
+    if (decisionId !== undefined) {
+      const d = store.get(decisionId);
+      const p = d?.explanation?.path;
+      if (p) scope = p.endsWith(PLAN_BLOCK_SUFFIX) ? { baseDir: documentDir(p) } : { baseDir: documentDir(p), root: documentDir(p) };
+      else if (d?.kind === "approve_plan" && d.plan_name) scope = { baseDir: plansDir(deps.home) }; // plan_name is set only for a plan file inside the plans dir
+    } else if (planName !== undefined && isPlanFile(planName)) scope = { baseDir: plansDir(deps.home) };
+    if (!scope) return notFound();
+    try {
+      const file = resolveDocumentFile(written, scope, deps.home, deps.dataDir);
+      if (!file) return notFound();
+      const body = await readFile(file);
+      return c.body(new Uint8Array(body), 200, {
+        "Content-Type": FILE_TYPES[extname(file).toLowerCase()]!,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-cache",
+      });
+    } catch {
+      return notFound();
+    }
   });
 
   app.get("/api/decisions", auth("any"), (c) => {

@@ -118,3 +118,19 @@ What the session is about, without boxes: the header's third row and one panel. 
 - Announcements: two fixed, visually hidden live regions in `index.html` (`#live` polite, `#live-urgent` assertive). `toast()` writes to them (lost / cancelled toasts are assertive); the visible `.toasts` box is `aria-hidden` because it is re-parented on every render. A new pending item announces `New decision, {n} pending` (including the first one on an empty queue; the initial load is not announced).
 - Drawer and overlays: the closed drawer is `inert`; while the drawer or an overlay (`?` / `v` / `s`, `role=dialog aria-modal`) is open, `#head`, `#main`, `#foot`, `#empty` and the pending button are `inert`. An overlay takes focus and gives it back to the previous element (never to a text box) on close.
 - CSS: a global `:focus-visible` ring, `accent-color`, `overscroll-behavior: contain` on the scroll panes, `text-wrap: balance` (headings) / `pretty` (prose), 32 px targets under `pointer: coarse`, and `prefers-reduced-motion: reduce` turns transitions and animations off.
+
+## ukagai Markdown
+
+Explanations and plans are written in the dialect of `docs/spec/markdown.md`; the GUI renders it in `setMarkdown` (`app.js`, sanitizer first, then the dialect on the parsed DOM). Every construct has a plain-text fallback in the TUI.
+
+- **Callouts.** `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION] Optional title`: coloured left border, the title (or the localised kind word) as the label. IMPORTANT is purple.
+- **Task lists.** `- [x]` / `- [ ]` become ☑ / ☐ glyphs (read-only); done items are dimmed.
+- **Folding.** `<details>` / `<summary>` (closed unless `open`), plus `<br>`, `<sub>`, `<sup>`. The sanitizer is an allowlist: every other tag is dropped (its text stays; `script`, `style`, `iframe`, `object`, `form` and similar go with their content), as are event attributes and `javascript:` links. A `<details>` inside a plan section folds on its own and does not touch the outline folding (`details.plan-sec` / `plan-sub` are the outline's).
+- **Mermaid.** Any type of the vendored build (flowchart, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, gantt, pie, mindmap, timeline, gitGraph, journey, quadrantChart, xychart-beta, block-beta). A render error shows the error line and keeps the source.
+- **Code.** ```` ```ts title="src/x.ts" ```` puts a filename tab (text) above the block; `diff` colours `+` / `-` lines. Blocks over 9 lines still fold.
+- **Badges.** `[done] [todo] [doing] [blocked] [risk] [skip]` at the start of a list item or table cell (or right after a bold title: `**Title** [done]`) become `.badge` chips; the word stays. Tokens elsewhere in a sentence are text.
+- **Highlight.** `==text==` becomes `<mark>` (not inside code).
+- **Columns.** `::: columns` … `---` … `:::` (2–3 columns): side by side from 900 px, stacked below.
+- **Steps.** An ordered list under `## Steps` / `## 手順` becomes a timeline (numbered dots, a connecting line, the badge beside the bold title, nested content indented).
+- **File references.** Inline code that looks like a repository path (`src/x.ts:12`, `public/app.js#L40-L60`) is a chip; a click copies it. In "What I checked" paths stay unboxed.
+- **Images.** `![alt](path)` with a local path (relative to the document's directory, or absolute) is served by `GET /api/files?decision=<id>|plan=<name>&path=<as written>` (allowlisted folders, png / jpg / jpeg / gif / webp, ≤ 10 MB; see `docs/spec/api.md`). The image is capped at 100% width / 480 px height with the alt text as caption; a click opens a lightbox (the shared overlay: `Esc` or a click closes, focus returns to the image, the background is inert). A file that cannot be loaded shows the alt text and a dim "image not found". `http(s)` and other schemes are dropped.

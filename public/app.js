@@ -261,28 +261,242 @@ const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(bo
 
 // ---- Sanitizing (for marked output) ----
 
-function sanitize(html) {
-  return html
-    .replace(/<script\b[\s\S]*?<\/script\s*>/gi, "")
-    .replace(/<\/?script\b[^>]*>/gi, "")
-    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-    .replace(/<img\b[^>]*?\ssrc\s*=\s*(?:"\s*(?:https?:)?\/\/[^"]*"|'\s*(?:https?:)?\/\/[^']*'|(?:https?:)?\/\/[^\s>]*)[^>]*>/gi, "")
-    .replace(/\ssrcset\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-    .replace(/\s(href|src|xlink:href|action|formaction)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi, "");
+// Everything is decided on the parsed DOM (allowTags): an allowlist of tags, attributes and link schemes, so entity / whitespace tricks cannot slip through
+const sanitize = (html) => allowTags(html);
+
+// A link target the dialect keeps: http(s), mailto, an in-page `#`, a root-relative `/` path or a relative path. The decoded value is checked with
+// control characters and spaces removed (browsers ignore them inside a scheme: `jav&#x09;ascript:`)
+function safeHref(value) {
+  const v = value.replace(/[\u0000-\u0020\u007f]/g, "").toLowerCase();
+  if (v.startsWith("//")) return false;
+  return /^(?:https?:|mailto:|#|\/)/.test(v) || !/^[a-z][a-z0-9+.-]*:/.test(v);
 }
 
-// Last line of defense after the HTML is materialized: drop every image except data: (including ones that slipped past the regex via entities)
-function dropExternalImages(container) {
-  for (const img of container.querySelectorAll("img")) {
-    const src = (img.getAttribute("src") ?? "").trim();
-    if (!/^data:/i.test(src)) img.remove(); // everything but data: (external, relative, same-origin) goes
+// The dialect's tag allowlist (docs/spec/markdown.md 2.3): what marked emits plus <details> / <summary> / <br> / <sub> / <sup>. Every other tag is dropped
+// (its text stays; script-like elements go with their content). Attributes are an allowlist too; class only with the values the renderer itself writes
+const ALLOWED_TAGS = new Set("a blockquote br code del details em h1 h2 h3 h4 h5 h6 hr img input li ol p pre strong sub summary sup table tbody td th thead tr ul".split(" "));
+const DROP_WITH_CONTENT = new Set("script style iframe frame frameset object embed applet form noscript template textarea select button svg math title head link meta base noembed noframes xmp plaintext audio video canvas".split(" "));
+const ALLOWED_ATTRS = new Set("href src alt title tabindex open checked disabled type align start data-fn data-def data-title".split(" "));
+const ALLOWED_CLASS = /^(language-[\w+-]+|fn)$/;
+function allowTags(html) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const walk = (parent) => {
+    for (const n of [...parent.childNodes]) {
+      if (n.nodeType === Node.COMMENT_NODE) { n.remove(); continue; }
+      if (n.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = n.tagName.toLowerCase();
+      if (DROP_WITH_CONTENT.has(tag)) { n.remove(); continue; }
+      walk(n);
+      if (!ALLOWED_TAGS.has(tag) || (tag === "input" && n.getAttribute("type") !== "checkbox")) { n.replaceWith(...n.childNodes); continue; }
+      for (const a of [...n.attributes]) {
+        if (a.name === "class") {
+          const keep = a.value.split(/\s+/).filter((c) => ALLOWED_CLASS.test(c));
+          if (keep.length) n.setAttribute("class", keep.join(" ")); else n.removeAttribute("class");
+        } else if (!ALLOWED_ATTRS.has(a.name) || (a.name.startsWith("data-") && !(tag === "sup" || (tag === "pre" && a.name === "data-title")))) n.removeAttribute(a.name);
+      }
+      if (tag === "a" && n.hasAttribute("href") && !safeHref(n.getAttribute("href"))) n.removeAttribute("href");
+      if (tag === "input") n.setAttribute("disabled", "");
+    }
+  };
+  walk(tpl.content);
+  return tpl.innerHTML;
+}
+
+// The URL of a document image: local files go through GET /api/files (decision=<id> or plan=<name>, path as written); everything else (http, data:, file:, ...) is dropped
+function imageUrl(src, doc) {
+  if (!doc?.id || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) return null;
+  let written = src;
+  try { written = decodeURIComponent(src); } catch {}
+  const who = isPlanId(doc.id) ? `plan=${encodeURIComponent(planNameOf(doc.id))}` : `decision=${encodeURIComponent(doc.id)}`;
+  return `/api/files?${who}&path=${encodeURIComponent(written)}`;
+}
+
+// Images after the HTML is materialized: external ones (and anything else that slipped past the regex via entities) are removed; local paths become /api/files URLs
+// with the alt text as caption, a button that opens the lightbox, and the alt text with "image not found" when the file cannot be loaded
+function documentImages(container, doc) {
+  for (const img of [...container.querySelectorAll("img")]) {
+    const src = imageUrl((img.getAttribute("src") ?? "").trim(), doc);
+    if (!src) { img.remove(); continue; }
+    const alt = img.getAttribute("alt") ?? "";
+    img.setAttribute("src", src);
+    img.setAttribute("loading", "lazy");
+    const fig = el("figure", { class: "doc-img" });
+    const open = el("button", { class: "doc-img-open", type: "button", "aria-label": t("image_open", { alt: alt || t("image") }) });
+    img.replaceWith(fig);
+    open.append(img);
+    fig.append(open);
+    if (alt) fig.append(el("figcaption", { text: alt }));
+    img.addEventListener("error", () => fig.replaceChildren(el("span", { class: "img-alt", text: alt }), " ", el("span", { class: "img-missing", text: t("image_missing") })), { once: true });
+    const p = fig.parentElement;
+    if (p?.tagName === "P" && p.childNodes.length === 1) p.replaceWith(fig); // a lone image is a block
   }
 }
 
-// Markdown into a container: sanitized, external images dropped
-function setMarkdown(container, md) {
-  container.innerHTML = sanitize(window.marked.parse(md ?? "", { async: false }));
-  dropExternalImages(container);
+// Markdown into a container: sanitized, external images dropped, the dialect (docs/spec/markdown.md) applied. `doc`: the decision or plan the text belongs to (images)
+function setMarkdown(container, md, doc) {
+  const cols = [];
+  const src = extractColumns(closeDetails(md ?? ""), cols);
+  container.innerHTML = sanitize(window.marked.parse(src, { async: false }));
+  dialect(container, doc);
+  cols.forEach((parts, i) => {
+    const mark = [...container.querySelectorAll("p")].find((p) => p.textContent === columnsToken(i));
+    if (!mark) return;
+    const box = el("div", { class: `cols n${Math.min(parts.length, 3)}` });
+    parts.forEach((part, k) => {
+      const col = el("div", { class: k < 3 ? "col md" : "col rest md" }); // the 4th and later columns stack below the first three, in order
+      col.innerHTML = sanitize(window.marked.parse(part, { async: false }));
+      dialect(col, doc);
+      box.append(col);
+    });
+    mark.replaceWith(box);
+  });
+}
+
+// An unclosed <details> would swallow every later section (the Options table included): it ends at the next `## ` heading (outside code fences)
+function closeDetails(md) {
+  if (!/<details\b/i.test(md)) return md;
+  const out = [];
+  let depth = 0;
+  let fence = "";
+  for (const ln of md.replace(/\r\n?/g, "\n").split("\n")) {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(ln);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = ""; }
+    else if (!fence) {
+      if (depth > 0 && /^## /.test(ln)) { out.push("", ...Array(depth).fill("</details>"), ""); depth = 0; }
+      depth += (ln.match(/<details\b/gi) ?? []).length - (ln.match(/<\/details\s*>/gi) ?? []).length;
+      if (depth < 0) depth = 0;
+    }
+    out.push(ln);
+  }
+  return out.join("\n");
+}
+
+// `::: columns` ... `---` ... `:::` outside code fences: each container becomes a one-line placeholder paragraph and its columns go to `out`
+const columnsToken = (i) => `UKAGAICOLUMNS${i}END`;
+function extractColumns(md, out) {
+  if (!/^:::[ \t]*columns[ \t]*$/m.test(md)) return md;
+  const lines = md.replace(/\r\n?/g, "\n").split("\n");
+  const kept = [];
+  let fence = "";
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(ln);
+    if (f) { if (!fence) fence = f[1][0]; else if (f[1][0] === fence) fence = ""; }
+    if (fence || f || !/^:::[ \t]*columns[ \t]*$/.test(ln)) { kept.push(ln); continue; }
+    const parts = [[]];
+    let fence2 = "";
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const g = /^ {0,3}(`{3,}|~{3,})/.exec(lines[j]);
+      if (g) { if (!fence2) fence2 = g[1][0]; else if (g[1][0] === fence2) fence2 = ""; }
+      if (!fence2 && !g && /^:::[ \t]*$/.test(lines[j])) break;
+      if (!fence2 && !g && /^---[ \t]*$/.test(lines[j])) parts.push([]);
+      else parts.at(-1).push(lines[j]);
+    }
+    if (j >= lines.length) { kept.push(ln); continue; } // no closing :::, so it is plain text
+    out.push(parts.map((p) => p.join("\n")).filter((p) => p.trim()));
+    kept.push("", columnsToken(out.length - 1), "");
+    i = j;
+  }
+  return kept.join("\n");
+}
+
+// The dialect on parsed DOM (safe to call once per fresh container)
+const BADGES = "done todo doing blocked risk skip";
+const BADGE_RE = new RegExp(`^(\\s*)\\[(${BADGES.replaceAll(" ", "|")})\\][ \\t]?`);
+const FILEREF_RE = /^[\w.@/-]+\.(ts|js|mjs|cjs|json|md|css|html|py|rs|go|toml|yaml|yml|sh)(:\d+|#L\d+(-L\d+)?)?$/;
+function dialect(container, doc) {
+  documentImages(container, doc);
+  taskLists(container);
+  stepsLists(container);
+  inlineMarks(container);
+  statusBadges(container);
+  codeDecor(container);
+}
+
+// `- [x]` items: the checkbox marked emits becomes a ☑ / ☐ glyph, done items are dimmed
+function taskLists(container) {
+  for (const box of container.querySelectorAll("input")) {
+    const li = box.parentElement;
+    if (li?.tagName !== "LI" || li.firstElementChild !== box && li.firstElementChild?.firstElementChild !== box) { box.remove(); continue; }
+    const done = box.hasAttribute("checked");
+    li.classList.add("task");
+    li.classList.toggle("done", done);
+    li.parentElement?.classList.add("tasks");
+    box.replaceWith(el("span", { class: "task-box", role: "img", "aria-label": t(done ? "task_done" : "task_open"), text: done ? "☑" : "☐" }));
+  }
+  for (const box of container.querySelectorAll("li > p > input")) box.remove();
+}
+
+// `## Steps` / `## 手順` followed by an ordered list: a timeline
+function stepsLists(container) {
+  for (const h of container.querySelectorAll("h2")) {
+    if (!/^(steps|手順)$/i.test((h.textContent ?? "").trim())) continue;
+    for (let n = h.nextElementSibling; n && !/^H[1-6]$/.test(n.tagName); n = n.nextElementSibling) {
+      if (n.tagName === "OL") { n.classList.add("steps"); break; }
+    }
+  }
+}
+
+// ==mark== in text (not in code, not across other inline elements)
+function inlineMarks(container) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest("pre, code, mark") || !n.data.includes("==") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  const nodes = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+  for (const n of nodes) {
+    const parts = n.data.split(/(?<!=)==(?=[^\s=])([^=\n]*?[^\s=])==(?!=)/);
+    if (parts.length < 3) continue;
+    n.replaceWith(...parts.map((p, i) => (i % 2 ? el("mark", { text: p }) : p)));
+  }
+}
+
+// [done] [todo] [doing] [blocked] [risk] [skip] at the start of a list item or table cell (or right after its bold title: `**Title** [done]`)
+function statusBadges(container) {
+  for (const host of container.querySelectorAll("li, td, th")) {
+    let first = host.firstChild;
+    if (first?.nodeType === Node.ELEMENT_NODE && first.tagName === "P") first = first.firstChild;
+    let anchor = null; // the node the badge goes after (null: the start)
+    if (first?.nodeType === Node.ELEMENT_NODE && first.tagName === "STRONG") { anchor = first; first = first.nextSibling; }
+    while (first?.nodeType === Node.TEXT_NODE) {
+      const m = BADGE_RE.exec(first.data);
+      if (!m || (anchor && !m[1])) break;
+      first.data = first.data.slice(m[0].length);
+      const badge = el("span", { class: `badge ${m[2]}`, text: m[2] });
+      if (anchor) first.before(" ", badge, " "); else first.before(badge, " ");
+      anchor = null;
+    }
+  }
+}
+
+// Code blocks: a `title="…"` tab (text only); inline code that names a repository file becomes a copy chip
+function codeDecor(container) {
+  for (const pre of container.querySelectorAll("pre[data-title]")) {
+    const wrap = el("div", { class: "codefile" }, el("div", { class: "codefile-tab", text: pre.getAttribute("data-title") }));
+    pre.before(wrap);
+    wrap.append(pre);
+  }
+  for (const c of container.querySelectorAll("code")) {
+    if (c.closest("pre") || c.classList.contains("cbadge") || !FILEREF_RE.test(c.textContent ?? "")) continue;
+    c.classList.add("cbadge", "fileref");
+    c.tabIndex = 0;
+  }
+}
+
+// ```lang title="…" fences: marked drops everything after the language, so the renderer keeps the title on the <pre> (read by codeDecor)
+if (window.marked?.use) {
+  window.marked.use({
+    renderer: {
+      code(token) {
+        const info = token.lang ?? "";
+        const m = /(?:^|\s)title=(?:"([^"]*)"|'([^']*)')/.exec(info);
+        if (!m) return false;
+        const lang = /^[\w+#.-]+(?=\s|$)/.exec(info)?.[0] ?? "";
+        const esc = token.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return `<pre data-title="${escAttr(m[1] ?? m[2])}"><code${lang ? ` class="language-${escAttr(lang)}"` : ""}>${esc}\n</code></pre>\n`;
+      },
+    },
+  });
 }
 
 // ---- Display helpers ----
@@ -1066,7 +1280,7 @@ function renderRight(d) {
 // The caption is the heading as written in the file
 function impactBox(d) {
   const tmp = el("div", { class: "md" });
-  setMarkdown(tmp, d.request.plan);
+  setMarkdown(tmp, d.request.plan, d);
   const sec = findSection(sectionsOf(tmp), SECTION.impact);
   const nodes = sec?.nodes.slice(1) ?? [];
   if (!nodes.some((n) => (n.textContent ?? "").trim())) return null;
@@ -1198,6 +1412,20 @@ function openOverlay(kind, title, body, extra = {}) {
   setBackgroundInert(true);
   card.focus({ preventScroll: true });
 }
+
+// A document image at full size: the shared overlay (background inert, Esc / a click closes, focus returns to the image button)
+function openLightbox(button) {
+  const thumb = button.querySelector("img");
+  if (!thumb) return;
+  const alt = thumb.getAttribute("alt") ?? "";
+  button.focus({ preventScroll: true });
+  const full = el("img", { class: "lightbox-img", src: thumb.getAttribute("src"), alt, onclick: closeOverlay });
+  openOverlay("lightbox", alt || t("image"), full);
+}
+document.addEventListener("click", (e) => {
+  const b = e.target instanceof Element ? e.target.closest("button.doc-img-open") : null;
+  if (b) openLightbox(b);
+});
 
 function openTerms(v2) {
   if (!v2?.terms.length) return;
@@ -1910,20 +2138,30 @@ function foldLongPre(container) {
 }
 
 // Turn GitHub-style alerts (a blockquote starting with [!NOTE] etc.) into colored boxes. Safe to call repeatedly
-const CALLOUTS = { NOTE: ["callout_note", "note"], TIP: ["callout_tip", "tip"], WARNING: ["callout_warning", "warning"], CAUTION: ["callout_caution", "caution"] };
+const CALLOUTS = { NOTE: ["callout_note", "note"], TIP: ["callout_tip", "tip"], IMPORTANT: ["callout_important", "important"], WARNING: ["callout_warning", "warning"], CAUTION: ["callout_caution", "caution"] };
 function callouts(container) {
   for (const bq of container.querySelectorAll("blockquote:not(.callout)")) {
     const p = bq.firstElementChild;
     const first = p?.firstChild;
     if (!p || p.tagName !== "P" || first?.nodeType !== Node.TEXT_NODE) continue;
-    const m = /^\s*\[!(NOTE|TIP|WARNING|CAUTION)\][ \t]*\n?/i.exec(first.textContent ?? "");
+    const m = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*/i.exec(first.textContent ?? "");
     if (!m) continue;
     const [labelKey, cls] = CALLOUTS[m[1].toUpperCase()];
     first.textContent = first.textContent.slice(m[0].length);
-    if (p.firstChild?.nodeName === "BR") p.firstChild.remove();
+    // The title is the rest of the marker line (it may hold inline elements); the body starts on the next line
+    const title = el("div", { class: "callout-label" });
+    for (let n = p.firstChild; n; n = p.firstChild) {
+      if (n.nodeName === "BR") { n.remove(); break; }
+      if (n.nodeType === Node.TEXT_NODE) {
+        const nl = n.data.indexOf("\n");
+        if (nl >= 0) { title.append(n.data.slice(0, nl)); n.data = n.data.slice(nl + 1); break; }
+      }
+      title.append(n);
+    }
+    if (!title.textContent.trim()) title.replaceChildren(t(labelKey));
     if (!p.textContent.trim() && !p.children.length) p.remove();
     bq.classList.add("callout", cls);
-    bq.prepend(el("div", { class: "callout-label", text: t(labelKey) }));
+    bq.prepend(title);
   }
 }
 
@@ -2094,7 +2332,7 @@ function footnoteDefs(defs) {
   for (const [id, text] of defs) {
     const body = el("span", { class: "fn-text" });
     body.innerHTML = sanitize(window.marked.parseInline(text, { async: false }));
-    dropExternalImages(body);
+    documentImages(body);
     box.append(el("div", { class: "fn-def", "data-fn": id }, el("sup", { class: "fn-n", text: id }), body));
   }
   return box;
@@ -2188,8 +2426,8 @@ function highlightCode(container) {
   }
 }
 
-async function renderMarkdown(container, md) {
-  setMarkdown(container, md);
+async function renderMarkdown(container, md, doc) {
+  setMarkdown(container, md, doc);
   await enhance(container);
 }
 
@@ -2447,9 +2685,10 @@ function foldPlanSections(container, o, d) {
   const clicked = (ev) => {
     const sum = ev.target instanceof Element ? ev.target.closest("summary") : null;
     if (!sum) return;
+    const det = sum.parentElement;
+    if (!det.classList.contains("plan-sec") && !det.classList.contains("plan-sub")) return; // a <details> the author wrote folds natively
     ev.preventDefault(); // the state lives in the draft; syncPlan opens / closes the element
     if (ev.target.closest(".cbadge")) return; // a click on a path copies it (the document handler) and does not fold the section
-    const det = sum.parentElement;
     const i = Number(det.dataset.i);
     planState(d, o).cur = i;
     planSetOpen(d, i, !planState(d, o).open.has(i));
@@ -2483,7 +2722,7 @@ function pathBadges(container) {
 
 // The plan body into the left column: long plans fold into sections, short ones stay one document
 async function renderPlanMarkdown(container, d) {
-  setMarkdown(container, d.request.plan);
+  setMarkdown(container, d.request.plan, d);
   const o = planOutline(d);
   if (o && foldPlanSections(container, o, d)) container.classList.add("plan-long");
   pathBadges(container);
@@ -2525,7 +2764,7 @@ function buildModel(d) {
   const { fm, body } = parseFrontMatter(d.explanation.markdown);
   const left = el("div", { class: "md" });
   const fn = extractFootnotes(body);
-  setMarkdown(left, fn.md);
+  setMarkdown(left, fn.md, d);
   m.left = left;
   m.fnCount = fn.defs.size;
   const qs = d.request.questions;
@@ -2615,7 +2854,7 @@ function buildModel(d) {
       if (checkedSec) {
         const hosts = [...checkedSec.nodes, ...left.querySelectorAll(".fn-defs")];
         for (const n of hosts) {
-          for (const c of n.querySelectorAll?.("code") ?? []) if (!c.closest("pre")) { c.classList.add("cbadge"); c.tabIndex = 0; }
+          for (const c of n.querySelectorAll?.("code") ?? []) if (!c.closest("pre")) { c.classList.add("cbadge"); c.classList.remove("fileref"); c.tabIndex = 0; } // evidence paths stay unboxed
         }
       }
       // Decorate: option colors in the text, terms, risk words (cells are handled when the cards are built), numbers with units
@@ -2697,7 +2936,7 @@ function renderLeft(d) {
     if (hasExplanation(d) && ex.markdown.trim() !== (d.request.plan ?? "").trim()) {
       const md = el("div", { class: "md" });
       root.append(el("hr"), md);
-      jobs.push(renderMarkdown(md, parseFrontMatter(ex.markdown).body));
+      jobs.push(renderMarkdown(md, parseFrontMatter(ex.markdown).body, d));
     }
     return Promise.all(jobs).catch(() => {});
   }
