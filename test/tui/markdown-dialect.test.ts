@@ -324,6 +324,11 @@ test("stray ::: lines and unterminated columns / details do not lose text", () =
   const open = renderMarkdown("<details>\n<summary>S</summary>\n\nbody text", 40).map(stripAnsi);
   assert.equal(open[0], "▸ S (1 line)");
   assert.ok(open.includes("body text"));
+  // An unclosed <details> ends at the next `## ` heading: the heading and what follows stay outside
+  const cut = renderMarkdown("<details>\n<summary>Why</summary>\n\nbody\n\n## Options\n\nafter", 40).map(stripAnsi);
+  assert.equal(cut[0], "▸ Why (1 line)");
+  assert.ok(cut.some((x) => x.includes("Options")));
+  assert.ok(cut.includes("after"));
   // An unclosed <summary> keeps the body: the first line is the summary
   const unclosed = renderMarkdown("<details>\n<summary>Why\n\nbody text\n</details>", 40).map(stripAnsi);
   assert.equal(unclosed[0], "▸ Why (1 line)");

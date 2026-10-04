@@ -146,10 +146,16 @@ function expandBlocks(lines: string[], fallback: string): string[] {
     } else if (DETAILS_OPEN.test(l)) {
       let depth = 1;
       let j = i + 1;
+      let closed = false;
       for (; j < lines.length; j++) {
         if (inFence[j]) continue;
+        // An unclosed <details> ends at the next `## ` heading (markdown.md §2.3), so a section is never swallowed
+        if (/^## /.test(lines[j]!)) break;
         if (DETAILS_OPEN.test(lines[j]!)) depth++;
-        else if (DETAILS_CLOSE.test(lines[j]!) && --depth === 0) break;
+        else if (DETAILS_CLOSE.test(lines[j]!) && --depth === 0) {
+          closed = true;
+          break;
+        }
       }
       let inner = lines.slice(i + 1, j);
       const bodyOnly = inner;
@@ -179,7 +185,7 @@ function expandBlocks(lines: string[], fallback: string): string[] {
       while (inner.length && inner[0]!.trim() === "") inner.shift();
       while (inner.length && inner.at(-1)!.trim() === "") inner.pop();
       out.push("", `${SENT}H${inner.length}${SENT}${summary}`, ...expandBlocks(inner, fallback), "");
-      i = j + 1;
+      i = closed ? j + 1 : j;
     } else if (/^\s*:::\s*columns\s*$/i.test(l)) {
       let j = i + 1;
       while (j < lines.length && !(!inFence[j] && /^\s*:::\s*$/.test(lines[j]!))) j++;
