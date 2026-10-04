@@ -99,7 +99,36 @@ export function padArrows(source: string): string {
   return source.split("\n").map(padLine).join("\n");
 }
 
-export function renderMermaid(source: string): MermaidResult {
+/** Diagram types beautiful-mermaid draws as ASCII */
+const ASCII_TYPES = /^(flowchart|graph|stateDiagram(-v2)?|sequenceDiagram|classDiagram|erDiagram|xychart(-beta)?)$/;
+
+/** Drop leading `---` front matter and `%%{init …}%%` directives (the latter may span lines) */
+export function stripPreamble(source: string): string {
+  let s = source;
+  for (;;) {
+    const next = s.replace(/^\s*---[ \t]*\n[\s\S]*?\n---[ \t]*(?:\n|$)/, "").replace(/^\s*%%\{[\s\S]*?\}%%/, "");
+    if (next === s) return s;
+    s = next;
+  }
+}
+
+/** The diagram type: the first word of the first non-empty line that is not a `%%` comment (after the preamble) */
+export function diagramType(source: string): string {
+  for (const raw of stripPreamble(source).split("\n")) {
+    const l = raw.trim();
+    if (l === "" || l.startsWith("%%")) continue;
+    return /^[^\s:;{]+/.exec(l)?.[0] ?? "";
+  }
+  return "";
+}
+
+/** True when beautiful-mermaid can draw this type (any other type shows `diagram: <type>` plus the source) */
+export function isAsciiType(type: string): boolean {
+  return ASCII_TYPES.test(type);
+}
+
+export function renderMermaid(raw: string): MermaidResult {
+  const source = stripPreamble(raw);
   const hit = cache.get(source);
   if (hit) return hit;
   let res: MermaidResult;

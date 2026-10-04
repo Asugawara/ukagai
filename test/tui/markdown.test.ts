@@ -34,9 +34,9 @@ test("tables are aligned text without borders, and strong text in the risk colum
   assert.ok(!lines.join("").includes("|"));
 });
 
-test("diff: + is green, - is red, @@ is blue", () => {
+test("diff: + is green, - is red, @@ is cyan", () => {
   const raw = renderMarkdown("```diff\n@@ -1 +1 @@\n-old\n+new\n```\n", 40);
-  assert.ok(raw[0]!.includes("\x1b[34m@@"));
+  assert.ok(raw[0]!.includes("\x1b[36m@@"));
   assert.ok(raw[1]!.includes("\x1b[31m-old"));
   assert.ok(raw[2]!.includes("\x1b[32m+new"));
 });
@@ -72,9 +72,9 @@ test("mermaid: drawn even when too narrow (truncated to the column, with a note,
 });
 
 test("mermaid: a definition that cannot be drawn gives the failure note and the definition", () => {
-  const lines = renderMarkdown("```mermaid\nnot a diagram at all\n```\n", 60).map(stripAnsi);
+  const lines = renderMarkdown("```mermaid\nsequenceDiagram\n  not a diagram at all\n```\n", 60).map(stripAnsi);
   assert.equal(lines[0], "(Diagram: could not render. Definition below)");
-  assert.ok(lines.includes("  not a diagram at all"));
+  assert.ok(lines.includes("    not a diagram at all"));
 });
 
 test("callouts are bands with the same labels and colors as the GUI", () => {
@@ -116,7 +116,7 @@ test("ja: callout labels and the diagram note are Japanese", () => {
   const lines = r.lines.map(stripAnsi);
   const top = lines.findIndex((l) => l.includes("┌"));
   assert.match(lines.slice(0, top).join("").replace(/ /g, ""), /^\(図:幅\d+桁。←→\/横ホイールでスクロール·fで全幅\)$/);
-  assert.equal(renderMarkdown("```mermaid\nnot a diagram at all\n```\n", 60, { lang: "ja" }).map(stripAnsi)[0], "(図: 描画に失敗。以下は定義)");
+  assert.equal(renderMarkdown("```mermaid\nsequenceDiagram\n  not a diagram at all\n```\n", 60, { lang: "ja" }).map(stripAnsi)[0], "(図: 描画に失敗。以下は定義)");
 });
 
 test("table risk column is detected by the English or the Japanese header", () => {
