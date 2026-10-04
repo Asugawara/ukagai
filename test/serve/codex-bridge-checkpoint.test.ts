@@ -1,7 +1,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -135,7 +135,7 @@ class FakeServer {
   }
 }
 
-type Env = { fake: FakeServer; h: ServeHandle; url: string };
+type Env = { fake: FakeServer; h: ServeHandle; url: string; tui: { value: boolean | undefined; asked: string[]; gate?: Promise<void> }; dataDir: string };
 
 async function setup(opts: { ephemeral?: boolean; replay?: (f: FakeServer) => void } = {}): Promise<Env> {
   const root = mkdtempSync(join(tmpdir(), "ukagai-cbc-"));
@@ -150,9 +150,25 @@ async function setup(opts: { ephemeral?: boolean; replay?: (f: FakeServer) => vo
   await fake.listen();
   symlinkSync(join(short, "s.sock"), join(codexHome, "app-server-control", "app-server-control.sock"));
   cleanup.push(() => fake.close());
-  const h = await start({ port: 0, dataDir: join(root, "data"), home: root, codexBridge: true, codexHome, codexCheckpointDelayMs: DELAY });
+  const dataDir = join(root, "data");
+  // The bridge is started here (not by serve) so the TUI probe is a stub: the real one would look at this machine's processes
+  const h = await start({ port: 0, dataDir, home: root, codexBridge: false });
   cleanup.push(() => h.close());
-  const env = { fake, h, url: `http://127.0.0.1:${h.port}` };
+  const tui: Env["tui"] = { value: true, asked: [] };
+  const bridge = startCodexBridge({
+    store: h.store,
+    dataDir,
+    lang: "en",
+    codexHome,
+    checkpointDelayMs: DELAY,
+    tuiRunningIn: async (cwd) => {
+      tui.asked.push(cwd);
+      await tui.gate;
+      return tui.value;
+    },
+  });
+  cleanup.push(() => bridge.close());
+  const env: Env = { fake, h, url: `http://127.0.0.1:${h.port}`, tui, dataDir };
   await until(() => fake.methods("thread/resume").length > 0, "thread/resume");
   await sleep(30);
   return env;
@@ -419,6 +435,8 @@ test("a stop answer: the stop turn's turn/completed arms nothing; the next human
   const d = await seedCheckpoint(env);
   await api(env, `/api/decisions/${d.id}/answer`, { kind: "stop" });
   await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  // the bridge learns the stop turn's id from the turn/start reply: events of that turn must not overtake it
+  await until(() => env.h.store.get(d.id)!.response?.delivered_at, "delivered");
   env.fake.started("sent-1");
   env.fake.message("sent-1", "Status: done.");
   env.fake.completed("sent-1");
@@ -444,6 +462,7 @@ test("a stop queued behind a running turn (no turn/interrupt): its turn arms not
   await sleep(100); // the bridge queues once the interrupt error is back
   env.fake.completed("turn-run"); // sends the queued stop; its own completion follows
   await until(() => env.fake.methods("turn/start")[0], "queued turn/start");
+  await until(() => env.h.store.get(seeded.id)!.response?.delivered_at, "delivered");
   env.fake.started("sent-1");
   env.fake.message("sent-1", "Status.");
   env.fake.completed("sent-1");
@@ -565,4 +584,84 @@ test("startCodexBridge chains the session-event callback and restores it on clos
   assert.notEqual(store.onSessionEvent, prev);
   bridge.close();
   assert.equal(store.onSessionEvent, prev);
+});
+
+test("no Codex TUI in the thread's folder: skipped as tui_gone, no checkpoint", async () => {
+  const env = await setup();
+  env.tui.value = false;
+  env.fake.turn("turn-1", "Done.");
+  await until(() => env.tui.asked.length > 0, "probe asked");
+  await sleep(DELAY / 2);
+  assert.deepEqual(env.tui.asked, [CWD]);
+  assert.equal(checkpoints(env).length, 0);
+  const log = readFileSync(join(env.dataDir, "codex-bridge.log"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  assert.ok(log.some((e) => e.event === "checkpoint_skipped" && e.reason === "tui_gone" && e.thread === THREAD && e.turn === "turn-1" && e.cwd === CWD), "tui_gone logged with the cwd");
+});
+
+test("a TUI running in the folder: the checkpoint is created", async () => {
+  const env = await setup();
+  env.tui.value = true;
+  env.fake.turn("turn-1", "Done.");
+  await until(() => live(env)[0], "checkpoint");
+  assert.deepEqual(env.tui.asked, [CWD]);
+});
+
+test("the probe cannot tell (undefined): the checkpoint is created", async () => {
+  const env = await setup();
+  env.tui.value = undefined;
+  env.fake.turn("turn-1", "Done.");
+  await until(() => live(env)[0], "checkpoint");
+});
+
+test("tui_gone is not sticky: the next turn (after codex resume) with a TUI creates a checkpoint", async () => {
+  const env = await setup();
+  env.tui.value = false;
+  env.fake.turn("turn-1", "Done.");
+  await until(() => env.tui.asked.length > 0, "probe asked");
+  await sleep(DELAY / 2);
+  assert.equal(checkpoints(env).length, 0);
+  env.tui.value = true;
+  env.fake.turn("turn-2", "Done again.");
+  const d = await until(() => live(env)[0], "checkpoint");
+  assert.match(JSON.stringify(d), /Done again/);
+});
+
+test("SessionEnd while the TUI probe is in flight: no checkpoint", async () => {
+  const env = await setup();
+  let release!: () => void;
+  env.tui.gate = new Promise<void>((r) => (release = r));
+  env.fake.turn("turn-1", "Done.");
+  await until(() => env.tui.asked.length > 0, "probe asked");
+  await hookEvent(env, "SessionEnd");
+  await sleep(50);
+  release();
+  await sleep(200);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("turn/started while the TUI probe is in flight: no checkpoint for the old turn", async () => {
+  const env = await setup();
+  let release!: () => void;
+  env.tui.gate = new Promise<void>((r) => (release = r));
+  env.fake.turn("turn-1", "Done.");
+  await until(() => env.tui.asked.length > 0, "probe asked");
+  env.fake.started("turn-2");
+  await sleep(50);
+  release();
+  await sleep(200);
+  assert.equal(checkpoints(env).length, 0);
+});
+
+test("tui_gone does not forget the thread: a turn completing without a turn/started still arms", async () => {
+  const env = await setup();
+  env.tui.value = false;
+  env.fake.turn("turn-1", "Done.");
+  await until(() => env.tui.asked.length > 0, "probe asked");
+  await sleep(DELAY / 2);
+  assert.equal(checkpoints(env).length, 0);
+  env.tui.value = true;
+  env.fake.message("turn-2", "Second, no turn/started.");
+  env.fake.completed("turn-2");
+  const d = await until(() => live(env)[0], "checkpoint");
+  assert.equal((d.request as any).recap, "Second, no turn/started.");
 });
