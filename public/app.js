@@ -335,10 +335,17 @@ function syncIdleNote(sid) {
 
 // ---- Toasts ----
 // Stacked vertically right above the submit button in the right column (on top of the .actions edge), at most 3. Bottom right when nothing is shown
-const toastBox = el("div", { class: "toasts", role: "status" });
+const toastBox = el("div", { class: "toasts", "aria-hidden": "true" }); // visual only: announcements go through the fixed live regions below
 document.body.append(toastBox);
 const TOAST_MAX = 3;
+// Fixed live regions (index.html): never moved, so assistive tech keeps tracking them. Re-set after a short timeout (rAF is paused in hidden tabs) so an identical text is announced again
+function announce(msg, urgent = false) {
+  const r = $(urgent ? "live-urgent" : "live");
+  r.textContent = "";
+  setTimeout(() => { r.textContent = msg; }, 50);
+}
 function toast(msg, { kind = "", ms = 2000 } = {}) {
+  announce(msg, kind === "lost");
   const box = el("div", { class: `toast ${kind}`.trim(), text: msg });
   toastBox.append(box);
   while (toastBox.children.length > TOAST_MAX) toastBox.firstElementChild.remove();
@@ -373,8 +380,12 @@ function placePending() {
   if (slot) { if (pendingBtn.parentElement !== slot) slot.append(pendingBtn); } else stashPending();
 }
 
+let announcedCount = 0;
+let loaded = false; // set once the first loadAll() has filled the queue, so the initial load is not announced item by item
 function renderHeader() {
   const n = itemIds().length;
+  if (loaded && n > announcedCount) announce(t("announce_pending", { n }));
+  announcedCount = n;
   pendingCount.textContent = String(n);
   pendingBtn.hidden = n < 2; // with one item only the shown one exists, so hide it
   const blocked = pendingList().some(isBlocker);
@@ -761,7 +772,8 @@ function setDrawer(open) {
   if (open) drawerIdx = Math.max(0, itemIds().indexOf(shownId));
   else if (drawerOpen()) document.activeElement?.blur?.();
   $("drawer").classList.toggle("open", open);
-  $("drawer").setAttribute("aria-hidden", String(!open));
+  $("drawer").inert = !open;
+  setBackgroundInert(open);
   $("backdrop").hidden = !open;
   pendingBtn.setAttribute("aria-expanded", String(open));
   if (!open && document.activeElement === pendingBtn) pendingBtn.blur(); // keep Enter from being swallowed by the pending button
@@ -769,6 +781,11 @@ function setDrawer(open) {
 }
 
 const drawerOpen = () => $("drawer").classList.contains("open");
+
+// While the drawer or an overlay is open, everything behind it is inert (no focus, hidden from assistive tech)
+function setBackgroundInert(on) {
+  for (const id of ["head", "main", "foot", "empty", "pending-btn"]) $(id).inert = on;
+}
 
 function renderList() {
   const list = $("pending-list");
@@ -1052,15 +1069,22 @@ async function copyBadge(badge) {
 
 let overlay = null; // { kind, el, sel?, v2?, ui? }
 function closeOverlay() {
-  overlay?.el.remove();
+  if (!overlay) return;
+  const back = overlay.opener;
+  overlay.el.remove();
   overlay = null;
+  if (!drawerOpen()) setBackgroundInert(false);
+  if (back?.isConnected && back !== document.body && !back.matches("input, textarea")) back.focus({ preventScroll: true });
 }
 function openOverlay(kind, title, body, extra = {}) {
   closeOverlay();
-  const card = el("div", { class: `overlay-card ${kind}` }, el("div", { class: "overlay-title" }, el("span", { text: title })), body);
-  const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-label": title, onclick: (e) => { if (e.target === root) closeOverlay(); } }, card);
+  const opener = document.activeElement;
+  const card = el("div", { class: `overlay-card ${kind}`, tabindex: "-1" }, el("div", { class: "overlay-title" }, el("span", { text: title })), body);
+  const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === root) closeOverlay(); } }, card);
   document.body.append(root);
-  overlay = { kind, el: root, ...extra };
+  overlay = { kind, el: root, opener, ...extra };
+  setBackgroundInert(true);
+  card.focus({ preventScroll: true });
 }
 
 function openTerms(v2) {
@@ -2640,6 +2664,7 @@ async function loadAll() {
     }
   }));
   await sessionsReq;
+  loaded = true;
   syncIdleNote(decisions.get(shownId)?.session.session_id);
   try { await loadPlans(await plansReq); } catch (e) { if (e.message === "unauthorized") throw e; }
   if (isPlanId(shownId)) {
