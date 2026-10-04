@@ -1827,3 +1827,96 @@ gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval 
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(firstText(), q1("#head .origin"));
 });
+
+// ---- UX1: modern-web audit ----
+
+const liveText = (id: string) => ev<string>(`"t:" + document.getElementById(${JSON.stringify(id)}).textContent`).slice(2);
+
+gui("UX1: a decision arriving on an empty queue is announced; cancelled background item is announced assertively", async () => {
+  await reopen("document.getElementById('empty') && !document.getElementById('empty').hidden");
+  assert.equal(ev<string>(`document.getElementById("live").getAttribute("aria-live")`), "polite");
+  assert.equal(ev<string>(`document.getElementById("live-urgent").getAttribute("role")`), "alert");
+  assert.equal(ev<boolean>(`!document.querySelector(".toasts").hasAttribute("role")`), true); // the moving visual box is not itself a live region
+  await seedQuestion();
+  await waitFor("0 -> 1 announcement", `document.getElementById("live").textContent === "New decision, 1 pending"`);
+  const second = await seedQuestion();
+  await waitFor("1 -> 2 announcement", `document.getElementById("live").textContent === "New decision, 2 pending"`);
+  // The shown decision is the first one; cancelling the second (not shown) raises an assertive notice naming it
+  await api(`/api/decisions/${second.id}/cancel`, {});
+  await waitFor("urgent", `document.getElementById("live-urgent").textContent.includes(${JSON.stringify(second.title)})`);
+  assert.equal(liveText("live").includes(second.title), false);
+});
+
+gui("UX1: the drawer is inert while closed, takes focus on open, makes the page inert, Esc closes it", async () => {
+  await seedQuestion();
+  await seedQuestion();
+  await reopen();
+  await waitFor("pending button", `!document.getElementById("pending-btn").hidden`);
+  assert.equal(ev<boolean>(`document.getElementById("drawer").inert`), true);
+  ev(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "b", code: "KeyB", bubbles: true, cancelable: true })), "ok"`);
+  await waitFor("drawer row focused", `document.activeElement?.matches("#drawer .row")`);
+  assert.equal(ev<boolean>(`document.getElementById("drawer").inert`), false);
+  assert.equal(ev<boolean>(`document.getElementById("main").inert`), true);
+  await sleep(300);
+  ab("screenshot", join(SHOTS, "UX1-drawer.png"));
+  fire("Escape");
+  await waitFor("drawer closed", `document.getElementById("drawer").inert`);
+  assert.equal(ev<boolean>(`document.getElementById("main").inert`), false);
+  // Opening with the pending button works the same way
+  ev(`document.getElementById("pending-btn").click(), "ok"`);
+  await waitFor("drawer row focused (button)", `document.activeElement?.matches("#drawer .row")`);
+  fire("Escape");
+  await waitFor("drawer closed again", `document.getElementById("drawer").inert`);
+});
+
+gui("UX1: overlay is a modal dialog, no ring on the card, focus is restored, Esc / renderAll un-inert the page", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  // Give a non-input element focus first so there is something to restore
+  ev(`(() => { const b = document.getElementById("pending-btn"); document.body.prepend(Object.assign(document.createElement("button"), { id: "opener-probe", textContent: "x" })); document.getElementById("opener-probe").focus(); })(), "ok"`);
+  press("v");
+  await waitFor("compare", `document.querySelector(".overlay.compare")`);
+  assert.equal(ev<boolean>(`document.querySelector(".overlay").getAttribute("aria-modal") === "true"`), true);
+  assert.equal(ev<boolean>(`document.getElementById("main").inert`), true);
+  assert.equal(ev<boolean>(`document.querySelector(".overlay").contains(document.activeElement)`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector(".overlay-card")).outlineStyle === "none"`), true);
+  ab("screenshot", join(SHOTS, "UX1-compare.png"));
+  press("Escape");
+  await waitFor("closed", `!document.querySelector(".overlay")`);
+  assert.equal(ev<boolean>(`document.getElementById("main").inert`), false);
+  assert.equal(ev<string>(`document.activeElement?.id ?? ""`), "opener-probe"); // focus went back to the opener
+  ev(`document.getElementById("opener-probe").remove(), "ok"`);
+  // An overlay closed by a re-render (a new item arrives and the screen is rebuilt) un-inerts too
+  press("v");
+  await waitFor("compare again", `document.querySelector(".overlay.compare")`);
+  ev(`document.documentElement.dataset.lang = "ja", "ok"`); // applyLang -> renderAll -> closeOverlay
+  await waitFor("closed by render", `!document.querySelector(".overlay")`);
+  assert.equal(ev<boolean>(`document.getElementById("main").inert`), false);
+  ev(`document.documentElement.dataset.lang = "en", "ok"`);
+});
+
+gui("UX1: reduced motion makes the drawer transition instant; 1000x700 has no horizontal overflow with a rich decision", async () => {
+  await seedRich();
+  await reopen(RICH_READY);
+  try {
+    ab("set", "viewport", "1000", "700");
+    await sleep(300);
+    assert.equal(ev<boolean>(`document.documentElement.scrollWidth <= window.innerWidth`), true);
+    assert.equal(ev<boolean>(`document.body.scrollWidth <= window.innerWidth`), true);
+    const dur = () => ev<number>(`parseFloat(getComputedStyle(document.getElementById("drawer")).transitionDuration.split(",")[0])`);
+    assert.ok(dur() >= 0.1, "normal motion: the drawer slides");
+    ab("set", "media", "light", "reduced-motion");
+    await sleep(200);
+    assert.ok(dur() < 0.01, "reduced motion: no transition");
+  } finally {
+    try { ab("set", "media", "light", "no-preference"); } catch {}
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+gui("UX1: a role=button control focused from the keyboard shows a focus ring", async () => {
+  await seedQuestion();
+  await reopen();
+  ab("press", "Tab"); // a real key press so :focus-visible applies
+  assert.equal(ev<boolean>(`(() => { const b = document.querySelector("#decision .none-card"); if (!b) return false; b.focus(); return b.matches(":focus-visible") && getComputedStyle(b).outlineStyle !== "none"; })()`), true);
+});

@@ -11,6 +11,8 @@
 <link rel="stylesheet" media="(prefers-color-scheme: dark)" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 </head>
 <body>
+<div id="live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="live-urgent" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
 <button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" hidden><span data-i18n="pending">Pending</span> <span id="pending-count">0</span></button>
 <div id="banner" class="banner" hidden></div>
 <header id="head" class="hd" hidden></header>
@@ -25,7 +27,7 @@
 <footer id="foot" class="foot" hidden></footer>
 <span id="build" class="build"></span>
 <div id="backdrop" class="backdrop" hidden></div>
-<aside id="drawer" class="drawer" aria-label="Pending decisions" data-i18n-aria-label="pending_list" aria-hidden="true">
+<aside id="drawer" class="drawer" aria-label="Pending decisions" data-i18n-aria-label="pending_list" inert>
   <h2 data-i18n="pending_list">Pending decisions</h2>
   <div id="drawer-keys" class="keys"></div>
   <ul id="pending-list"></ul>
