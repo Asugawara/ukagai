@@ -96,7 +96,7 @@ export class TuiApi {
     });
   }
 
-  /** The settings (language, repository colours, ...). Throws on any failure */
+  /** The settings (language, ...). Throws on any failure */
   async settings(): Promise<Settings> {
     const res = await this.fetch("/api/settings", { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);

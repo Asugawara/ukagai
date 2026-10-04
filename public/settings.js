@@ -5,13 +5,9 @@ import { t } from "./i18n.js";
 const $ = (id) => document.getElementById(id);
 const DELAY_MIN = 30; // same limits as CODEX_DELAY_MIN_S / MAX_S in src/contract.ts
 const DELAY_MAX = 3600;
-const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/; // same repo naming as app.js
-const repoOfCwd = (cwd) => WT_RE.exec(cwd)?.[1] ?? (cwd.split("/").filter(Boolean).pop() || cwd);
 
 let s = null; // the saved settings
-let seen = []; // repo names from the current decisions and sessions
 let idSeq = 0; // checkbox ids are stable across renders (the focused control keeps its focus)
-let colorDraft = ""; // text of the "add a repository" box (kept across re-renders)
 
 function el(tag, props = {}, ...children) {
   const e = document.createElement(tag);
@@ -117,51 +113,6 @@ async function browserToggle(box, err) {
   save((n) => { n.notify.browser = box.checked; }, (m) => { err.textContent = m; });
 }
 
-// ---- repository colours ----
-const hueOf = (name) => (typeof s.repo_colors[name] === "number" ? s.repo_colors[name] : null);
-// The default hue of a repo name: the same hash as repoSlot in app.js / src/tui/model.ts (FNV-1a -> 12 slots)
-function hashHue(name) {
-  let h = 0x811c9dc5;
-  for (const ch of name) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
-  return (238 + (h % 12) * 27) % 360;
-}
-function swatchStyle(name) {
-  const o = Object.hasOwn(s.repo_colors, name) ? s.repo_colors[name] : undefined;
-  return o === "grey" ? "--repo-hue:0;--repo-sat:0%" : `--repo-hue:${typeof o === "number" ? o : hashHue(name)}`;
-}
-function colorRow(name) {
-  const custom = Object.hasOwn(s.repo_colors, name);
-  const grey = s.repo_colors[name] === "grey";
-  const swatch = el("span", { class: "color-swatch", style: swatchStyle(name), "data-swatch": name, "aria-hidden": "true" });
-  const slider = el("input", { type: "range", min: "0", max: "359", step: "1", value: String(hueOf(name) ?? hashHue(name)), "aria-label": t("set_hue_for", { repo: name }), "data-hue": name, disabled: grey });
-  // The swatch follows the slider while it moves; the value is saved when it is released
-  slider.addEventListener("input", () => swatch.setAttribute("style", `--repo-hue:${slider.value}`));
-  slider.addEventListener("change", () => save((n) => { n.repo_colors[name] = Number(slider.value); }));
-  const greyBtn = el("button", { type: "button", "data-grey": name, "aria-pressed": String(grey), text: t("set_grey"), onclick: () => save((n) => { n.repo_colors[name] = "grey"; }) });
-  const reset = el("button", { type: "button", "data-reset": name, disabled: !custom, text: t("set_reset"), onclick: () => save((n) => { delete n.repo_colors[name]; }) });
-  const label = el("span", { class: "color-name", title: name }, name, custom ? el("span", { class: "tag", text: t("set_custom") }) : null);
-  return el("div", { class: "color-row" }, swatch, label, slider, greyBtn, reset);
-}
-function colorSection() {
-  const names = [...new Set([...seen, ...Object.keys(s.repo_colors)])].sort((a, b) => a.localeCompare(b));
-  const add = el("input", { type: "text", id: "color-add-name", "aria-label": t("set_add_label"), placeholder: t("set_add_label"), maxlength: "200", value: colorDraft });
-  add.addEventListener("input", () => { colorDraft = add.value; });
-  const addBtn = el("button", { type: "button", id: "color-add-btn", text: t("set_add") });
-  const doAdd = () => {
-    const name = add.value.trim();
-    if (!name) return;
-    colorDraft = "";
-    if (Object.hasOwn(s.repo_colors, name)) { render(); return; }
-    save((n) => { n.repo_colors[name] = hashHue(name); });
-  };
-  addBtn.addEventListener("click", doAdd);
-  add.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); doAdd(); } });
-  return fieldset(t("set_g_colors"),
-    el("p", { class: "set-help", text: t("set_colors_help") }),
-    el("div", { id: "color-list" }, ...(names.length ? names.map(colorRow) : [el("p", { class: "muted", text: t("set_colors_empty") })])),
-    el("div", { class: "color-add" }, add, addBtn));
-}
-
 // ---- the page ----
 function render() {
   const focused = document.activeElement?.id;
@@ -196,8 +147,7 @@ function render() {
         before: browserToggle,
         note: () => el("p", { class: "set-help", id: "perm-state", text: permText() }),
       }),
-      toggle(t("set_n_badge"), "", () => s.notify.title_badge, (n, v) => { n.notify.title_badge = v; })),
-    colorSection());
+      toggle(t("set_n_badge"), "", () => s.notify.title_badge, (n, v) => { n.notify.title_badge = v; })));
   if (focused) $(focused)?.focus?.();
 }
 
@@ -213,8 +163,6 @@ function chrome() {
 async function load() {
   s = await api("/api/settings");
   applyChrome();
-  const [ds, ss] = await Promise.all([api("/api/decisions").catch(() => []), api("/api/sessions").catch(() => [])]);
-  seen = [...new Set([...(Array.isArray(ds) ? ds : []).map((d) => d.session?.cwd), ...(Array.isArray(ss) ? ss : []).map((x) => x.cwd)].filter(Boolean).map(repoOfCwd))];
   render();
 }
 

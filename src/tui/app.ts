@@ -1,6 +1,6 @@
 import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type SessionHistory, type SessionSummary, type Settings } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
-import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, setRepoColors, type ScreenModel } from "./model.js";
+import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
@@ -138,10 +138,9 @@ export class App {
     this.sessions = new Map(list.map((s) => [s.session_id, s]));
   }
 
-  /** The settings changed (GET /api/settings, `settings.updated`): the language (unless `--lang` pinned it) and the repository colours */
+  /** The settings changed (GET /api/settings, `settings.updated`): the language (unless `--lang` pinned it) */
   settingsUpdated(s: Settings): void {
     if (!this.langLocked) this.lang = s.lang;
-    setRepoColors(s.repo_colors);
     this.models.clear();
   }
 

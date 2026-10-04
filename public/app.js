@@ -134,12 +134,12 @@ const $ = (id) => document.getElementById(id);
 
 // ---- Settings (GET /api/settings, SSE settings.updated; edited on /settings) ----
 // Same shape as the Settings schema in src/contract.ts. `loaded` below does not depend on it: the defaults apply until the first fetch lands
-const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: true }, notify: { sound: false, browser: false, title_badge: true }, repo_colors: {} };
+const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: true }, notify: { sound: false, browser: false, title_badge: true } };
 let settings = DEFAULT_SETTINGS;
 const isDark = () => settings.theme === "dark" || (settings.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
 function applySettings(s) {
   const prev = settings;
-  settings = { ...DEFAULT_SETTINGS, ...s, plans: { ...DEFAULT_SETTINGS.plans, ...s.plans }, notify: { ...DEFAULT_SETTINGS.notify, ...s.notify }, repo_colors: s.repo_colors ?? {} };
+  settings = { ...DEFAULT_SETTINGS, ...s, plans: { ...DEFAULT_SETTINGS.plans, ...s.plans }, notify: { ...DEFAULT_SETTINGS.notify, ...s.notify } };
   const root = document.documentElement;
   if (settings.theme === "system") delete root.dataset.theme; else root.dataset.theme = settings.theme;
   // highlight.js ships two stylesheets switched by media query: pin the one that matches the theme
@@ -152,9 +152,8 @@ function applySettings(s) {
   if (isDark() !== wasDark) mermaidReady = false; // re-initialise with the other theme for the next diagram
   document.body.classList.toggle("no-hints", !settings.hints);
   if (settings.lang !== currentLang()) root.dataset.lang = settings.lang; // the MutationObserver below re-renders in the new language
-  else if (loaded) { // colours, plan auto-show and the title badge show without a reload
+  else if (loaded) { // plan auto-show and the title badge show without a reload
     const changed = (k) => JSON.stringify(prev[k]) !== JSON.stringify(settings[k]);
-    if (changed("repo_colors")) { const d = decisions.get(shownId); if (d) renderHead(d); }
     if (changed("plans") && settings.plans.auto_show && shownId == null) advance();
     refreshItems();
   }
@@ -701,13 +700,7 @@ const repoSlot = (name) => {
   for (const ch of name) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
   return h % 12;
 };
-// Settings `repo_colors` override the hash: a hue, or "grey" (no saturation, like plans/)
-const repoColorStyle = (name) => {
-  const o = Object.hasOwn(settings.repo_colors, name) ? settings.repo_colors[name] : undefined;
-  if (o === "grey") return "--repo-hue:0;--repo-sat:0%";
-  return `--repo-hue:${typeof o === "number" ? o : (238 + repoSlot(name) * 27) % 360}`;
-};
-const repoStyle = (d) => repoColorStyle(repoOf(d));
+const repoStyle = (d) => `--repo-hue:${(238 + repoSlot(repoOf(d)) * 27) % 360}`;
 
 // Where the decision comes from, as one line: `ukagai ⎇ main ⧉ worktree` (the full working directory is the tooltip)
 const whereText = (d) => [repoOf(d), d.context?.branch ? `⎇ ${d.context.branch}` : "", worktreeOf(d) ? `⧉ ${worktreeOf(d)}` : ""].filter(Boolean).join(" ");

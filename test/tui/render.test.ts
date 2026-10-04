@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App } from "../../src/tui/app.js";
-import { buildModel, fixedLabel, repoAnsi, repoSlot, setRepoColors, PLANS_ANSI } from "../../src/tui/model.js";
+import { buildModel, fixedLabel, repoAnsi } from "../../src/tui/model.js";
 import { parseSse } from "../../src/tui/api.js";
 import { DEFAULT_SETTINGS } from "../../src/contract.js";
 import { render, renderFrame, type View } from "../../src/tui/render.js";
@@ -210,51 +210,19 @@ test("G1: frame line 1 starts with repo and branch in bold, at 120x40 and 100x24
   assert.ok(stripAnsi(blk.split("\n")[0]!).startsWith("ukagai"), "blocker");
 });
 
-test("repo_colors: an override wins over the hash (a hue maps to the nearest ANSI, grey to bright black); removing it restores the hash", () => {
-  const hashed = repoAnsi("ukagai");
-  try {
-    // Hues of the 12 slots (238 + slot * 27): 238 / 265 blue, 292 / 319 magenta, 346 / 13 red, 40 / 67 yellow, 94 / 121 / 148 green, 175 cyan
-    const byHue: [number, number][] = [[238, 34], [250, 34], [300, 35], [350, 31], [5, 31], [50, 33], [120, 32], [175, 36], [180, 36], [215, 34], [359, 31]];
-    for (const [hue, ansi] of byHue) {
-      setRepoColors({ ukagai: hue });
-      assert.equal(repoAnsi("ukagai"), `\x1b[${ansi}m`, `hue ${hue}`);
-    }
-    setRepoColors({ ukagai: "grey" });
-    assert.equal(repoAnsi("ukagai"), PLANS_ANSI);
-    // Only the named repo changes; a name that is an Object.prototype key is not an override
-    setRepoColors({ ukagai: 175 });
-    assert.equal(repoAnsi("whoknows"), `\x1b[${[34, 34, 35, 35, 31, 31, 33, 33, 32, 32, 32, 36][repoSlot("whoknows")]}m`);
-    assert.equal(repoAnsi("constructor"), `\x1b[${[34, 34, 35, 35, 31, 31, 33, 33, 32, 32, 32, 36][repoSlot("constructor")]}m`);
-    // The header paints it
-    const override = repoAnsi("ukagai");
-    assert.ok(render(viewOf(), { cols: 140, rows: 40 }).includes(`\x1b[1m${override}ukagai\x1b[0m`));
-    setRepoColors({});
-    assert.equal(repoAnsi("ukagai"), hashed);
-    setRepoColors(undefined);
-    assert.equal(repoAnsi("ukagai"), hashed);
-  } finally {
-    setRepoColors({});
-  }
-});
-
-test("settings.updated: parsed from SSE; the app takes the language (unless --lang pinned it) and the repo colours", () => {
-  const next = { ...DEFAULT_SETTINGS, lang: "ja" as const, repo_colors: { ukagai: 175 } };
+test("settings.updated: parsed from SSE; the app takes the language (unless --lang pinned it)", () => {
+  const next = { ...DEFAULT_SETTINGS, lang: "ja" as const };
   const ev = parseSse(`event: settings.updated\ndata: ${JSON.stringify(next)}`);
   assert.deepEqual(ev, { event: "settings.updated", settings: next });
   assert.equal(parseSse(`event: settings.updated\ndata: ${JSON.stringify({ lang: "fr" })}`), null);
-  try {
-    const app = new App();
-    app.settingsUpdated(next);
-    assert.equal(app.lang, "ja");
-    assert.equal(repoAnsi("ukagai"), "\x1b[36m");
-    const pinned = new App();
-    pinned.lang = "en";
-    pinned.langLocked = true;
-    pinned.settingsUpdated(next);
-    assert.equal(pinned.lang, "en");
-  } finally {
-    setRepoColors({});
-  }
+  const app = new App();
+  app.settingsUpdated(next);
+  assert.equal(app.lang, "ja");
+  const pinned = new App();
+  pinned.lang = "en";
+  pinned.langLocked = true;
+  pinned.settingsUpdated(next);
+  assert.equal(pinned.lang, "en");
 });
 
 const QUIZ_Q = "Subject: parse_retry_after\n\nWhat does it return for \"120\"?";

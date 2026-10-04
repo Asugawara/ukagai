@@ -29,14 +29,13 @@ test("writeConfig then readConfig round-trips and creates the directory", async 
   }
 });
 
-test("readConfig: at most 500 repo colours are kept (the schema's cap), unknown keys are stripped", async () => {
+test("readConfig: unknown keys are stripped, and a repo_colors key from an older version is ignored", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ukagai-cfg-"));
   try {
-    const colors: Record<string, number> = {};
-    for (let i = 0; i < 600; i++) colors[`repo-${i}`] = i % 360;
-    writeFileSync(configPath(dir), JSON.stringify({ repo_colors: colors, extra: { x: 1 }, checkpoints: { other: true } }));
+    writeFileSync(configPath(dir), JSON.stringify({ theme: "dark", repo_colors: { ukagai: 120, dotfiles: "grey" }, extra: { x: 1 }, checkpoints: { other: true } }));
     const c = await readConfig(dir);
-    assert.equal(Object.keys(c.repo_colors).length, 500);
+    assert.equal(c.theme, "dark");
+    assert.equal("repo_colors" in c, false);
     assert.equal(Settings.safeParse(c).success, true, "what is read always passes the PUT schema");
     assert.equal("extra" in c, false);
     assert.deepEqual(Object.keys(c.checkpoints).sort(), ["codex_delay_s", "enabled", "terminal_delivery"]);

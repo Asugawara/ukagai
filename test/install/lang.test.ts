@@ -95,7 +95,6 @@ test("install --lang keeps the other settings of an existing config.json (with a
     checkpoints: { enabled: false, codex_delay_s: 600, terminal_delivery: false },
     plans: { auto_show: false },
     notify: { sound: true, browser: false, title_badge: false },
-    repo_colors: { ukagai: 120, dotfiles: "grey" },
   };
   await writeFile(join(e.dataDir, "config.json"), JSON.stringify(saved));
   const r = await ukagai(e.home, ["install", "--settings", e.settings, "--data-dir", e.dataDir, "--lang", "ja"]);

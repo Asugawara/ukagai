@@ -55,7 +55,7 @@ export async function run(argv: string[]): Promise<number> {
   app.server = opts.server;
   app.lang = await resolveLang(opts);
   app.langLocked = opts.lang !== undefined;
-  // The server's live settings (language, repository colours); the config.json read above stays when it cannot be reached
+  // The server's live settings (language); the config.json read above stays when it cannot be reached
   try {
     app.settingsUpdated(await api.settings());
   } catch {
