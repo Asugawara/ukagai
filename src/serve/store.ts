@@ -5,6 +5,7 @@ import {
   CANCEL_WINDOW_MS,
   CHECKPOINT_TTL_MS,
   checkpointFingerprint,
+  type DeliveredVia,
   checkpointToolUseId,
   DENY_LINK_WINDOW_MS,
   HANDOFF_GRACE_MS,
@@ -103,10 +104,16 @@ export class Store {
   private waiters = new Map<string, Set<() => void>>();
   /** Answered checkpoints whose text has not reached the agent yet: one per session, newest wins */
   private instructions = new Map<string, Instruction>();
+  /** Claude Code sessions whose last delivered instruction was a stop and that have not had a UserPromptSubmit since */
+  private stoppedSessions = new Set<string>();
   /** Called after each live hook event of a session (the recap watcher reads that session's transcript now) */
   onSessionEvent: ((sessionId: string, hookEvent: string) => void) | undefined;
   /** Called after a checkpoint is answered (the Codex bridge delivers its answer in-process; Claude's hook polls the instruction instead) */
   onCheckpointAnswered: ((d: Decision) => void) | undefined;
+  /** Claude Code checkpoints: an answered instruct that an idle agent will not pick up by itself (the terminal delivery types it) */
+  onCheckpointDeliverable: ((d: Decision) => void) | undefined;
+  /** A checkpoint was created for a session (the terminal delivery looks up where its terminal is) */
+  onCheckpointCreated: ((d: Decision) => void) | undefined;
   private monitor: NodeJS.Timeout | undefined;
 
   // Aggregates rebuilt from events
@@ -268,7 +275,9 @@ export class Store {
     session: SessionSummary & { agent?: "claude" | "codex" },
     recap: string,
     recapAt: string,
-  ): { decision: Decision; created: boolean } {
+  ): { decision: Decision; created: boolean; skipped?: undefined } | { decision?: undefined; created: false; skipped: "after_stop" } {
+    // The human told the agent to stop: no more progress checks until they speak again (Claude Code only; the Codex bridge handles its own)
+    if (session.agent !== "codex" && this.stoppedSessions.has(session.session_id)) return { created: false, skipped: "after_stop" };
     const ds: CreateDecisionRequest["session"] = { session_id: session.session_id, cwd: session.cwd, transcript_path: session.transcript_path ?? "" };
     if (session.agent) ds.agent = session.agent;
     if (session.title) ds.title = session.title;
@@ -304,7 +313,22 @@ export class Store {
     this.persist(decision);
     this.emit("decision.created", decision);
     this.touchSession(sid, { cwd: req.session.cwd, title: req.session.title, transcript_path: req.session.transcript_path });
+    try {
+      this.onCheckpointCreated?.(decision);
+    } catch {
+      // A subscriber must not break the checkpoint
+    }
     return { decision, created: true };
+  }
+
+  /** The terminal the session's agent runs in (looked up when a checkpoint is created and again when it is answered); undefined = not found */
+  setTerminal(sessionId: string, terminal: string | undefined): void {
+    const cur = this.sessions.get(sessionId);
+    if (!cur || cur.terminal === terminal) return;
+    const { terminal: _old, ...rest } = cur;
+    const next: SessionSummary = terminal ? { ...rest, terminal } : rest;
+    this.sessions.set(sessionId, next);
+    this.emit("session.updated", next);
   }
 
   /** pending checkpoint -> cancelled (no lease, no waiter) */
@@ -335,17 +359,43 @@ export class Store {
   }
 
   /** The instruction waiting for the session's agent, or undefined. Consuming it marks the checkpoint delivered */
-  consumeInstruction(sessionId: string): Instruction | undefined {
+  consumeInstruction(sessionId: string, via: DeliveredVia = "hook"): Instruction | undefined {
     const ins = this.instructions.get(sessionId);
     if (!ins) return undefined;
     this.instructions.delete(sessionId);
-    const d = this.decisions.get(ins.decision_id);
-    if (d?.response && !d.response.delivered_at) {
-      d.response = { ...d.response, delivered_at: new Date().toISOString() };
-      this.persist(d);
-      this.emit("decision.updated", d);
-    }
+    this.markDelivered(ins.decision_id, via);
+    if (ins.kind === "stop" && this.decisions.get(ins.decision_id)?.session.agent !== "codex") this.stoppedSessions.add(sessionId);
     return ins;
+  }
+
+  private markDelivered(decisionId: string, via: DeliveredVia): void {
+    const d = this.decisions.get(decisionId);
+    if (!d?.response || d.response.delivered_at) return;
+    d.response = { ...d.response, delivered_at: new Date().toISOString(), delivered_via: via };
+    this.persist(d);
+    this.emit("decision.updated", d);
+  }
+
+  /** The queued instruction of this checkpoint, taken off the queue for the terminal delivery (undefined when the hook took it first) */
+  claimInstruction(decisionId: string, maxAgeMs: number): Instruction | undefined {
+    for (const [sid, ins] of this.instructions) {
+      if (ins.decision_id !== decisionId) continue;
+      // Typing starts a new turn: only for an agent that is still idle, and not for a reply the human gave long ago
+      if (this.sessions.get(sid)?.state !== "idle" || Date.now() - Date.parse(ins.created_at) > maxAgeMs) return undefined;
+      this.instructions.delete(sid);
+      return ins;
+    }
+    return undefined;
+  }
+
+  /** A claimed instruction could not be typed: back on the queue for the hook, unless a newer one took its place */
+  requeueInstruction(sessionId: string, ins: Instruction): void {
+    if (!this.instructions.has(sessionId)) this.instructions.set(sessionId, ins);
+  }
+
+  /** A claimed instruction reached the agent's terminal */
+  deliveredToTerminal(decisionId: string): void {
+    this.markDelivered(decisionId, "terminal");
   }
 
   /** The newest decision of the session and agent that is still open (pending, or its hook went away) and asks the same thing */
@@ -456,13 +506,21 @@ export class Store {
     if (patch.answer === "instruct" && !text) throw new HttpError(400, "text is required for instruct");
     d.response = { via: "gui", kind: patch.answer, ...(text !== undefined && patch.answer !== "continue" ? { text } : {}), decided_at: decidedAt };
     this.setStatus(d, "answered");
+    const claude = d.session.agent !== "codex";
+    // Nothing to stop in an idle Claude Code session: delivered at once, nothing queued
+    const noop = claude && patch.answer === "stop" && this.sessions.get(d.session.session_id)?.state === "idle";
+    if (noop) {
+      d.response = { ...d.response, delivered_at: decidedAt, delivered_via: "noop" };
+      this.stoppedSessions.add(d.session.session_id);
+    }
     this.persist(d);
-    if (patch.answer !== "continue") {
+    if (patch.answer !== "continue" && !noop) {
       this.instructions.set(d.session.session_id, { decision_id: d.id, kind: patch.answer, text: d.response.text ?? "", created_at: decidedAt });
     }
     this.emit("decision.updated", d);
     try {
       this.onCheckpointAnswered?.(d);
+      if (claude && patch.answer === "instruct" && this.sessions.get(d.session.session_id)?.state === "idle") this.onCheckpointDeliverable?.(d);
     } catch {
       // A subscriber must not break the answer
     }
@@ -592,6 +650,7 @@ export class Store {
     if (title) next.title = title;
     const transcript = patch.transcript_path || cur?.transcript_path;
     if (transcript) next.transcript_path = transcript;
+    if (cur?.terminal) next.terminal = cur.terminal;
     this.sessions.set(sessionId, next);
     if (live) this.emit("session.updated", next);
   }
@@ -642,7 +701,12 @@ export class Store {
     if (live && (ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "Stop")) {
       this.cancelRecentlyDisconnected(ev.session_id);
     }
-    if (live && ev.hook_event_name === "UserPromptSubmit") this.cancelPending(ev.session_id);
+    if (live && ev.hook_event_name === "UserPromptSubmit") {
+      this.cancelPending(ev.session_id);
+      this.stoppedSessions.delete(ev.session_id);
+      this.dropQueuedStop(ev.session_id);
+    }
+    if (live && ev.hook_event_name === "Stop") this.offerQueuedInstruction(ev.session_id);
     if (ev.hook_event_name === "SessionEnd") this.endCheckpoints(ev.session_id, live);
     if (live) this.onSessionEvent?.(ev.session_id, ev.hook_event_name);
   }
@@ -650,9 +714,38 @@ export class Store {
   /** The session ended: its pending checkpoints and the instruction nobody can receive any more are dropped */
   private endCheckpoints(sessionId: string, live: boolean): void {
     this.instructions.delete(sessionId);
+    this.stoppedSessions.delete(sessionId);
     if (!live) return;
     for (const d of this.decisions.values()) {
       if (d.kind === "checkpoint" && d.session.session_id === sessionId && d.status === "pending") this.closeCheckpoint(d, "session_end");
+    }
+  }
+
+  /** The human typed a new prompt: a queued stop would deny the first tool call of that prompt. A queued instruct stays */
+  private dropQueuedStop(sessionId: string): void {
+    const ins = this.instructions.get(sessionId);
+    if (ins?.kind !== "stop") return;
+    this.instructions.delete(sessionId);
+    this.markDelivered(ins.decision_id, "noop"); // nothing left to stop
+  }
+
+  /** The agent went idle without calling a tool: an instruct still queued for it goes to the terminal delivery */
+  private offerQueuedInstruction(sessionId: string): void {
+    const ins = this.instructions.get(sessionId);
+    if (!ins) return;
+    const d = this.decisions.get(ins.decision_id);
+    if (!d || d.session.agent === "codex") return;
+    if (ins.kind === "stop") {
+      // The agent stopped on its own before the deny could reach it: nothing to stop
+      this.instructions.delete(sessionId);
+      this.markDelivered(ins.decision_id, "noop");
+      this.stoppedSessions.add(sessionId);
+      return;
+    }
+    try {
+      this.onCheckpointDeliverable?.(d);
+    } catch {
+      // A subscriber must not break the event
     }
   }
 

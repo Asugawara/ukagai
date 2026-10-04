@@ -144,6 +144,11 @@ export class App {
     return !!d && this.sessions.get(d.session.session_id)?.state === "idle";
   }
 
+  /** The idle session of a checkpoint runs in a terminal the reply can be typed into */
+  private hasTerminal(d: Decision | undefined): boolean {
+    return !!d && !!this.sessions.get(d.session.session_id)?.terminal;
+  }
+
   /** The list at startup / refetch (pending only). Decisions still pending locally but missing from the list are returned to be re-fetched */
   replacePending(list: Decision[], now: number): string[] {
     const seen = new Set<string>();
@@ -169,9 +174,12 @@ export class App {
     const prev = this.decisions.get(d.id);
     this.decisions.set(d.id, d);
     if (d.status !== "pending" && this.sent.has(d.id)) {
-      const key = STATUS_KEY[d.status];
+      const key = d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[d.status];
       if (key) this.showToast(t(this.lang, key), now);
       if (d.status !== "answer_submitted") this.sent.delete(d.id);
+    }
+    if (d.kind === "checkpoint" && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) {
+      this.showToast(t(this.lang, "checkpoint_delivered"), now);
     }
     if (d.id === this.shownId) {
       if (d.status !== "pending") this.advance(now);
@@ -379,7 +387,11 @@ export class App {
 
   private items(): HistoryItem[] {
     const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
-    return historyItems(d ? (this.histories.get(d.session.session_id) ?? null) : null);
+    if (!d) return [];
+    const replies: HistoryItem[] = [...this.decisions.values()]
+      .filter((x) => x.kind === "checkpoint" && x.session.session_id === d.session.session_id && x.status === "answered" && x.response && x.response.kind !== "continue")
+      .map((x) => ({ first: false, at: x.response!.decided_at, text: x.response!.text || t(this.lang, "checkpoint_stop"), delivered: !!x.response!.delivered_at }));
+    return historyItems(this.histories.get(d.session.session_id) ?? null, replies);
   }
 
   /** Next item: a pending decision, else the newest new plan, else the idle screen */
@@ -462,6 +474,7 @@ export class App {
       history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
       histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
       idle: m?.checkpoint ? this.idle(this.decisions.get(m.id)) : false,
+      terminal: m?.checkpoint ? this.hasTerminal(this.decisions.get(m.id)) : false,
       copy: this.copySupported,
       recFull: this.shownId !== null && this.recFull.has(this.shownId),
       plan: m?.plan ? this.planState(m) : null,
@@ -976,7 +989,7 @@ export class App {
     this.sending.delete(updated.id);
     this.sent.add(updated.id);
     this.decisions.set(updated.id, updated);
-    const key = STATUS_KEY[updated.status];
+    const key = updated.kind === "checkpoint" && updated.status === "answered" && updated.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[updated.status];
     this.showToast(t(this.lang, key ?? "sent"), now);
     if (updated.id === this.shownId) this.advance(now);
   }

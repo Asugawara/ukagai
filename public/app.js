@@ -325,11 +325,12 @@ const kindLabel = (d) => (d.kind === "approve_plan" ? t("kind_plan") : isCheckpo
 // Session state by id (GET /api/sessions, SSE session.updated): the idle note of a checkpoint reads it
 const sessions = new Map();
 const sessionIdle = (d) => sessions.get(d.session.session_id)?.state === "idle";
+const idleNoteText = (d) => t(sessions.get(d.session.session_id)?.terminal ? "checkpoint_idle_terminal" : "checkpoint_idle");
 function syncIdleNote(sid) {
   const d = decisions.get(shownId);
   if (!d || !isCheckpoint(d) || d.session.session_id !== sid) return;
   const note = document.querySelector("#decision .cp-idle");
-  if (note) note.hidden = !sessionIdle(d);
+  if (note) { note.hidden = !sessionIdle(d); note.textContent = idleNoteText(d); }
 }
 
 // ---- Toasts ----
@@ -358,7 +359,7 @@ function notifyBackground(prev, d) {
   const title = clip(titleOf(d));
   if (d.status === "cancelled" && prev.status === "pending") toast(t("cancelled_title", { title }), { kind: "lost", ms: 4000 });
   else if (LOST_KEYS[d.status]) toast(t(LOST_KEYS[d.status], { title }), { kind: "lost", ms: 4000 });
-  else if (d.status === "answered") toast(t("delivered_title", { title }), { kind: "soft" });
+  else if (d.status === "answered") toast(isCheckpoint(d) ? (d.response?.kind === "continue" ? t("delivered_title", { title }) : t("checkpoint_sent")) : t("delivered_title", { title }), { kind: "soft" });
 }
 
 // ---- Pending button / title ----
@@ -484,10 +485,18 @@ function historyOf(d) {
 
 // Chronological list for the panel: the first instruction, then the recent ones. `recent` overlaps `first` when the session is short
 // (same rule as historyItems in src/tui/history.ts)
-function historyItems(h) {
+// A reply typed into the terminal is an ordinary user record in the transcript: the checkpoint row below stands for it
+const REPLY_PREFIX = "[ukagai] Reply to your progress recap:";
+const isTypedReply = (e) => String(e?.text ?? "").startsWith(REPLY_PREFIX);
+function historyItems(h, sid) {
   if (!h) return [];
-  const rest = h.first && h.recent.length >= h.total ? h.recent.slice(1) : h.recent;
-  return [...(h.first ? [{ first: true, ...h.first }] : []), ...rest.map((e) => ({ first: false, ...e }))];
+  const rest = (h.first && h.recent.length >= h.total ? h.recent.slice(1) : h.recent).filter((e) => !isTypedReply(e));
+  // The session's answered checkpoints (instruct / stop) sit among the instructions with a delivered mark; continue shows nothing
+  const replies = [...decisions.values()]
+    .filter((x) => isCheckpoint(x) && x.session.session_id === sid && x.status === "answered" && x.response && x.response.kind !== "continue")
+    .map((x) => ({ first: false, at: x.response.decided_at, text: x.response.text || t("checkpoint_stop"), delivered: !!x.response.delivered_at }));
+  const later = [...rest.map((e) => ({ first: false, ...e })), ...replies].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  return [...(h.first && !isTypedReply(h.first) ? [{ first: true, ...h.first }] : []), ...later];
 }
 
 // Lazy fetch when a decision is shown. One request per session (concurrent shows share it); failures are ignored
@@ -528,14 +537,15 @@ function syncHistoryHint(d) {
 }
 
 function openHistory(d) {
-  const items = historyItems(historyOf(d));
+  const items = historyItems(historyOf(d), d.session.session_id);
   if (!items.length) return;
   const list = el("div", { class: "hist-list" });
   items.forEach((it, i) => {
     list.append(el("div", { class: "hist-row", "data-i": String(i), onclick: () => { overlay.sel = i; overlay.full = true; syncHistory(); } },
       el("span", { class: "hist-at", text: it.at ? t("history_ago", { t: elapsed(it.at) }) : "" }),
       el("span", { class: "hist-first", text: it.first ? t("history_first") : "" }),
-      el("span", { class: "hist-text", text: oneLine(it.text) })));
+      el("span", { class: "hist-text", text: oneLine(it.text) }),
+      it.delivered === undefined ? null : el("span", { class: "hist-mark", text: t(it.delivered ? "history_delivered" : "history_undelivered") })));
   });
   const full = el("pre", { class: "hist-full", hidden: true });
   const hint = el("div", { class: "overlay-hint" });
@@ -847,6 +857,8 @@ const STATUS_KEYS = {
   cancelled: "status_cancelled",
 };
 const statusText = (status, fallbackKey) => t(STATUS_KEYS[status] ?? fallbackKey);
+// An answered checkpoint was sent, not delivered: its text reaches the agent later (the delivered toast follows)
+const answeredText = (d, fallbackKey) => (isCheckpoint(d) && d.status === "answered" && d.response?.kind !== "continue" ? t("checkpoint_sent") : statusText(d.status, fallbackKey));
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
@@ -854,7 +866,7 @@ async function send(d, body) {
     const updated = await post(`/api/decisions/${d.id}/answer`, body);
     decisions.set(updated.id, updated);
     if (shownId === d.id) {
-      toast(statusText(updated.status, "sent"));
+      toast(answeredText(updated, "sent"));
       advance();
     } else {
       refreshItems();
@@ -1485,7 +1497,7 @@ function renderRightBody(d) {
 function renderCheckpointRight(d, dr, closed, root) {
   root.classList.add("split");
   const free = dr.free.get(0) ?? dr.free.set(0, { on: false, text: "" }).get(0);
-  const top = el("div", { class: "q-top" }, el("div", { class: "cp-idle", hidden: !sessionIdle(d), text: t("checkpoint_idle") }));
+  const top = el("div", { class: "q-top" }, el("div", { class: "cp-idle", hidden: !sessionIdle(d), text: idleNoteText(d) }));
   const cardsBox = el("div", { class: "q-cards" });
   const cards = [];
   const instruct = el("input", {
@@ -2581,10 +2593,11 @@ function advance() {
 function upsert(d) {
   const prev = decisions.get(d.id);
   decisions.set(d.id, d);
+  if (isCheckpoint(d) && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) toast(t("checkpoint_delivered"), { kind: "ok" });
   if (d.id !== shownId) notifyBackground(prev, d);
   if (d.id === shownId) {
     if (d.status !== "pending") {
-      if (!(isCheckpoint(d) && d.status === "cancelled")) toast(statusText(d.status, "updated"));
+      if (!(isCheckpoint(d) && d.status === "cancelled")) toast(answeredText(d, "updated"));
       advance();
     } else if (!prev || prev.status !== d.status) {
       renderAll();

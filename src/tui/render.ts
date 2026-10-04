@@ -30,6 +30,8 @@ export interface View {
   lang: Lang;
   /** The shown checkpoint's session is idle (its note says the reply arrives at the next tool call) */
   idle: boolean;
+  /** ...and the reply will be typed into its terminal */
+  terminal?: boolean;
   /** The `s` overlay (the session's instructions, chronological; cursor); null when closed */
   history: { index: number; items: HistoryItem[] } | null;
   /** One instruction shown in full in place of the background column */
@@ -286,7 +288,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   }
 
   if (m.checkpoint) {
-    if (v.idle) lines.push(...wrap(`${DIM}${t(lang, "checkpoint_idle")}${RESET}`, w), "");
+    if (v.idle) lines.push(...wrap(`${DIM}${t(lang, v.terminal ? "checkpoint_idle_terminal" : "checkpoint_idle")}${RESET}`, w), "");
     (["continue", "instruct", "stop"] as const).forEach((k, i) => {
       const start = lines.length;
       const on = v.cursor === i;
@@ -609,7 +611,8 @@ function historyBody(v: View, cols: number, rows: number): string[] {
     const on = off + k === h.index;
     const when = padEnd(`${DIM}${it.at ? elapsed(it.at, v.now, v.lang) : ""}${RESET}`, 6);
     const mark = it.first ? `${YELLOW}${t(v.lang, "history_first")}${RESET} ` : "";
-    return truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${when} ${mark}${on ? BOLD : ""}${oneLine(it.text)}${RESET}`, cols);
+    const delivery = it.delivered === undefined ? "" : ` ${DIM}${t(v.lang, it.delivered ? "history_delivered" : "history_undelivered")}${RESET}`;
+    return truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${when} ${mark}${on ? BOLD : ""}${oneLine(it.text)}${RESET}${delivery}`, cols);
   });
   return window([...head, ...body], rows, 0);
 }

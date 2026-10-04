@@ -523,7 +523,7 @@ export class PlanBridge {
       this.checkpointLost(d.id, err);
       return;
     }
-    store.consumeInstruction(d.session.session_id);
+    store.consumeInstruction(d.session.session_id, "bridge");
     log("checkpoint_delivered", { decision: d.id, thread: t.id, kind: d.response?.kind });
   }
 
@@ -539,7 +539,7 @@ export class PlanBridge {
       this.checkpointLost(q.decisionId, err);
       return;
     }
-    this.deps.store.consumeInstruction(t.id);
+    this.deps.store.consumeInstruction(t.id, "bridge");
     this.deps.log("checkpoint_delivered", { decision: q.decisionId, thread: t.id, via: "queue" });
   }
 
