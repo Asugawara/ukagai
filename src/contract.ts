@@ -678,10 +678,6 @@ export function stripExplainBlocks(markdown: string): string {
 
 export const CODEX_DELAY_MIN_S = 30;
 export const CODEX_DELAY_MAX_S = 3600;
-/** A repository colour override: a hue (0-359) or "grey" */
-export const RepoColor = z.union([z.number().int().min(0).max(359), z.literal("grey")]);
-export type RepoColor = z.infer<typeof RepoColor>;
-
 export const Settings = z.object({
   /** Display language of the GUI / TUI (and the language the agent writes explanations in) */
   lang: z.enum(["en", "ja"]),
@@ -705,8 +701,6 @@ export const Settings = z.object({
     browser: z.boolean(),
     title_badge: z.boolean(),
   }),
-  /** Per-repository header colour overrides: repo name -> hue / "grey" */
-  repo_colors: z.record(z.string().min(1).max(200), RepoColor).refine((r) => Object.keys(r).length <= 500, "too many repo colours"),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -717,5 +711,4 @@ export const DEFAULT_SETTINGS: Settings = {
   checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true },
   plans: { auto_show: true },
   notify: { sound: false, browser: false, title_badge: true },
-  repo_colors: {},
 };

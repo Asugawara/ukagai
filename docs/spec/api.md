@@ -312,8 +312,7 @@ The settings page (`/settings`) edits `<data-dir>/config.json` through these two
     "sound": false,                  // a short beep on a new decision while the GUI tab is not focused
     "browser": false,                // a browser Notification on a new decision while the tab is hidden (the page asks the browser for permission when it is turned on)
     "title_badge": true              // the "(N)" pending count in the tab title
-  },
-  "repo_colors": { "ukagai": 120, "dotfiles": "grey" }   // repo name -> hue 0..359 | "grey"; wins over the name hash in the GUI header and (nearest ANSI colour) in the TUI
+  }
 }
 ```
 
@@ -321,9 +320,9 @@ A failed write (for example a read-only data directory) is a 500 `{ "error": "in
 
 `install --lang` rewrites `config.json` behind a running server's back; the server does not watch the file. A `PUT` that leaves `lang` as the server has it keeps the file's `lang` (so the install is not written over); other fields changed in the file by hand need a restart of `serve` (or any `PUT`, which writes the server's values).
 
-`config.json` is read tolerantly (`readConfig`): a missing or malformed file, or any unknown / invalid field, falls back to that field's default and never throws (at most 500 `repo_colors` entries are kept, the schema's cap); `writeConfig` writes the whole object. `install --lang` keeps the other settings. Not settings: ports, the data directory, hook budgets, the Codex home.
+`config.json` is read tolerantly (`readConfig`): a missing or malformed file, or any unknown / invalid field, falls back to that field's default and never throws (a key an older version wrote is ignored); `writeConfig` writes the whole object. `install --lang` keeps the other settings. Not settings: ports, the data directory, hook budgets, the Codex home.
 
-Live application, without a restart: the recap watcher, the Codex bridge (`codex_delay_s` at arm time) and the terminal delivery read the current value at the moment they act; `lang` changes what `GET /api/config`, the injected `<html lang data-lang>` and the next GUI / TUI load use (the hook reads `config.json` per call already). `theme`, `hints`, `plans.auto_show`, `notify.*` and `repo_colors` are applied by the GUI itself; the TUI takes `lang` (unless `--lang` pinned it) and `repo_colors` from `GET /api/settings` at start, on every reconnect refetch and on `settings.updated`.
+Live application, without a restart: the recap watcher, the Codex bridge (`codex_delay_s` at arm time) and the terminal delivery read the current value at the moment they act; `lang` changes what `GET /api/config`, the injected `<html lang data-lang>` and the next GUI / TUI load use (the hook reads `config.json` per call already). `theme`, `hints`, `plans.auto_show`, and `notify.*` are applied by the GUI itself; the TUI takes `lang` (unless `--lang` pinned it) from `GET /api/settings` at start, on every reconnect refetch and on `settings.updated`.
 
 ### POST /api/plans/:name/read / DELETE /api/plans/:name/read
 

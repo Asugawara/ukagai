@@ -215,34 +215,7 @@ export function repoSlot(name: string): number {
 const SLOT_ANSI = [34, 34, 35, 35, 31, 31, 33, 33, 32, 32, 32, 36];
 export const PLANS_ANSI = "\x1b[90m";
 
-/** Settings `repo_colors`: a hue (0-359) or "grey" per repo name. An override wins over the hash (set by the app from GET /api/settings) */
-let repoOverrides: Record<string, number | "grey"> = {};
-export function setRepoColors(colors: Record<string, number | "grey"> | undefined): void {
-  repoOverrides = { ...(colors ?? {}) };
-}
-
-/** The ANSI colour nearest to a hue: the nearest of the 12 slot hues (238 + slot * 27) takes its SLOT_ANSI */
-function ansiOfHue(hue: number): number {
-  let best = 0;
-  let bestDist = 361;
-  for (let slot = 0; slot < SLOT_ANSI.length; slot++) {
-    const h = (238 + slot * 27) % 360;
-    const diff = Math.abs(h - hue) % 360;
-    const dist = Math.min(diff, 360 - diff);
-    if (dist < bestDist) {
-      best = slot;
-      bestDist = dist;
-    }
-  }
-  return SLOT_ANSI[best]!;
-}
-
-export const repoAnsi = (name: string): string => {
-  const o = Object.hasOwn(repoOverrides, name) ? repoOverrides[name] : undefined;
-  if (o === "grey") return PLANS_ANSI;
-  if (typeof o === "number") return `\x1b[${ansiOfHue(o)}m`;
-  return `\x1b[${SLOT_ANSI[repoSlot(name)]}m`;
-};
+export const repoAnsi = (name: string): string => `\x1b[${SLOT_ANSI[repoSlot(name)]}m`;
 
 export function chipsOf(d: Decision): Chip[] {
   const m = WT_RE.exec(d.session.cwd);

@@ -108,7 +108,6 @@ test("GET /api/settings: defaults when config.json is malformed; bad fields fall
       checkpoints: { enabled: false, codex_delay_s: 5, terminal_delivery: 1 },
       plans: null,
       notify: { sound: true, browser: "x" },
-      repo_colors: { a: 400, b: "grey", c: 120, d: "blue", "": 3 },
     }),
   });
   assert.deepEqual(await getSettings(partial), {
@@ -116,7 +115,6 @@ test("GET /api/settings: defaults when config.json is malformed; bad fields fall
     lang: "ja",
     checkpoints: { enabled: false, codex_delay_s: 180, terminal_delivery: true },
     notify: { sound: true, browser: false, title_badge: true },
-    repo_colors: { b: "grey", c: 120 },
   });
 });
 
@@ -132,7 +130,7 @@ test("GET / PUT /api/settings need auth (cookie or Bearer)", async () => {
 
 // ---- PUT validation ----
 
-test("PUT /api/settings: 400 with the issue list for a bad enum, a delay out of range, a bad hue, a non-object", async () => {
+test("PUT /api/settings: 400 with the issue list for a bad enum, a delay out of range, a non-object", async () => {
   const env = await boot();
   const cases: [string, unknown][] = [
     ["bad lang", change((s) => ((s as any).lang = "fr"))],
@@ -140,9 +138,6 @@ test("PUT /api/settings: 400 with the issue list for a bad enum, a delay out of 
     ["delay below the minimum", change((s) => (s.checkpoints.codex_delay_s = 29))],
     ["delay above the maximum", change((s) => (s.checkpoints.codex_delay_s = 3601))],
     ["delay not an integer", change((s) => (s.checkpoints.codex_delay_s = 60.5))],
-    ["hue above 359", change((s) => (s.repo_colors.api = 360))],
-    ["hue negative", change((s) => (s.repo_colors.api = -1))],
-    ["hue a bad string", change((s) => ((s.repo_colors as any).api = "red"))],
     ["bool as string", change((s) => ((s as any).hints = "yes"))],
     ["missing group", { ...DEFAULT_SETTINGS, notify: undefined }],
     ["array", []],
@@ -166,7 +161,6 @@ test("PUT /api/settings: 400 with the issue list for a bad enum, a delay out of 
 test("PUT /api/settings: the limits themselves are accepted", async () => {
   const env = await boot();
   for (const delay of [30, 3600]) assert.equal((await put(env, change((s) => (s.checkpoints.codex_delay_s = delay)))).status, 200);
-  assert.equal((await put(env, change((s) => Object.assign(s.repo_colors, { a: 0, b: 359, c: "grey" })))).status, 200);
 });
 
 // ---- persistence / broadcast ----
@@ -180,7 +174,6 @@ test("PUT persists to config.json (reload the server: same values), returns the 
     s.checkpoints = { enabled: false, codex_delay_s: 600, terminal_delivery: false };
     s.plans.auto_show = false;
     s.notify = { sound: true, browser: true, title_badge: false };
-    s.repo_colors = { ukagai: 120, plans: "grey" };
   });
   const r = await put(env, next);
   assert.equal(r.status, 200);
@@ -410,22 +403,21 @@ test("concurrent PUTs: all answer, memory and file agree on the last one, no tmp
   assert.deepEqual(readdirSync(env.dir).filter((f) => f.endsWith(".tmp")), []);
 });
 
-test("PUT: __proto__ is dropped, constructor / toString are plain repo names; nothing is polluted; they survive a reload", async () => {
+test("PUT: a __proto__ key is dropped, nothing is polluted, and the file holds only the schema's keys", async () => {
   const env = await boot();
   const r = await api(env, "/api/settings", {
     method: "PUT",
-    raw: JSON.stringify({ ...DEFAULT_SETTINGS, repo_colors: {} }).replace('"repo_colors":{}', '"repo_colors":{"__proto__":5,"constructor":7,"toString":"grey","ok":9}'),
+    raw: JSON.stringify(DEFAULT_SETTINGS).replace("{", '{"__proto__":{"polluted":1},"constructor":7,'),
   });
   assert.equal(r.status, 200);
   const got = (await r.json()) as Settings;
-  assert.deepEqual(Object.keys(got.repo_colors).sort(), ["constructor", "ok", "toString"]);
-  assert.equal(Object.getPrototypeOf(got.repo_colors), Object.prototype);
+  assert.deepEqual(got, DEFAULT_SETTINGS);
+  assert.equal(Object.hasOwn(got, "__proto__"), false);
   assert.equal(({} as any).polluted, undefined);
-  assert.equal(Object.hasOwn(got.repo_colors, "__proto__"), false);
   await env.h.close();
-  const again = await boot({ dir: env.dir });
-  assert.deepEqual(Object.keys((await getSettings(again)).repo_colors).sort(), ["constructor", "ok", "toString"]);
-  assert.equal(Object.hasOwn(JSON.parse(readFileSync(configPath(env.dir), "utf8")).repo_colors, "__proto__"), false);
+  const file = JSON.parse(readFileSync(configPath(env.dir), "utf8"));
+  assert.deepEqual(file, DEFAULT_SETTINGS);
+  assert.equal(Object.hasOwn(file, "__proto__"), false);
 });
 
 test("PUT keeps the language install --lang wrote to config.json meanwhile (unless the client changes it)", async () => {

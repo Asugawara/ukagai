@@ -166,14 +166,14 @@ gui("the page renders in en and ja; the language select re-renders it and saves"
   assert.equal(ev<string>("document.documentElement.dataset.lang"), "en");
   assert.equal(text("#set-title"), "Settings");
   assert.equal(ev<string>("document.title"), "ukagai · Settings");
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["Display", "Progress checkpoints (recap)", "Plans", "Notifications", "Repository colours"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["Display", "Progress checkpoints (recap)", "Plans", "Notifications"]);
   assert.equal(text("#back"), "← Back");
   assert.equal(ev<string>(`document.querySelector("#back").getAttribute("href")`), "/");
   setControl("#lang", "ja", "change");
   await waitFor("page in ja", `document.querySelector("#set-title").textContent === "設定"`);
   assert.equal(ev<string>("document.documentElement.dataset.lang"), "ja");
   assert.equal(ev<string>("document.documentElement.lang"), "ja");
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["表示", "進捗チェック(recap)", "プラン", "通知", "リポジトリの色"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["表示", "進捗チェック(recap)", "プラン", "通知"]);
   await waitFor("saved", `(async () => 1)() && document.querySelector("#status").textContent === "保存しました"`);
   assert.equal((await getSettings()).lang, "ja");
   // The server renders the next load in ja from the start, and the main GUI follows
@@ -277,56 +277,6 @@ gui("the `,` key opens /settings; Esc there goes back; the header carries a Sett
   ab("open", base + "/");
   await waitFor("screen", MAIN_READY);
   assert.equal(ev<string>(`(() => { const t = document.createElement("input"); t.type = "text"; document.body.append(t); t.focus(); t.dispatchEvent(new KeyboardEvent("keydown", { key: ",", bubbles: true, cancelable: true })); t.remove(); return location.pathname; })()`), "/");
-});
-
-gui("repository colours: the list shows the repos seen; an override changes the header edge, persists after a reload; grey and reset work", async () => {
-  const cwd = "/Users/a/.herdr/worktrees/colorrepo/feat-x";
-  await seedQuestion(cwd);
-  await openSettings();
-  await waitFor("repo listed", `document.querySelector('#color-list [data-hue="colorrepo"]')`);
-  const edge = () => ev<string>(`getComputedStyle(document.getElementById("head")).borderLeftColor`);
-  const probe = (css: string) => ev<string>(`(() => { const p = document.createElement("div"); p.style.cssText = ${JSON.stringify(`border-left:6px solid ${css}`)}; document.body.append(p); const c = getComputedStyle(p).borderLeftColor; p.remove(); return c; })()`);
-  // The header is painted after the page's own first render: poll the read instead of asserting once (a loaded machine is slow)
-  const edgeIs = async (expected: string) => {
-    const end = Date.now() + 10000;
-    let got = edge();
-    while (got !== expected && Date.now() < end) { await sleep(150); got = edge(); }
-    assert.equal(got, expected);
-  };
-  const swatch = () => ev<string>(`getComputedStyle(document.querySelector('[data-swatch="colorrepo"]')).backgroundColor`);
-  assert.equal(ev<boolean>(`document.querySelector('[data-reset="colorrepo"]').disabled`), true, "nothing to reset yet");
-  const hashed = swatch();
-  // Move the slider and release it
-  setControl('[data-hue="colorrepo"]', "120", "input", "change");
-  await waitFor("saved", `document.querySelector("#status").textContent === "Saved"`);
-  assert.deepEqual((await getSettings()).repo_colors, { colorrepo: 120 });
-  await waitFor("swatch follows", `document.querySelector('[data-swatch="colorrepo"]').getAttribute("style").includes("--repo-hue:120")`);
-  assert.equal(swatch(), probe("hsl(120 70% var(--repo-l, 28%))"));
-  assert.notEqual(swatch(), hashed);
-  // The main GUI paints it, also after a reload
-  await openMain();
-  await edgeIs(probe("hsl(120 70% 28%)"));
-  ab("reload");
-  await waitFor("main screen", MAIN_READY);
-  await edgeIs(probe("hsl(120 70% 28%)"));
-  // Grey
-  await openSettings();
-  clickEl('[data-grey="colorrepo"]');
-  await waitFor("grey saved", `document.querySelector('[data-grey="colorrepo"]').getAttribute("aria-pressed") === "true"`);
-  assert.deepEqual((await getSettings()).repo_colors, { colorrepo: "grey" });
-  await openMain();
-  await edgeIs(probe("hsl(0 0% 28%)"));
-  // Reset to the hash
-  await openSettings();
-  clickEl('[data-reset="colorrepo"]');
-  await waitFor("reset saved", `document.querySelector('[data-reset="colorrepo"]').disabled`);
-  assert.deepEqual((await getSettings()).repo_colors, {});
-  assert.equal(swatch(), hashed);
-  // A repo added by name
-  setControl("#color-add-name", "brand-new", "input");
-  clickEl("#color-add-btn");
-  await waitFor("added", `document.querySelector('#color-list [data-hue="brand-new"]')`);
-  assert.equal(typeof (await getSettings()).repo_colors["brand-new"], "number");
 });
 
 gui("a change made elsewhere (the API) shows on an open settings page", async () => {
@@ -441,26 +391,6 @@ gui("theme system follows an emulated dark OS (and light again)", async () => {
   } finally {
     ab("set", "media", "light");
   }
-});
-
-gui("repo names __proto__ and constructor: constructor is a plain repo, __proto__ is dropped, the page keeps working", async () => {
-  await openSettings();
-  setControl("#color-add-name", "constructor", "input");
-  clickEl("#color-add-btn");
-  await waitFor("constructor row", `document.querySelector('#color-list [data-hue="constructor"]')`);
-  assert.equal(typeof (await getSettings()).repo_colors["constructor"], "number");
-  setControl("#color-add-name", "__proto__", "input");
-  clickEl("#color-add-btn");
-  await waitFor("saved", `document.querySelector("#status").textContent === "Saved"`);
-  const saved = await getSettings();
-  assert.deepEqual(Object.keys(saved.repo_colors), ["constructor"]);
-  assert.equal(ev<boolean>(`!!document.querySelector("#form fieldset")`), true);
-  assert.equal(ev<boolean>(`({}).polluted === undefined`), true);
-  // The main GUI paints a repo called constructor with its override and one called toString with the hash (no prototype lookup)
-  const cwd = "/Users/a/.herdr/worktrees/constructor/x";
-  await seedQuestion(cwd);
-  await openMain();
-  assert.equal(ev<boolean>(`getComputedStyle(document.getElementById("head")).borderLeftColor.startsWith("rgb(")`), true);
 });
 
 gui("plans.auto_show=false: a lone waiting plan keeps the Pending button; an arriving approval for a plan shows as the decision, once", async () => {

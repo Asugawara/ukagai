@@ -64,7 +64,6 @@ Open <http://127.0.0.1:4818/settings> (the header's `Settings` link, or the `,` 
 - **Progress checkpoints (recap)**: create them at all (off: no recap from Claude Code or Codex becomes a card; cards already waiting stay), how long Codex has to be quiet after a turn (30 to 3600 s), and whether replies are typed into the agent's herdr pane (off: they wait for the agent's next tool call).
 - **Plans**: show new plan files automatically (off: they neither pop up nor count in Pending; they stay in the list under `b`).
 - **Notifications**: a beep (while the tab is not focused) and / or a browser notification (while it is hidden) on a new decision (turning the browser one on asks for permission; if the browser denies it, the toggle stays off), and the `(N)` count in the tab title.
-- **Repository colours**: pick a hue or grey for a repository's header colour (GUI and TUI), or reset it to the name hash. Repositories seen in current decisions and sessions are listed; others can be added by name.
 
 `config.json` is read when `serve` starts; a change made to it by hand needs a restart (or a save on the page). Ports, the data directory, hook budgets and the Codex home are not settings (flags / environment, see above). The API is `GET` / `PUT /api/settings`, documented in `docs/spec/api.md`.
 

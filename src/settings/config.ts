@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { CODEX_DELAY_MAX_S, CODEX_DELAY_MIN_S, DEFAULT_SETTINGS, RepoColor, type Settings } from "../contract.js";
+import { CODEX_DELAY_MAX_S, CODEX_DELAY_MIN_S, DEFAULT_SETTINGS, type Settings } from "../contract.js";
 
 /** Languages the GUI / TUI can display. Agent-facing text (hook messages, skill) is always English. */
 export const LANGS = ["en", "ja"] as const;
@@ -28,11 +28,6 @@ export function normalizeConfig(rawIn: unknown): UkagaiConfig {
   const d = DEFAULT_SETTINGS;
   const cp = obj(raw.checkpoints);
   const delay = cp.codex_delay_s;
-  const colors: Record<string, RepoColor> = {};
-  for (const [name, hue] of Object.entries(obj(raw.repo_colors))) {
-    if (Object.keys(colors).length >= 500) break; // the schema's cap
-    if (name.length > 0 && name.length <= 200 && RepoColor.safeParse(hue).success) colors[name] = hue as RepoColor;
-  }
   return {
     lang: isLang(raw.lang) ? raw.lang : d.lang,
     theme: raw.theme === "light" || raw.theme === "dark" || raw.theme === "system" ? raw.theme : d.theme,
@@ -48,7 +43,6 @@ export function normalizeConfig(rawIn: unknown): UkagaiConfig {
       browser: bool(obj(raw.notify).browser, d.notify.browser),
       title_badge: bool(obj(raw.notify).title_badge, d.notify.title_badge),
     },
-    repo_colors: colors,
   };
 }
 
