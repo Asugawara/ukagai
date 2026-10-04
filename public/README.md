@@ -3,6 +3,7 @@
 The GUI served by `ukagai serve`. Static files, no build step. `GET /` returns `index.html` (and issues the cookie); everything else is under `/public/*`.
 
 - `index.html` — the skeleton (banner, the header `#head`, then the left "background" and right "decision" columns, empty state, drawer for the pending list; toasts are created by `app.js`). Static text carries `data-i18n="<key>"` / `data-i18n-aria-label="<key>"` and is replaced at startup.
+- `settings.html` / `settings.js` / `api.js` — the settings page at `/settings` (see "Settings page" below). `api.js` is the tiny `api()` fetch wrapper it shares (cookie renewal on a 401).
 - `i18n.js` — ES module with `MESSAGES = { en, ja }`, `t(key, vars?)` and `applyStatic()`. Both languages must have the same key set (tested). Keys are English snake_case; `{name}` marks a variable.
 - `app.js` — ES module. API calls, SSE, rendering. Text from outside is inserted with `textContent`. Every display string goes through `t()`.
 - `app.css` — system fonts. The body grid is banner / header / main. Below the header, two columns (background 3fr / decision 340–520px), one column below 900px (decision first). Dark mode follows `prefers-color-scheme`.
@@ -10,9 +11,17 @@ The GUI served by `ukagai serve`. Static files, no build step. `GET /` returns `
 
 Update vendor with `npm ci`, then `npm run vendor` (copies from `node_modules` to `public/vendor/`).
 
+## Settings page (`/settings`)
+
+`GET /settings` serves `settings.html`; `settings.js` builds one column of fieldsets (Display / Progress checkpoints / Plans / Notifications / Repository colours) from `GET /api/settings` and saves each control on change with `PUT /api/settings` (the whole object; a small "Saved" status, an inline message for an invalid value, the controls re-render from the saved state). The theme applies at once (`<html data-theme>`), a language change re-renders the page in the new language, `Esc` goes back to `/`. The repository colour rows show a live swatch (the header's left-edge colour), a hue slider, `Grey` and `Reset to hash`, for the repos in `/api/decisions` and `/api/sessions` plus any added by name. Turning on the browser notification asks the browser for permission and stays off unless it is granted; the permission state is shown. The strings are the `set_*` keys of `i18n.js`.
+
+`app.js` loads `/api/settings` before the first render and on SSE `settings.updated` (`applySettings`): `theme` (`data-theme`, and the highlight.js / mermaid theme), `hints` (`body.no-hints` hides the footer), `plans.auto_show` (`queuedPlans()` keeps new plans out of the queue and the Pending count; `drawerIds()` still lists them, and the Pending button stays visible while a plan waits so the drawer is reachable), `notify.*` (a WebAudio beep through one shared `AudioContext` that is created / resumed on the first key or click (a context made without a gesture starts suspended) when the tab is not focused, a `Notification` when it is hidden, the `(N)` title badge: `title_badge=false` drops only the count, the "waiting" cue of a blocker stays), `repo_colors` (`repoColorStyle()` overrides the name hash). Typed drafts are stashed (`stashDrafts()`) before the page changes. The `,` key and the `Settings` link in the header's meta area (`#settings-link`, floating at the top right while there is no header) open `/settings`; the hint line lists `, Settings`.
+
+Dark mode: `app.css` defines the dark variables for `prefers-color-scheme: dark` (unless `data-theme="light"`) and for `data-theme="dark"`; the server injects `data-theme` into the page when it is pinned.
+
 ## Display language (`data-lang`)
 
-The display language is `en` (default) or `ja`. The server reads `<data-dir>/config.json` at startup and injects `<html lang="…" data-lang="…">` into `index.html`; `GET /api/config` returns `{ "lang": "ja" }`. `app.js` reads `document.documentElement.dataset.lang` (anything but `ja` means `en`), applies it to the static text, and renders with `t()`.
+The display language is `en` (default) or `ja`. The server keeps the live settings (loaded from `<data-dir>/config.json` at startup, replaced by `PUT /api/settings`) and injects `<html lang="…" data-lang="…">` into `index.html`; `GET /api/config` returns `{ "lang": "ja" }`. `app.js` reads `document.documentElement.dataset.lang` (anything but `ja` means `en`), applies it to the static text, and renders with `t()`.
 
 - Changing `dataset.lang` at runtime re-renders in place (a `MutationObserver` on `data-lang`). The tests use this instead of reloading.
 - UI strings are translated, and so are the headings of the **known sections** (Recommendation / Options / What I checked / What you need to do / Scope and reversibility / Terms / Assumptions / Counterargument / Affected / What only you know): whichever language the file's heading is in, the right column and the left column show the display language's wording (`sec_*` keys). Headings the GUI does not know (and "Why this decision is needed now", "Diagram", "Related diff") stay as written.

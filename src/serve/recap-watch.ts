@@ -1,5 +1,6 @@
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { isAllowedTranscriptPath, isClaudeTranscriptPath } from "../contract.js";
+import type { SettingsStore } from "./settings.js";
 import type { Store } from "./store.js";
 
 const LIVE_WINDOW_MS = 6 * 3600 * 1000;
@@ -12,6 +13,8 @@ export type RecapWatcherOptions = {
   store: Store;
   home: string;
   pollMs?: number;
+  /** Live settings: `checkpoints.enabled = false` stops new recaps from becoming checkpoints */
+  settings?: SettingsStore;
   log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
 };
 
@@ -40,7 +43,7 @@ function recapsOf(text: string): { recap: string; at: string }[] {
  * and every new recap becomes a checkpoint decision. Only files under ~/.claude/projects are read.
  */
 export function startRecapWatcher(opts: RecapWatcherOptions): { stop(): void; poll(sessionId?: string, discard?: boolean): void } {
-  const { store, home, pollMs = 5000, log } = opts;
+  const { store, home, pollMs = 5000, log, settings } = opts;
   const cursors = new Map<string, Cursor>();
   let stopped = false;
 
@@ -90,6 +93,10 @@ export function startRecapWatcher(opts: RecapWatcherOptions): { stop(): void; po
         for (const r of recapsOf(buf.subarray(0, end).toString("utf8"))) {
           const s = store.listSessions().find((x) => x.session_id === sessionId);
           if (!s) continue;
+          if (settings && !settings.get().checkpoints.enabled) {
+            log?.("checkpoint_skipped", { session: sessionId, reason: "disabled" });
+            continue;
+          }
           const res = store.createCheckpoint(s, r.recap, r.at);
           if (res.skipped) log?.("checkpoint_skipped", { session: sessionId, reason: res.skipped });
         }

@@ -1,6 +1,6 @@
-import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type SessionHistory, type SessionSummary } from "../contract.js";
+import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type SessionHistory, type SessionSummary, type Settings } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
-import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
+import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, setRepoColors, type ScreenModel } from "./model.js";
 import type { Frame, ListItem, View } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
@@ -52,6 +52,8 @@ const STATUS_KEY: Record<string, MessageKey> = {
 export class App {
   /** Display language (set by index.ts) */
   lang: Lang = "en";
+  /** `--lang` was given: the settings page does not change the language of this TUI */
+  langLocked = false;
   readonly decisions = new Map<string, Decision>();
   shownId: string | null = null;
   mode: Mode = "normal";
@@ -134,6 +136,13 @@ export class App {
 
   setSessions(list: SessionSummary[]): void {
     this.sessions = new Map(list.map((s) => [s.session_id, s]));
+  }
+
+  /** The settings changed (GET /api/settings, `settings.updated`): the language (unless `--lang` pinned it) and the repository colours */
+  settingsUpdated(s: Settings): void {
+    if (!this.langLocked) this.lang = s.lang;
+    setRepoColors(s.repo_colors);
+    this.models.clear();
   }
 
   sessionUpdated(s: SessionSummary): void {

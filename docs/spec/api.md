@@ -28,8 +28,9 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/decisions/:id/history` | GUI / TUI (cookie or Bearer) | The human instructions of the decision's session (first + last 20), read from the transcript on request |
 | `GET /api/plans` / `GET /api/plans/:name` | GUI / TUI (cookie or Bearer) | Read-only view of the plan files Claude Code writes to `~/.claude/plans` (list, and one file). See below |
 | `POST /api/plans/:name/read` / `DELETE /api/plans/:name/read` | GUI / TUI (cookie or Bearer) | Mark a plan read (at a given `mtime`) / unread again. Kept in `<data-dir>/plans-read.json`. See below |
-| `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja", "build": string }`: the display language from `<data-dir>/config.json` (read once at startup; missing/malformed → `"en"`) and the current `app.js` version (the `?v=` value). The GUI reloads itself when `build` differs from its own |
-| `GET /api/stream` | GUI | SSE. `decision.created` / `decision.updated` / `session.updated` / `plan.updated` / `plan.removed` |
+| `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja", "build": string }`: the display language (the live `lang` setting, see `GET /api/settings`) and the current `app.js` version (the `?v=` value). The GUI reloads itself when `build` differs from its own |
+| `GET /api/settings` / `PUT /api/settings` | GUI / TUI (cookie or Bearer) | The settings kept in `<data-dir>/config.json`: read, and replace as a whole (validated, applied live, broadcast as `settings.updated`). See below |
+| `GET /api/stream` | GUI / TUI | SSE. `decision.created` / `decision.updated` / `session.updated` / `plan.updated` / `plan.removed` / `settings.updated` |
 | `GET /healthz` | hook | Connectivity check |
 
 ### POST /api/decisions
@@ -283,7 +284,7 @@ Read-only access to the plan files Claude Code writes in plan mode, so a plan ca
 
 ### GET /api/config
 
-Returns the GUI display language, from `<data-dir>/config.json`. It is read once when the server starts; a missing or malformed file gives `"en"`. Allowed with cookie or Bearer.
+Returns the GUI display language: the `lang` of the live settings (below), which starts as `<data-dir>/config.json`'s value (a missing or malformed file gives `"en"`) and follows `PUT /api/settings`. Allowed with cookie or Bearer. The GUI reads the rest of its configuration from `GET /api/settings`.
 
 ```json
 { "lang": "ja", "build": "mabc12" }
@@ -291,21 +292,53 @@ Returns the GUI display language, from `<data-dir>/config.json`. It is read once
 
 `build` is the mtime-based version of `app.js` (the same value as the `?v=` in index.html), read on every request. The GUI compares it with its own on every SSE `open` and calls `location.reload()` when they differ.
 
+### GET /api/settings / PUT /api/settings
+
+The settings page (`/settings`) edits `<data-dir>/config.json` through these two calls. Cookie or Bearer. `GET` returns the whole object with every default filled in. `PUT` (`Content-Type: application/json`, 415 otherwise) takes the **whole** object, validates it with the zod schema `Settings` in `src/contract.ts` (400 `{ "error": "invalid request", "issues": [...] }` on failure, nothing is saved), writes `config.json` (tmp + rename, writes one after another), applies it live, broadcasts SSE `settings.updated` with the new object and returns it.
+
+```json
+{
+  "lang": "en",                      // "en" | "ja": GUI / TUI display language (also what `install --lang` sets)
+  "theme": "system",                 // "system" | "light" | "dark": the GUI sets <html data-theme> (system = prefers-color-scheme)
+  "hints": true,                     // false hides the GUI's bottom key-hint line
+  "checkpoints": {
+    "enabled": true,                 // false: the recap watcher and the Codex bridge create no progress checkpoint (log: checkpoint_skipped, reason "disabled"); cards already pending stay
+    "codex_delay_s": 180,            // integer 30..3600: quiet time after a finished Codex turn; read when the timer is armed
+    "terminal_delivery": true        // false: a reply is never typed into a herdr pane; it waits for the agent's next tool call (no terminal is looked up)
+  },
+  "plans": { "auto_show": true },    // false: new plan files do not pop up and do not count in Pending (the drawer list and an arriving approval still show them)
+  "notify": {
+    "sound": false,                  // a short beep on a new decision while the GUI tab is not focused
+    "browser": false,                // a browser Notification on a new decision while the tab is hidden (the page asks the browser for permission when it is turned on)
+    "title_badge": true              // the "(N)" pending count in the tab title
+  },
+  "repo_colors": { "ukagai": 120, "dotfiles": "grey" }   // repo name -> hue 0..359 | "grey"; wins over the name hash in the GUI header and (nearest ANSI colour) in the TUI
+}
+```
+
+A failed write (for example a read-only data directory) is a 500 `{ "error": "internal error" }` and **changes nothing**: the new values become current, reach the listeners and are broadcast only after the file was written (tmp + rename), so the server never runs on values that are not on disk. Concurrent `PUT`s are applied one after another (the last one wins, memory and file agree). Keys the schema does not know are stripped without an error.
+
+`install --lang` rewrites `config.json` behind a running server's back; the server does not watch the file. A `PUT` that leaves `lang` as the server has it keeps the file's `lang` (so the install is not written over); other fields changed in the file by hand need a restart of `serve` (or any `PUT`, which writes the server's values).
+
+`config.json` is read tolerantly (`readConfig`): a missing or malformed file, or any unknown / invalid field, falls back to that field's default and never throws (at most 500 `repo_colors` entries are kept, the schema's cap); `writeConfig` writes the whole object. `install --lang` keeps the other settings. Not settings: ports, the data directory, hook budgets, the Codex home.
+
+Live application, without a restart: the recap watcher, the Codex bridge (`codex_delay_s` at arm time) and the terminal delivery read the current value at the moment they act; `lang` changes what `GET /api/config`, the injected `<html lang data-lang>` and the next GUI / TUI load use (the hook reads `config.json` per call already). `theme`, `hints`, `plans.auto_show`, `notify.*` and `repo_colors` are applied by the GUI itself; the TUI takes `lang` (unless `--lang` pinned it) and `repo_colors` from `GET /api/settings` at start, on every reconnect refetch and on `settings.updated`.
+
 ### POST /api/plans/:name/read / DELETE /api/plans/:name/read
 
 Cookie or Bearer. `POST` body `{ "mtime": "<ISO>" }` (the `mtime` the human actually read) → 200 `{ "name": "foo-bar.md", "read": true }`. `DELETE` → 200 `{ "name", "read": false }`. 400 if `name` is invalid (same rule as the detail endpoint, and it must end in `.md`) or `mtime` is missing / empty; 404 if the file does not exist or is not listable. A plan is `read` while the stored mark equals its current `mtime` string, so any later write to the file makes it unread again. Marks live in `<data-dir>/plans-read.json` (`{ "<name>": "<mtime ISO>" }`, loaded once, written atomically via tmp + rename; a missing or corrupt file is `{}`); written asynchronously, one write after another; entries whose file is gone are pruned when the file is loaded and when the watcher sees the file removed. Both calls broadcast `plan.updated` with the current summary so other clients learn of it. The server also marks a plan read by itself when an `approve_plan` decision leaves `pending` for any reason (answered, answered in the terminal / fallback, cancelled, lease expired, or cancelled by the next prompt in that session) and its `request.planFilePath` resolved (realpath) to a `.md` file directly inside the plans directory when the decision was created (`Decision.plan_name`, the file's basename): the mark is at the file's current mtime and `plan.updated` with `read: true` is broadcast, both before the `decision.updated` of that status change goes out (so no client sees the closed decision with the plan still new). A path outside the plans directory, a subdirectory, a symlink leaving it, or a missing file is ignored without error.
 
 ### GET /api/stream
 
-SSE. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`) and `plan.removed` (data is `{ "name" }`).
+SSE. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`), `plan.removed` (data is `{ "name" }`) and `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`).
 
 `plan.updated` fires when a `*.md` file in `~/.claude/plans` is created or modified (debounced 400 ms per file: a burst of writes gives one event with the final state; files that are dotfiles, escape the directory by symlink, or exceed 1 MB are skipped silently) and when the read mark of a plan changes. `plan.removed` fires when a plan is deleted or renamed away. Plans already present when the server starts are not announced; use `GET /api/plans`. The server watches with `fs.watch` plus a 10 s listing poll (`name → mtime + size`), and polls until the directory exists if it is missing.
 
 AskUserQuestion is not available inside subagents, so no decision arises there (confirmed with Claude Code 2.1.287).
 
-### GET /
+### GET / and GET /settings
 
-Serves `public/index.html`. The server injects the `?v=` version into the asset URLs, and also injects `<html lang="…" data-lang="…">` into index.html, with `lang` taken from the same config as `GET /api/config`.
+`GET /` serves `public/index.html`; `GET /settings` (and `/settings/`) serves `public/settings.html`, the settings page. Both issue the session cookie the same way. The server injects the `?v=` version into the asset URLs (`app.js` / `settings.js`, `app.css`), and injects `<html lang="…" data-lang="…">` (plus `data-theme="light|dark"` when the theme is pinned) with the values of the live settings.
 
 ## Progress checkpoints
 
@@ -372,8 +405,8 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 | Authorization | Endpoints |
 |---|---|
 | Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `POST /api/decisions/:id/handoff`, `GET /api/sessions/:id/open`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
-| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/stream` |
-| none | `GET /healthz`, `GET /`, `GET /public/*` |
+| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/settings`, `PUT /api/settings`, `GET /api/stream` |
+| none | `GET /healthz`, `GET /`, `GET /settings` (and `/settings/`), `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
 - **Content-Type**: **every POST** (including ack / consume, which have no body) requires `application/json` (otherwise 415). If there is no body, send `{}`. The order of checks is Host (400) → authorization (401) → Content-Type (415) → body (400).
 - **Paths**: `transcript_path` must be under `~/.claude/projects/` or `~/.codex/sessions/` (for `session.agent: "codex"` an empty string is accepted too: Codex has no transcript with `--ephemeral`), `explanation.path` under `<scratchpad_dir>/ukagai/`, `<data-dir>/explain/` (the server's own data directory) or `~/.ukagai/explain/`, and `cwd` an existing directory (`isAllowedTranscriptPath` / `isAllowedExplanationPath`. Judged after resolving `..` and symlinks).

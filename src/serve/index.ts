@@ -8,7 +8,6 @@ import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
 import { appendLogLine } from "../log.js";
 import { LEASE_GRACE_MS, plansDir } from "../contract.js";
-import { readConfig } from "../settings/config.js";
 import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
 import { startCheckpointDelivery } from "./deliver.js";
@@ -17,6 +16,7 @@ import { startPlanWatcher } from "./plan-watch.js";
 import { startRecapWatcher } from "./recap-watch.js";
 import { listPlans, planNameOfPath, planSummarySync } from "./plans.js";
 import { createApp } from "./routes.js";
+import { SettingsStore } from "./settings.js";
 import { SseHub } from "./sse.js";
 import { Store } from "./store.js";
 import { HerdrTerminal, NoTerminal, type Terminal } from "./terminal.js";
@@ -54,6 +54,7 @@ export type ServeHandle = {
   token: string;
   dataDir: string;
   store: Store;
+  settings: SettingsStore;
   codexBridge?: CodexBridge;
   close: () => Promise<void>;
 };
@@ -84,7 +85,8 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   });
   store.load();
 
-  const { lang } = await readConfig(dataDir);
+  const settings = await SettingsStore.load(dataDir);
+  const { lang } = settings.get();
   const token = randomBytes(32).toString("hex");
 
   let port = opts.port ?? DEFAULT_PORT;
@@ -96,6 +98,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     home,
     dataDir,
     lang,
+    settings,
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
     collect: (session) => collectContext(session, { home }),
@@ -129,10 +132,10 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const log = (event: string, fields?: Record<string, string | number | undefined>) => appendLogLine(join(dataDir, "serve.log"), event, fields);
   // UKAGAI_TERMINAL=none: no terminal at all (the test script sets it so no test asks the real herdr)
   const terminal = opts.terminal ?? (process.env.UKAGAI_TERMINAL === "none" ? new NoTerminal() : new HerdrTerminal("herdr", (error) => log("herdr_failed", { error })));
-  startCheckpointDelivery({ store, terminal, log, pollMs: opts.terminalPollMs });
-  const recapWatcher = startRecapWatcher({ store, home, pollMs: opts.recapPollMs, log });
+  startCheckpointDelivery({ store, terminal, log, settings, pollMs: opts.terminalPollMs });
+  const recapWatcher = startRecapWatcher({ store, home, pollMs: opts.recapPollMs, settings, log });
   const codexBridge = opts.codexBridge
-    ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, checkpointDelayMs: opts.codexCheckpointDelayMs, collect: (session) => collectContext(session, { home }) })
+    ? startCodexBridge({ store, dataDir, lang, settings, codexHome: opts.codexHome, checkpointDelayMs: opts.codexCheckpointDelayMs, collect: (session) => collectContext(session, { home }) })
     : undefined;
 
   return {
@@ -140,6 +143,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     token,
     dataDir,
     store,
+    settings,
     codexBridge,
     close: () =>
       new Promise<void>((resolve) => {
@@ -148,6 +152,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
         recapWatcher.stop();
         store.close();
         hub.closeAll();
+        void settings.flush();
         server.close(() => resolve());
         server.closeAllConnections();
       }),

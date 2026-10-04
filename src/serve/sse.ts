@@ -1,6 +1,6 @@
 const HEARTBEAT_MS = 15000;
 
-export type SseEventName = "decision.created" | "decision.updated" | "session.updated" | "plan.updated" | "plan.removed";
+export type SseEventName = "decision.created" | "decision.updated" | "session.updated" | "plan.updated" | "plan.removed" | "settings.updated";
 
 type Client = { controller: ReadableStreamDefaultController<Uint8Array> };
 

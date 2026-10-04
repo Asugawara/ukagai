@@ -2,6 +2,7 @@ import { POLL_TIMEOUT_MS, type Decision, type DecisionContext, type DecisionSess
 import { parsePlanImpact, validatePlan } from "../../hook/explain.js";
 import type { Lang } from "../../settings/config.js";
 import { collectGuarded } from "../context.js";
+import type { SettingsStore } from "../settings.js";
 import type { Store } from "../store.js";
 import type { Notification } from "./client.js";
 import type { BridgeLog } from "./log.js";
@@ -31,6 +32,8 @@ export type PlanBridgeDeps = {
   waitMs?: number;
   /** Quiet time after a completed turn before a progress checkpoint is created (default 3 min) */
   checkpointDelayMs?: number;
+  /** Live settings: `checkpoints.enabled` and `codex_delay_s` are read when a checkpoint would be armed. An explicit `checkpointDelayMs` (tests) wins over the delay */
+  settings?: SettingsStore;
   /** Is a Codex TUI running in this folder? undefined = cannot tell. The daemon keeps a thread loaded after its TUI quit and says nothing, so this is the "someone is looking" signal */
   tuiRunningIn?: (cwd: string) => Promise<boolean | undefined>;
 };
@@ -336,7 +339,7 @@ export class PlanBridge {
           path: "",
           ...parsePlanImpact(plan),
           // Only the note: the GUI / TUI print `request.plan` first and append this when it differs
-          markdown: NOTE[this.deps.lang],
+          markdown: NOTE[this.deps.settings?.get().lang ?? this.deps.lang],
           has: validatePlan(plan).has,
           match: "question",
           attached_via: "first_call",
@@ -430,6 +433,10 @@ export class PlanBridge {
       for (const it of turn.items) if (it?.type === "agentMessage" && typeof it.text === "string" && it.text.trim()) msg = it.text.trim();
     }
     if (this.ended.has(t.id)) return;
+    if (this.deps.settings && !this.deps.settings.get().checkpoints.enabled) {
+      if (!t.ephemeral && !this.attaching && !t.resuming && !t.armed.has(turnId)) log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "disabled" });
+      return;
+    }
     if (t.ephemeral || this.attaching || t.resuming || t.armed.has(turnId)) return;
     if (msg === undefined) {
       log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "no_agent_message" });
@@ -440,7 +447,7 @@ export class PlanBridge {
     const recapAt = new Date().toISOString();
     this.cancelTimer(t);
     const epoch = t.epoch;
-    t.checkpointTimer = setTimeout(() => void this.fireCheckpoint(t, turnId, recap, recapAt, epoch), this.deps.checkpointDelayMs ?? CHECKPOINT_DELAY_MS);
+    t.checkpointTimer = setTimeout(() => void this.fireCheckpoint(t, turnId, recap, recapAt, epoch), this.deps.checkpointDelayMs ?? (this.deps.settings ? this.deps.settings.get().checkpoints.codex_delay_s * 1000 : CHECKPOINT_DELAY_MS));
     t.checkpointTimer.unref();
   }
 
@@ -448,6 +455,11 @@ export class PlanBridge {
     const log = this.deps.log;
     t.checkpointTimer = undefined;
     if (this.stopped || t.running) return;
+    // Switched off while the timer was waiting (the delay can be an hour)
+    if (this.deps.settings && !this.deps.settings.get().checkpoints.enabled) {
+      log("checkpoint_skipped", { thread: t.id, turn: turnId, reason: "disabled" });
+      return;
+    }
     const rpc = this.rpc;
     if (!rpc) {
       // Nobody could deliver the answer: not worth asking
