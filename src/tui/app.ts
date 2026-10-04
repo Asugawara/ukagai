@@ -580,8 +580,8 @@ export class App {
   private apply(a: Action, m: ScreenModel | null, now: number): Effect[] {
     switch (a.type) {
       case "quit": return [{ type: "quit" }];
-      case "prev": this.cycle(-1); return [];
-      case "next": this.cycle(1); return [];
+      case "prev": this.cycle(-1, now); return [];
+      case "next": this.cycle(1, now); return [];
       case "list":
         if (this.listItems(now).length) {
           this.mode = "list";
@@ -767,8 +767,8 @@ export class App {
     return it.plan ? it.plan.name === this.shownPlan : it.decision!.id === this.shownId;
   }
 
-  private cycle(step: number): void {
-    const items = this.listItems(Date.now());
+  private cycle(step: number, now: number): void {
+    const items = this.listItems(now);
     const i = items.findIndex((it) => this.isShown(it));
     if (!items.length || (items.length === 1 && i === 0)) return;
     // A plan on screen that is no longer an item (it was read meanwhile) steps to the first / last
