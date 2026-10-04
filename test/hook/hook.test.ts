@@ -665,37 +665,29 @@ test("Stop: a question like \"Which one?\" → event with escaped_question: true
   });
 });
 
-test("Stop: blocker vocabulary + stop_hook_active: false → decision: block, event has blocker_detected: true", async () => {
-  await withServer(() => false, async (f, d) => {
-    const r = await runHook(args(f, d), JSON.stringify(stop("gcloud の認証がないため進められません。")));
-    const out = JSON.parse(r.stdout);
-    assert.equal(out.decision, "block");
-    assert.ok(out.reason.includes("ukagai-explain"));
-    assert.ok(out.reason.length <= 600);
-    const ev = f.calls.find((c) => c.path === "/api/events");
-    assert.equal(ev?.body.blocker_detected, true);
-  });
-});
-
-test("Stop: stop_hook_active: true / no vocabulary match / plan mode / --observe produce no output", async () => {
+test("Stop: text matching the old blocker vocabulary produces no output and no blocker_detected, in every mode", async () => {
   await withServer(() => false, async (f, d) => {
     const msg = "gcloud の認証がないため進められません。";
-    const run = async (input: Record<string, unknown>, ...more: string[]) =>
-      (await runHook(args(f, d, ...more), JSON.stringify(input))).stdout;
+    const run = async (input: Record<string, unknown>, ...more: string[]) => {
+      const before = f.calls.filter((c) => c.path === "/api/events").length;
+      const out = (await runHook(args(f, d, ...more), JSON.stringify(input))).stdout;
+      const evs = f.calls.filter((c) => c.path === "/api/events");
+      assert.equal(evs.length, before + 1);
+      assert.equal(evs.at(-1)?.body.hook_event_name, "Stop");
+      assert.equal(evs.at(-1)?.body.blocker_detected, undefined);
+      return out;
+    };
+    assert.equal(await run({ ...stop(msg), stop_hook_active: false }), "");
     assert.equal(await run({ ...stop(msg), stop_hook_active: true }), "");
-    // Q3-05: a Stop that did not block does not get blocker_detected
-    assert.equal(f.calls.filter((c) => c.path === "/api/events").at(-1)?.body.blocker_detected, undefined);
-    assert.equal(await run(stop("The implementation is finished.")), "");
     assert.equal(await run({ ...stop(msg), permission_mode: "plan" }), "");
     assert.equal(await run(stop(msg), "--observe"), "");
-    assert.equal(f.calls.filter((c) => c.path === "/api/events").at(-1)?.body.blocker_detected, undefined);
-    assert.equal(await run({ ...stop(msg), last_assistant_message: undefined }), "");
   });
 });
 
-test("Stop: still returns block when the server is absent (event failures are swallowed)", async () => {
+test("Stop: prints nothing and exits 0 when the server is absent (event failures are swallowed)", async () => {
   const r = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", dataDirWithToken()], JSON.stringify(stop("Permission denied, so I cannot proceed.")));
-  assert.equal(JSON.parse(r.stdout).decision, "block");
+  assert.equal(r.stdout, "");
+  assert.equal(r.code, 0);
   assert.ok(r.ms < 2500);
 });
 

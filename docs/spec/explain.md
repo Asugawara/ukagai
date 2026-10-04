@@ -471,21 +471,15 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 | `fail-no-checked.md` | false | `checked` (costly + repo, no "What I checked") |
 | `fail-footnote.md` | false | `footnote` (`[^2]` referenced, not defined) |
 
-## 12. Stop hook safeguard (a blocker stopped in prose)
+## 12. Stop hook safeguard (removed)
 
-A safeguard for when the agent does not use the blocker format and ends the turn in prose such as "please authenticate".
+**Removed (2026-10-05).** The `Stop` hook used to make the agent continue when its last message matched a bilingual vocabulary (a target word such as 認証 / 権限 / permission / login / token and a stuck word such as ない / 必要 / denied in the same sentence), telling it to re-ask in blocker format (`decision: block`, `blocker_detected: true` on the event).
 
-- `Stop` is **sync** (`async: false`, timeout 5). `SubagentStop` stays async.
-- It returns nothing when: `stop_hook_active === true` (Claude Code sets it on the Stop after a Stop hook made it continue; **the continuation happens once** and does not loop), `permission_mode === "plan"`, `--observe`, `last_assistant_message` is absent, or the blocker vocabulary does not match.
-- When `stop_hook_active` is false and `last_assistant_message` matches the blocker vocabulary, it writes `{"decision":"block","reason":"<reason>"}` to stdout. The reason (at most 600 characters, no URL; `BLOCKER_REASON` in `src/hook/blocker.ts`):
-  `If human work (authentication, permissions, etc.) is needed, do not just end with prose; ask in ukagai's blocker format: following "When stopped by human work" in skill ukagai-explain, write an explanation file (type: blocker, with "Why I stopped", "What you need to do" and "Options") and call AskUserQuestion with the options "Done. Continue (Recommended)", "Skip this step and continue" and "Stop here". If no human work is needed, you may simply end.`
-- Blocker vocabulary (`src/hook/blocker.ts`, case-insensitive; **intentionally bilingual**, English and Japanese): split the text into sentences on 「。」 「.」 and newlines, and match only when **the same sentence contains both a "target word" and a "stuck word"**.
-  - Target words (`BLOCKER_TARGET`): `認証|ログイン|権限|credential|permission|unauthori[sz]ed|forbidden|\b40[13]\b|token|トークン|api key|鍵|login|sign[ -]?in|api[ _-]?key|APIキー|API キー|\bauth\b`
-  - Stuck words (`BLOCKER_STUCK`): `ない|無い|なく|なければ|無く|無ければ|ありません|切れ|失敗|必要|してください|お願い|できません|進められません|進めません|denied|failed|required|missing|expired|not logged in|cannot proceed|blocked`
-  - Double negatives (`BLOCKER_SAFE`): besides 「問題ありません」 「問題なく」 「支障ない」 「エラーなく」, also 「わけではありません / わけではない」 「必要(は|も)?(ありません|ない|無い|なく)」 「問題(は|も)?なかった」 「要りません」 「不要」 are removed from the sentence before matching (so that 「認証は問題ありません」 and 「権限は必要ありません」 are not hits).
-  - Matching examples: `gcloud の認証がないため進められません`, `gcloud auth login をしてください`, `APIキーが必要です`, `Permission denied (403)`, `I could not log in: the token has expired`. Non-matching examples: `権限エラーになったわけではありません`, `認証は不要です`, `認証は有効です`, `Login works and all tests passed`, `Which one?` (only one kind of word).
-  - Independent of the `escaped_question` check (the end is ？).
-- The observed event (`POST /api/events`) is still sent as before, and `blocker_detected: true` is added **only to a Stop that actually returned `decision: block`** (not to a Stop that did not block because of `stop_hook_active` / plan mode / `--observe`). The POST is cut at 600 ms and the whole hook returns within 1.9 seconds. Even on failure it prints nothing (fail open).
+Why it went: over 3 days of real use it blocked 32 times in 15 sessions, and only 2 were followed by a blocker question. The rest were false positives on messages *about* authentication or permissions; each cost an extra turn and was shown by Claude Code as "Stop hook error". 6 of the 8 blocker questions were raised by agents from the SessionStart instruction alone.
+
+What replaces it: the instruction stays (the SessionStart context, section 8, and "When stopped by human work" in skill ukagai-explain, with the `type: blocker` explanation and its GUI / TUI rendering), and progress checkpoints surface a session that stopped in prose anyway.
+
+Now: Claude `Stop` is observe-only and **async** (like `SubagentStop`): it posts the event (with `escaped_question` when the message ends with ？ / ?) and never prints anything. The Codex `Stop` hook still registers a prose question that ends with ？ / ? (`stop_hook_active` still stops a second continuation). The section number is kept so references to section 13 stay valid.
 
 ## 13. Alias table (English name ↔ Japanese alias)
 

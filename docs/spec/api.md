@@ -180,7 +180,7 @@ Sends the observation hook's stdin as is and adds `received_at` (`EventInput`). 
 
 - `observe.phase`: `start` for PreToolUse and `end` for PostToolUse under `--observe`.
 - `escaped_question: true`: when Stop's `last_assistant_message` matches the rough detection.
-- `blocker_detected: true`: when Stop's `last_assistant_message` matches the blocker vocabulary (stored in `events.jsonl` and counted in `a.blocker_detected` of `GET /api/metrics`. Not included in `a.total`).
+- `blocker_detected: true`: **no longer emitted since the Stop detector was removed (explain.md section 12); counts historical events only.** The field stays in the event schema and `a.blocker_detected` in `GET /api/metrics` stays (always 0 for new data) so old `events.jsonl` lines still load. Not included in `a.total`.
 
 Response 204.
 

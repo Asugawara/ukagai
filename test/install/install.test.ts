@@ -46,7 +46,7 @@ test("install into empty settings: all events, exec form, statusMessage, --budge
   assert.equal(h.statusMessage, "ukagai: waiting for an answer in the GUI");
   assert.equal(h.timeout, 3600);
   assert.equal(s.hooks.SessionEnd[0].hooks[0].timeout, 2);
-  assert.equal(s.hooks.Stop[0].hooks[0].async, undefined);
+  assert.equal(s.hooks.Stop[0].hooks[0].async, true);
   assert.equal(s.hooks.Stop[0].hooks[0].timeout, 5);
   assert.equal(s.hooks.SubagentStop[0].hooks[0].async, true);
   assert.equal(s.hooks.SessionStart[0].hooks[0].async, undefined);
