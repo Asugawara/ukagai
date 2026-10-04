@@ -106,6 +106,8 @@ export class Store {
   private instructions = new Map<string, Instruction>();
   /** Claude Code sessions whose last delivered instruction was a stop and that have not had a UserPromptSubmit since */
   private stoppedSessions = new Set<string>();
+  /** When the session's agent last did something (a hook event or a decision its hook registered), as epoch ms. Insertions of checkpoints, answers and settings do not count */
+  private lastActivity = new Map<string, number>();
   /** Called after each live hook event of a session (the recap watcher reads that session's transcript now) */
   onSessionEvent: ((sessionId: string, hookEvent: string) => void) | undefined;
   /** Called after a checkpoint is answered (the Codex bridge delivers its answer in-process; Claude's hook polls the instruction instead) */
@@ -143,6 +145,7 @@ export class Store {
           if (typeof d.id !== "string") continue;
           this.decisions.set(d.id, d);
           this.byToolUse.set(d.tool_use_id, d.id);
+          if (d.kind !== "checkpoint") this.markActivity(d.session?.session_id, Date.parse(d.created_at));
           for (const prev of d.previous_tool_use_ids ?? []) this.byToolUse.set(prev, d.id);
         } catch {
           // Skip malformed lines
@@ -263,6 +266,7 @@ export class Store {
     this.decisions.set(decision.id, decision);
     this.byToolUse.set(decision.tool_use_id, decision.id);
     this.persist(decision);
+    this.markActivity(session.session_id, now);
     if (!denied) {
       this.emit("decision.created", decision);
       this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
@@ -275,9 +279,13 @@ export class Store {
     session: SessionSummary & { agent?: "claude" | "codex" },
     recap: string,
     recapAt: string,
-  ): { decision: Decision; created: boolean; skipped?: undefined } | { decision?: undefined; created: false; skipped: "after_stop" } {
-    // The human told the agent to stop: no more progress checks until they speak again (Claude Code only; the Codex bridge handles its own)
-    if (session.agent !== "codex" && this.stoppedSessions.has(session.session_id)) return { created: false, skipped: "after_stop" };
+  ): { decision: Decision; created: boolean; skipped?: undefined } | { decision?: undefined; created: false; skipped: "after_stop" | "no_progress" } {
+    if (session.agent !== "codex") {
+      // The human told the agent to stop: no more progress checks until they speak again (Claude Code only; the Codex bridge handles its own)
+      if (this.stoppedSessions.has(session.session_id)) return { created: false, skipped: "after_stop" };
+      // Claude Code rewrites its recap while idle: a new card needs the agent to have done something since the last one
+      if (!this.hasProgressSinceLastCheckpoint(session.session_id)) return { created: false, skipped: "no_progress" };
+    }
     const ds: CreateDecisionRequest["session"] = { session_id: session.session_id, cwd: session.cwd, transcript_path: session.transcript_path ?? "" };
     if (session.agent) ds.agent = session.agent;
     if (session.title) ds.title = session.title;
@@ -287,6 +295,21 @@ export class Store {
       session: ds,
       request: { recap, recap_at: recapAt },
     });
+  }
+
+  private markActivity(sessionId: string | undefined, at: number): void {
+    if (!sessionId || !Number.isFinite(at)) return;
+    if (at > (this.lastActivity.get(sessionId) ?? 0)) this.lastActivity.set(sessionId, at);
+  }
+
+  /** True when the session has no checkpoint yet, or its agent was active after the newest one was created */
+  private hasProgressSinceLastCheckpoint(sessionId: string): boolean {
+    let newest = -Infinity;
+    for (const d of this.decisions.values()) {
+      if (d.kind === "checkpoint" && d.session.session_id === sessionId) newest = Math.max(newest, Date.parse(d.created_at));
+    }
+    if (!Number.isFinite(newest)) return true;
+    return (this.lastActivity.get(sessionId) ?? 0) > newest;
   }
 
   private insertCheckpoint(req: CreateDecisionRequest): { decision: Decision; created: boolean } {
@@ -673,6 +696,7 @@ export class Store {
       this.panelOpens++;
       return;
     }
+    this.markActivity(ev.session_id, Date.parse(ev.received_at));
     if (ev.escaped_question) this.escapedQuestions++;
     if (ev.blocker_detected) this.blockersDetected++;
     const at = Date.parse(ev.received_at);
