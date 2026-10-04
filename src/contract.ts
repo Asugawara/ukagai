@@ -239,6 +239,10 @@ export const Explanation = z.object({
 });
 export type Explanation = z.infer<typeof Explanation>;
 
+/** How an answered checkpoint reached the agent: the PreToolUse hook, typed into its terminal, the Codex bridge, or nothing to do (stop of an idle agent) */
+export const DeliveredVia = z.enum(["hook", "terminal", "bridge", "noop"]);
+export type DeliveredVia = z.infer<typeof DeliveredVia>;
+
 export const DecisionResponse = z.object({
   via: z.enum(["gui", "terminal"]),
   answers: z.record(z.string(), z.string()).optional(),
@@ -251,6 +255,7 @@ export const DecisionResponse = z.object({
   decided_at: z.string(),
   /** For a checkpoint: when its instruction was handed to the agent */
   delivered_at: z.string().optional(),
+  delivered_via: DeliveredVia.optional(),
 });
 export type DecisionResponse = z.infer<typeof DecisionResponse>;
 
@@ -261,6 +266,7 @@ export const CheckpointResponse = z.object({
   text: z.string().optional(),
   decided_at: z.string(),
   delivered_at: z.string().optional(),
+  delivered_via: DeliveredVia.optional(),
 });
 export type CheckpointResponse = z.infer<typeof CheckpointResponse>;
 
@@ -365,6 +371,8 @@ export const SessionSummary = z.object({
   cwd: z.string(),
   /** From the hook events (absent for Codex --ephemeral and before the first event) */
   transcript_path: z.string().optional(),
+  /** Where a checkpoint reply can be typed into the agent's terminal, e.g. "herdr:w1:p1" */
+  terminal: z.string().optional(),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 

@@ -6,10 +6,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
+import { appendLogLine } from "../log.js";
 import { LEASE_GRACE_MS, plansDir } from "../contract.js";
 import { readConfig } from "../settings/config.js";
 import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
+import { startCheckpointDelivery } from "./deliver.js";
 import { PlanReadStore } from "./plan-read.js";
 import { startPlanWatcher } from "./plan-watch.js";
 import { startRecapWatcher } from "./recap-watch.js";
@@ -17,6 +19,7 @@ import { listPlans, planNameOfPath, planSummarySync } from "./plans.js";
 import { createApp } from "./routes.js";
 import { SseHub } from "./sse.js";
 import { Store } from "./store.js";
+import { HerdrTerminal, NoTerminal, type Terminal } from "./terminal.js";
 
 const DEFAULT_PORT = 4818;
 const HOST = "127.0.0.1";
@@ -40,6 +43,10 @@ export type ServeOptions = {
   codexHome?: string;
   /** Quiet time after a completed Codex turn before a progress checkpoint (default 180 s; tests shorten it) */
   codexCheckpointDelayMs?: number;
+  /** Where Claude Code checkpoint replies are typed when the agent is idle (default: herdr panes; tests inject a fake) */
+  terminal?: Terminal;
+  /** How often a working agent's status is re-read before a reply is left for the hook (default 500 ms; tests shorten it) */
+  terminalPollMs?: number;
 };
 
 export type ServeHandle = {
@@ -119,7 +126,11 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       hub.broadcast("plan.removed", { name });
     },
   });
-  const recapWatcher = startRecapWatcher({ store, home, pollMs: opts.recapPollMs });
+  const log = (event: string, fields?: Record<string, string | number | undefined>) => appendLogLine(join(dataDir, "serve.log"), event, fields);
+  // UKAGAI_TERMINAL=none: no terminal at all (the test script sets it so no test asks the real herdr)
+  const terminal = opts.terminal ?? (process.env.UKAGAI_TERMINAL === "none" ? new NoTerminal() : new HerdrTerminal("herdr", (error) => log("herdr_failed", { error })));
+  startCheckpointDelivery({ store, terminal, log, pollMs: opts.terminalPollMs });
+  const recapWatcher = startRecapWatcher({ store, home, pollMs: opts.recapPollMs, log });
   const codexBridge = opts.codexBridge
     ? startCodexBridge({ store, dataDir, lang, codexHome: opts.codexHome, checkpointDelayMs: opts.codexCheckpointDelayMs, collect: (session) => collectContext(session, { home }) })
     : undefined;

@@ -12,6 +12,7 @@ export type RecapWatcherOptions = {
   store: Store;
   home: string;
   pollMs?: number;
+  log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
 };
 
 type Cursor = { path: string; offset: number };
@@ -39,7 +40,7 @@ function recapsOf(text: string): { recap: string; at: string }[] {
  * and every new recap becomes a checkpoint decision. Only files under ~/.claude/projects are read.
  */
 export function startRecapWatcher(opts: RecapWatcherOptions): { stop(): void; poll(sessionId?: string, discard?: boolean): void } {
-  const { store, home, pollMs = 5000 } = opts;
+  const { store, home, pollMs = 5000, log } = opts;
   const cursors = new Map<string, Cursor>();
   let stopped = false;
 
@@ -88,7 +89,9 @@ export function startRecapWatcher(opts: RecapWatcherOptions): { stop(): void; po
         if (discard) continue;
         for (const r of recapsOf(buf.subarray(0, end).toString("utf8"))) {
           const s = store.listSessions().find((x) => x.session_id === sessionId);
-          if (s) store.createCheckpoint(s, r.recap, r.at);
+          if (!s) continue;
+          const res = store.createCheckpoint(s, r.recap, r.at);
+          if (res.skipped) log?.("checkpoint_skipped", { session: sessionId, reason: res.skipped });
         }
       }
     } catch {

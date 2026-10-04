@@ -175,6 +175,11 @@ test("TUI and GUI use the same words for checkpoints", async () => {
     checkpoint_instruct: ["Give an instruction…", "指示を出す…"],
     checkpoint_stop: ["Stop here", "ここで止める"],
     checkpoint_idle: ["The agent is idle; your reply arrives at its next tool call", "エージェントは待機中。返事は次のツール実行時に届きます"],
+    checkpoint_idle_terminal: ["The agent is idle; your reply will be typed into its terminal (an unsent draft there goes with it)", "エージェントは待機中。返事はエージェントの端末に入力されます（未送信の下書きがあれば一緒に送られます）"],
+    checkpoint_sent: ["Reply sent", "返事を送りました"],
+    checkpoint_delivered: ["Reply delivered", "返事が届きました"],
+    history_delivered: ["delivered", "届いた"],
+    history_undelivered: ["not delivered yet", "未配達"],
     checkpoint_kind: ["recap", "進捗"],
     checkpoint_placeholder: ["What should the agent do next?", "エージェントに次に何をさせますか？"],
   } as const;
@@ -184,4 +189,61 @@ test("TUI and GUI use the same words for checkpoints", async () => {
     assert.equal(GUI.en![k], en, `gui en.${k}`);
     assert.equal(GUI.ja![k], ja, `gui ja.${k}`);
   }
+});
+
+// ---- delivery: terminal note, sent vs delivered, history mark ----
+
+const answeredCk = (id: string, kind: "instruct" | "stop" | "continue", delivered: boolean, at: string): Decision =>
+  checkpoint({
+    id,
+    status: "answered",
+    response: { via: "gui", kind, ...(kind === "continue" ? {} : { text: `text of ${id}` }), decided_at: at, ...(delivered ? { delivered_at: at, delivered_via: "terminal" as const } : {}) },
+  } as Partial<Decision>);
+
+// The note wraps inside its column: compare without the column bars and whitespace
+const flat = (text: string) => text.replace(/[│\s]+/g, "");
+
+test("TUI checkpoint: idle note says the reply is typed into the terminal when the session has one (en and ja)", () => {
+  const app = setup(checkpoint());
+  app.sessionUpdated({ ...sess("idle"), terminal: "herdr:w1:p1" });
+  assert.ok(flat(draw(app, 100).text).includes(flat("The agent is idle; your reply will be typed into its terminal (an unsent draft there goes with it)")));
+  app.lang = "ja";
+  assert.ok(flat(draw(app, 100).text).includes(flat("エージェントは待機中。返事はエージェントの端末に入力されます（未送信の下書きがあれば一緒に送られます）")));
+  app.lang = "en";
+  app.sessionUpdated(sess("idle"));
+  assert.ok(flat(draw(app, 100).text).includes(flat("your reply arrives at its next tool call")));
+});
+
+test("TUI checkpoint: answered says Reply sent; a later decision.updated with delivered_at says Reply delivered", () => {
+  const app = setup(checkpoint());
+  const sent = answeredCk("ck1", "instruct", false, "2026-10-04T12:00:00.000Z");
+  app.answered(sent, clock);
+  assert.ok(draw(app).text.includes("Reply sent"));
+  assert.ok(!draw(app).text.includes("Delivered"));
+  app.upsert(answeredCk("ck1", "instruct", true, "2026-10-04T12:00:00.000Z"), clock);
+  assert.ok(draw(app).text.includes("Reply delivered"));
+});
+
+test("TUI checkpoint: the s list marks answered checkpoints delivered / not delivered yet; continue shows nothing", async () => {
+  const app = new App();
+  app.fetchHistory = async () => ({
+    session_id: SID,
+    total: 2,
+    first: { at: "2026-10-04T08:00:00.000Z", text: "start the work" },
+    recent: [{ at: "2026-10-04T08:00:00.000Z", text: "start the work" }, { at: "2026-10-04T09:00:00.000Z", text: "second prompt" }],
+  });
+  app.replacePending([checkpoint()], clock);
+  app.upsert(answeredCk("a1", "instruct", true, "2026-10-04T10:00:00.000Z"), clock);
+  app.upsert(answeredCk("a2", "stop", false, "2026-10-04T11:00:00.000Z"), clock);
+  app.upsert(answeredCk("a3", "continue", false, "2026-10-04T11:30:00.000Z"), clock);
+  await new Promise((r) => setTimeout(r, 20));
+  press(app, ch("s"));
+  const text = draw(app).text;
+  assert.match(text, /text of a1.*delivered/);
+  assert.match(text, /text of a2.*not delivered yet/);
+  assert.ok(!text.includes("text of a3"));
+  app.lang = "ja";
+  const ja = draw(app).text;
+  assert.match(ja, /text of a1.*届いた/);
+  assert.match(ja, /text of a2.*未配達/);
 });

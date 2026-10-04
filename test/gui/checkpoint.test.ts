@@ -24,6 +24,7 @@ let serve: ChildProcess | undefined;
 let base = "";
 let opened = false;
 let seq = 0;
+const TERM_SID = `ck-term-${process.pid}`;
 const session = `ukagai-ck-${process.pid}-${Date.now().toString(36)}`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -110,13 +111,13 @@ async function setLang(lang: "en" | "ja", ready: string) {
 const CWD = "/work/ukagai-ck-demo";
 const RECAP = "Added the retry to the uploader and the tests pass. Next I would wire it into the CLI and update the README.";
 
-async function seedCheckpoint(sid = `ck-sess-${process.pid}`, recap = RECAP): Promise<{ id: string }> {
+async function seedCheckpoint(sid = `ck-sess-${process.pid}`, recap = RECAP, transcript = join(home, ".claude", "projects", "p", "none.jsonl")): Promise<{ id: string }> {
   const n = ++seq;
   const at = new Date(Date.now() + n).toISOString();
   const d = await api("/api/decisions", {
     tool_use_id: `checkpoint:${sid}:${at}`,
     kind: "checkpoint",
-    session: { session_id: sid, cwd: CWD, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    session: { session_id: sid, cwd: CWD, transcript_path: transcript },
     request: { recap, recap_at: at },
   });
   assert.ok(d.id, `cannot create checkpoint: ${JSON.stringify(d)}`);
@@ -161,7 +162,11 @@ before(async () => {
   mkdirSync(PLANS(), { recursive: true });
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
-  serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home, UKAGAI_DISABLE: "1" } });
+  // A fake `herdr` first on PATH: one pane (working, so nothing is typed) for the session TERM_SID, none for the others
+  const bin = join(home, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "herdr"), `#!/bin/sh\nif [ "$2" = list ]; then echo '{"result":{"panes":[{"pane_id":"w9:p9","agent":"claude","agent_status":"working","agent_session":{"value":"${TERM_SID}"}}]}}'; fi\n`, { mode: 0o755 });
+  serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home, UKAGAI_DISABLE: "1", UKAGAI_TERMINAL: "herdr", PATH: `${bin}:${process.env.PATH}` } });
   const end = Date.now() + 20000;
   for (;;) {
     try { if ((await fetch(base + "/healthz")).ok) break; } catch {}
@@ -322,6 +327,65 @@ gui("idle note: hidden while the session works, shown once it is idle", async ()
   await stopEvent(sid);
   await waitFor("idle note", `document.querySelector("#decision .cp-idle") && !document.querySelector("#decision .cp-idle").hidden`);
   assert.equal(text("#decision .cp-idle"), "The agent is idle; your reply arrives at its next tool call");
+});
+
+const toastTexts = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll(".toast")].map((t) => t.textContent))`);
+const hookGet = (sid: string) => fetch(`${base}/api/sessions/${sid}/instruction`, { headers: { authorization: `Bearer ${token}` } });
+
+gui("idle note with a terminal: the reply will be typed into it (en and ja)", async () => {
+  const c = await seedCheckpoint(TERM_SID);
+  await show(c.id);
+  await stopEvent(TERM_SID);
+  await waitFor("terminal on the session", `[...document.querySelectorAll("#decision .cp-idle")].some((n) => n.textContent === "The agent is idle; your reply will be typed into its terminal (an unsent draft there goes with it)")`);
+  ev(`document.documentElement.dataset.lang = "ja", "ok"`);
+  await waitFor("ja note", `document.querySelector("#decision .cp-idle")?.textContent === "エージェントは待機中。返事はエージェントの端末に入力されます（未送信の下書きがあれば一緒に送られます）"`);
+  ev(`document.documentElement.dataset.lang = "en", "ok"`);
+});
+
+gui("answering a checkpoint toasts Reply sent; delivery toasts Reply delivered later", async () => {
+  const sid = `ck-toast-${process.pid}`;
+  const c = await seedCheckpoint(sid);
+  await show(c.id);
+  key("2");
+  await waitFor("box focused", `document.activeElement?.classList.contains("free-text")`);
+  ev(`(() => { const i = document.activeElement; i.value = "ship it"; i.dispatchEvent(new Event("input", { bubbles: true })); i.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); return "ok"; })()`);
+  await waitStatus(c.id, "answered");
+  await waitFor("sent toast", `[...document.querySelectorAll(".toast")].some((t) => t.textContent === "Reply sent")`);
+  assert.ok(!(await toastTexts()).some((x) => /deliver/i.test(x)), "answered is not delivered: no delivered toast yet");
+  assert.equal((await hookGet(sid)).status, 200); // the agent's next tool call
+  await waitFor("delivered toast", `[...document.querySelectorAll(".toast")].some((t) => t.textContent === "Reply delivered")`);
+});
+
+gui("history drawer: an answered checkpoint is marked not delivered yet, then delivered; continue shows nothing", async () => {
+  const sid = `ck-hist-${process.pid}`;
+  const dir = join(home, ".claude", "projects", "p");
+  const transcript = join(dir, `${sid}.jsonl`);
+  const t0 = Date.now() - 3 * 3600_000;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(transcript, ["first prompt", "second prompt"].map((x, i) => JSON.stringify({ type: "user", message: { role: "user", content: x }, timestamp: new Date(t0 + i * 1800_000).toISOString() })).join("\n") + "\n");
+  // The page is open while the checkpoints are answered, so it sees the answers through SSE
+  const x = await seedCheckpoint(sid, "recap X", transcript);
+  await show(x.id);
+  assert.equal((await api(`/api/decisions/${x.id}/answer`, { kind: "instruct", text: "reply that waits" })).status, "answered");
+  await waitFor("idle after the answer", IDLE);
+  const z = await seedCheckpoint(sid, "recap Z", transcript);
+  await waitFor("next card", CARD);
+  assert.equal((await api(`/api/decisions/${z.id}/answer`, { kind: "continue" })).status, "answered");
+  await waitFor("idle again", IDLE);
+  await seedCheckpoint(sid, "recap Y", transcript);
+  await waitFor("last card", CARD);
+  await waitFor("history loaded", `document.querySelector("#head .hd-goal")`);
+  key("s");
+  await waitFor("drawer", `document.querySelector(".hist-row")`);
+  const rows = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll(".hist-row")].map((r) => r.textContent))`);
+  assert.ok((await rows()).some((r) => r.includes("reply that waits") && r.includes("not delivered yet")), JSON.stringify(await rows()));
+  assert.equal((await rows()).length, 3, "two prompts and the one instruct; the continue answer shows nothing");
+  key("Escape");
+  assert.equal((await hookGet(sid)).status, 200);
+  await waitFor("delivered toast", `[...document.querySelectorAll(".toast")].some((t) => t.textContent === "Reply delivered")`);
+  key("s");
+  await waitFor("drawer", `document.querySelector(".hist-row")`);
+  assert.ok((await rows()).some((r) => r.includes("reply that waits") && /delivered$/.test(r) && !r.includes("not delivered")), JSON.stringify(await rows()));
 });
 
 gui("Japanese: every word of the card, and English again", async () => {
