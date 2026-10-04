@@ -256,3 +256,54 @@ test("settings.updated: parsed from SSE; the app takes the language (unless --la
     setRepoColors({});
   }
 });
+
+const QUIZ_Q = "Subject: parse_retry_after\n\nWhat does it return for \"120\"?";
+const QUIZ_MD = (lang: "en" | "ja") => `---
+ukagai: 1
+type: quiz
+question: |
+  Subject: parse_retry_after
+
+  What does it return for "120"?
+title: Comprehension quiz on parse_retry_after
+reversibility: reversible
+scope: file
+---
+
+## ${lang === "en" ? "Why this question now" : "なぜ今この質問か"}
+
+The agent edited this function 12 times.
+
+## ${lang === "en" ? "Premise" : "前提"}
+
+src/http/retry.rs reads the Retry-After header.
+
+## ${lang === "en" ? "How to answer" : "答え方"}
+
+Pick with the arrow keys and press Enter.
+`;
+const quizDecision = (lang: "en" | "ja" = "en") =>
+  decision({
+    request: { questions: [{ question: QUIZ_Q, header: "Quiz", multiSelect: false, options: [{ label: "Some(120s)", description: "Seconds" }, { label: "None (Recommended)", description: "No value" }] }] },
+    ...withExplanation(QUIZ_MD(lang), { type: "quiz" }),
+  });
+
+test("quiz: band, the three sections, the options as given, no recommendation", () => {
+  const raw = render(viewOf(quizDecision()), { cols: 140, rows: 40 });
+  const out = stripAnsi(raw);
+  for (const s of ["Quiz", "Why this question now", "The agent edited this function 12 times.", "Premise", "src/http/retry.rs reads", "How to answer", "▸ ● Some(120s)", "○ None (Recommended)", "Free text"]) assert.ok(out.includes(s), `missing: ${s}`);
+  assert.ok(raw.includes("\x1b[46;30m Quiz "), "the Quiz band");
+  for (const s of ["Recommendation", "Recommended ", "Waiting for you"]) assert.ok(!out.split("\n").some((l) => l.includes(s) && !l.includes("None (Recommended)")), `unexpected: ${s}`);
+  assert.ok(!raw.includes("\x1b[42;30m Recommended "), "no recommended badge");
+  const m = buildModel(quizDecision());
+  assert.equal(m.quiz, true);
+  assert.equal(m.recommendation, null);
+  assert.equal(m.question!.cards.every((c) => !c.recommended), true);
+  assert.equal(m.question!.initialCursor, 0);
+});
+
+test("quiz: ja headings and band; the Japanese Premise alias is not read as Assumptions", () => {
+  const out = stripAnsi(render(viewOf(quizDecision("ja"), "ja"), { cols: 140, rows: 40 }));
+  for (const s of ["理解度クイズ", "なぜ今この質問か", "前提", "答え方"]) assert.ok(out.includes(s), `missing: ${s}`);
+  assert.equal(buildModel(quizDecision("ja"), "ja").assumptions.length, 0);
+});

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, utimesSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -35,15 +35,18 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 29 fixtures", () => {
-  assert.equal(mdFiles.length, 29);
+test("there are 34 fixtures", () => {
+  assert.equal(mdFiles.length, 34);
 });
 
 for (const f of mdFiles) {
   test(`fixture ${f} matches expected`, () => {
     const md = readFileSync(join(fixDir, f), "utf8");
     const expected = JSON.parse(readFileSync(join(fixDir, f.replace(/\.md$/, ".expected.json")), "utf8"));
-    const actual = f.startsWith("plan-") ? validatePlan(md) : validateExplanation(md, "answer_question");
+    // An optional `<name>.labels.json` gives the option labels of the AskUserQuestion call (a quiz is checked against them)
+    const labelsFile = join(fixDir, f.replace(/\.md$/, ".labels.json"));
+    const labels = existsSync(labelsFile) ? (JSON.parse(readFileSync(labelsFile, "utf8")) as string[]) : undefined;
+    const actual = f.startsWith("plan-") ? validatePlan(md) : validateExplanation(md, "answer_question", labels);
     assert.deepEqual(actual, expected);
   });
 }
@@ -712,4 +715,148 @@ test("assumptions_long: more than 3 Assumptions bullets are a defect, after agai
   assert.deepEqual(validateExplanation(withA(4)).missing, ["assumptions_long"]);
   assert.deepEqual(validateExplanation(withA(4).replace("I recommend A. If C, choose B.", "I recommend B.")).missing, ["recommend_cond", "recommend_name", "assumptions_long"]);
   assert.equal(validateExplanation(withA(4).replace("- premise 0", "```\n- a\n- b\n```\n- premise 0")).missing.includes("assumptions_long"), true);
+});
+
+// ---- type: quiz ----
+
+const quizMd = (name: string) => readFileSync(join(fixDir, name), "utf8");
+const QUIZ_LABELS = ["Some(true), 拡張子が .json ではないため", "Some(false), fixtures 配下は対象外のため", "None, 拡張子で判定できないため", "Some(true), tests/ 配下のパスのため"];
+
+test("quiz: the contract example is valid with the 4 labels of the question, in ja", () => {
+  const md = quizMd("pass-quiz-ja.md");
+  const question = parseFrontMatterQuestion(md);
+  const v = validateExplanation(md, "answer_question", QUIZ_LABELS, "ja", { question, descriptions: ["", "", "", ""] });
+  assert.deepEqual(v.missing, []);
+  assert.equal(v.valid, true);
+  assert.equal(v.question, question);
+});
+
+function parseFrontMatterQuestion(md: string): string {
+  return validateExplanation(md, "answer_question").question!;
+}
+
+test("quiz: a block-scalar question equals the multi-line AskUserQuestion text; a one-line question still works", () => {
+  const v = validateExplanation(quizMd("pass-quiz-ja.md"));
+  assert.equal(v.question!.split("\n").length, 5);
+  assert.ok(v.question!.startsWith("対象: src/quiz/context.rs › is_test_code\n"));
+  assert.ok(v.question!.endsWith("どれか。"), "trailing newline stripped");
+  assert.ok(v.question!.includes("\n\nis_test_code に"), "the blank line is kept");
+  assert.equal(validateExplanation(quizMd("fail-quiz-leak.md")).question, 'Which value does parse_retry_after return for "120"?');
+  // decision front matter: a plain one-line question is unchanged
+  assert.equal(validateExplanation(GOOD).question !== null, true);
+});
+
+test("quiz: findExplanation matches the block-scalar question verbatim", async () => {
+  const dir = tmpDir();
+  const md = quizMd("pass-quiz-ja.md");
+  writeFile(join(dir, "quiz.md"), md);
+  const question = validateExplanation(md).question!;
+  assert.equal((await findExplanation(dir, question))?.match, "question");
+});
+
+test("quiz: recommended present → quiz_recommended with the deny text", () => {
+  const v = validateExplanation(quizMd("fail-quiz-recommended.md"));
+  assert.deepEqual(v.missing, ["quiz_recommended"]);
+  assert.equal(MISSING_LABELS.quiz_recommended, "a quiz must not recommend an answer; remove `recommended`");
+});
+
+test("quiz: missing Premise → quiz_premise; missing or over-long Why → quiz_why", () => {
+  assert.deepEqual(validateExplanation(quizMd("fail-quiz-no-premise.md")).missing, ["quiz_premise"]);
+  const en = quizMd("pass-quiz-en.md");
+  assert.deepEqual(validateExplanation(en.replace(/## Why this question now[\s\S]*?(?=## Premise)/, "")).missing, ["quiz_why"]);
+  assert.deepEqual(validateExplanation(en.replace("no quiz answer exists for it yet.", "x".repeat(700))).missing, ["quiz_why"]);
+  assert.deepEqual(validateExplanation(en.replace("src/http/retry.rs reads", "x".repeat(700) + " reads")).missing, ["quiz_premise"]);
+});
+
+test("quiz: Japanese heading aliases are accepted", () => {
+  const md = quizMd("pass-quiz-en.md").replace("## Why this question now", "## なぜ今この質問か").replace("## Premise", "## 前提").replace("## How to answer", "## 答え方");
+  assert.deepEqual(validateExplanation(md).missing, []);
+});
+
+test("quiz: an option label (6+ characters) inside Why / Premise / How to answer → quiz_leak; the question is exempt", () => {
+  const labels = JSON.parse(readFileSync(join(fixDir, "fail-quiz-leak.labels.json"), "utf8")) as string[];
+  assert.deepEqual(validateExplanation(quizMd("fail-quiz-leak.md"), "answer_question", labels).missing, ["quiz_leak"]);
+  assert.deepEqual(validateExplanation(quizMd("fail-quiz-leak.md")).missing, [], "no labels, no leak check");
+  // normalized like recommend_name: whitespace, backticks and case do not matter
+  assert.deepEqual(validateExplanation(quizMd("fail-quiz-leak.md"), "answer_question", ["some( duration::FROM_SECS(120) )"]).missing, ["quiz_leak"]);
+  // short labels are not looked for
+  assert.deepEqual(validateExplanation(quizMd("fail-quiz-leak.md"), "answer_question", ["None", "an error"]).missing, []);
+  // the leak can sit in How to answer too
+  const how = quizMd("pass-quiz-en.md").replace("Pick with", "The right one is Some(Duration::from_secs(120)). Pick with");
+  assert.deepEqual(validateExplanation(how, "answer_question", ["Some(Duration::from_secs(120))", "None"]).missing, ["quiz_leak"]);
+  // a label that is only in the question (exempt)
+  const q = quizMd("pass-quiz-en.md").replace("for the header value", "for Some(Duration::from_secs(120)) as the header value");
+  assert.deepEqual(validateExplanation(q, "answer_question", ["Some(Duration::from_secs(120))"]).missing, []);
+});
+
+test("quiz: options, table, Recommendation, Diagram, What I checked, coined terms and footnotes are not evaluated", () => {
+  const md = quizMd("pass-quiz-en.md").replace("reversibility: reversible", "reversibility: irreversible").replace("scope: file", "scope: external") +
+    "\n## Terms\n\n- **ZX9** — a made-up code that a decision explanation would have to define.\n\nSee ZX9 and Phase 2 and W-T2[^1].\n";
+  assert.deepEqual(validateExplanation(md, "answer_question", ["Option number one", "Option number two"]).missing, []);
+});
+
+test("quiz: language, question, type, title, reversibility and scope stay required", () => {
+  const en = quizMd("pass-quiz-en.md");
+  assert.deepEqual(validateExplanation(en.replace(/^title: .*\n/m, "")).missing, ["title"]);
+  assert.deepEqual(validateExplanation(en.replace("scope: file", "scope: nowhere")).missing, ["scope"]);
+  assert.deepEqual(validateExplanation(en.replace("reversibility: reversible\n", "")).missing, ["reversibility"]);
+  assert.deepEqual(validateExplanation(en.replace(/^question: \|\n(  .*\n|\n)+/m, "")).missing, ["question"]);
+  assert.deepEqual(validateExplanation(en, "answer_question", undefined, "ja", { question: "English only?" }).missing, ["language"]);
+});
+
+test("quiz: the deny reason for a quiz shows the quiz template, not the decision one", () => {
+  const reason = denyReason("A", { path: "/x/explain.md", question: "Q?", missing: [MISSING_LABELS.title], codes: ["title"], quiz: true });
+  assert.ok(reason.includes("type: quiz"));
+  assert.ok(!reason.includes("recommended:"));
+  assert.ok(!reason.includes("## Options"));
+});
+
+test("quiz_leak: a short label (under 6 characters) really present in the Premise does not leak", () => {
+  const md = quizMd("pass-quiz-en.md").replace("The header carries either", "None is returned when the header is absent. The header carries either");
+  assert.ok(md.includes("None is returned"));
+  assert.deepEqual(validateExplanation(md, "answer_question", ["None", "An error"]).missing, []);
+  // the same text with a label of 6+ characters does leak
+  assert.deepEqual(validateExplanation(md, "answer_question", ["None is returned"]).missing, ["quiz_leak"]);
+});
+
+test("quiz_leak: backticks and asterisks in the label are ignored when looking for it in the body", () => {
+  const md = quizMd("pass-quiz-en.md").replace("The header carries either", "foo_bar を返す。The header carries either");
+  assert.ok(md.includes("foo_bar を返す"));
+  for (const label of ["`foo_bar` を返す", "**foo_bar** を返す", "foo_bar を返す (Recommended)"]) {
+    assert.deepEqual(validateExplanation(md, "answer_question", [label, "other"]).missing, ["quiz_leak"], label);
+  }
+});
+
+test("block scalar: a blank line before the next key, and `|+`, give the same question; trailing spaces are kept; mixed indentation", () => {
+  const body = "## Why this question now\n\nwhy\n\n## Premise\n\npremise\n";
+  const fm = (q: string) => `---\nukagai: 1\ntype: quiz\n${q}title: t\nreversibility: reversible\nscope: file\n---\n\n${body}`;
+  const want = "line one\n\nline two";
+  for (const q of ["question: |\n  line one\n\n  line two\n", "question: |\n  line one\n\n  line two\n\n", "question: |+\n  line one\n\n  line two\n\n\n", "question: |-\n  line one\n\n  line two\n"]) {
+    assert.equal(validateExplanation(fm(q)).question, want, JSON.stringify(q));
+  }
+  // YAML keeps trailing spaces: an ask question with the same trailing spaces matches verbatim
+  const spaced = "line one  \n\nline two ";
+  assert.equal(validateExplanation(fm("question: |\n  line one  \n\n  line two \n")).question, spaced);
+  // exactly the common indent prefix is removed, tabs and spaces included
+  assert.equal(validateExplanation(fm("question: |\n\t  a\n\t    b\n")).question, "a\n  b");
+  assert.equal(validateExplanation(fm("question: |\n    a\n      b\n")).question, "a\n  b");
+});
+
+test("block scalar: findExplanation matches a question line that ends in spaces", async () => {
+  const dir = tmpDir();
+  const ask = "first line  \n\nsecond line";
+  writeFile(join(dir, "q.md"), "---\nukagai: 1\ntype: quiz\nquestion: |\n  first line  \n\n  second line\ntitle: t\nreversibility: reversible\nscope: file\n---\n\n## Premise\n\np\n");
+  assert.equal((await findExplanation(dir, ask))?.match, "question");
+});
+
+test("deny text: a question with line breaks is to be written as `question: |` followed by indented lines", () => {
+  const q = "Subject: x\n\nWhich one?";
+  for (const template of ["A", "B"] as const) {
+    const plain = denyReason(template, { path: "/x/explain.md", question: q, missing: [MISSING_LABELS.why], codes: ["why"] });
+    assert.ok(plain.includes("question: |"), template);
+    const tpl = denyReason(template, { path: "/x/explain.md", question: q, missing: [MISSING_LABELS.file], codes: ["file"] });
+    assert.ok(tpl.includes("question: |\n  Subject: x\n\n  Which one?"), template);
+  }
+  const one = denyReason("A", { path: "/x/explain.md", question: "Which one?", missing: [MISSING_LABELS.why], codes: ["why"] });
+  assert.ok(!one.includes("question: |") && one.includes("Put exactly this string"));
 });

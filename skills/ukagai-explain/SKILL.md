@@ -195,6 +195,14 @@ The hook remembers the last Cannot answer of the session and denies the next exp
 > Changing the storage format leaves some people unable to read existing logs.
 ```
 
+## Quiz (a question with no recommendation)
+
+A comprehension quiz (`type: quiz`) is normally written by a tool (whoknows, through its Stop hook), which also asks the AskUserQuestion; you do not decide a quiz, you only present it. If the explanation file is already there, do not rewrite it, and **never add a recommendation to a quiz** (no `recommended`, no Recommendation section, no hint in the title or the sections: that would give the answer away). What the file must contain:
+
+- Front matter: `ukagai: 1`, `type: quiz`, `question` (a `question: |` block scalar holding the AskUserQuestion text verbatim), `title`, `reversibility`, `scope`. No `recommended`.
+- `## Why this question now` (1 to 600 characters) and `## Premise` (non-empty, at most 600 characters); optional `## How to answer` and `## Terms`.
+- No option label of 6 or more characters inside those sections (the hook denies it as `quiz_leak`). No Options table, Diagram or What I checked is needed.
+
 ## When stopped by human work (blocker)
 
 Use this when you cannot proceed because of **work only a human can do**: authentication, login, granting permissions, two-factor authentication, placing a key, a physical operation. **Ending the turn with prose such as "please authenticate" is forbidden.** Ending that way shows nothing in the ukagai GUI, and work stays stopped until the human notices and types "continue".

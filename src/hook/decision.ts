@@ -191,7 +191,7 @@ async function explainQuestion(c: Ctx, data: AskUserQuestionInput): Promise<Expl
     const fm = parseFrontMatter(toLines(found.markdown)).fields;
     const explanation: Explanation = {
       path: found.path,
-      type: fm["type"] === "blocker" || fm["type"] === "decision" ? fm["type"] : undefined,
+      type: fm["type"] === "blocker" || fm["type"] === "decision" || fm["type"] === "quiz" ? fm["type"] : undefined,
       title: fm["title"] || q0.question,
       question: fm["question"],
       reversibility: fm["reversibility"] as Explanation["reversibility"],
@@ -220,6 +220,7 @@ async function explainQuestion(c: Ctx, data: AskUserQuestionInput): Promise<Expl
     codes,
     agent: input.agent,
     blocker: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "blocker" : false,
+    quiz: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "quiz" : false,
   });
   return { out: await denyAndRecord(c, reason, codes) };
 }

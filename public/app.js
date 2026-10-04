@@ -21,6 +21,9 @@ const SECTION = {
   assumptions: ["Assumptions", "前提"],
   against: ["Counterargument", "反論"],
   affects: ["Affected", "影響を受けるもの"],
+  quizWhy: ["Why this question now", "なぜ今この質問か"],
+  quizPremise: ["Premise", "前提"],
+  quizHow: ["How to answer", "答え方"],
 };
 // Fixed option labels of a blocker (a "(Recommended)" suffix is allowed on the first).
 const BLOCKER_LABELS = {
@@ -321,6 +324,14 @@ function isBlocker(d) {
   return d.kind === "answer_question" && hasExplanation(d) && parseFrontMatter(ex.markdown).fm.type === "blocker";
 }
 
+// A comprehension quiz: a question with no recommendation (explanation.type or the front matter type)
+function isQuiz(d) {
+  const ex = d.explanation;
+  if (!ex) return false;
+  if (ex.type) return ex.type === "quiz";
+  return d.kind === "answer_question" && hasExplanation(d) && parseFrontMatter(ex.markdown).fm.type === "quiz";
+}
+
 // A plan carries them in explanation.reversibility / scope (the hook ran parsePlanImpact); when absent, read the plan's own
 // "Scope and reversibility" lines (same pattern as parsePlanImpact in src/hook/explain.ts)
 function planImpactOf(d) {
@@ -527,6 +538,9 @@ const firstSentence = (text) => {
   return /^(.+?(?:[。！？!?]+|\.(?=\s|$)))/u.exec(flat)?.[1] ?? flat;
 };
 
+// A quiz question is several paragraphs (subject, why now, premise, then the question): the head shows only the last one
+const lastParagraph = (q) => q.split(/\n[ \t]*\n/).filter((p) => p.trim() !== "").at(-1)?.trim() ?? q;
+
 // The header (full width, above both columns). Row 1: title + chips, reversibility, scope, pending pill. Row 2: the headline (the first
 // sentence of the recommendation, or the raw question / the plan prompt). Both rows are one / two lines and end in … (click or `.` shows all)
 function renderHead(d) {
@@ -544,14 +558,18 @@ function renderHead(d) {
   let line2;
   if (isCheckpoint(d)) line2 = el("div", { class: "headline plain clampable", text: firstSentence(d.request.recap) });
   else if (d.kind === "approve_plan") line2 = el("div", { class: "headline plain clampable", text: t("plan_question") });
+  else if (d.request.questions.length === 1 && isQuiz(d)) line2 = el("div", { class: "headline plain quiz-q", text: lastParagraph(d.request.questions[0].question) });
   else if (d.request.questions.length === 1 && modelFor(d).v2) line2 = modelFor(d).v2.headline;
   else if (d.request.questions.length === 1 && title !== d.request.questions[0].question) line2 = el("div", { class: "headline plain clampable", text: d.request.questions[0].question });
   const blocker = isBlocker(d);
+  const quiz = isQuiz(d);
   head.classList.toggle("blocker", blocker);
+  head.classList.toggle("quiz", quiz);
   head.append(
     el("div", { class: "hd-top" },
       originEl(d),
       blocker ? el("span", { class: "blocker-band", text: t("blocker_band") }) : null,
+      quiz ? el("span", { class: "quiz-band", text: t("quiz_band") }) : null,
       el("div", { class: "v2-title", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d))),
       metaBox(d)),
     el("div", { class: "hd-sub", hidden: true }),
@@ -987,6 +1005,8 @@ async function send(d, body) {
 }
 
 // A raw option that has no row in the explanation table: strip the (Recommended) suffix and show a recommended badge. The answer value stays the original label
+// A quiz option is shown exactly as given: no recommended badge, no preferred start position, the label untouched
+const quizItem = (o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: false });
 const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label) });
 
 const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
@@ -1335,7 +1355,7 @@ function renderRightBody(d) {
       } else {
         // The header carries the title (and, for one question, the question under it). With several questions each one is headed here
         if (!single) box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
-        items = q.options.map(rawItem);
+        items = q.options.map(isQuiz(d) ? quizItem : rawItem);
       }
       if (single) {
         if (dr.cursor == null) dr.cursor = Math.max(0, items.findIndex((i) => i.pref));
@@ -1758,9 +1778,29 @@ function parseFrontMatter(md) {
   const m = md.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   if (!m) return { fm: {}, body: md };
   const fm = {};
-  for (const line of m[1].split(/\r?\n/)) {
-    const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (kv) fm[kv[1]] = kv[2].replace(/^["']|["']$/g, "");
+  const rows = m[1].split(/\r?\n/);
+  for (let i = 0; i < rows.length; i++) {
+    const kv = rows[i].match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (!kv) continue;
+    // `question: |` (a literal block scalar, `question` only): the indented lines that follow, trailing newlines stripped
+    if (kv[1] === "question" && /^\|[+-]?$/.test(kv[2].trim())) {
+      const block = [];
+      let j = i + 1;
+      while (j < rows.length && (rows[j].trim() === "" || /^[ \t]/.test(rows[j]))) block.push(rows[j++]);
+      while (block.length && block[block.length - 1].trim() === "") block.pop();
+      // exactly the common leading-whitespace prefix is removed; trailing spaces stay (as in YAML)
+      let prefix = null;
+      for (const l of block.filter((x) => x.trim() !== "").map((x) => /^[ \t]*/.exec(x)[0])) {
+        if (prefix === null) { prefix = l; continue; }
+        let k = 0;
+        while (k < prefix.length && k < l.length && prefix[k] === l[k]) k++;
+        prefix = prefix.slice(0, k);
+      }
+      fm.question = block.map((l) => (l.startsWith(prefix ?? "") ? l.slice((prefix ?? "").length) : "")).join("\n");
+      i = j - 1;
+      continue;
+    }
+    fm[kv[1]] = kv[2].replace(/^["']|["']$/g, "");
   }
   return { fm, body: md.slice(m[0].length) };
 }
@@ -2169,6 +2209,8 @@ const KNOWN_HEADS = [
   [SECTION.impact, "sec_impact"], [SECTION.terms, "sec_terms"], [SECTION.assumptions, "sec_assumptions"], [SECTION.against, "sec_against"],
   [SECTION.affects, "sec_affects"], [SECTION.unknowns, "sec_unknowns"], [SECTION.why, "sec_why"], [SECTION.blockerWhy, "sec_blocker_why"],
 ];
+// A quiz's own headings come first: its Premise alias (前提) is also the alias of Assumptions
+const QUIZ_HEADS = [[SECTION.quizWhy, "sec_quiz_why"], [SECTION.quizPremise, "sec_quiz_premise"], [SECTION.quizHow, "sec_quiz_how"]];
 // A section whose heading the GUI does not know is never dropped: it is shown as written at the end of the left column
 function keepUnknownSections(container) {
   const known = Object.values(SECTION).flat();
@@ -2179,9 +2221,10 @@ function keepUnknownSections(container) {
 }
 
 // Headings of the known sections that stay in the left column, in the display language
-function localizeHeads(container) {
+function localizeHeads(container, quiz = false) {
+  const heads = quiz ? [...QUIZ_HEADS, ...KNOWN_HEADS] : KNOWN_HEADS;
   for (const sec of sectionsOf(container)) {
-    const known = KNOWN_HEADS.find(([names]) => isKnown(sec, names));
+    const known = heads.find(([names]) => isKnown(sec, names));
     if (known) sec.head.textContent = t(known[1]);
   }
 }
@@ -2583,7 +2626,7 @@ function buildModel(d) {
     }
   }
   if (m.v2) keepUnknownSections(left);
-  localizeHeads(left);
+  localizeHeads(left, fm.type === "quiz" || d.explanation.type === "quiz");
   enhance(left, m.v2?.ctx.opts ?? []).catch(() => {});
   return m;
 }

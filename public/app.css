@@ -105,6 +105,7 @@ body.no-hints .foot { display: none; }
 .hd-goal .goal-n { flex: none; white-space: nowrap; }
 .hd-goal:hover .goal-text { text-decoration: underline dotted; }
 .hs[hidden] { display: none; }
+.quiz-band { flex: none; font-weight: 700; font-size: 13px; white-space: nowrap; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent); }
 .blocker-band { flex: none; font-weight: 700; font-size: 13px; white-space: nowrap; }
 .cwd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .banner { grid-row: 1; background: var(--red); color: #fff; padding: 8px 16px; } /* Normal flow. While shown it pushes the rows below (header / main / .empty) down */
@@ -266,6 +267,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 /* 1-second layer: headline, reversibility shape, affected chips, "You decide", option chips */
 .headline { flex: 1 1 0; min-width: 0; font-size: 18px; font-weight: 700; line-height: 1.5; color: var(--accent); overflow-wrap: anywhere; cursor: pointer; }
 .headline.plain { color: var(--muted); font-weight: 500; font-size: 13px; }
+.headline.quiz-q { white-space: pre-line; color: var(--fg, inherit); font-size: 15px; font-weight: 600; cursor: default; }
 .headline strong { color: var(--accent); }
 .unknowns { margin-top: 8px; padding: 6px 10px; border-left: 4px solid var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); border-radius: 0 6px 6px 0; font-size: 13px; }
 .unknowns-cap { color: var(--yellow); font-size: 12px; }

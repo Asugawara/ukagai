@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": false
+  },
+  "question": "対象: src/quiz/context.rs › is_test_code\nいま聞く理由: 回復不能(U 0.00)。エージェント行 1088 / 全 1088。クイズ正答はまだ無い\n前提: src/quiz/context.rs は出題プロンプト用に、定義・呼び出し元・import・テストの行を静的に集める。is_test_code は、収集したヒットのうちテストとして引用する対象かを判定するパス判定関数である。\n\nis_test_code に \"tests/fixtures/a.json\" を渡したときの戻り値と、その理由として正しいものはどれか。"
+}

@@ -21,6 +21,9 @@ export const SECTION = {
   assumptions: ["Assumptions", "前提"],
   against: ["Counterargument", "反論"],
   affects: ["Affected", "影響を受けるもの"],
+  quizWhy: ["Why this question now", "なぜ今この質問か"],
+  quizPremise: ["Premise", "前提"],
+  quizHow: ["How to answer", "答え方"],
 } as const;
 
 /** Fixed option labels for blockers (suffix "(Recommended)" allowed on the first). */
@@ -69,7 +72,11 @@ export type MissingCode =
   | "checked"
   | "footnote"
   | "impact"
-  | "multi";
+  | "multi"
+  | "quiz_recommended"
+  | "quiz_why"
+  | "quiz_premise"
+  | "quiz_leak";
 
 export interface Has {
   mermaid: boolean;
@@ -91,7 +98,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   language:
     "the configured language is Japanese: write the title, the explanation and the AskUserQuestion question / labels / descriptions in Japanese (code and proper nouns may stay)",
   question: "`question`",
-  type: "`type` (decision / blocker)",
+  type: "`type` (decision / blocker / quiz)",
   title: "`title` (the decision for the human, in one sentence)",
   reversibility: "`reversibility`",
   scope: "`scope`",
@@ -117,11 +124,15 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   footnote: 'a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked")',
   impact: 'the "Scope and reversibility" section',
   multi: "one question per call",
+  quiz_recommended: "a quiz must not recommend an answer; remove `recommended`",
+  quiz_why: 'the "Why this question now" section (1 to 600 characters)',
+  quiz_premise: 'the "Premise" section (non-empty, at most 600 characters)',
+  quiz_leak: "the explanation repeats an option; a quiz explanation must not point at an answer",
 };
 
 const REVERSIBILITY = ["reversible", "costly", "irreversible"];
 const SCOPE = ["file", "repo", "machine", "external"];
-const TYPES = ["decision", "blocker"];
+const TYPES = ["decision", "blocker", "quiz"];
 
 // ---- helpers ----
 
@@ -155,6 +166,18 @@ export interface FrontMatter {
   bodyStart: number;
 }
 
+/** The lines of a block scalar with exactly their common leading-whitespace prefix removed (trailing spaces are kept, as in YAML) */
+function dedent(block: string[]): string {
+  const lead = block.filter((l) => l.trim() !== "").map((l) => /^[ \t]*/.exec(l)![0]);
+  let prefix = lead[0] ?? "";
+  for (const l of lead) {
+    let k = 0;
+    while (k < prefix.length && k < l.length && prefix[k] === l[k]) k++;
+    prefix = prefix.slice(0, k);
+  }
+  return block.map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : "")).join("\n");
+}
+
 export function parseFrontMatter(lines: string[]): FrontMatter {
   if (lines[0]?.trimEnd() !== "---") return { present: false, fields: {}, bodyStart: 0 };
   let close = -1;
@@ -166,10 +189,20 @@ export function parseFrontMatter(lines: string[]): FrontMatter {
   }
   if (close < 0) return { present: false, fields: {}, bodyStart: 0 };
   const fields: Record<string, string> = {};
-  for (const line of lines.slice(1, close)) {
-    const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+  for (let i = 1; i < close; i++) {
+    const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(lines[i]!);
     if (!m) continue;
     let v = m[2]!.trim();
+    // `question: |` (a literal block scalar, `question` only): the indented lines that follow, one indent removed, trailing newlines stripped
+    if (m[1] === "question" && /^\|[+-]?$/.test(v)) {
+      const block: string[] = [];
+      let j = i + 1;
+      while (j < close && (lines[j]!.trim() === "" || /^[ \t]/.test(lines[j]!))) block.push(lines[j++]!);
+      while (block.length > 0 && block[block.length - 1]!.trim() === "") block.pop();
+      fields["question"] = dedent(block);
+      i = j - 1;
+      continue;
+    }
     if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
     fields[m[1]!] = v;
   }
@@ -725,6 +758,33 @@ export function checkRewrite(memo: PendingRewrite, markdown: string, question: s
   return issues;
 }
 
+// ---- quiz (type: quiz) ----
+
+/** Codes for the quiz sections, in evaluation order: quiz_why, quiz_premise, quiz_leak */
+function quizMissing(lines: string[], inFence: boolean[], headings: ReturnType<typeof scanHeadings>, labels?: string[]): MissingCode[] {
+  const out: MissingCode[] = [];
+  const why = findSection(headings, lines.length, SECTION.quizWhy);
+  if (!why || !hasContent(lines, why) || cpLength(sectionText(lines, inFence, why)) > LIMITS.whyChars) out.push("quiz_why");
+  const premise = findSection(headings, lines.length, SECTION.quizPremise);
+  if (!premise || !hasContent(lines, premise) || cpLength(sectionText(lines, inFence, premise)) > LIMITS.whyChars) out.push("quiz_premise");
+  const how = findSection(headings, lines.length, SECTION.quizHow);
+  const body = nameForm(
+    [why, premise, how]
+      .filter((x): x is Section => x !== null)
+      .map((x) => sectionText(lines, inFence, x))
+      .join("\n"),
+  );
+  const leaked = (labels ?? []).some((l) => {
+    const bare = nameForm(l.replace(/\s*[(（](?:recommended|推奨)[)）]\s*$/iu, ""));
+    return [...bare].length >= QUIZ_LEAK_MIN && body.includes(bare);
+  });
+  if (leaked) out.push("quiz_leak");
+  return out;
+}
+
+/** Option labels shorter than this are not looked for in a quiz explanation */
+const QUIZ_LEAK_MIN = 6;
+
 // ---- validation ----
 
 /** A Japanese character (hiragana, katakana or han) */
@@ -749,8 +809,10 @@ export function validateExplanation(
 
   if (!fm.present || f["ukagai"] !== "1") missing.push("front_matter");
   if (lang === "ja") {
-    const whySec = findSection(headings, lines.length, f["type"] === "blocker" ? SECTION.blockerWhy : SECTION.why);
-    const prose = [f["title"] ?? "", whySec ? sectionText(lines, inFence, whySec) : ""].join("\n");
+    const quiz = f["type"] === "quiz";
+    const whySec = findSection(headings, lines.length, quiz ? SECTION.quizWhy : f["type"] === "blocker" ? SECTION.blockerWhy : SECTION.why);
+    const premiseSec = quiz ? findSection(headings, lines.length, SECTION.quizPremise) : null;
+    const prose = [f["title"] ?? "", whySec ? sectionText(lines, inFence, whySec) : "", premiseSec ? sectionText(lines, inFence, premiseSec) : ""].join("\n");
     const descs = (ask?.descriptions ?? []).filter((d) => d.trim() !== "");
     if (
       !HAS_JAPANESE.test(prose) ||
@@ -767,7 +829,19 @@ export function validateExplanation(
     if (!f["reversibility"] || !REVERSIBILITY.includes(f["reversibility"])) missing.push("reversibility");
     if (!f["scope"] || !SCOPE.includes(f["scope"])) missing.push("scope");
     const rec = f["recommended"];
-    if (!rec || (labels && !labels.some((l) => normalizeLabel(l) === normalizeLabel(rec)))) missing.push("recommended");
+    if (f["type"] === "quiz") {
+      if (rec !== undefined) missing.push("quiz_recommended");
+    } else if (!rec || (labels && !labels.some((l) => normalizeLabel(l) === normalizeLabel(rec)))) missing.push("recommended");
+  }
+
+  if (f["type"] === "quiz") {
+    missing.push(...quizMissing(lines, inFence, headings, labels));
+    return {
+      valid: missing.length === 0,
+      missing,
+      has: hasOf(lines, inFence, blocks),
+      question: f["question"] ? f["question"] : null,
+    };
   }
 
   const blocker = f["type"] === "blocker";
@@ -947,6 +1021,8 @@ export interface DenyParams {
   codes?: MissingCode[];
   /** True when the file found has `type: blocker` */
   blocker?: boolean;
+  /** True when the file found has `type: quiz` */
+  quiz?: boolean;
   /** `codex` swaps the Claude Code tool / skill names in the text for Codex's (`request_user_input`, the SessionStart context) */
   agent?: string;
 }
@@ -959,6 +1035,18 @@ function needsTemplate(p: DenyParams): boolean {
   return p.blocker === true ? p.codes.length > 0 : p.codes.some((c) => TEMPLATE_CODES.includes(c));
 }
 
+/** The `question:` line(s) of a template: a question with line breaks is written as a `|` block scalar */
+function questionField(q: string): string {
+  return q.includes("\n") ? "question: |\n" + q.split("\n").map((l) => (l === "" ? "" : "  " + l)).join("\n") : `question: ${q}`;
+}
+
+/** How to put the question into the front matter, for a sentence of the deny reason */
+function questionRule(q: string): string {
+  return q.includes("\n")
+    ? `Write the front matter question as \`question: |\` followed by the lines of this text, each indented by two spaces (blank lines stay blank): ${JSON.stringify(q)}`
+    : `Put exactly this string in the front matter question: ${q}`;
+}
+
 const OPTIONS_HEADER = "| Option | What happens if chosen | Risks and how to undo |";
 
 /** Plan mode: the block shape in short (front matter and section headings; the details are in the skill / SessionStart context) */
@@ -967,7 +1055,7 @@ function planTemplateBlock(p: DenyParams): string {
     "<!-- ukagai-explain -->",
     "---",
     "ukagai: 1",
-    `question: ${p.question}`,
+    questionField(p.question ?? ""),
     "title: <the decision for the human, in one sentence>",
     "recommended: <label of the option you recommend>",
     "reversibility: reversible | costly | irreversible",
@@ -987,11 +1075,25 @@ function planTemplateBlock(p: DenyParams): string {
 
 function templateBlock(p: DenyParams): string {
   if (p.planFile !== undefined) return planTemplateBlock(p);
-  const body = p.blocker
+  const body = p.quiz
     ? [
         "---",
         "ukagai: 1",
-        `question: ${p.question}`,
+        "type: quiz",
+        questionField(p.question ?? ""),
+        "title: <what the quiz is about, in one sentence>",
+        "reversibility: reversible",
+        "scope: file",
+        "---",
+        `## ${SECTION.quizWhy[0]}`,
+        `## ${SECTION.quizPremise[0]}  (do not repeat an option; no recommendation)`,
+        `## ${SECTION.quizHow[0]}  (optional)`,
+      ]
+    : p.blocker
+    ? [
+        "---",
+        "ukagai: 1",
+        questionField(p.question ?? ""),
         "type: blocker",
         "title: <what is needed, in one sentence>",
         `recommended: ${BLOCKER_LABELS.done[0]}`,
@@ -1009,7 +1111,7 @@ function templateBlock(p: DenyParams): string {
     : [
         "---",
         "ukagai: 1",
-        `question: ${p.question}`,
+        questionField(p.question ?? ""),
         "title: <the decision for the human, in one sentence>",
         "recommended: <label of the option you recommend>",
         "reversibility: reversible | costly | irreversible",
@@ -1083,7 +1185,7 @@ function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, 
       `First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
       (tpl
         ? `Save to: ${p.path} (any name in the same directory). Write it in this shape; question: already holds the question text verbatim.${tpl}`
-        : `Save to: ${p.path} (any name in the same directory). Put exactly this string in the front matter question: ${p.question}`) +
+        : `Save to: ${p.path} (any name in the same directory). ${questionRule(p.question!)}`) +
       (withTail ? "\nThe full format is in skill ukagai-explain. When done, call AskUserQuestion again with the same question. Do not ask in prose." : "")
     );
   }
@@ -1091,7 +1193,7 @@ function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, 
     `Could you first read skill ukagai-explain (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
     (tpl
       ? `Could you write ${p.path} in this shape (any name in the same directory is fine)? question: is identical to the question text.${tpl}`
-      : `Could you write ${p.path} (any name in the same directory is fine)? The front matter question: must be identical to "${p.question}".`) +
+      : `Could you write ${p.path} (any name in the same directory is fine)? ${p.question!.includes("\n") ? questionRule(p.question!) : `The front matter question: must be identical to "${p.question}".`}`) +
     (withTail ? "\nThe full format is in skill ukagai-explain. When done, please call AskUserQuestion again with the same question." : "")
   );
 }

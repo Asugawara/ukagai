@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": false
+  },
+  "question": "Subject: parse_retry_after in src/http/retry.rs\nWhy now: the agent edited this function 12 times and the quiz has no correct answer yet.\n\nWhat does parse_retry_after return for the header value \"120\"?"
+}

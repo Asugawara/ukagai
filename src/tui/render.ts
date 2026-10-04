@@ -122,6 +122,7 @@ const BADGE_IRREVERSIBLE = "\x1b[41;97m";
 const BADGE_COSTLY = "\x1b[43;30m";
 const BADGE_REC = "\x1b[42;30m";
 const BADGE_BLOCKER = "\x1b[43;30m";
+const BADGE_QUIZ = "\x1b[46;30m";
 
 /** Option colors (index 0..3); the same order everywhere on the screen */
 export const OPT_COLORS = [CYAN, MAGENTA, YELLOW, "\x1b[94m"];
@@ -159,6 +160,7 @@ function metaLine(m: ScreenModel, now: number, cols: number, lang: Lang): string
   const origin = m.chips.map((c) => `${BOLD}${c.kind === "repo" ? repoAnsi(repoName(c)) : ""}${c.text.replace(/^◈ /, "")}${RESET}`).join(" ");
   const parts = [origin, `${DIM}${m.cwd}${RESET}`];
   if (m.blocker) parts.splice(1, 0, `${BADGE_BLOCKER} ${t(lang, "waiting_for_you")} ${RESET}`);
+  else if (m.quiz) parts.splice(1, 0, `${BADGE_QUIZ} ${t(lang, "quiz_band")} ${RESET}`);
   if (m.reversibility === "irreversible") parts.push(`${BADGE_IRREVERSIBLE} ${t(lang, "irreversible")} ${RESET}`);
   else if (m.reversibility === "costly") parts.push(`${BADGE_COSTLY} ${t(lang, "costly")} ${RESET}`);
   else if (m.reversibility === "reversible") parts.push(`${GREEN}${t(lang, "reversible")}${RESET}`);
@@ -166,7 +168,7 @@ function metaLine(m: ScreenModel, now: number, cols: number, lang: Lang): string
   parts.push(`${DIM}${elapsed(m.createdAt, now, lang)}${RESET}`);
   const line = parts.join("  ");
   // When it does not fit, drop the cwd (keep the origin and reversibility)
-  return width(line) <= cols ? line : truncate(parts.filter((_, i) => i !== (m.blocker ? 2 : 1)).join("  "), cols);
+  return width(line) <= cols ? line : truncate(parts.filter((_, i) => i !== (m.blocker || m.quiz ? 2 : 1)).join("  "), cols);
 }
 
 /** Backticked spans in bold cyan (the command of an approval) */
