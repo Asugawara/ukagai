@@ -195,6 +195,25 @@ export function hasExplanation(d: Decision): boolean {
   return !!d.explanation && d.explanation.attached_via !== "none";
 }
 
+/**
+ * A stable accent per repository, shared with the GUI (repoSlot in public/app.js is the same algorithm):
+ * FNV-1a (32 bit) over the repo name (the working directory's last segment when there is no repo) -> slot = hash % 12.
+ * GUI: hue = (238 + slot * 27) % 360 (the 12 hues skip 200-235, which is the UI accent blue); `plans/` is a neutral grey.
+ * TUI: each slot gets the ANSI colour nearest to that hue (non-bright 31-36, drawn bold), so the same repo reads as the same colour:
+ *   hues 238 265 -> blue, 292 319 -> magenta, 346 13 -> red, 40 67 -> yellow, 94 121 148 -> green, 175 -> cyan. `plans/` is bright black (grey).
+ */
+export function repoSlot(name: string): number {
+  let h = 0x811c9dc5;
+  for (const ch of name) {
+    h ^= ch.codePointAt(0)!;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h % 12;
+}
+const SLOT_ANSI = [34, 34, 35, 35, 31, 31, 33, 33, 32, 32, 32, 36];
+export const repoAnsi = (name: string): string => `\x1b[${SLOT_ANSI[repoSlot(name)]}m`;
+export const PLANS_ANSI = "\x1b[90m";
+
 export function chipsOf(d: Decision): Chip[] {
   const m = WT_RE.exec(d.session.cwd);
   const out: Chip[] = [{ kind: "repo", text: `◈ ${m?.[1] ?? tail(d.session.cwd)}` }];

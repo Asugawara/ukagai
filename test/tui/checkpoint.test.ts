@@ -73,7 +73,7 @@ test("TUI checkpoint: 1 sends {kind: continue}; 3 sends {kind: stop} with one pr
 test("TUI checkpoint: Enter acts on the card under the cursor; j moves; the first card is the default", () => {
   assert.deepEqual(press(setup(checkpoint()), enter), [{ type: "answer", id: "ck1", body: { kind: "continue" } }]);
   const app = setup(checkpoint());
-  press(app, ch("j"), ch("j"));
+  press(app, ch("j"), { name: "esc" }, ch("j")); // j onto the instruction card opens its box; Esc leaves it
   assert.deepEqual(press(app, enter), [{ type: "answer", id: "ck1", body: { kind: "stop" } }]);
 });
 

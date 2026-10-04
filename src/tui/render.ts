@@ -1,5 +1,5 @@
 import { BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET, STRONG_RISK, YELLOW, inline, literalMarks, renderMarkdown, renderMarkdownRich, type Mark, type Rendered } from "./markdown.js";
-import { IRREVERSIBLE_RE, UNDO_RE, elapsed, type Card, type Chip, type ScreenModel } from "./model.js";
+import { IRREVERSIBLE_RE, UNDO_RE, elapsed, repoAnsi, PLANS_ANSI, type Card, type Chip, type ScreenModel } from "./model.js";
 import { SECTION, normalizeHeading } from "../hook/explain.js";
 import { NONE_TYPES } from "./none.js";
 import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
@@ -141,7 +141,8 @@ const riskMarks = (): Mark[] => [
 ];
 const TERMS_HEADINGS = SECTION.terms.map(normalizeHeading);
 
-const chip = (c: Chip): string => `${CHIP_COLOR[c.kind]}${c.text}${RESET}`;
+const repoName = (c: Chip): string => c.text.replace(/^◈ /, "");
+const chip = (c: Chip): string => `${c.kind === "repo" ? repoAnsi(repoName(c)) : CHIP_COLOR[c.kind]}${c.text}${RESET}`;
 export const chipsText = (chips: Chip[]): string => chips.map(chip).join(" ");
 
 /** Affected names on one line: at most 6, the rest as +N */
@@ -153,7 +154,9 @@ function affectsText(m: ScreenModel): string {
 
 function metaLine(m: ScreenModel, now: number, cols: number, lang: Lang): string {
   // The origin comes first: `repo ⎇ branch ⧉ worktree` in bold accent colour, whatever else is dropped
-  const origin = `${BOLD}${CYAN}${m.chips.map((c) => c.text.replace(/^◈ /, "")).join(" ")}${RESET}`;
+  // (the repo in its own colour, the same repo always the same one: repoAnsi; branch / worktree stay cyan)
+  // (branch / worktree are plain bold, so they never merge with a repo colour)
+  const origin = m.chips.map((c) => `${BOLD}${c.kind === "repo" ? repoAnsi(repoName(c)) : ""}${c.text.replace(/^◈ /, "")}${RESET}`).join(" ");
   const parts = [origin, `${DIM}${m.cwd}${RESET}`];
   if (m.blocker) parts.splice(1, 0, `${BADGE_BLOCKER} ${t(lang, "waiting_for_you")} ${RESET}`);
   if (m.reversibility === "irreversible") parts.push(`${BADGE_IRREVERSIBLE} ${t(lang, "irreversible")} ${RESET}`);
@@ -385,7 +388,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     : v.none
     ? fitHint([t(lang, v.input?.kind === "note" ? "hint_input" : "hint_none_pick")], w)
     : typing
-    ? t(lang, v.input?.kind === "free" && !q.multi ? "hint_input_send" : "hint_input")
+    ? t(lang, v.input?.kind === "free" ? (q.multi ? "hint_input_confirm" : "hint_input_send") : "hint_input")
     : fitHint(
         [
           t(lang, q.multi ? "hint_main_multi" : "hint_main") + (m.todoCode.length ? ` ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
@@ -664,7 +667,7 @@ export function renderFrame(v: View, size: Size): Frame {
   const head = m.checkpoint
     ? [metaLine(m, v.now, cols, v.lang), truncate(`${BOLD}${m.title}${RESET}`, cols), ...wrap(m.checkpoint.headline, cols).slice(0, 1), truncate(`${DIM}${t(v.lang, "checkpoint_optional")}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
     : m.readonly
-    ? [truncate(`${BOLD}${CYAN}plans/${RESET}  ${planFileMeta(m, v.now, v.lang)}`, cols), truncate(`${BOLD}${m.title}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
+    ? [truncate(`${BOLD}${PLANS_ANSI}plans/${RESET}  ${planFileMeta(m, v.now, v.lang)}`, cols), truncate(`${BOLD}${m.title}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
     : [metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
   const bodyRows = Math.max(1, rows - head.length - 1);
 

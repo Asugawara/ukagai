@@ -34,12 +34,12 @@ test("free text: i, type, Enter to confirm, Enter to send (replaces the selectio
   assert.deepEqual((eff[0] as { body: unknown }).body, { answers: { [Q]: "あx" } });
 });
 
-test("Esc in free text cancels (unconfirmed text is discarded)", () => {
+test("Esc in free text leaves the box and keeps the text", () => {
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), t);
   press(app, ch("i"), ch("z"), { name: "esc" });
   assert.equal(app.mode, "normal");
-  assert.equal(app.view(t).free.text, "");
+  assert.equal(app.view(t).free.text, "z");
 });
 
 test("multi select: Space toggles, answers are joined with a comma", () => {
@@ -58,7 +58,8 @@ test("gg / G go to the top / bottom (the bottom is free text)", () => {
   app.upsert(decision(withExplanation(V2_MD)), t);
   press(app, ch("G"));
   assert.equal(app.view(t).cursor, 4, "cards, None of these, Can't answer this, free text");
-  press(app, ch("g"), ch("g"));
+  assert.equal(app.mode, "input", "landing on the free-text card opens the box");
+  press(app, { name: "esc" }, ch("g"), ch("g"));
   assert.equal(app.view(t).cursor, 0);
 });
 

@@ -636,7 +636,17 @@ export class App {
       case "focus": this.focus = this.focus === "decision" ? "background" : "decision"; return [];
       case "input-char": if (this.input) this.input.text += a.ch; return [];
       case "input-backspace": if (this.input) this.input.text = Array.from(this.input.text).slice(0, -1).join(""); return [];
-      case "input-cancel": this.mode = this.input?.kind === "note" && this.none ? "none" : this.input?.kind === "note" && this.cannot ? "cannot" : "normal"; this.input = null; return [];
+      case "input-cancel": {
+        // Esc leaves the box and keeps the text (a note box keeps its own text on Enter, as before)
+        if (this.input?.kind === "free" && m) {
+          const dr = this.draft(m);
+          dr.free.text = this.input.text;
+          if (!dr.free.text.trim() && !m.checkpoint) dr.free.on = false;
+        }
+        this.mode = this.input?.kind === "note" && this.none ? "none" : this.input?.kind === "note" && this.cannot ? "cannot" : "normal";
+        this.input = null;
+        return [];
+      }
       case "footnote": {
         const rows = this.frame.footRows;
         if (!rows.length) return [];
@@ -687,9 +697,20 @@ export class App {
         this.mode = "normal";
         return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: body } });
       }
-      case "move": this.moveCursor(m, dr, dr.cursor + a.delta); return [];
-      case "top": this.moveCursor(m, dr, 0); return [];
-      case "bottom": this.moveCursor(m, dr, this.slots(m) - 1); return [];
+      case "move": this.moveCursor(m, dr, dr.cursor + a.delta); return this.landOnText(m, dr);
+      case "top": this.moveCursor(m, dr, 0); return this.landOnText(m, dr);
+      case "bottom": this.moveCursor(m, dr, this.slots(m) - 1); return this.landOnText(m, dr);
+      case "input-move": {
+        // ↑↓ in an empty free-text box walk to the neighbouring card; with text they do nothing (a one-line box)
+        const inp = this.input;
+        if (inp?.kind !== "free" || inp.text !== "") return [];
+        dr.free.text = "";
+        if (!m.checkpoint) dr.free.on = false;
+        this.input = null;
+        this.mode = "normal";
+        this.moveCursor(m, dr, dr.cursor + a.delta);
+        return this.landOnText(m, dr);
+      }
       case "toggle": return this.toggle(m, dr);
       case "free": return this.startFree(m, dr);
       case "copy": {
@@ -886,6 +907,13 @@ export class App {
     if (i === 0) return this.emit(m.id, { kind: "continue" });
     if (i === 2) return this.emit(m.id, { kind: "stop" });
     return this.startFree(m, dr);
+  }
+
+  /** The cursor landing on a card with a text box (the checkpoint's instruction card, the free-text card) opens the box at once; `i` still does too */
+  private landOnText(m: ScreenModel, dr: Draft): Effect[] {
+    if (this.mode !== "normal") return [];
+    const onText = m.checkpoint ? dr.cursor === 1 : !!m.question && dr.cursor === m.question.cards.length + 2;
+    return onText ? this.startFree(m, dr) : [];
   }
 
   private startFree(m: ScreenModel, dr: Draft): Effect[] {
