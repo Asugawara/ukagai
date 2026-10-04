@@ -226,7 +226,8 @@ gui("single select: j / k / G / gg / arrows move, the recommended option is pres
   press("k");
   assert.deepEqual(view(), { cursor: 1, checked: 1 });
   press("G");
-  assert.deepEqual(view(), { cursor: 3, checked: 3 }); // free text
+  assert.deepEqual(view(), { cursor: 3, checked: 3 }); // free text (the box has the focus)
+  press("Escape"); // back to card navigation
   press("g", "g");
   assert.deepEqual(view(), { cursor: 0, checked: 0 });
   press("ArrowDown");
@@ -366,6 +367,7 @@ gui("arrows: ← / → switch pending decisions (question), Home / End jump to f
   assert.equal(title(), a.title);
   press("End");
   assert.deepEqual(view(), { cursor: 3, checked: 3 });
+  press("Escape"); // the free-text box has the focus: Esc first, then Home is a navigation key again
   press("Home");
   assert.deepEqual(view(), { cursor: 0, checked: 0 });
 });
@@ -1512,7 +1514,7 @@ gui("V4 G-1: the hint is one line in the footer at 1440, 1280 and 1000, and the 
       assert.ok(r.h < r.lh * 1.5, `${w}x${h}: one line ${JSON.stringify(r)}`);
       assert.ok(r.sw <= r.cw + 1, `${w}x${h}: not cut ${JSON.stringify(r)}`);
       assert.equal(r.inDecision || r.inBuild, false);
-      assert.match(q1("#foot .hint"), w === "1000" ? /x/ : /Enter\/1-4 Send · \? Terms · e Evidence · v Compare · y Copy · n None · x Can't answer .*←→ Next · Esc$/);
+      assert.match(ev<string>(`[...document.querySelectorAll("#foot .hint > :not(.hint-type)")].map(e => e.textContent).join("")`), w === "1000" ? /x/ : /Enter\/1-4 Send · \? Terms · e Evidence · v Compare · y Copy · n None · x Can't answer .*←→ Next · Esc$/);
     }
     ab("set", "viewport", "1440", "900");
     ab("screenshot", join(SHOTS, "V4-hint-1440.png"));
@@ -1807,7 +1809,7 @@ gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval 
   await reopen();
   press("b");
   await sleep(300);
-  assert.equal(ev<boolean>(`[...document.querySelectorAll("#drawer .row .where")].every(w => w.firstChild.tagName === "B" && getComputedStyle(w.firstChild).fontWeight >= 600)`), true);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("#drawer .row .where")].every(w => w.firstChild.className === "repo-dot" && w.children[1].tagName === "B" && getComputedStyle(w.children[1]).fontWeight >= 600)`), true);
   press("Escape");
   await cancelAll();
   await seedBlocker();

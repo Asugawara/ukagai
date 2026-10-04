@@ -120,6 +120,7 @@ const NONE_PREFIX = "None of these"; // the answer is `None of these — <type>:
 const CANNOT_PREFIX = "Cannot answer";
 const CANNOT_REASONS = [["Undefined terms", "cannot_terms"], ["Unclear", "cannot_unclear"], ["Too much at once", "cannot_much"]];
 
+let autoFocusing = false; // syncTyping focuses a text box on its own: that focus does not tick the card
 let selecting = false; // setCursor clicks the radio itself: that click is not a send
 const decisions = new Map();
 const drafts = new Map(); // id -> { sel: Map<qIndex, Set<label>>, free: Map<qIndex, {on, text}>, rejecting, reason }
@@ -135,6 +136,29 @@ function setHint(node) {
   const foot = $("foot");
   foot.replaceChildren(...(node ? [node] : []));
   foot.hidden = !node;
+}
+
+// A card that carries a text box: while the cursor is on it the box has the focus (caret at the end), off it the box is blurred.
+// The hint line says so (`.on-text` swaps in the "Type your reply" hint)
+function syncTyping(box, on) {
+  if (!box) return;
+  if (on) {
+    if (document.activeElement !== box) {
+      autoFocusing = true;
+      box.focus();
+      autoFocusing = false;
+      const n = box.value.length;
+      box.setSelectionRange(n, n);
+    }
+  } else if (document.activeElement === box) box.blur();
+  $("foot").querySelector(".hint")?.classList.toggle("on-text", on);
+}
+
+// Focus by hand (a click in the box, `i`) or Esc moves the hint with it
+for (const [type, on] of [["focusin", true], ["focusout", false]]) {
+  document.addEventListener(type, (ev) => {
+    if (ev.target instanceof HTMLInputElement && ev.target.classList.contains("free-text") && (ev.target.closest(".opt") || !on)) $("foot").querySelector(".hint")?.classList.toggle("on-text", on && !!ev.target.closest(".opt"));
+  });
 }
 
 function el(tag, props = {}, ...children) {
@@ -388,17 +412,29 @@ const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
 const repoOf = (d) => WT_RE.exec(d.session.cwd)?.[1] ?? cwdTail(d);
 const worktreeOf = (d) => WT_RE.exec(d.session.cwd)?.[2];
 
+// A stable accent per repository. The same algorithm is in src/tui/model.ts (repoSlot / repoAnsi), so a repo has the same colour in the GUI and the TUI:
+// FNV-1a (32 bit) over the repo name (the working directory when there is none) -> slot = hash % 12 -> hue = (238 + slot * 27) % 360
+// (the 12 hues skip 200-235, the UI accent blue). The TUI gives each slot the nearest ANSI colour (see SLOT_ANSI in model.ts).
+// `plans/` is a neutral grey in both (no hue: --repo-sat 0%).
+const repoSlot = (name) => {
+  let h = 0x811c9dc5;
+  for (const ch of name) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h % 12;
+};
+const repoStyle = (d) => `--repo-hue:${(238 + repoSlot(repoOf(d)) * 27) % 360}`;
+
 // Where the decision comes from, as one line: `ukagai ⎇ main ⧉ worktree` (the full working directory is the tooltip)
 const whereText = (d) => [repoOf(d), d.context?.branch ? `⎇ ${d.context.branch}` : "", worktreeOf(d) ? `⧉ ${worktreeOf(d)}` : ""].filter(Boolean).join(" ");
 
 // Drawer row: the repo first and bold, the rest dim
 function whereLine(d) {
   const rest = whereText(d).slice(repoOf(d).length);
-  return el("div", { class: "where", title: tildePath(d.session.cwd) }, el("b", { text: repoOf(d) }), rest);
+  return el("div", { class: "where", title: tildePath(d.session.cwd) }, el("span", { class: "repo-dot", style: repoStyle(d) }), el("b", { text: repoOf(d) }), rest);
 }
 
 // The first element of the header: one text node, headline size, ellipsis from the end (the repo is the last thing to be cut)
-const originEl = (d) => el("div", { class: "origin", title: tildePath(d.session.cwd), text: whereText(d) });
+// The repo is a coloured span; branch / worktree keep the plain text colour. text stays one string for the ellipsis
+const originEl = (d) => el("div", { class: "origin", title: tildePath(d.session.cwd) }, el("span", { class: "origin-repo", text: repoOf(d) }), whereText(d).slice(repoOf(d).length));
 
 function metaBox(d) {
   const box = el("div", { class: "hd-meta" });
@@ -438,8 +474,10 @@ function renderHead(d) {
   head.replaceChildren();
   head.hidden = !d;
   head.className = "hd";
+  head.style.cssText = "";
   head.onclick = null;
   if (!d) return;
+  head.style.cssText = repoStyle(d);
   const dr = draftOf(d);
   const title = titleOf(d);
   let line2;
@@ -678,11 +716,12 @@ function renderPlanHead(pd) {
   head.replaceChildren();
   head.hidden = false;
   head.className = "hd";
+  head.style.cssText = "--repo-hue:0;--repo-sat:0%";
   head.onclick = null;
   const cap = t("plan_kind").replace(/^./, (c) => c.toUpperCase());
   head.append(
     el("div", { class: "hd-top" },
-      el("div", { class: "origin dim", title: "plans/", text: "plans/" }),
+      el("div", { class: "origin dim", title: "plans/" }, el("span", { class: "origin-repo", text: "plans/" })),
       el("div", { class: "v2-title", title: pd.title, text: pd.title }),
       el("div", { class: "hd-meta" })),
     el("div", { class: "hd-sub", hidden: true }),
@@ -1330,12 +1369,23 @@ function renderRightBody(d) {
       });
       const freeText = el("input", {
         type: "text", class: "free-text", placeholder: t("free_text"), value: free.text, disabled: closed,
-        onfocus: () => { if (!free.on) freeInput.click(); },
-        oninput: (ev) => { free.text = ev.target.value; updateSubmit(); },
+        onfocus: () => { if (!free.on && !autoFocusing) freeInput.click(); },
+        oninput: (ev) => {
+          free.text = ev.target.value;
+          if (free.text && !free.on) freeInput.click();
+          else if (!free.text && free.on && q.multiSelect) freeInput.click(); // an empty text is not an answer: untick, so Answer is not blocked
+          updateSubmit();
+        },
       });
       const freeCard = el("label", { class: "opt free" }, freeInput,
         el("span", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("free_text") })), freeText));
-      if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard, free: true }); freeTextEl = freeText; freeCard.addEventListener("click", () => ui?.setCursor(idx, false)); }
+      if (single) { const idx = cards.length; cards.push({ input: freeInput, card: freeCard, free: true }); freeTextEl = freeText; freeCard.addEventListener("click", (ev) => {
+        if (ev.target === freeText || ev.target === freeInput) { ui?.setCursor(idx, false, true); return; }
+        ev.preventDefault(); // no label default action: it would run after this and could take the focus back (Firefox / Safari)
+        if (closed || !ui) return;
+        if (!free.on && !q.multiSelect) freeInput.click();
+        ui.setCursor(idx, false, true);
+      }); }
       cardsBox.append(freeCard);
       qsBox.append(box);
     });
@@ -1390,14 +1440,16 @@ function renderRightBody(d) {
       const shortTail = ` ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
       setHint(el("div", { class: "hint" },
         el("span", { class: "hint-full" }, full, el("span", { class: "hs", hidden: !hs, text: `${t("hint_history")} · ` }), fullTail),
-        el("span", { class: "hint-short" }, short, el("span", { class: "hs", hidden: !hs, text: " s" }), shortTail)));
+        el("span", { class: "hint-short" }, short, el("span", { class: "hs", hidden: !hs, text: " s" }), shortTail),
+        el("span", { class: "hint-type", text: t("hint_type") })));
     }
     root.append(actions);
     const multi = !!qs[0].multiSelect && single;
     ui = {
       kind: "question", cards, multi, submit, needSubmit, optCount: Math.max(0, cards.length - 1), closed, single, v2, freeText: freeTextEl, noneNote, cannotNote,
       copy: v2?.todoBox?.querySelector("pre") ? () => copyCode(v2.todoBox.querySelector("pre")) : null,
-      setCursor(i, select) {
+      // focus: the cursor landed here by the user (↑↓, a click), so a text-box card takes the focus; the first render does not steal it
+      setCursor(i, select, focus = true) {
         if (!cards.length) return;
         i = clamp(i, cards.length);
         if (i !== dr.cursor) clearConfirm(dr);
@@ -1406,6 +1458,7 @@ function renderRightBody(d) {
         revealCard(cards[i].card);
         updateMore(dr);
         if (select && !multi && !closed) { selecting = true; cards[i].input.click(); selecting = false; }
+        syncTyping(freeTextEl, !closed && focus && !!cards[i].free);
       },
       get cursor() { return dr.cursor ?? 0; },
       toggleExpand: () => toggleExpand(dr),
@@ -1438,7 +1491,7 @@ function renderRightBody(d) {
         attempt(d, dr, "none", { answers: { [qs[0].question]: `${NONE_PREFIX} — ${type}${note ? `: ${note}` : ""}` } }, false); // a type answer chooses nothing irreversible: no Enter twice
       },
     };
-    if (single && !closed) ui.setCursor(dr.cursor, false);
+    if (single && !closed) ui.setCursor(dr.cursor, false, cards.length === 1); // the free card alone: type at once
     markClamps(root, dr);
     if (single && !closed) revealCard(cards[clamp(dr.cursor, cards.length)]?.card);
     return;
@@ -1487,7 +1540,7 @@ function renderRightBody(d) {
     get cursor() { return dr.cursor ?? 0; },
     toggleExpand: () => toggleExpand(dr),
   };
-  if (!closed) ui.setCursor(dr.cursor ?? 0);
+  if (!closed) ui.setCursor(dr.cursor ?? 0, false);
   markClamps(root, dr);
   if (outline) syncPlan(d);
 }
@@ -1502,7 +1555,7 @@ function renderCheckpointRight(d, dr, closed, root) {
   const cards = [];
   const instruct = el("input", {
     type: "text", class: "free-text", placeholder: t("checkpoint_placeholder"), value: free.text, disabled: closed,
-    onfocus: () => ui?.setCursor(1),
+    onfocus: () => { if (ui && ui.cursor !== 1) ui.setCursor(1); },
     oninput: (ev) => { free.text = ev.target.value; },
   });
   const defs = [
@@ -1526,14 +1579,15 @@ function renderCheckpointRight(d, dr, closed, root) {
   });
   root.append(el("div", { class: "qs" }, el("div", { class: "q split" }, top, cardsBox)));
   root.append(el("div", { class: "actions" }));
-  setHint(el("div", { class: "hint" }, t("hint_checkpoint")));
+  setHint(el("div", { class: "hint" }, el("span", { class: "hint-full", text: t("hint_checkpoint") }), el("span", { class: "hint-short", text: t("hint_checkpoint") }), el("span", { class: "hint-type", text: t("hint_type") })));
   ui = {
     kind: "checkpoint", cards, closed, instruct,
-    setCursor(i) {
+    setCursor(i, focus = true) {
       i = clamp(i, cards.length);
       dr.cursor = i;
       cards.forEach((c, k) => c.card.classList.toggle("cursor", k === i));
       revealCard(cards[i].card);
+      syncTyping(instruct, !closed && focus && i === 1);
     },
     get cursor() { return dr.cursor ?? 0; },
     toggleExpand: () => toggleExpand(dr),
@@ -2773,7 +2827,7 @@ document.addEventListener("keydown", (ev) => {
     if (typing) {
       if (key === "Enter") { ev.preventDefault(); ui.sendCard(1); }
       else if (key === "Escape") { ev.preventDefault(); t.blur(); }
-      else if (key === "ArrowUp" || key === "ArrowDown") { ev.preventDefault(); t.blur(); ui.setCursor(ui.cursor + (key === "ArrowDown" ? 1 : -1)); }
+      else if ((key === "ArrowUp" || key === "ArrowDown") && t.value === "") { ev.preventDefault(); ui.setCursor(ui.cursor + (key === "ArrowDown" ? 1 : -1)); } // with text, the arrows stay text-field keys
       return;
     }
     if (key === "Enter" && isBtn) return;
@@ -2853,9 +2907,8 @@ document.addEventListener("keydown", (ev) => {
         else if (t === ui.freeText) ui.sendCard(n - 1); // empty: nothing is sent
       }
       else if (key === "Escape") { ev.preventDefault(); t.blur(); }
-      else if (n && (key === "ArrowUp" || key === "ArrowDown")) {
+      else if (n && (key === "ArrowUp" || key === "ArrowDown") && !(t === ui.freeText && t.value !== "")) {
         ev.preventDefault();
-        t.blur();
         ui.setCursor(ui.cursor + (key === "ArrowDown" ? 1 : -1), true);
       }
       return;

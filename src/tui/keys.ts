@@ -164,6 +164,7 @@ export type Action =
   | { type: "input-backspace" }
   | { type: "input-confirm" }
   | { type: "input-cancel" }
+  | { type: "input-move"; delta: 1 | -1 }
   | { type: "list-move"; delta: 1 | -1 }
   | { type: "list-pick" }
   | { type: "list-close" }
@@ -208,6 +209,8 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     switch (key.name) {
       case "enter": return done({ type: "input-confirm" });
       case "esc": return done({ type: "input-cancel" });
+      case "up": return done({ type: "input-move", delta: -1 });
+      case "down": return done({ type: "input-move", delta: 1 });
       case "backspace": return done({ type: "input-backspace" });
       case "char": return done({ type: "input-char", ch: key.ch });
       default: return done(null);

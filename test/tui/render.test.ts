@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App } from "../../src/tui/app.js";
-import { buildModel, fixedLabel } from "../../src/tui/model.js";
+import { buildModel, fixedLabel, repoAnsi } from "../../src/tui/model.js";
 import { render, renderFrame, type View } from "../../src/tui/render.js";
 import { stripAnsi, width } from "../../src/tui/width.js";
 import { BLOCKER_MD_JA, V2_MD, V2_MD_JA, blockerDecision, decision, withExplanation } from "./helpers.js";
@@ -30,9 +30,9 @@ test("140x40: heading, chips, recommendation, cards, background, hints, status l
   for (const l of lines) assert.ok(width(l) <= 140);
 });
 
-test("colors: the origin is bold cyan, reversibility is a background color, recommended badge", () => {
+test("colors: the repo in the origin has its own bold colour, reversibility is a background color, recommended badge", () => {
   const raw = render(viewOf(), { cols: 140, rows: 40 });
-  assert.ok(raw.includes("\x1b[1m\x1b[36mukagai ⎇ feat/tui ⧉ feat-tui"));
+  assert.ok(raw.includes(`\x1b[1m${repoAnsi("ukagai")}ukagai\x1b[0m \x1b[1m⎇ feat/tui\x1b[0m \x1b[1m⧉ feat-tui`));
   assert.ok(raw.includes("\x1b[43;30m ◐ Costly to undo"));
   assert.ok(raw.includes("\x1b[42;30m Recommended "));
   const irr = viewOf(decision(withExplanation(V2_MD.replace("costly", "irreversible"))));
