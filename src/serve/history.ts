@@ -16,8 +16,10 @@ const cache = new Map<string, { at: number; value: SessionHistory }>();
 
 const PASTED_TAG = /<\/?pasted_content\b[^>]*>/g;
 const SYSTEM_REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
-/** Lines produced by slash commands and local commands, not typed by a human */
-const COMMAND_MARKER = /<(?:command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>/;
+/** Harness notices stored as `user` records (background task / monitor / subagent completions), not typed by a human */
+const TASK_NOTIFICATION = /<task-notification>[\s\S]*?<\/task-notification>/g;
+/** Lines produced by slash commands, local commands and `!` shell commands (input and output), not instructions to the agent */
+const COMMAND_MARKER = /<(?:command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr)>/;
 const INTERRUPT_MARKER = /^\[Request interrupted by user/;
 
 function cut(text: string, max: number): string {
@@ -26,7 +28,8 @@ function cut(text: string, max: number): string {
 
 /** The human-typed text of a transcript `user` record, or undefined if the line is not a human instruction */
 function humanText(rec: Record<string, unknown>): string | undefined {
-  if (rec.isSidechain === true || rec.isMeta === true) return undefined;
+  // Sidechains are subagent prompts, meta records are harness text (caveats, agent messages), compact summaries are written by the model
+  if (rec.isSidechain === true || rec.isMeta === true || rec.isCompactSummary === true) return undefined;
   const msg = rec.message as Record<string, unknown> | undefined;
   if (!msg || msg.role !== "user") return undefined;
   let raw: string;
@@ -42,7 +45,7 @@ function humanText(rec: Record<string, unknown>): string | undefined {
     raw = texts.join("\n");
   } else return undefined;
   if (COMMAND_MARKER.test(raw)) return undefined;
-  const text = raw.replace(SYSTEM_REMINDER, "").replace(PASTED_TAG, "").trim();
+  const text = raw.replace(SYSTEM_REMINDER, "").replace(TASK_NOTIFICATION, "").replace(PASTED_TAG, "").trim();
   if (!text || INTERRUPT_MARKER.test(text)) return undefined;
   return text;
 }

@@ -62,11 +62,30 @@ test("excludes tool_result only, sidechain, meta, slash commands and interrupts"
     user("<local-command-stdout>done</local-command-stdout>"),
     user("[Request interrupted by user]"),
     user("<system-reminder>only a reminder</system-reminder>"),
+    user("<bash-input> node dist/cli.js doctor</bash-input>"),
+    user("<bash-stdout>○  hook PreToolUse\n○  hook SessionStart</bash-stdout>"),
+    user("<bash-stderr>warning</bash-stderr>"),
+    user("This session is being continued from a previous conversation that ran out of context…", { isCompactSummary: true, isVisibleInTranscriptOnly: true }),
     user("real one"),
   ]);
   const h = await collectHistory(session, { home });
   assert.equal(h.total, 1);
   assert.equal(h.first?.text, "real one");
+});
+
+test("excludes task-notification records (background task, monitor and subagent completions), whole or wrapped", async () => {
+  const home = tmp();
+  const notice = "<task-notification>\n<task-id>b9mf6rol8</task-id>\n<status>completed</status>\n<summary>Background command finished</summary>\n</task-notification>";
+  const { session } = transcript(home, [
+    user("first real"),
+    user(notice),
+    user([{ type: "text", text: notice }]),
+    user(`${notice}\n\nsecond real`),
+  ]);
+  const h = await collectHistory(session, { home });
+  assert.equal(h.total, 2);
+  assert.equal(h.first?.text, "first real");
+  assert.deepEqual(h.recent.map((e) => e.text), ["first real", "second real"]);
 });
 
 test("strips pasted_content tags and system-reminder blocks, keeps whitespace", async () => {
