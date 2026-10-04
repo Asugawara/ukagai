@@ -1,6 +1,6 @@
 # Codex bridge spec
 
-`ukagai serve` contains a second client of the Codex app-server. It covers one gap the hooks cannot reach: the plan approval ("Implement this plan?"). Questions and command approvals stay on the hook route (`hook --agent codex`). Research record: D1 (`docs/verification/02-codex-hooks.md`, last section).
+`ukagai serve` contains a second client of the Codex app-server. It covers two things the hooks cannot reach: the plan approval ("Implement this plan?") and progress checkpoints (below). Questions and command approvals stay on the hook route (`hook --agent codex`). Research record: D1 (`docs/verification/02-codex-hooks.md`, last section).
 
 ## Connection
 
@@ -45,6 +45,28 @@ The bridge waits on the decision like the hook does (`Store.wait`, 25 s long pol
 ## Withdrawal
 
 If the terminal moves first the pending plan decision of that thread becomes `cancelled` with `status_reason: "answered_elsewhere"` (the GUI shows its usual cancelled toast). Triggers: `turn/started` of any turn other than the plan's own, or `item/started userMessage` whose text is `Implement the plan.`. An `answer_submitted` decision is never withdrawn. "No, stay in Plan mode" in the terminal produces no event: that decision stays pending until the next turn on the thread.
+
+## Progress checkpoints
+
+Claude Code has a session recap; Codex has none, so the bridge makes the equivalent: a completed turn followed by `codexCheckpointDelayMs` (`ServeOptions.codexCheckpointDelayMs`, default 180 000 ms) without a new turn. The decision is the ordinary `checkpoint` kind (`docs/spec/api.md`), created with `store.createCheckpoint`; nothing waits on it.
+
+Detection:
+
+1. `item/completed {type:"agentMessage", text, phase}` — the last one of a turn is kept under its `turnId` (a `final_answer` wins over `commentary`; `turn/completed.turn.items` is the fallback).
+2. `turn/completed`: arm a timer. Not armed for an `ephemeral` thread, for a turn without an agent message, for a plan turn (the `approve_plan` card covers it), for a turn seen while the bridge attaches or resumes the thread (a replay), or twice for the same turn. When the timer fires with no turn running and the socket up, the checkpoint is created: `session = { session_id: <threadId>, cwd, transcript_path: "", agent: "codex", title }`, `recap` = the agent message (trimmed, 2 000 characters at most, `…` when cut), `recap_at` = when `turn/completed` was seen.
+3. `turn/started` on the thread stops the timer and cancels the thread's pending checkpoint (`status_reason: "new_prompt"`). A newer checkpoint supersedes an older one as usual (`superseded`).
+
+Delivery (in-process: the store calls the bridge when a checkpoint of a `codex` session is answered; the Claude-only `hook --checkpoint` never runs for Codex):
+
+| Answer | Sent |
+|---|---|
+| `continue` | nothing |
+| `instruct` | `turn/start` with the human's text, `collaborationMode.mode: "default"` and the thread's last model / effort (like "Implement the plan.") |
+| `stop` | `turn/start` with `The human asked you to stop. Write a short status (done / in progress / next) and end your turn.` + a blank line + the human's text when present |
+
+If a turn is running (`turn/started` without `turn/completed`) `turn/interrupt {threadId, turnId}` (verified in the daemon's schema, `codex app-server generate-json-schema --experimental`) is sent first. If the daemon answers that the method is unknown, the text is queued and sent at the thread's next `turn/completed`; any other interrupt error is logged and the `turn/start` is still sent. After a successful send the instruction is consumed (`delivered_at` is set and `decision.updated` emitted, so `GET /api/sessions/:id/instruction` returns 404). If the send fails or the socket is down the decision becomes `answer_lost` (log: `checkpoint_deliver_failed`). Log events: `checkpoint_created`, `checkpoint_skipped`, `checkpoint_queued`, `checkpoint_delivered`, `turn_interrupt_failed`.
+
+Limits: an answer given while the bridge is disconnected is `answer_lost`; a restart of `serve` drops a queued (not yet sent) instruction; `turn/start` straight after `turn/interrupt` is not synchronised with the interrupted turn's own `turn/completed`.
 
 ## Known limits (accepted)
 

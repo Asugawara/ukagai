@@ -24,6 +24,8 @@ export type CodexBridgeOptions = {
   /** First reconnect delay; doubles up to 30 s (for tests) */
   backoffMs?: number;
   waitMs?: number;
+  /** Quiet time after a completed turn before a progress checkpoint (default 180 s; for tests) */
+  checkpointDelayMs?: number;
   log?: BridgeLog;
 };
 
@@ -40,7 +42,8 @@ export function resolveCodexHome(explicit?: string): string {
 export function startCodexBridge(opts: CodexBridgeOptions): CodexBridge {
   const socketPath = join(resolveCodexHome(opts.codexHome), SOCKET_RELATIVE);
   const log = opts.log ?? createBridgeLog(opts.dataDir);
-  const bridge = new PlanBridge({ store: opts.store, log, lang: opts.lang, collect: opts.collect, waitMs: opts.waitMs });
+  const bridge = new PlanBridge({ store: opts.store, log, lang: opts.lang, collect: opts.collect, waitMs: opts.waitMs, checkpointDelayMs: opts.checkpointDelayMs });
+  opts.store.onCheckpointAnswered = (d) => bridge.onCheckpointAnswered(d);
   const pollMs = opts.pollMs ?? POLL_MS;
   const backoffStart = opts.backoffMs ?? 1000;
   let stopped = false;
@@ -97,6 +100,7 @@ export function startCodexBridge(opts: CodexBridgeOptions): CodexBridge {
     socketPath,
     close: () => {
       stopped = true;
+      opts.store.onCheckpointAnswered = undefined;
       if (timer) clearTimeout(timer);
       bridge.stop();
       client?.close();

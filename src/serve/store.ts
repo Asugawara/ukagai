@@ -105,6 +105,8 @@ export class Store {
   private instructions = new Map<string, Instruction>();
   /** Called after each live hook event of a session (the recap watcher reads that session's transcript now) */
   onSessionEvent: ((sessionId: string, hookEvent: string) => void) | undefined;
+  /** Called after a checkpoint is answered (the Codex bridge delivers its answer in-process; Claude's hook polls the instruction instead) */
+  onCheckpointAnswered: ((d: Decision) => void) | undefined;
   private monitor: NodeJS.Timeout | undefined;
 
   // Aggregates rebuilt from events
@@ -262,8 +264,13 @@ export class Store {
   }
 
   /** A progress recap seen in the session's transcript: supersedes the session's pending checkpoint and never changes the session state */
-  createCheckpoint(session: SessionSummary, recap: string, recapAt: string): { decision: Decision; created: boolean } {
+  createCheckpoint(
+    session: SessionSummary & { agent?: "claude" | "codex" },
+    recap: string,
+    recapAt: string,
+  ): { decision: Decision; created: boolean } {
     const ds: CreateDecisionRequest["session"] = { session_id: session.session_id, cwd: session.cwd, transcript_path: session.transcript_path ?? "" };
+    if (session.agent) ds.agent = session.agent;
     if (session.title) ds.title = session.title;
     return this.insertCheckpoint({
       tool_use_id: checkpointToolUseId(session.session_id, recapAt),
@@ -306,6 +313,25 @@ export class Store {
     d.status_reason = reason;
     this.persist(d);
     this.emit("decision.updated", d);
+  }
+
+  /** The session's pending checkpoints are no longer wanted (its next turn started elsewhere): cancelled with `reason` */
+  cancelPendingCheckpoints(sessionId: string, reason: string): void {
+    for (const d of this.decisions.values()) {
+      if (d.kind === "checkpoint" && d.session.session_id === sessionId && d.status === "pending") this.closeCheckpoint(d, reason);
+    }
+  }
+
+  /** An answered checkpoint whose instruction could not be handed over (Codex bridge): answer_lost, and the queued instruction is dropped */
+  loseCheckpoint(id: string): Decision {
+    const d = this.decisions.get(id);
+    if (!d) throw new HttpError(404, "decision not found");
+    if (d.kind !== "checkpoint" || d.status !== "answered" || d.response?.delivered_at) return d;
+    if (this.instructions.get(d.session.session_id)?.decision_id === id) this.instructions.delete(d.session.session_id);
+    this.setStatus(d, "answer_lost");
+    this.persist(d);
+    this.emit("decision.updated", d);
+    return d;
   }
 
   /** The instruction waiting for the session's agent, or undefined. Consuming it marks the checkpoint delivered */
@@ -435,6 +461,11 @@ export class Store {
       this.instructions.set(d.session.session_id, { decision_id: d.id, kind: patch.answer, text: d.response.text ?? "", created_at: decidedAt });
     }
     this.emit("decision.updated", d);
+    try {
+      this.onCheckpointAnswered?.(d);
+    } catch {
+      // A subscriber must not break the answer
+    }
     return d;
   }
 

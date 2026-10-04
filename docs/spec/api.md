@@ -78,6 +78,8 @@ Response: **201 for a new decision, 200 if the same `tool_use_id` already exists
 
 `status_reason` (optional string on a decision) says why a decision was closed without an answer. Only the codex-bridge sets it today: `answered_elsewhere` when the terminal moved first (see `docs/spec/codex-bridge.md`). Decisions of `kind: "approve_plan"` with `session.agent: "codex"` and `explanation.path: ""` are not created through this endpoint but by the codex-bridge inside `serve`; `request.planFilePath` is `""` for them.
 
+Codex checkpoints: a `checkpoint` decision with `session.agent: "codex"` is created by the codex-bridge (not the transcript watcher) when a turn has been completed for `codexCheckpointDelayMs` (default 180 s) with no new turn; its `recap` is the turn's last agent message. Its `instruct` / `stop` answer is delivered by the bridge as `turn/start` (after `turn/interrupt` when a turn runs), which consumes the instruction itself, so `GET /api/sessions/:id/instruction` returns 404 for it; a failed delivery makes the decision `answer_lost`. See `docs/spec/codex-bridge.md`.
+
 ### GET /api/decisions/:id/history
 
 Returns what the human typed in the session, so a viewer can see what the session is about. Allowed with cookie or Bearer (same as `GET /api/decisions/:id`). 404 `{error}` if the decision does not exist. It is not part of the decision list or SSE; clients fetch it on demand.
