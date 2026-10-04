@@ -72,6 +72,10 @@ If a turn is running (`turn/started` without `turn/completed`) `turn/interrupt {
 
 Limits: the TUI check matches the process's own cwd, so a Codex started with `--cd` / `-C <dir>`, `codex resume --all` from another folder, or a non-CLI client of the daemon never matches and its thread gets no checkpoint (`tui_gone` logs the `cwd` compared); an answer given while the bridge is disconnected is `answer_lost`; a restart of `serve` drops a queued (not yet sent) instruction; `turn/start` straight after `turn/interrupt` is not synchronised with the interrupted turn's own `turn/completed`.
 
+## Plan mode and the Markdown dialect
+
+Codex has no `EnterPlanMode` tool, so there is no plan-writing hook for it (Claude Code gets the rules at `EnterPlanMode` / the first prompt in plan mode, `explain.md` section 6.1). Plan mode in Codex gets only the one sentence of the `SessionStart` context (`codexContextText`): explanations and plans are written in ukagai Markdown (`docs/spec/markdown.md`). Codex has no skill either, so the sentence carries no skill pointer.
+
 ## Known limits (accepted)
 
 - The terminal popup is not dismissed and not de-duplicated by an outside `turn/start`: a later "Yes" there starts a second turn. That is why the note is shown.

@@ -259,6 +259,7 @@ test("SessionStart gives additionalContext pointing at <data-dir>/explain/<sessi
     const out = JSON.parse(r.stdout);
     assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
     assert.ok(out.hookSpecificOutput.additionalContext.includes(join(d, "explain", start.session_id)));
+    assert.ok(out.hookSpecificOutput.additionalContext.includes("callouts (`> [!NOTE] Title`, also TIP / IMPORTANT / WARNING / CAUTION), task lists (`- [x]`), `<details><summary>` folds and Mermaid diagrams"));
     const prompt = evs.find((e) => e.hook_event_name === "UserPromptSubmit");
     await runHook(a(f.url, d), JSON.stringify(prompt));
     assert.equal(seen.length, 1);

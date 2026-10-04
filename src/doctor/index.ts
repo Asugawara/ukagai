@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { configPath, readConfig } from "../settings/config.js";
-import { CHECKPOINT_FLAG, HOOK_EVENTS } from "../settings/hooks-spec.js";
+import { CHECKPOINT_FLAG, HOOK_EVENTS, PLAN_CONTEXT_FLAG } from "../settings/hooks-spec.js";
 import { findManaged, readSettings } from "../settings/merge.js";
 import { status as codexStatus } from "../install/codex.js";
 import { parseTarget } from "../settings/target.js";
@@ -54,6 +54,10 @@ export async function run(argv: string[]): Promise<number> {
     const c = findManaged(settings, "PreToolUse", (h) => Array.isArray(h["args"]) && h["args"].includes(CHECKPOINT_FLAG));
     const observing = Array.isArray(findManaged(settings, "PreToolUse")?.["args"]) && (findManaged(settings, "PreToolUse")!["args"] as unknown[]).includes("--observe");
     add(c !== undefined || observing, "hook PreToolUse (checkpoint)", c ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
+    const p = findManaged(settings, "PreToolUse", (h) => Array.isArray(h["args"]) && h["args"].includes(PLAN_CONTEXT_FLAG));
+    add(p !== undefined || observing, "hook PreToolUse (plan context)", p ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
+    const u = findManaged(settings, "UserPromptSubmit", (h) => Array.isArray(h["args"]) && h["args"].includes(PLAN_CONTEXT_FLAG));
+    add(u !== undefined || observing, "hook UserPromptSubmit (plan context)", u ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
   }
   if (node !== undefined) add(await exists(node), "node exists", node);
   if (cli !== undefined) add(await exists(cli), "cli exists", cli);

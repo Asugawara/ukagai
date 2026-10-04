@@ -7,6 +7,9 @@ export const DECISION_MATCHER = "AskUserQuestion|ExitPlanMode";
 /** Tools that carry a checkpoint instruction to the agent (never the decision tools) */
 export const CHECKPOINT_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite";
 export const CHECKPOINT_FLAG = "--checkpoint";
+/** EnterPlanMode (and the first UserPromptSubmit in plan mode) carries the plan-writing rules (docs/spec/markdown.md section 4) */
+export const PLAN_CONTEXT_MATCHER = "EnterPlanMode";
+export const PLAN_CONTEXT_FLAG = "--plan-context";
 
 export interface HookCommand {
   type: "command";
@@ -83,11 +86,16 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
       ...group(pre, DECISION_MATCHER),
       // observe mode only watches: it must not steer the agent
       ...(opts.observe ? [] : group(mk([CHECKPOINT_FLAG], 3), CHECKPOINT_MATCHER)),
+      ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], 3), PLAN_CONTEXT_MATCHER)),
     ],
     PermissionRequest: group(mk([], 5), "Write|Edit"),
     SessionStart: group(mk(opts.autostart === false ? ["--no-autostart"] : [], 5)),
     SubagentStart: group(mk([], 5)),
-    UserPromptSubmit: group(mk([], 5, { async: true })),
+    UserPromptSubmit: [
+      ...group(mk([], 5, { async: true })),
+      // plan mode entered by the human never calls EnterPlanMode: the first prompt typed in plan mode carries the rules instead
+      ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], 3))),
+    ],
     Stop: group(mk([], 5)),
     SubagentStop: group(mk([], 5, { async: true })),
     PostToolUse: group(post, postMatcher),

@@ -195,6 +195,94 @@ The hook remembers the last Cannot answer of the session and denies the next exp
 > Changing the storage format leaves some people unable to read existing logs.
 ```
 
+## Rich Markdown (ukagai dialect)
+
+Explanations and plans may use the constructs below. The GUI renders each richly; the TUI shows the fallback, so one file serves both. Use one only when it makes the decision easier to read. Full contract: `docs/spec/markdown.md`. Raw HTML other than `<details>` / `<summary>` / `<br>` / `<sub>` / `<sup>` never renders.
+
+| Construct | Syntax | Use it for | TUI fallback |
+|---|---|---|---|
+| Callout | `> [!CAUTION] Title` + `> body` (NOTE, TIP, IMPORTANT, WARNING, CAUTION) | CAUTION irreversible / external, WARNING costly to undo, IMPORTANT a premise, TIP the easy path, NOTE context | coloured `[!KIND] Title`, indented body |
+| Task list | `- [x] done` / `- [ ] open` | acceptance criteria, pre-flight checks (never options) | `☑` / `☐` |
+| Folding | `<details>` `<summary>Log</summary>` blank line, Markdown, `</details>` | long logs and evidence the reader may skip | `▸ summary (N lines)` + body |
+| Mermaid | ```` ```mermaid ```` with any diagram type | flowchart structure, sequenceDiagram calls, stateDiagram lifecycle, gantt / timeline rollout, quadrantChart risk × effort | ASCII for 6 types, else `diagram: <type>` + source |
+| Code title / diff | ```` ```ts title="src/x.ts" ````, ```` ```diff ```` | file excerpts; proposed changes | dim title line; green / red lines |
+| Badge | `[done]` `[todo]` `[doing]` `[blocked]` `[risk]` `[skip]` (exactly these) | step or row status | same words, coloured |
+| Highlight | `==the one phrase==` | the phrase not to miss (sparingly) | inverse video |
+| Columns | `::: columns` … `---` … `:::` | before / after, A vs B too wide for a table (the Options section stays a table) | stacked with rules |
+| Steps | `## Steps` + ordered list, bold titles | plan timeline | the list as written |
+| File ref | `` `src/x.ts:12` `` | one path per sentence | inline code |
+| Image | `![alt](shots/a.png)` | what the reader must see | `[image] alt — path` |
+
+````markdown
+> [!WARNING] Rewrites history
+> The branch is force-pushed; undo with the reflog.
+
+- [x] typecheck passes
+- [ ] `npm test` passes
+
+<details>
+<summary>Full log (120 lines)</summary>
+
+```text
+…
+```
+
+</details>
+
+```ts title="src/serve/store.ts"
+export const limit = 10;
+```
+
+```diff
+-const limit = 10;
++const limit = 20;
+```
+
+```mermaid
+flowchart LR
+  hook --> server --> GUI
+```
+
+1. **Add the schema** [done] — `src/contract.ts:12`
+
+::: columns
+Before: one queue.
+
+---
+
+After: ==two== queues.
+:::
+````
+
+### Plans
+
+A plan has these sections, in this order. Nothing but "Scope and reversibility" is checked by the hook (see "When to write"); the rest is what makes it readable.
+
+1. `# Title`: one line saying what the plan does.
+2. `## Scope and reversibility`: first 2 lines `Reversibility: …` and `Scope: …`.
+3. `## Steps`: an ordered list; each item a **bold title**, a badge and the `path` it touches; nest task lists or `<details>`.
+4. `## Risks`: one callout per risk (`CAUTION` irreversible, `WARNING` costly).
+5. `## Verification`: a task list of the commands / checks.
+
+### Screenshots
+
+For a UI decision show, do not describe. Take the picture with agent-browser into the document's own folder, then reference it with a relative path and alt text the TUI reader can use on its own:
+
+`<scratchpad_dir>/ukagai` is the folder the SessionStart context names (the explanation files live there). In plan mode write no image: reference one only if the file already exists next to the plan file.
+
+```bash
+mkdir -p <scratchpad_dir>/ukagai/shots
+agent-browser open http://localhost:3000/settings
+agent-browser screenshot <scratchpad_dir>/ukagai/shots/settings-dark.png
+agent-browser close
+```
+
+```markdown
+![Settings page, dark theme: the Display group is selected](shots/settings-dark.png)
+```
+
+Only `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` up to 10 MB, under the document's folder, `~/.claude/plans/` or the scratchpad, are shown; external `http(s)` images never are.
+
 ## When stopped by human work (blocker)
 
 Use this when you cannot proceed because of **work only a human can do**: authentication, login, granting permissions, two-factor authentication, placing a key, a physical operation. **Ending the turn with prose such as "please authenticate" is forbidden.** Ending that way shows nothing in the ukagai GUI, and work stays stopped until the human notices and types "continue".
