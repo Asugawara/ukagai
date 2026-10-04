@@ -1,7 +1,9 @@
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { COLUMN_RISK, findTables, normalizeHeading, scanFences, toLines } from "../hook/explain.js";
 import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
-import { renderMermaid } from "./mermaid.js";
+import { diagramType, isAsciiType, renderMermaid } from "./mermaid.js";
 import { padEnd, sliceCols, wrap, width } from "./width.js";
 
 // Terminal rendering of Markdown. Lines are returned already wrapped to display width w.
@@ -15,6 +17,8 @@ export const YELLOW = "\x1b[33m";
 export const BLUE = "\x1b[34m";
 export const MAGENTA = "\x1b[35m";
 export const CYAN = "\x1b[36m";
+export const INVERSE = "\x1b[7m";
+export const INVERSE_OFF = "\x1b[27m";
 export const STRONG = "\x1b[1;36m";
 export const STRONG_RISK = "\x1b[1;31m";
 
@@ -66,35 +70,178 @@ export interface InlineOpts {
   strong?: string;
   /** Decoration outside the span, re-applied after the span closes */
   base?: string;
+  /** Turn `<br>` into a line break (the caller splits on "\n"); otherwise it becomes a space */
+  br?: boolean;
+  /** Colour a status badge (`[done]` …) at the start of the text (or right after a leading `**title**`) */
+  badge?: boolean;
+  /** Label of an inline image (`![alt](path)`), localised by the caller */
+  imageLabel?: string;
 }
+
+const BADGES: Record<string, string> = { done: GREEN, todo: "", doing: CYAN, blocked: RED, risk: RED, skip: DIM };
+const BADGE_RE = /^((?:\*\*[^*]+\*\*\s*)?)\[(done|todo|doing|blocked|risk|skip)\]/;
+const IMAGE_DEST = String.raw`((?:[^()\s]|\([^()\s]*\))+)`;
+const IMAGE_RE = new RegExp(String.raw`!\[([^\]]*)\]\(${IMAGE_DEST}(?:\s+"[^"]*")?\)`, "g");
+// `==text==` but not runs of `=` (setext underlines, `a===b`); public/app.js inlineMarks must use the same pattern
+const MARK_RE = /(?<!=)==(?=[^\s=])([^=\n]*?[^\s=])==(?!=)/g;
 
 /** Turn `**strong**` / `` `code` `` / `*em*` / links into ANSI, returning to base decoration afterwards */
 export function inline(text: string, opts: InlineOpts = {}): string {
   const strong = opts.strong ?? STRONG;
   const base = opts.base ?? "";
   const close = RESET + base;
-  const plain = text.replace(/<br\s*\/?>/gi, " ").replace(/\\([|*`_])/g, "$1");
-  // Marks go only on text outside code spans (and are applied before `**` so they do not split the markers)
-  const marked = opts.marks?.length
-    ? plain
-        .split(/(`[^`]+`)/)
-        .map((seg, i) => (i % 2 ? seg : applyMarks(seg, opts.marks!)))
-        .join("")
+  const plain = text
+    .replace(/<br\s*\/?>/gi, opts.br ? "\n" : " ")
+    .replace(/<\/?(?:sub|sup)>/gi, "")
+    .replace(/\\([|*`_])/g, "$1");
+  const badged = opts.badge
+    ? plain.replace(BADGE_RE, (_, lead: string, word: string) => `${lead}[${BADGES[word] ? BADGES[word] + word + RESET + base : word}]`)
     : plain;
+  // Marks go only on text outside code spans (and are applied before `**` so they do not split the markers)
+  const marked = badged
+    .split(/(`[^`]+`)/)
+    .map((seg, i) => {
+      if (i % 2) return seg;
+      const hl = seg
+        .replace(IMAGE_RE, (_, alt: string, src: string) => `\x00${alt ? `${alt} — ` : ""}${src}\x01`)
+        .replace(MARK_RE, (_, c: string) => `\x02${c}\x03`);
+      return opts.marks?.length ? applyMarks(hl, opts.marks) : hl;
+    })
+    .join("");
   return marked
+    .replace(/\x00([^\x01]*)\x01/g, (_, c: string) => `${DIM}${opts.imageLabel ?? "[image]"} ${c}${close}`)
     .replace(/\[\^([^\]\s]+)\](?!:)/g, (_, id: string) => `${DIM}[${id}]${close}`)
     .replace(/`([^`]+)`/g, (_, c: string) => `${DIM}${c}${close}`)
     .replace(/\*\*([^*]+)\*\*/g, (_, c: string) => `${strong}${c}${close}`)
     .replace(/(?<![*\w])\*([^*\s][^*]*)\*(?![*\w])/g, (_, c: string) => `\x1b[3m${c}${close}`)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t: string, u: string) => `${t} ${DIM}(${u})${close}`);
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t: string, u: string) => `${t} ${DIM}(${u})${close}`)
+    // Last, so a reset inside the mark (nested bold, code) re-opens the inverse
+    .replace(/\x02([^\x03]*)\x03/g, (_, c: string) => INVERSE + c.replaceAll(close, close + INVERSE) + INVERSE_OFF);
 }
 
 const CALLOUTS: Record<string, { label: MessageKey; color: string }> = {
   NOTE: { label: "callout_note", color: BLUE },
   TIP: { label: "callout_tip", color: GREEN },
   WARNING: { label: "callout_warning", color: YELLOW },
+  IMPORTANT: { label: "callout_important", color: MAGENTA },
   CAUTION: { label: "callout_caution", color: RED },
 };
+
+// `<details>` and `::: columns` are expanded into plain lines plus two sentinel lines before rendering:
+// SENT + "H" + <body line count> + SENT + <summary> (a dim fold header) and SENT + "R" (a dim rule).
+const SENT = "\x01";
+const DETAILS_OPEN = /^\s*<details(?:\s[^>]*)?>\s*$/i;
+const DETAILS_CLOSE = /^\s*<\/details>\s*$/i;
+const IMAGE_LINE = new RegExp(String.raw`^\s*!\[([^\]]*)\]\(${IMAGE_DEST}(?:\s+"[^"]*")?\)\s*$`);
+
+function expandBlocks(lines: string[], fallback: string): string[] {
+  const { inFence } = scanFences(lines);
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i]!;
+    if (inFence[i]) {
+      out.push(l);
+      i++;
+    } else if (DETAILS_OPEN.test(l)) {
+      let depth = 1;
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        if (inFence[j]) continue;
+        if (DETAILS_OPEN.test(lines[j]!)) depth++;
+        else if (DETAILS_CLOSE.test(lines[j]!) && --depth === 0) break;
+      }
+      let inner = lines.slice(i + 1, j);
+      const bodyOnly = inner;
+      let summary = fallback;
+      const first = inner.findIndex((x) => x.trim() !== "");
+      if (first >= 0 && /^\s*<summary[\s>]/i.test(inner[first]!)) {
+        let k = first;
+        let text = "";
+        while (k < inner.length) {
+          const m = /<\/summary>/i.exec(inner[k]!);
+          if (m) {
+            text += " " + inner[k]!.slice(0, m.index);
+            inner = [inner[k]!.slice(m.index + m[0].length), ...inner.slice(k + 1)];
+            k = -1;
+            break;
+          }
+          text += " " + inner[k]!;
+          k++;
+        }
+        if (k !== -1) {
+          // No </summary>: the first line is the summary, the rest stays body
+          text = bodyOnly[first]!;
+          inner = bodyOnly.slice(first + 1);
+        }
+        summary = text.replace(/<\/?(?:summary|b|i|em|strong|code|kbd|span|a)(?:\s[^>]*)?>/gi, " ").replace(/\s+/g, " ").trim() || fallback;
+      }
+      while (inner.length && inner[0]!.trim() === "") inner.shift();
+      while (inner.length && inner.at(-1)!.trim() === "") inner.pop();
+      out.push("", `${SENT}H${inner.length}${SENT}${summary}`, ...expandBlocks(inner, fallback), "");
+      i = j + 1;
+    } else if (/^\s*:::\s*columns\s*$/i.test(l)) {
+      let j = i + 1;
+      while (j < lines.length && !(!inFence[j] && /^\s*:::\s*$/.test(lines[j]!))) j++;
+      const inner = lines.slice(i + 1, j);
+      const innerFence = scanFences(inner).inFence;
+      const cols: string[][] = [[]];
+      inner.forEach((x, k) => {
+        if (!innerFence[k] && /^\s*-{3,}\s*$/.test(x)) cols.push([]);
+        else cols.at(-1)!.push(x);
+      });
+      for (const col of cols) {
+        while (col.length && col[0]!.trim() === "") col.shift();
+        while (col.length && col.at(-1)!.trim() === "") col.pop();
+        out.push("", `${SENT}R`, ...expandBlocks(col, fallback), "");
+      }
+      i = j + 1;
+    } else if (/^\s*:::/.test(l)) i++;
+    else {
+      out.push(l);
+      i++;
+    }
+  }
+  return out;
+}
+
+/** `W×H` from the header of a PNG / GIF / JPEG / WebP (read from the first 64 KB, no dependency) */
+function imageSize(src: string, baseDir?: string): string {
+  const file = isAbsolute(src) ? src : baseDir ? join(baseDir, src) : "";
+  if (!/\.(png|jpe?g|gif|webp)$/i.test(file)) return "";
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+    if (!fstatSync(fd).isFile()) return "";
+    const buf = Buffer.alloc(65536);
+    const b = buf.subarray(0, readSync(fd, buf, 0, buf.length, 0));
+    let dim: [number, number] | null = null;
+    if (b.length >= 24 && b.readUInt32BE(0) === 0x89504e47) dim = [b.readUInt32BE(16), b.readUInt32BE(20)];
+    else if (b.length >= 10 && b.toString("latin1", 0, 3) === "GIF") dim = [b.readUInt16LE(6), b.readUInt16LE(8)];
+    else if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+      for (let p = 2; p + 9 < b.length; ) {
+        const m = b[p + 1]!;
+        if (b[p] !== 0xff || m === 0xff) p++;
+        else if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+          dim = [b.readUInt16BE(p + 7), b.readUInt16BE(p + 5)];
+          break;
+        } else p += m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7) ? 2 : 2 + b.readUInt16BE(p + 2);
+      }
+    } else if (b.length >= 30 && b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") {
+      const kind = b.toString("latin1", 12, 16);
+      if (kind === "VP8X") dim = [1 + b.readUIntLE(24, 3), 1 + b.readUIntLE(27, 3)];
+      else if (kind === "VP8L") {
+        const bits = b.readUInt32LE(21);
+        dim = [1 + (bits & 0x3fff), 1 + ((bits >> 14) & 0x3fff)];
+      } else if (kind === "VP8 ") dim = [b.readUInt16LE(26) & 0x3fff, b.readUInt16LE(28) & 0x3fff];
+    }
+    return dim && dim[0] > 0 && dim[1] > 0 ? ` (${dim[0]}×${dim[1]})` : "";
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 
 function isCjk(ch: string | undefined): boolean {
   return ch !== undefined && width(ch) === 2;
@@ -113,18 +260,18 @@ function joinSoft(lines: string[]): string {
 
 function diffLine(l: string): string {
   if (/^(diff |index |\+\+\+ |--- )/.test(l)) return `${BOLD}${l}${RESET}`;
-  if (l.startsWith("@@")) return `${BLUE}${l}${RESET}`;
+  if (l.startsWith("@@")) return `${CYAN}${l}${RESET}`;
   if (l.startsWith("+")) return `${GREEN}${l}${RESET}`;
   if (l.startsWith("-")) return `${RED}${l}${RESET}`;
   return l;
 }
 
 /** Render a table as aligned text without borders. When it does not fit, shrink the widest columns first and wrap cells */
-function renderTable(header: string[], rows: string[][], w: number, marks: Mark[]): string[] {
+function renderTable(header: string[], rows: string[][], w: number, marks: Mark[], imageLabel: string): string[] {
   const cols = header.length;
   const GAP = 2;
   const isRisk = header.map((h) => COLUMN_RISK.test(h.normalize("NFKC")));
-  const cell = (r: string[], c: number, strong?: string) => inline(r[c] ?? "", { marks, ...(strong ? { strong } : {}) });
+  const cell = (r: string[], c: number, strong?: string) => inline(r[c] ?? "", { marks, badge: true, imageLabel, ...(strong ? { strong } : {}) });
   const natural = Array.from({ length: cols }, (_, c) =>
     Math.max(width(header[c] ?? ""), ...rows.map((r) => width(cell(r, c)))),
   );
@@ -173,6 +320,8 @@ export interface MarkdownOpts {
   lang?: Lang;
   /** Highlights for terms (not applied under the Terms heading) */
   marks?: Mark[];
+  /** Directory images are resolved against for their size (absolute paths work without it) */
+  baseDir?: string;
   /** Normalized Terms headings (marks are skipped inside that section) */
   termsHeadings?: string[];
 }
@@ -184,13 +333,14 @@ export function renderMarkdown(markdown: string, w: number, opts: MarkdownOpts =
 
 export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOpts = {}): Rendered {
   const lang = opts.lang ?? "en";
-  const lines = toLines(markdown);
+  const lines = expandBlocks(toLines(markdown), t(lang, "details_summary"));
   const { inFence, blocks } = scanFences(lines);
   const out: string[] = [];
   const wideRows = new Map<number, string>();
   const footnotes: { id: string; row: number }[] = [];
   let marks = opts.marks ?? [];
-  const inl = (x: string, o: InlineOpts = {}) => inline(x, { marks, ...o });
+  const imageLabel = t(lang, "image_label");
+  const inl = (x: string, o: InlineOpts = {}) => inline(x, { marks, imageLabel, br: true, ...o });
   const gap = () => {
     if (out.length && out.at(-1) !== "") out.push("");
   };
@@ -202,7 +352,13 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       const closed = block.end > block.start && /^ {0,3}(`{3,}|~{3,})\s*$/.test(lines[block.end]!);
       const body = lines.slice(block.start + 1, closed ? block.end : block.end + 1);
       gap();
-      if (block.lang === "mermaid") {
+      const title = /\btitle=(?:"([^"]*)"|'([^']*)')/.exec(lines[block.start]!);
+      const kind = block.lang === "mermaid" ? diagramType(body.join("\n")) : "";
+      if (block.lang === "mermaid" && !isAsciiType(kind)) {
+        const label = ` ${t(lang, "diagram_type", { type: kind || "?" })} `;
+        out.push(...wrap(`${DIM}┌${"─".repeat(width(label))}┐${RESET}`, w), ...wrap(`${DIM}│${label}│${RESET}`, w), ...wrap(`${DIM}└${"─".repeat(width(label))}┘${RESET}`, w));
+        for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
+      } else if (block.lang === "mermaid") {
         const fig = renderMermaid(body.join("\n"));
         if (fig.ok) {
           if (fig.width > w) {
@@ -217,8 +373,10 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
           for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
         }
       } else if (block.lang === "diff") {
+        if (title && (title[1] ?? title[2])) out.push(...wrap(`${DIM}${title[1] ?? title[2]}${RESET}`, w));
         for (const l of body) out.push(...wrap(`  ${diffLine(l)}`, w));
       } else {
+        if (title && (title[1] ?? title[2])) out.push(...wrap(`${DIM}${title[1] ?? title[2]}${RESET}`, w));
         for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
       }
       out.push("");
@@ -227,6 +385,16 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
     }
     if (line.trim() === "") {
       gap();
+      i++;
+      continue;
+    }
+    if (line.startsWith(SENT)) {
+      gap();
+      const head = /^\x01H(\d+)\x01(.*)$/.exec(line);
+      if (head) {
+        const n = Number(head[1]);
+        out.push(...wrap(`${DIM}▸ ${inline(head[2]!, { base: DIM })} (${t(lang, n === 1 ? "plan_lines_one" : "plan_lines", { n })})${RESET}`, w));
+      } else out.push(`${DIM}${"─".repeat(w)}${RESET}`);
       i++;
       continue;
     }
@@ -243,7 +411,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       while (end < lines.length && !inFence[end] && lines[end]!.includes("|") && lines[end]!.trim() !== "") end++;
       const t = findTables(lines, inFence, i, end)[0]!;
       gap();
-      out.push(...renderTable(t.header, t.rows, w, marks));
+      out.push(...renderTable(t.header, t.rows, w, marks, imageLabel));
       out.push("");
       i = end;
       continue;
@@ -255,12 +423,16 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
         i++;
       }
       gap();
-      const m = /^\[!(NOTE|TIP|WARNING|CAUTION)\]\s*(.*)$/i.exec(quote[0]!.trim());
+      const m = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i.exec(quote[0]!.trim());
       const spec = m ? CALLOUTS[m[1]!.toUpperCase()]! : null;
-      const bodyLines = spec ? [...(m![2]! ? [m![2]!] : []), ...quote.slice(1)] : quote;
+      const bodyLines = spec ? quote.slice(1) : quote;
       const color = spec?.color ?? DIM;
       const bar = `${color}▌${RESET} `;
-      if (spec) out.push(`${color}▌ ${BOLD}${t(lang, spec.label)}${RESET}`);
+      if (spec) {
+        const title = m![2]!.trim();
+        const head = title ? inl(title, { base: color + BOLD }) : t(lang, spec.label);
+        wrap(`${color}${BOLD}${title ? `[!${m![1]!.toUpperCase()}] ` : ""}${head}${RESET}`, w - 2).forEach((l, k) => out.push(k === 0 ? `${color}▌${RESET} ${l}` : bar + l));
+      }
       const paras: string[][] = [[]];
       for (const l of bodyLines) {
         if (l.trim() === "") paras.push([]);
@@ -277,16 +449,25 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
     const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
     if (li) {
       const indent = Math.min(6, li[1]!.length);
-      const mark = /^\d/.test(li[2]!) ? li[2]! : "•";
+      let mark = /^\d/.test(li[2]!) ? li[2]! : "•";
       const item: string[] = [li[3]!];
       i++;
-      while (i < lines.length && lines[i]!.trim() !== "" && !/^(\s*)([-*+]|\d+[.)])\s+/.test(lines[i]!) && !inFence[i] && !/^ {0,3}(#{1,6}\s|>)/.test(lines[i]!) && !/^ {0,3}\[\^[^\]\s]+\]:/.test(lines[i]!)) {
+      while (i < lines.length && lines[i]!.trim() !== "" && !/^(\s*)([-*+]|\d+[.)])\s+/.test(lines[i]!) && !inFence[i] && !lines[i]!.startsWith(SENT) && !/^ {0,3}(#{1,6}\s|>)/.test(lines[i]!) && !/^ {0,3}\[\^[^\]\s]+\]:/.test(lines[i]!)) {
         item.push(lines[i]!);
         i++;
       }
+      let text = joinSoft(item);
+      const task = /^\[([ xX])\](?:\s+|$)/.exec(text);
+      let done = false;
+      if (task) {
+        done = task[1] !== " ";
+        mark = (/^\d/.test(mark) ? mark + " " : "") + (done ? "☑" : "☐");
+        text = text.slice(task[0].length);
+      }
       const lead = " ".repeat(indent) + mark + " ";
       const pad = " ".repeat(width(lead));
-      wrap(inl(joinSoft(item)), Math.max(8, w - width(lead))).forEach((l, k) => out.push((k === 0 ? lead : pad) + l));
+      const body = !text ? "" : done ? `${DIM}${inl(text, { badge: true, base: DIM })}${RESET}` : inl(text, { badge: true });
+      wrap(body, Math.max(8, w - width(lead))).forEach((l, k) => out.push(((k === 0 ? lead : pad) + l).trimEnd()));
       continue;
     }
     const fn = /^ {0,3}\[\^([^\]\s]+)\]:\s*(.*)$/.exec(line);
@@ -300,12 +481,21 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       wrap(inl(joinSoft(item)), Math.max(8, w - width(lead))).forEach((l, k) => out.push((k === 0 ? lead : pad) + l));
       continue;
     }
+    const img = IMAGE_LINE.exec(line);
+    if (img) {
+      const [, alt, src] = img;
+      out.push(...wrap(`${DIM}${imageLabel} ${alt ? `${alt} — ` : ""}${src}${imageSize(src!, opts.baseDir)}${RESET}`, w));
+      i++;
+      continue;
+    }
     // Paragraph
     const para: string[] = [];
     while (
       i < lines.length &&
       lines[i]!.trim() !== "" &&
       !blocks.some((b) => b.start === i) &&
+      !lines[i]!.startsWith(SENT) &&
+      !(para.length && IMAGE_LINE.test(lines[i]!)) &&
       !/^ {0,3}(#{1,6}\s|>)/.test(lines[i]!) &&
       !/^ {0,3}\[\^[^\]\s]+\]:/.test(lines[i]!) &&
       !(para.length && /^(\s*)([-*+]|\d+[.)])\s+/.test(lines[i]!))

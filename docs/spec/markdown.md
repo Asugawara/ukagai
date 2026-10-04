@@ -75,7 +75,7 @@ Use: whenever the block is a file excerpt; `diff` for proposed changes.
 
 ### 2.6 Status badges
 
-Inline tokens at the start of a list item or table cell: `[done]`, `[todo]`, `[doing]`, `[blocked]`, `[risk]`, `[skip]` (English, lowercase, exactly these six).
+Inline tokens at the start of a list item or table cell (or right after its bold title, as in Steps): `[done]`, `[todo]`, `[doing]`, `[blocked]`, `[risk]`, `[skip]` (English, lowercase, exactly these six).
 GUI: small coloured badge (done green, doing accent, blocked / risk red, todo grey, skip dim). TUI: the same words in the same colours. The badge is text in both, so a plain Markdown viewer still reads it.
 Use: step progress, per-item status in a checklist or table.
 
