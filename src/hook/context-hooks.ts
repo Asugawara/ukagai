@@ -1,7 +1,6 @@
 import { autostart, defaultDeps, type AutostartDeps } from "./autostart.js";
 import { EventInput, HookInputBase } from "../contract.js";
 import type { Client } from "./client.js";
-import { BLOCKER_REASON, isBlockerMessage } from "./blocker.js";
 import { explainDir } from "./explain.js";
 import type { HookOptions } from "./options.js";
 import { readConfig, type Lang } from "../settings/config.js";
@@ -13,8 +12,6 @@ const OBSERVED = new Set(["UserPromptSubmit", "Stop", "SubagentStop", "PostToolU
 const ASYNC_EVENT_TIMEOUT_MS = 1500;
 /** SessionEnd is sync (1.5 second budget), so keep it short */
 const SESSION_END_TIMEOUT_MS = 500;
-/** Stop is sync (2 seconds overall), so cut the event POST at 1 second */
-export const STOP_EVENT_TIMEOUT_MS = 1000;
 /** If the end (ignoring whitespace and Markdown marks) is ？ / ?, treat it as a question asked in prose */
 export function isEscapedQuestion(text: string | undefined): boolean {
   if (!text) return false;
@@ -89,32 +86,20 @@ async function post(raw: Record<string, unknown>, extra: Record<string, unknown>
 }
 
 /** Observed events such as Stop (with escaped_question). Does nothing for other events */
-export async function observedEvent(raw: Record<string, unknown>, client: Client, blocked = false): Promise<void> {
+export async function observedEvent(raw: Record<string, unknown>, client: Client): Promise<void> {
   const name = raw["hook_event_name"];
   if (typeof name !== "string" || !OBSERVED.has(name)) return;
   const extra: Record<string, unknown> = {};
   if (name === "Stop") {
     const msg = raw["last_assistant_message"];
     if (isEscapedQuestion(typeof msg === "string" ? msg : undefined)) extra["escaped_question"] = true;
-    // Count of detections that prompted the agent: only Stops that actually returned decision: block (not stop_hook_active / plan / --observe)
-    if (blocked) extra["blocker_detected"] = true;
   }
   await post(
     raw,
     extra,
     client,
-    name === "Stop" ? STOP_EVENT_TIMEOUT_MS : name === "SessionEnd" ? SESSION_END_TIMEOUT_MS : ASYNC_EVENT_TIMEOUT_MS,
+    name === "SessionEnd" ? SESSION_END_TIMEOUT_MS : ASYNC_EVENT_TIMEOUT_MS,
   );
-}
-
-/** Stop (sync) safeguard: if the agent stopped in prose saying it waits for human work, make it continue and ask in blocker format (spec section 12) */
-export function stopDecision(raw: Record<string, unknown>): Out | null {
-  if (raw["hook_event_name"] !== "Stop") return null;
-  if (raw["stop_hook_active"] === true) return null;
-  if (raw["permission_mode"] === "plan") return null;
-  const msg = raw["last_assistant_message"];
-  if (typeof msg !== "string" || !isBlockerMessage(msg)) return null;
-  return { decision: "block", reason: BLOCKER_REASON };
 }
 
 /** --observe: PreToolUse is start, PostToolUse is end */

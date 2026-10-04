@@ -9,7 +9,6 @@ import {
   type Explanation,
 } from "../contract.js";
 import type { Client } from "./client.js";
-import { isBlockerMessage } from "./blocker.js";
 import { isEscapedQuestion, observedEvent } from "./context-hooks.js";
 import { handleDecision } from "./decision.js";
 import type { HookOptions } from "./options.js";
@@ -96,7 +95,7 @@ const NO_EXPLANATION: Explanation = {
 };
 
 /**
- * Stop: a prose question / blocker is registered as a decision; if the human answers in the GUI within the budget,
+ * Stop: a prose question (ending with ？ / ?) is registered as a decision; if the human answers in the GUI within the budget,
  * the turn continues with the answer (`decision: block`). Anything else prints nothing
  */
 export async function codexStop(
@@ -107,7 +106,7 @@ export async function codexStop(
 ): Promise<Out | null> {
   const msg = input["last_assistant_message"];
   const text = typeof msg === "string" ? msg : undefined;
-  const detected = isEscapedQuestion(text) || isBlockerMessage(text);
+  const detected = isEscapedQuestion(text);
   const act = detected && !opts.observe && input["stop_hook_active"] !== true;
   // The event comes first: the session must not read as idle after the answer arrives
   await Promise.race([observedEvent(input, client), new Promise<void>((r) => setTimeout(r, 1500).unref())]);

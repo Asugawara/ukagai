@@ -392,7 +392,7 @@ export const Metrics = z.object({
     answer_lost: z.number().int().nonnegative(),
     cancelled: z.number().int().nonnegative(),
     escaped_question: z.number().int().nonnegative(),
-    // Number of times Stop detected blocker vocabulary. Not included in the denominator (total)
+    // Historical only: the Stop detector was removed, so nothing emits blocker_detected any more. Not included in the denominator (total)
     blocker_detected: z.number().int().nonnegative(),
     // Hand-off cycles (sum of Decision.handoffs) and how many times an open decision was re-attached
     handoffs: z.number().int().nonnegative(),

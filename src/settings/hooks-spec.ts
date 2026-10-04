@@ -96,7 +96,7 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
       // plan mode entered by the human never calls EnterPlanMode: the first prompt typed in plan mode carries the rules instead
       ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], 3))),
     ],
-    Stop: group(mk([], 5)),
+    Stop: group(mk([], 5, { async: true })),
     SubagentStop: group(mk([], 5, { async: true })),
     PostToolUse: group(post, postMatcher),
     SessionEnd: group(mk([], 2)),
