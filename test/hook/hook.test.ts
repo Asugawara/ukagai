@@ -605,6 +605,7 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
     assert.ok(out.additionalContext.includes("reversibility is reversible / costly / irreversible, scope is file / repo / machine / external"));
     assert.doesNotMatch(out.additionalContext, /[ぁ-んァ-ン一-龥]/);
     assert.ok(out.additionalContext.includes("Write the explanation file in English."));
+    assert.ok(out.additionalContext.includes('Explanations and plans are written in ukagai Markdown (callouts, task lists, details, Mermaid, badges, columns, images); the palette is in skill ukagai-explain, section "Rich Markdown".'));
   });
 }
 

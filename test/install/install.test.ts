@@ -71,7 +71,7 @@ test("--data-dir / --server go into every hook's args when given, and not when o
   await ukagai(e, ["install", "--settings", e.settings, "--data-dir", dd, "--server", "http://127.0.0.1:9999/"]);
   const s = await readJson(e.settings);
   const hooks = Object.values<any[]>(s.hooks).flatMap((g) => g.flatMap((x) => x.hooks));
-  assert.equal(hooks.length, EVENTS.length + 1); // + the checkpoint group
+  assert.equal(hooks.length, EVENTS.length + 3); // + the checkpoint and the two plan-context groups
   for (const h of hooks) {
     assert.equal(h.args[h.args.indexOf("--data-dir") + 1], dd);
     assert.equal(h.args[h.args.indexOf("--server") + 1], "http://127.0.0.1:9999");
@@ -197,6 +197,8 @@ test("doctor: installed + no server -> hook ○, server ×, exit 1", async () =>
   const r = await ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")]);
   assert.equal(r.code, 1);
   assert.match(r.out, /○ +hook PreToolUse/);
+  assert.match(r.out, /○ +hook PreToolUse \(plan context\)/);
+  assert.match(r.out, /○ +hook UserPromptSubmit \(plan context\)/);
   assert.match(r.out, /× +server/);
   assert.match(r.out, /× +token/);
   assert.match(r.out, /○ +skill ukagai-explain +not handled/);
@@ -209,4 +211,41 @@ test("doctor --skill: detects whether the skill exists", async () => {
   assert.match((await ukagai(e, args)).out, /○ +skill ukagai-explain +\S*SKILL\.md/);
   await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
   assert.match((await ukagai(e, args)).out, /× +skill ukagai-explain/);
+});
+
+test("upgrade in place: a settings file from before the plan-context group gains it, user hooks stay, no duplicates", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify(OTHER));
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const full = await readJson(e.settings);
+  const old = JSON.parse(JSON.stringify(full));
+  old.hooks.PreToolUse = old.hooks.PreToolUse.filter((g: any) => g.matcher !== "EnterPlanMode");
+  old.hooks.UserPromptSubmit = old.hooks.UserPromptSubmit.filter((g: any) => !g.hooks.some((h: any) => h.args.includes("--plan-context")));
+  assert.equal(old.hooks.PreToolUse.length, full.hooks.PreToolUse.length - 1);
+  assert.equal(old.hooks.UserPromptSubmit.length, full.hooks.UserPromptSubmit.length - 1);
+  await writeFile(e.settings, JSON.stringify(old));
+  const args = ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")];
+  const before = (await ukagai(e, args)).out;
+  assert.match(before, /× +hook PreToolUse \(plan context\) +not registered/);
+  assert.match(before, /× +hook UserPromptSubmit \(plan context\) +not registered/);
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const s = await readJson(e.settings);
+  assert.deepEqual(s, full);
+  assert.equal(s.hooks.PreToolUse.filter((g: any) => g.matcher === "EnterPlanMode").length, 1);
+  assert.deepEqual(s.hooks.SessionStart[0], OTHER.hooks.SessionStart[0]);
+  assert.equal(s.hooks.UserPromptSubmit.filter((g: any) => g.hooks.some((h: any) => h.args.includes("--plan-context"))).length, 1);
+  const after = (await ukagai(e, args)).out;
+  assert.match(after, /○ +hook PreToolUse \(plan context\)/);
+  assert.match(after, /○ +hook UserPromptSubmit \(plan context\)/);
+});
+
+test("install --observe registers no plan-context group and doctor says off", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings, "--observe"]);
+  const s = await readJson(e.settings);
+  assert.ok(!s.hooks.PreToolUse.some((g: any) => g.matcher === "EnterPlanMode"));
+  const r = await ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")]);
+  assert.match(r.out, /○ +hook PreToolUse \(plan context\) +off \(--observe\)/);
+  assert.match(r.out, /○ +hook UserPromptSubmit \(plan context\) +off \(--observe\)/);
+  assert.equal(s.hooks.UserPromptSubmit.length, 1);
 });

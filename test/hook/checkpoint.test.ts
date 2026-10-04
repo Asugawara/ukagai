@@ -96,7 +96,7 @@ test("closed port and a server that hangs: nothing printed, exit 0, within 1.5 s
 
 test("buildHookEntries: the checkpoint group sits next to the decision group", () => {
   const e = buildHookEntries({ node: "node", cli: "cli.js", timeout: 3600, observe: false });
-  assert.equal(e["PreToolUse"]?.length, 2);
+  assert.equal(e["PreToolUse"]?.length, 3);
   assert.equal(e["PreToolUse"]?.[0]?.matcher, "AskUserQuestion|ExitPlanMode");
   const g = e["PreToolUse"]![1]!;
   assert.equal(g.matcher, "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite");

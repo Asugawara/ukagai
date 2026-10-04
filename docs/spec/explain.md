@@ -292,6 +292,40 @@ question: <the question verbatim>
 - **Deny text** (variant A; B is the polite variant): `First read skill ukagai-explain (if you have not). In plan mode the explanation goes into your plan file, not a separate file: append to <planFilePath> a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (…), then call AskUserQuestion again with the same question. Missing: <missing>.` plus a short block template when a front matter key is missing (at most 1600 characters).
 - **ExitPlanMode** strips every block from `plan` (`stripExplainBlocks`, `src/contract.ts`) before checking and registering it; the server's plan views (`/api/plans`) strip them too.
 
+### 6.1 Plan-writing rules (`hook --plan-context`)
+
+Two triggers, one command. Plan mode the agent enters itself calls `EnterPlanMode`; plan mode the human enters (Shift+Tab, `--permission-mode plan`) calls no tool, so the first prompt typed in plan mode carries the rules instead.
+
+| Group | Event / matcher | Fires when |
+|---|---|---|
+| `PreToolUse` | `EnterPlanMode` | the agent enters plan mode |
+| `UserPromptSubmit` (sync, next to the async observe entry) | none | the hook input has `permission_mode: "plan"` (`HookEvent` carries it) |
+
+Both are sync, `timeout: 3`, no statusMessage, omitted with `install --observe`. The command never calls the server and exits 0 in every case; a failure prints nothing. It injects **at most once per session**: a marker file `<data-dir>/plan-context/<session_id>` is created with `wx`; if it exists nothing is printed, any other marker error (read-only dir, unset HOME) means inject. Output (the tool / prompt proceeds; no `permissionDecision`, like the checkpoint path), with `hookEventName` = the event's name:
+
+```
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"<text>"}}
+```
+
+`<text>` is 12 lines, English (`planContextText`, `src/hook/plan-context.ts`; `test/hook/plan-context.test.ts` pins this block to it); `<repo>` is the checkout the installed `dist/` sits in, and the last line names the spec file only when it exists there:
+
+```
+[ukagai] Write the plan in ukagai Markdown; a human reads it in a GUI / TUI and decides on it. Plan sections, in this order:
+- `# Title`: one line saying what the plan does.
+- `## Scope and reversibility`: its first 2 lines are exactly `Reversibility: reversible|costly|irreversible` and `Scope: file|repo|machine|external`.
+- `## Steps`: an ordered list; each item starts with a **bold title**, then a badge ([done] [todo] [doing] [blocked] [risk] [skip]) and the `path` it touches; nest task lists or details under it.
+- `## Risks`: one callout per risk, `> [!CAUTION] Title` for anything irreversible or touching other people / external systems, `> [!WARNING]` for costly to undo.
+- `## Verification`: a task list (`- [ ] command or check`) the reader can tick off.
+A question you ask while in plan mode needs its explanation inside the plan file between `<!-- ukagai-explain -->` and `<!-- /ukagai-explain -->` (same format as the explanation file; see skill ukagai-explain).
+Palette (use what makes the decision easier to read, nothing more):
+- callouts with titles `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION] Title`, task lists `- [x]` / `- [ ]`, folding `<details><summary>..</summary>` (blank line after the summary) for long evidence;
+- Mermaid of any type (flowchart, sequenceDiagram, stateDiagram-v2, gantt, pie, quadrantChart, ...), code blocks with a title (```ts title="src/x.ts") and ```diff for proposed changes;
+- `==mark==` for the one phrase not to miss, `::: columns` (columns split by `---`, closed by `:::`) for before / after (the Options section stays a table), images `![meaningful alt](shots/x.png)` only for a file that already exists next to the plan file (the plan file is the only file you may write).
+Full spec: skill ukagai-explain, section "Rich Markdown (ukagai dialect)", or <repo>/docs/spec/markdown.md.
+```
+
+Nothing is required by this hook: `ExitPlanMode` still checks only the "Scope and reversibility" section (section 9). `doctor` lists the groups as `hook PreToolUse (plan context)` and `hook UserPromptSubmit (plan context)`. Codex has no such tool (see `codex-bridge.md`).
+
 ## 7. Deny reason templates
 
 There are two. By the result of E4 (round trips of 2 passed for 6 of 7 imperative sentences, and 2/2 for fact + request) **variant A is the default**. `--deny-template` switches to variant B.
@@ -365,9 +399,11 @@ The hook reads `lang` with `readConfig(dataDir)` (`<data-dir>/config.json`; defa
 Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.
 When you do ask, write the explanation the human reads as Markdown in {absolute location}/ following skill ukagai-explain. {language sentence}
 front matter: question is the AskUserQuestion question verbatim, title is the decision for the human in one sentence, recommended is the label of the option you recommend, reversibility is reversible / costly / irreversible, scope is file / repo / machine / external. Body: "Why this decision is needed now", "Options" (table: first column is the label; columns for what happens if chosen and for risks and how to undo), "Recommendation" (reason, and the condition under which another option is right). Recommendation: first sentence is a conclusion that decides on its own and names the option, last sentence is "if ..., B" (at most 5 sentences and 400 characters); table cells at most 160 characters and each risk cell says how to undo. Also write "What only you know" (1-3 bullets) and "Assumptions" (one per line), and unless reversible + file, "What I checked" with evidence as footnotes ([^1]) cited from the body. Optional: "Terms", "Counterargument", "Affected". Draw a Mermaid diagram only when the decision is hard to undo (anything but reversible) or scope is machine / external, and the options differ in structure or flow.
-Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section whose first 2 lines are "Reversibility: reversible|costly|irreversible" and "Scope: file|repo|machine|external". In plan mode, put the explanation into your plan file between <!-- ukagai-explain --> and <!-- /ukagai-explain --> (same format) instead of a separate file.
+Do not ask in prose. Call AskUserQuestion one question at a time from the start (never batch; do not write an explanation that contradicts an earlier answer), mark the deciding factor in **bold**, put irreversible effects in a > [!CAUTION] callout, put the recommended option first and append (Recommended) to its label. A plan body needs a "Scope and reversibility" section whose first 2 lines are "Reversibility: reversible|costly|irreversible" and "Scope: file|repo|machine|external". In plan mode, put the explanation into your plan file between <!-- ukagai-explain --> and <!-- /ukagai-explain --> (same format) instead of a separate file. Explanations and plans are written in ukagai Markdown (callouts, task lists, details, Mermaid, badges, columns, images); the palette is in skill ukagai-explain, section "Rich Markdown".
 When stopped by human work such as authentication or permissions, do not end in prose: write a blocker-format explanation and ask with AskUserQuestion (Done. Continue / Skip this step and continue / Stop here). After the human acts, retry the same work. If an answer starts with "None of these — ", act on its type: add options, fix the premise and re-ask, add evidence, or ask later.
 ```
+
+The Codex context (`codexContextText`) carries a shorter sentence on its format line (only the self-evident constructs with their syntax: callouts, task lists, `<details>`, Mermaid; Codex has no skill and no plan-mode hook). Claude Code adds the plan-writing rules in plan mode (section 6.1).
 
 `AskUserQuestion` is not provided inside a subagent, so no decision arises there (confirmed with Claude Code 2.1.287). The additionalContext of SubagentStart arrives but is never used.
 

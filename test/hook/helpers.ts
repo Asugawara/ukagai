@@ -115,7 +115,8 @@ export interface RunningHook {
 export function spawnHook(args: string[], input: string, home: string = tmpDir("ukagai-hook-home-")): RunningHook {
   const t0 = Date.now();
   // A fresh HOME per child: a hook under test must never reach the real ~/.ukagai (hook.log, token) or ~/.claude.
-  const env = { ...process.env, HOME: home };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+  if (home === "") delete env["HOME"]; // "" = HOME unset
   const p = spawn(process.execPath, ["--import", "tsx", cli, "hook", ...args], { stdio: ["pipe", "pipe", "pipe"], env });
   let stdout = "";
   let stderr = "";

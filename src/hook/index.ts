@@ -1,6 +1,7 @@
 import { PreToolUseInput } from "../contract.js";
 import { Client } from "./client.js";
 import { observeDecisionTool, observedEvent, permissionRequest, sessionContext, stopDecision } from "./context-hooks.js";
+import { planContext } from "./plan-context.js";
 import { checkpointInstruction } from "./checkpoint.js";
 import { codexInput, codexPermissionRequest, codexPreToolUse, codexStop } from "./codex.js";
 import { handleDecision } from "./decision.js";
@@ -41,7 +42,9 @@ export async function run(argv: string[]): Promise<number> {
     const client = new Client(opts.server, opts.dataDir);
     const isDecisionTool = typeof tool === "string" && DECISION_TOOLS.has(tool);
 
-    if (opts.checkpoint) {
+    if (opts.planContext) {
+      if (!opts.observe) write(planContext(input, opts.dataDir));
+    } else if (opts.checkpoint) {
       if (ev === "PreToolUse" && !isDecisionTool) write(await checkpointInstruction(input, client));
     } else if (opts.observe && isDecisionTool && (ev === "PreToolUse" || ev === "PostToolUse")) {
       await observeDecisionTool(input, client);

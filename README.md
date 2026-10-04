@@ -68,6 +68,8 @@ Open <http://127.0.0.1:4818/settings> (the header's `Settings` link, or the `,` 
 
 `config.json` is read when `serve` starts; a change made to it by hand needs a restart (or a save on the page). Ports, the data directory, hook budgets and the Codex home are not settings (flags / environment, see above). The API is `GET` / `PUT /api/settings`, documented in `docs/spec/api.md`.
 
+**Rich Markdown.** Explanations and plans are written in a small Markdown dialect that the GUI renders richly and the TUI degrades to readable text: titled callouts, task lists, `<details>`, any Mermaid diagram, code blocks with a title or `diff`, status badges (`[done]`, `[risk]`, …), `==mark==`, `::: columns`, a Steps timeline and screenshots from allowed folders (`docs/spec/markdown.md`). The agent learns it from one sentence in the SessionStart context, from the `ukagai-explain` skill (section "Rich Markdown") and, in Claude Code, from a cheap sync hook (`hook --plan-context`, 3 s, never calls the server) that hands it the plan-writing rules (title, Scope and reversibility, Steps, Risks, Verification) once per session in plan mode. It has two triggers: `PreToolUse` on `EnterPlanMode` (the agent enters plan mode) and `UserPromptSubmit` with `permission_mode: plan` (you entered plan mode yourself, which calls no tool); a marker file `<data-dir>/plan-context/<session_id>` keeps it to one injection. Codex has no such tool and gets only the SessionStart sentence.
+
 ## Development
 
 ```sh
@@ -83,6 +85,7 @@ npm run dev:serve
 | `docs/strategy/` | Strategy and the current MVP implementation plan (`03-*`) |
 | `docs/spec/api.md` | Server API, state transitions, authorization |
 | `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
+| `docs/spec/markdown.md` | The Markdown dialect explanations and plans are written in |
 | `docs/verification/` | Records of real-environment verification |
 | (removed before publication) |
 | `skills/ukagai-explain/SKILL.md` | The skill that teaches Claude how to write explanations |
