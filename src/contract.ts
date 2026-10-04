@@ -225,7 +225,7 @@ export type DecisionContext = z.infer<typeof DecisionContext>;
 
 export const Explanation = z.object({
   path: z.string(),
-  type: z.enum(["decision", "blocker"]).optional(),
+  type: z.enum(["decision", "blocker", "quiz"]).optional(),
   title: z.string().optional(),
   question: z.string().optional(),
   reversibility: z.enum(["reversible", "costly", "irreversible"]).optional(),

@@ -22,15 +22,17 @@ The format of the "explanation" an agent writes before asking a human to decide,
 
 The first line of the file is `---`, and everything up to the next `---` is the front matter. The syntax is a subset of YAML: one `key: value` per line. A value is a one-line scalar and may be wrapped in `"` (only the outer `"` is removed; escapes are not interpreted). Wrap the value in `"` when it contains `: ` or `#`. Unknown keys are ignored.
 
+**Block scalar (`question` only):** `question: |` (also `|-` / `|+`) followed by indented lines is a YAML literal block scalar. The block is the indented (and blank) lines after the key; one common indent is removed, line breaks are kept, and trailing newlines are stripped. Exactly the common leading-whitespace prefix (tabs and spaces alike) is removed from each line; trailing spaces on a line are kept (as in YAML), so the text still matches an ask question that has them. The result is compared with `questions[0].question` exactly like a one-line value, so it must hold the same text with real newlines. A one-line `question: text` keeps working. No other key accepts a block scalar.
+
 | Field | Required | Value | Meaning |
 |---|---|---|---|
 | `ukagai` | Required | `1` | Format version. Anything other than `1` is invalid |
 | `question` | Required | string | `questions[0].question` of `AskUserQuestion`, **verbatim**. Matching is exact (no normalization of whitespace or full-width / half-width). With several questions only `questions[0]` is used |
-| `type` | Optional | `decision` / `blocker` | The kind of explanation. Absent or `decision` = asks a human to decide (the original). `blocker` = progress is blocked by work only a human can do (authentication, permission grants, two-factor authentication, placing a key, physical operations); see the blocker required sections in section 3.2 and section 12. Any other value is invalid (`type` is reported missing) |
+| `type` | Optional | `decision` / `blocker` / `quiz` | The kind of explanation. Absent or `decision` = asks a human to decide (the original). `quiz` = a comprehension question that must not recommend an answer; see "When `type: quiz`" in section 3.2. `blocker` = progress is blocked by work only a human can do (authentication, permission grants, two-factor authentication, placing a key, physical operations); see the blocker required sections in section 3.2 and section 12. Any other value is invalid (`type` is reported missing) |
 | `title` | Required | string | The decision for the human in one sentence (example: `Choose JSONL or SQLite as the storage format of the decision log`). The decision heading in the GUI. `question` is for matching and is not shown in the GUI |
 | `reversibility` | Required | `reversible` / `costly` / `irreversible` | Whether the decision can be undone. `reversible` = easy to undo, `costly` = can be undone at some effort or cost, `irreversible` = cannot be undone |
 | `scope` | Required | `file` / `repo` / `machine` / `external` | The range of impact. `file` = a few files, `repo` = the whole repository, `machine` = this machine (files, settings and processes outside the repository), `external` = other people or systems (push, publish, billing, sending messages) |
-| `recommended` | Required | string | The label of the option you recommend. By label matching (below) it must equal one of `questions[0].options[].label` (matched only when the options are known from stdin; otherwise it only has to be non-empty) |
+| `recommended` | Required (**absent for `type: quiz`**) | string | The label of the option you recommend. By label matching (below) it must equal one of `questions[0].options[].label` (matched only when the options are known from stdin; otherwise it only has to be non-empty) |
 
 **Label matching** (`normalizeLabel`; the same rule in the hook and the GUI): normalize both sides by NFKC → strip a trailing `(Recommended)` / `（Recommended）` / `(推奨)` / `（推奨）` → remove all whitespace → lowercase, then compare for exact equality.
 
@@ -95,6 +97,51 @@ The names are exported from `src/hook/explain.ts` as `SECTION`:
 | Recommendation / Diagram | **Not required** |
 
 When `type` is absent or `decision`, nothing changes and `todo` is not required.
+
+**When `type: quiz`** (a question whose answer the human must find alone: the file is normally written by a tool such as whoknows from its Stop hook, not by the agent; the options come from the AskUserQuestion call itself). Front matter: `ukagai`, `type: quiz`, `question` (usually a block scalar, section 2), `title`, `reversibility`, `scope` are required; **`recommended` must be absent**.
+
+| Section | Condition |
+|---|---|
+| Why this question now (`なぜ今この質問か`) | Required (code `quiz_why`). Non-empty, 1 to 600 characters (the `why_long` limit of 3.6) |
+| Premise (`前提`) | Required (code `quiz_premise`). Non-empty, at most 600 characters |
+| How to answer (`答え方`) | Optional |
+| Terms | Optional |
+
+Not evaluated for a quiz: `recommended`, `recommend*`, `against_weak`, `assumptions_long`, `options` / `table` / `cell_long` / `undo`, `coined_term` (identifiers are the subject of the question; the premise explains them), `diagram`, `checked`, `footnote`. `language` and `question` matching are evaluated as usual (for `ja`, the title, the Why and the Premise are checked for Japanese). The heading alias `前提` is also the alias of Assumptions; for a quiz it means Premise.
+
+**No leak (`quiz_leak`).** When the option labels are known, none of them may occur in the bodies of Why, Premise and How to answer (outside code fences). A label is looked for in the normalized form of the body: NFKC, whitespace / backticks / asterisks removed, lowercase (the form `recommend_name` uses; a trailing `(Recommended)` / `(推奨)` is dropped from the label first). Labels shorter than 6 characters (after that normalization) are not looked for. The front matter `question` is exempt.
+
+Example (the contract whoknows writes; valid with the 4 labels of its question):
+
+```markdown
+---
+ukagai: 1
+type: quiz
+question: |
+  対象: src/quiz/context.rs › is_test_code
+  いま聞く理由: 回復不能(U 0.00)。エージェント行 1088 / 全 1088。クイズ正答はまだ無い
+  前提: src/quiz/context.rs は出題プロンプト用に、定義・呼び出し元・import・テストの行を静的に集める。is_test_code は、収集したヒットのうちテストとして引用する対象かを判定するパス判定関数である。
+
+  is_test_code に "tests/fixtures/a.json" を渡したときの戻り値と、その理由として正しいものはどれか。
+title: src/quiz/context.rs の is_test_code についての理解度クイズ
+reversibility: reversible
+scope: file
+---
+
+## Why this question now
+
+回復不能(U 0.00)。エージェント行 1088 / 全 1088。クイズ正答はまだ無い
+
+## Premise
+
+src/quiz/context.rs は出題プロンプト用に、定義・呼び出し元・import・テストの行を静的に集める。is_test_code は、収集したヒットのうちテストとして引用する対象かを判定するパス判定関数である。
+
+## How to answer
+
+選択肢を矢印キーで選んで Enter。分からなければ Other に「分からない」と入力する。正解・理由・根拠は回答のあとに表示される。
+```
+
+The GUI shows a "Quiz" band, the title, the Why and Premise sections, then the options exactly as the call gives them (no recommended highlight, no `(Recommended)` handling, no risk colors); the TUI shows the same sections with no recommendation line. Quizzes sort with questions (after blockers). The deny reason for a quiz that lacks front matter keys pastes a quiz template (no `recommended`, no Options).
 
 ### 3.3 Minimum table conditions
 
@@ -175,18 +222,22 @@ All take the whole Markdown (front matter included; it is skipped). Lines inside
 
 ## 4. Check result
 
-The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter`, `language`, `question` … `recommended`, `why`, `why_long`, `options`, `table`, `cell_long`, `coined_term`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `recommend_name`, `against_weak`, `assumptions_long`, `diagram`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
+The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter`, `language`, `question` … `recommended`, then for `type: quiz` only `quiz_recommended`, `quiz_why`, `quiz_premise`, `quiz_leak` (nothing after them is evaluated), else `why`, `why_long`, `options`, `table`, `cell_long`, `coined_term`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `recommend_name`, `against_weak`, `assumptions_long`, `diagram`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
 
 | Code | Condition (added when it is not satisfied) | Name in the deny reason |
 |---|---|---|
 | `file` | The explanation file is not found (no other code is evaluated in this case) | the explanation file itself |
 | `front_matter` | No front matter, it is not closed, or `ukagai` is not `1` | front matter (`ukagai: 1`) |
 | `question` | `question` is absent or empty | `question` |
-| `type` | `type` exists but is neither `decision` nor `blocker` (evaluated as decision from then on) | `type` (decision / blocker) |
+| `type` | `type` exists but is none of `decision` / `blocker` / `quiz` (evaluated as decision from then on) | `type` (decision / blocker / quiz) |
 | `title` | `title` is absent or empty | `title` (the decision for the human, in one sentence) |
 | `reversibility` | Absent, or the value is outside the set | `reversibility` |
 | `scope` | Absent, or the value is outside the set | `scope` |
 | `recommended` | Absent or empty, or by label matching it matches none of `options[].label` (when labels are known) | `recommended` (label of the option you recommend) |
+| `quiz_recommended` | (`type: quiz` only; right after `scope`) `recommended` is present, even empty | a quiz must not recommend an answer; remove `recommended` |
+| `quiz_why` | (`type: quiz`) The "Why this question now" section is absent, empty or over 600 characters | the "Why this question now" section (1 to 600 characters) |
+| `quiz_premise` | (`type: quiz`) The "Premise" section is absent, empty or over 600 characters | the "Premise" section (non-empty, at most 600 characters) |
+| `quiz_leak` | (`type: quiz`; only when labels are known) An option label of 6 or more characters occurs in the Why / Premise / How to answer bodies (section 3.2) | the explanation repeats an option; a quiz explanation must not point at an answer |
 | `why` | The "Why this decision is needed now" section ("Why I stopped" for a blocker) is absent or empty | the "Why this decision is needed now" section |
 | `why_long` | The `why` section exceeds the limit of 3.6 (not evaluated when `why` failed) | the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked") |
 | `options` | The "Options" section is absent | the "Options" section |
@@ -343,7 +394,7 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 
 ## 11. Fixtures
 
-`test/explain-fixtures/` has 29. Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
+`test/explain-fixtures/` has 34. An optional `<name>.labels.json` (an array of strings) next to a fixture gives the option labels passed to the check (used by `fail-quiz-leak`). Each `*.md` is the whole explanation (or plan), and `*.expected.json` is the expected check result `{ valid, missing, has: {mermaid, table, diff}, question }`. `question` is the front matter value (`null` when absent, and for plans). Files starting with `plan-` go through section 9 (the plan body), the others through the check of section 4. Tables are judged assuming `labels` is not passed (2 or more data rows, no label matching).
 
 `pass-*` and the other `fail-*` fixtures satisfy `checked` and `undo` (their text was extended), so each `fail-*` reports only its own code. The fixtures are written in English. The `question:` line keeps the original question text, because `expected.json` records it. Three Japanese variants (`*-ja.md`, with the same `expected.json` contents) exercise the Japanese aliases.
 
@@ -370,6 +421,11 @@ The hook does not check Mermaid syntax (it only checks whether the code block ex
 | `fail-assumptions-long.md` | false | `assumptions_long` (`pass-rich.md` with 4 Assumptions) |
 | `fail-against-weak.md` | false | `against_weak` (`pass-rich.md` whose Counterargument repeats a sentence of the Recommendation) |
 | `fail-cell-long.md` | false | `cell_long` |
+| `pass-quiz-ja.md` | true | none (the contract example: `type: quiz`, a block-scalar `question`, no Options table) |
+| `pass-quiz-en.md` | true | none (English quiz) |
+| `fail-quiz-recommended.md` | false | `quiz_recommended` |
+| `fail-quiz-no-premise.md` | false | `quiz_premise` |
+| `fail-quiz-leak.md` | false | `quiz_leak` (with `fail-quiz-leak.labels.json`) |
 | `fail-coined-terms.md` | false | `coined_term` (plan codes W-T2 / FT4 / G-T2 / TM28 / P-GH, undefined) |
 | `pass-coined-defined.md` | true | none (the same codes defined under Terms in plain words) |
 | `fail-recommend-long.md` | false | `recommend_long` |
@@ -412,6 +468,9 @@ English is canonical and preferred; the Japanese alias is accepted anywhere the 
 | Section | Affected | 影響を受けるもの |
 | Section | Terms | 用語 |
 | Section | Related diff | 関係する差分 |
+| Section (quiz) | Why this question now | なぜ今この質問か |
+| Section (quiz) | Premise | 前提 |
+| Section (quiz) | How to answer | 答え方 |
 | Section (blocker) | Why I stopped | なぜ止まったか |
 | Section (blocker) | What you need to do | 人にしてほしいこと |
 | Section (plan) | Scope and reversibility | 影響範囲と可逆性 |

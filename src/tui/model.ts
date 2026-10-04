@@ -118,6 +118,8 @@ export interface ScreenModel {
   planKey?: string;
   /** Waiting for the human (explanation.type === "blocker") */
   blocker: boolean;
+  /** A comprehension quiz (explanation type "quiz"): a band instead of a recommendation, the options as given */
+  quiz?: boolean;
   /** Body of the blocker "What you need to do" section (Markdown), shown at the top of the right column */
   todo: string | null;
   /** Contents of the code blocks in the todo (`c` copies the first) */
@@ -434,6 +436,28 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
   const body = all.slice(fmParsed!.bodyStart);
   const { inFence } = scanFences(body);
   const headings = scanHeadings(body, inFence);
+  if (fm["type"] === "quiz") {
+    // Why this question now, Premise and How to answer; no recommendation, no badge on any option
+    const part = (names: readonly string[], key: MessageKey): string => {
+      const sec = findSection(headings, body.length, names);
+      const text = sec ? body.slice(sec.start + 1, sec.end).join("\n").trim() : "";
+      return text ? `## ${t(lang, key)}\n\n${text}` : "";
+    };
+    const whySec = findSection(headings, body.length, SECTION.quizWhy);
+    const whyText = whySec ? body.slice(whySec.start + 1, whySec.end).join("\n").trim() : "";
+    // the labels stay exactly as given (no (Recommended) stripping)
+    const cards = q.options.map((o) => ({ ...rawCard(o, false), label: o.label }));
+    return {
+      ...base,
+      ...NO_RICH,
+      kind: "question",
+      quiz: true,
+      background: [part(SECTION.quizPremise, "sec_quiz_premise"), part(SECTION.quizHow, "sec_quiz_how"), part(SECTION.terms, "sec_quiz_terms")].filter(Boolean).join("\n\n"),
+      recommendation: null,
+      why: whyText ? { heading: t(lang, "sec_quiz_why"), text: whyText } : null,
+      question: { ...plainQuestion, cards, initialCursor: 0, v2: false },
+    };
+  }
   const optSec = findSection(headings, body.length, SECTION.options);
   let recSec = findSection(headings, body.length, SECTION.recommendation);
   if (recSec && optSec && recSec.start === optSec.start) recSec = null;
