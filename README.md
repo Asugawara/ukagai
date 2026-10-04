@@ -86,7 +86,7 @@ npm run dev:serve
 | `docs/spec/api.md` | Server API, state transitions, authorization |
 | `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
 | `docs/spec/markdown.md` | The Markdown dialect explanations and plans are written in |
-| `docs/verification/` | Records of real-environment verification |
+| `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context) |
 | (removed before publication) |
 | `skills/ukagai-explain/SKILL.md` | The skill that teaches Claude how to write explanations |
 
