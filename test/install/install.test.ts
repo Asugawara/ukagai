@@ -45,6 +45,10 @@ test("install into empty settings: all events, exec form, statusMessage, --budge
   assert.equal(h.args[h.args.indexOf("--budget") + 1], "3590");
   assert.equal(h.statusMessage, "ukagai: waiting for an answer in the GUI");
   assert.equal(h.timeout, 3600);
+  assert.equal(s.hooks.PermissionRequest.length, 1);
+  assert.equal(s.hooks.PermissionRequest[0].matcher, undefined, "PermissionRequest matches every tool");
+  assert.equal(s.hooks.PermissionRequest[0].hooks[0].timeout, 5);
+  assert.equal(s.hooks.PermissionRequest[0].hooks[0].async, undefined);
   assert.equal(s.hooks.SessionEnd[0].hooks[0].timeout, 2);
   assert.equal(s.hooks.Stop[0].hooks[0].async, true);
   assert.equal(s.hooks.Stop[0].hooks[0].timeout, 5);
@@ -248,4 +252,19 @@ test("install --observe registers no plan-context group and doctor says off", as
   assert.match(r.out, /○ +hook PreToolUse \(plan context\) +off \(--observe\)/);
   assert.match(r.out, /○ +hook UserPromptSubmit \(plan context\) +off \(--observe\)/);
   assert.equal(s.hooks.UserPromptSubmit.length, 1);
+});
+
+test("upgrade in place: an installed Write|Edit PermissionRequest group is replaced by the matcher-less one", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify(OTHER));
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const full = await readJson(e.settings);
+  const old = JSON.parse(JSON.stringify(full));
+  old.hooks.PermissionRequest = [{ matcher: "Write|Edit", hooks: old.hooks.PermissionRequest[0].hooks }];
+  await writeFile(e.settings, JSON.stringify(old));
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const s = await readJson(e.settings);
+  assert.equal(s.hooks.PermissionRequest.length, 1);
+  assert.equal(s.hooks.PermissionRequest[0].matcher, undefined);
+  assert.deepEqual(s, full);
 });

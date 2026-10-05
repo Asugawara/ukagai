@@ -14,7 +14,7 @@ export const HANDOFF_GRACE_MS = 120000;
 export const DENY_LINK_WINDOW_MS = 120000;
 export const RECENCY_WINDOW_MS = 600000;
 /** How long an "approve and auto" record lasts before it expires */
-export const MODE_SWITCH_TTL_MS = 120000;
+export const MODE_SWITCH_TTL_MS = 60 * 60 * 1000;
 /** If UserPromptSubmit / Stop arrives within this time after the lease expires, the decision is cancelled */
 export const CANCEL_WINDOW_MS = 10000;
 /** A checkpoint nobody answered expires after this long */
