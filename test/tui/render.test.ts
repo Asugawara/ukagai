@@ -128,6 +128,20 @@ test("blocker: the list row carries a 'Task' mark", () => {
   assert.equal(lines.filter((l) => l.includes(" Task ")).length, 1);
 });
 
+test("origin: the header's first line is the origin (repo, branch, worktree) and the title is the next line; list rows show the worktree", () => {
+  const out = stripAnsi(render(viewOf(), { cols: 140, rows: 40 })).split("\n");
+  const o = out.findIndex((l) => l.includes("ukagai ⎇ feat/tui ⧉ feat-tui"));
+  const t = out.findIndex((l) => l.includes("Whether the GUI update channel uses SSE or WebSocket"));
+  assert.ok(o >= 0 && t === o + 1, `origin ${o}, title ${t}`);
+  assert.ok(!out[o]!.includes("Whether the GUI"));
+  const app = new App();
+  app.upsert(decision(withExplanation(V2_MD)), NOW);
+  app.upsert(decision({ id: "d2", created_at: "2026-10-02T00:00:10.000Z", ...withExplanation(V2_MD) }), NOW);
+  app.handle({ name: "char", ch: "b" }, 1);
+  const rows = stripAnsi(render(app.view(NOW), { cols: 100, rows: 20 })).split("\n").filter((l) => l.includes("◈ ukagai"));
+  assert.ok(rows.length >= 2 && rows.every((l) => l.includes("⎇ feat/tui") && l.includes("⧉ feat-tui")), rows.join("\n"));
+});
+
 test("a non-blocker decision shows neither the band nor 'c copy'", () => {
   const out = stripAnsi(render(viewOf(), { cols: 140, rows: 40 }));
   assert.ok(!out.includes("Waiting for you") && !out.includes("c copy"));

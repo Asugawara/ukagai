@@ -66,13 +66,13 @@ body.no-hints .foot { display: none; }
 .badge.irreversible { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
 .badge.costly { background: var(--yellow-bg); border-color: var(--yellow); color: var(--fg); font-weight: 600; }
 
-/* Header (full width, above both columns): row 1 = title + chips / reversibility / scope / pending, row 2 = the headline. 2-3 lines, folded with … */
+/* Header (full width, above both columns): row 1 = the origin (+ reversibility / scope / pending), row 2 = the title, row 3 = the headline. 2-3 lines, folded with … */
 .hd { grid-row: 2; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; border-left: 6px solid var(--repo-accent); box-shadow: inset 0 3px 0 var(--repo-accent); }
 .hd-top { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 18px 0; }
 .hd-meta { flex: 0 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12px; color: var(--muted); }
 .where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .where b { color: var(--fg); font-weight: 700; }
-.origin { flex: 0 1 auto; min-width: 0; max-width: 60%; font-size: 18px; line-height: 1.5; font-weight: 400; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.origin { flex: 0 1 auto; min-width: 0; font-size: 18px; line-height: 1.5; font-weight: 400; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* --repo-hue is set inline per decision (renderHead / the drawer dot); the accent is computed where the hue is, not on :root */
 .hd, .repo-dot { --repo-accent: hsl(var(--repo-hue, 270) var(--repo-sat, 70%) var(--repo-l)); }
 .origin-repo { color: var(--repo-accent); font-weight: 700; }
@@ -85,7 +85,7 @@ body.no-hints .foot { display: none; }
 .hint.on-text .hint-full, .hint.on-text .hint-short { display: none; }
 .hd-meta { margin-left: auto; }
 .hd-sub { padding: 0 18px; min-width: 0; }
-.hd-sub .v2-title { display: block; font-weight: 500; }
+.hd-sub .v2-title { display: block; }
 .hd.blocker .origin { color: #1d1d1f; }
 .rev { flex: none; white-space: nowrap; }
 .hd.blocker .hd-top, .hd.blocker .hd-top .hd-meta, .hd.blocker .hd-top .pending-btn { color: #1d1d1f; }
@@ -97,7 +97,6 @@ body.no-hints .foot { display: none; }
 .hd-line2:empty { display: none; }
 .hd.blocker .hd-top { background: var(--blocker); color: #1d1d1f; padding-bottom: 6px; }
 .hd.blocker .hd-line2 { padding-top: 6px; }
-.hd.blocker .v2-title { color: #1d1d1f; }
 .hd-cond { min-width: 0; padding: 0 18px 4px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expanded .hd-cond { white-space: normal; overflow-wrap: anywhere; }
 .hd-goal { display: flex; gap: 8px; min-width: 0; padding: 0 18px 8px; font-size: 12px; color: var(--muted); cursor: pointer; }

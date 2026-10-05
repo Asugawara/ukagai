@@ -764,15 +764,6 @@ function metaBox(d) {
   return box;
 }
 
-// The title stays on row 1 after the origin when it fits; otherwise it becomes the first dim line of row 2 (measured once per render)
-function fitTitle(head) {
-  const title = head.querySelector(".hd-top .v2-title");
-  if (!title || title.scrollWidth <= title.clientWidth) return;
-  const sub = head.querySelector(".hd-sub");
-  sub.append(title);
-  sub.hidden = false;
-}
-
 // First sentence of a recap (ends at 。！？!? or a full stop followed by a space); the whole text when there is no end mark
 const firstSentence = (text) => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -782,7 +773,7 @@ const firstSentence = (text) => {
 // A quiz question is several paragraphs (subject, why now, premise, then the question): the head shows only the last one
 const lastParagraph = (q) => q.split(/\n[ \t]*\n/).filter((p) => p.trim() !== "").at(-1)?.trim() ?? q;
 
-// The header (full width, above both columns). Row 1: title + chips, reversibility, scope, pending pill. Row 2: the headline (the first
+// The header (full width, above both columns). Row 1: the origin alone (+ band, reversibility, scope, pending pill). Row 2: the title. Row 3: the headline (the first
 // sentence of the recommendation, or the raw question / the plan prompt). Both rows are one / two lines and end in … (click or `.` shows all)
 function renderHead(d) {
   const head = $("head");
@@ -811,9 +802,8 @@ function renderHead(d) {
       originEl(d),
       blocker ? el("span", { class: "blocker-band", text: t("blocker_band") }) : null,
       quiz ? el("span", { class: "quiz-band", text: t("quiz_band") }) : null,
-      el("div", { class: "v2-title", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d))),
       metaBox(d)),
-    el("div", { class: "hd-sub", hidden: true }),
+    el("div", { class: "hd-sub" }, el("div", { class: "v2-title", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d)))),
     el("div", { class: "hd-line2" }, line2 ?? null, d.kind === "approve_plan" ? planMetaLine(d) : null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
   head.onclick = (e) => {
     if (e.target.closest(".hd-goal")) openHistory(d);
@@ -826,7 +816,6 @@ function renderHead(d) {
   loadHistory(d);
   head.classList.toggle("expanded", !!dr.expanded);
   placePending();
-  fitTitle(head);
 }
 
 // ---- Session history: the Goal row (header row 3) and the panel (`s`) ----
@@ -1050,14 +1039,12 @@ function renderPlanHead(pd) {
   head.append(
     el("div", { class: "hd-top" },
       el("div", { class: "origin dim", title: "plans/" }, el("span", { class: "origin-repo", text: "plans/" })),
-      el("div", { class: "v2-title", title: pd.title, text: pd.title }),
       el("div", { class: "hd-meta" })),
-    el("div", { class: "hd-sub", hidden: true }),
+    el("div", { class: "hd-sub" }, el("div", { class: "v2-title", title: pd.title, text: pd.title })),
     el("div", { class: "hd-line2" },
       el("div", { class: "headline plain" }, `${cap} · `, el("span", { class: "age", "data-created": pd.mtime, "data-tpl": "plan_updated_ago", text: t("plan_updated_ago", { age: ageText(pd.mtime) }) })),
       planMetaLine(pd)));
   placePending();
-  fitTitle(head);
 }
 
 // Right column of a plan file: the Instruct card (when the session is known) and one text action, `Done reading`.

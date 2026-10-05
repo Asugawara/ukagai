@@ -875,11 +875,13 @@ gui("layers: the header has the title, the headline and the chips; the right col
   await reopen(RICH_READY);
   assert.equal(q1("#head .headline"), "I recommend Sqlite because it keeps reads fast without a server.");
   assert.equal(q1("#head .v2-title").startsWith("Rich check"), true);
-  // header: row 1 = title + meta (chips, reversibility, scope), row 2 = the headline
+  // header: row 1 = origin + meta (reversibility, scope), row 2 = the title, row 3 = the headline
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
   assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2", "hd-cond"]); // X1: the condition sentence is row 3
   const top = ev<string[]>(`JSON.stringify([...document.querySelector("#head .hd-top").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(top.slice(0, 3), ["origin", "v2-title", "hd-meta"]);
+  assert.deepEqual(top.slice(0, 2), ["origin", "hd-meta"]); // the first row holds no title
+  assert.equal(count("#head .hd-top .v2-title"), 0);
+  assert.equal(count("#head .hd-sub > .v2-title"), 1); // the title is its own row right below
   assert.equal(q1("#head .hd-meta .where").length > 0, true); // one line of dim text: scope · age
   assert.equal(count("#head .chip, #head .pill"), 0);
   assert.equal(count("#head .hd-line2 .headline"), 1);
@@ -1732,7 +1734,7 @@ gui("Y3 M-3: an approval has its command in monospace in the header, keeps the b
   await cancelAll();
 });
 
-gui("Y3 M-4: the Why / Why I stopped headings follow the display language, and the blocker band's title is dark", async () => {
+gui("Y3 M-4: the Why / Why I stopped headings follow the display language, and the blocker band's origin is dark", async () => {
   await seedRich();
   await reopen(RICH_READY);
   try {
@@ -1743,7 +1745,7 @@ gui("Y3 M-4: the Why / Why I stopped headings follow the display language, and t
     await reopen();
     await setLang("ja", `document.querySelector("#background .why h2")?.textContent === "なぜ止まったか"`);
     assert.equal(b.whyHeading, "Why I stopped");
-    assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .v2-title")).color`), "rgb(29, 29, 31)");
+    assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .origin")).color`), "rgb(29, 29, 31)"); // the band holds the origin; the title is on its own row below
   } finally {
     ev(`document.documentElement.dataset.lang = "en", "ok"`);
   }
@@ -1771,18 +1773,21 @@ gui("Y3 M-5: at 1000x700 (ja) three cards, the one-row free-text card and the hi
 const firstText = () => ev<string>(`"t:" + document.querySelector("#head .hd-top").firstChild.textContent`).slice(2);
 const fontPx = (sel: string) => ev<string>(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).fontSize`);
 
-gui("G1: row 1 of the header starts with the origin at the headline size; the title falls to row 2 when it does not fit", async () => {
+gui("G1: row 1 of the header holds the origin alone at the headline size; the title is its own row below, at any length", async () => {
   ab("set", "viewport", "1440", "900");
   try {
-    await seedRich();
+    await seedRich({ cwd: "/Users/dev/.herdr/worktrees/ukagai/fix-header-rows" });
     await reopen(RICH_READY);
     const origin = ev<string>(`"t:" + document.querySelector("#head .origin").textContent`).slice(2);
     assert.match(origin, /^\S+( ⎇ \S+)?( ⧉ \S+)?$/);
+    assert.match(origin, /⧉ fix-header-rows$/); // the worktree is in the header
     assert.equal(firstText(), origin); // the first text node of row 1
     assert.equal(ev<boolean>(`document.querySelector("#head .hd-top").firstElementChild.classList.contains("origin")`), true);
     assert.equal(fontPx("#head .origin"), fontPx("#head .headline"));
     assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .origin")).fontWeight`), 400 as unknown as string);
-    assert.equal(count("#head .hd-top .v2-title"), 1); // it fits at 1440
+    assert.equal(count("#head .hd-top .v2-title"), 0);
+    assert.equal(count("#head .hd-sub .v2-title"), 1);
+    assert.equal(ev<boolean>(`(() => { const o = document.querySelector("#head .origin").getBoundingClientRect(), t = document.querySelector("#head .v2-title").getBoundingClientRect(); return t.top >= o.bottom - 1 && t.left < o.left + 40; })()`), true); // below the origin, not beside it
     ab("screenshot", join(SHOTS, "G1-header-origin.png"));
 
     await cancelAll();
@@ -1793,7 +1798,6 @@ gui("G1: row 1 of the header starts with the origin at the headline size; the ti
     assert.equal(ev<boolean>(`(() => { const o = document.querySelector("#head .origin"); return o.scrollHeight <= o.clientHeight + 1 && o.getBoundingClientRect().height < 40; })()`), true); // one line
     assert.equal(count("#head .hd-top .v2-title"), 0);
     assert.equal(count("#head .hd-sub .v2-title"), 1);
-    assert.equal(ev<boolean>(`document.querySelector("#head .hd-sub").hidden`), false);
     assert.equal(fontPx("#head .origin"), fontPx("#head .headline"));
     ab("screenshot", join(SHOTS, "G1-header-origin-1000.png"));
   } finally {
@@ -1803,11 +1807,12 @@ gui("G1: row 1 of the header starts with the origin at the headline size; the ti
 
 gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval screens have the origin too", async () => {
   await cancelAll();
-  await seedQuestion();
-  await seedQuestion();
+  await seedQuestion({ cwd: "/Users/dev/.herdr/worktrees/ukagai/fix-header-rows" });
+  await seedQuestion({ cwd: "/Users/dev/.herdr/worktrees/ukagai/fix-header-rows" });
   await reopen();
   press("b");
   await sleep(300);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("#drawer .row .where")].every(w => /⧉ \\S+$/.test(w.textContent))`), true); // the worktree is in every drawer row
   assert.equal(ev<boolean>(`[...document.querySelectorAll("#drawer .row .where")].every(w => w.firstChild.className === "repo-dot" && w.children[1].tagName === "B" && getComputedStyle(w.children[1]).fontWeight >= 600)`), true);
   press("Escape");
   await cancelAll();
