@@ -103,6 +103,19 @@ async function seedQuestion(cwd = ROOT): Promise<{ id: string }> {
   return { id: d.id };
 }
 
+
+/** A live session whose transcript carries `slug`: a plan file `<slug>.md` pops up only when its session is known */
+async function planSession(slug: string): Promise<void> {
+  const tpath = join(home, ".claude", "projects", "p", `${slug}.jsonl`);
+  mkdirSync(join(home, ".claude", "projects", "p"), { recursive: true });
+  writeFileSync(tpath, `{"type":"user","slug":"${slug}"}\n`);
+  await fetch(base + "/api/events", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ session_id: `s-${slug}`, transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() }),
+  });
+}
+
 const PLANS = () => join(home, ".claude", "plans");
 function writePlan(name: string, body: string) {
   mkdirSync(PLANS(), { recursive: true });
@@ -235,6 +248,7 @@ gui("the hint line lists `, Settings` (en and ja)", async () => {
 gui("plans.auto_show=false keeps a new plan out of Pending (still in the drawer list); on again shows it", async () => {
   await putSettings((s) => (s.plans.auto_show = false));
   await openMain(IDLE);
+  await planSession("quiet-plan");
   writePlan("quiet-plan.md", "# Quiet plan\n\n## One\n\nText.\n");
   await sleep(2500);
   assert.equal(ev<boolean>(`document.getElementById("empty").hidden`), false, "the plan did not take the screen");

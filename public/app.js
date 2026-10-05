@@ -679,7 +679,7 @@ function renderHeader() {
   announcedCount = n;
   pendingCount.textContent = String(n);
   // With one item only the shown one exists, so hide it. With auto-show off a waiting plan is only reachable through the drawer: keep the button
-  pendingBtn.hidden = drawerIds().length < 2 && !(!settings.plans.auto_show && newPlans().length > 0);
+  pendingBtn.hidden = drawerIds().length < 2 && !(newPlans().length > queuedPlans().length); // a plan kept out of the queue (auto_show off, or no session yet) is reached through the drawer
   const blocked = pendingList().some(isBlocker);
   // title_badge only drops the (N) count; the "waiting" cue of a blocker stays
   document.title = n > 0 ? `${settings.notify.title_badge ? `(${n}) ` : ""}ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
@@ -912,9 +912,10 @@ const newPlans = () => {
   return [...plans.values()].filter((p) => isNewPlan(p) && !paired.has(p.name)).sort((a, b) => b.mtime.localeCompare(a.mtime));
 };
 // Every item in order: pending decisions (oldest first), then new plans (newest first)
-const isNewName = (name) => newPlans().some((x) => x.name === name);
+const isNewName = (name) => queuedPlans().some((x) => x.name === name);
 // Settings `plans.auto_show = false`: new plan files stay out of the queue (shown, counted, cycled); the drawer still lists them
-const queuedPlans = () => (settings.plans.auto_show ? newPlans() : []);
+// A plan file whose agent session is unknown has no actions and is never queued whatever the setting says; it is listed in the drawer until the session is found (plan.updated with session_id)
+const queuedPlans = () => (settings.plans.auto_show ? newPlans().filter((p) => p.session_id) : []);
 const itemIds = () => [...pendingList().map((d) => d.id), ...queuedPlans().map((p) => PLAN_ID + p.name)];
 const drawerIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
 const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name }, session_id: data.session_id });
@@ -945,7 +946,7 @@ async function loadPlans(data) {
   const seen = new Set(list.map((p) => p.name));
   for (const name of [...plans.keys()]) if (!seen.has(name)) dropPlan(name);
   for (const p of list) await applyPlan(p);
-  const first = newPlans()[0]; // the one advance() shows; the rest load when shown
+  const first = queuedPlans()[0] ?? newPlans()[0]; // the one advance() shows; the rest load when shown
   if (first) await ensurePlanData(first.name);
 }
 
@@ -953,7 +954,7 @@ async function loadPlans(data) {
 function applyPlan(p) {
   plans.set(p.name, p);
   const cached = planData.get(p.name);
-  if (!cached || cached.mtime === p.mtime) return null;
+  if (!cached || (cached.mtime === p.mtime && cached.session_id === p.session_id)) return null;
   if (shownId === PLAN_ID + p.name) return refreshPlanData(p.name);
   planData.delete(p.name);
   return null;

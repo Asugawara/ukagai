@@ -275,7 +275,7 @@ Read-only access to the plan files Claude Code writes in plan mode, so a plan ca
 { "plans": [ { "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "bytes": 1234, "sections": 4, "lines": 60, "read": false, "session_id": "…" } ] }
 ```
 
-- `session_id` (optional, also on the detail) is the live Claude Code session writing the plan: Claude Code names the plan after the session's `slug` and every transcript line carries `"slug":"<name>"`, so it is the session (not ended, last event within 6 hours, transcript under `~/.claude/projects/`) whose transcript has that slug in its first 256 KB. Absent when none is found. The `plan.updated` SSE event carries no `session_id`; clients get it from these two calls.
+- `session_id` (optional, also on the detail) is the live Claude Code session writing the plan: Claude Code names the plan after the session's `slug` and every transcript line carries `"slug":"<name>"`, so it is the session (not ended, last event within 6 hours, transcript under `~/.claude/projects/`) whose transcript has that slug. Claude Code assigns the slug lazily, when the session first enters plan mode (lines written before carry none, every later line does), so the lookup reads the **last** 256 KB of the transcript first (complete lines only), then the first 256 KB (once). While a session's slug is unknown the tail is read again whenever the file grew (one 256 KB read per poll per session); a found slug is kept for good. Absent when none is found. The `plan.updated` SSE event carries `session_id` when it is known: a plan whose session is found later (the server looks on a 10 s timer and on each of these two calls) is announced again with `session_id`, once, so clients learn it without a file write.
 - Only `*.md` files, newest `mtime` first, at most 50. Names starting with `.` are skipped. A file whose `realpath` is outside the plans directory (a symlink leading out) is not listed. A missing directory gives `{ "plans": [] }`.
 - `name` is the file name including `.md`. `title` is the first H1 (`# …`, outside code fences), or `name` if there is none. `sections` counts H2 headings (outside code fences). `lines` counts lines (0 for an empty file). A file over 1 MB is listed with `title = name` and `sections = 0`. `read` is true when the stored read mark equals the current `mtime`.
 
@@ -314,7 +314,7 @@ The settings page (`/settings`) edits `<data-dir>/config.json` through these two
   "plans": {
     // one-click chips on plan cards: at most 10 lines of 1-300 characters (trimmed, blank lines dropped)
     "instruction_presets": [],
-    "auto_show": true,   // false: new plan files do not pop up and do not count in Pending (the drawer list and an arriving approval still show them)
+    "auto_show": true,   // false: new plan files do not pop up and do not count in Pending (the drawer list and an arriving approval still show them). Whatever it says, a plan file without `session_id` never pops up or counts (it has no actions): it is listed in the drawer until `plan.updated` brings the session
   },
   "notify": {
     "sound": false,                  // a short beep on a new decision while the GUI tab is not focused
@@ -348,7 +348,7 @@ The real path (symlinks resolved) must be a regular file under one of: `<HOME>/.
 
 ### GET /api/stream
 
-SSE. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`), `plan.removed` (data is `{ "name" }`) and `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`).
+SSE. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read` and, when known, `session_id`), `plan.removed` (data is `{ "name" }`) and `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`).
 
 `plan.updated` fires when a `*.md` file in `~/.claude/plans` is created or modified (debounced 400 ms per file: a burst of writes gives one event with the final state; files that are dotfiles, escape the directory by symlink, or exceed 1 MB are skipped silently) and when the read mark of a plan changes. `plan.removed` fires when a plan is deleted or renamed away. Plans already present when the server starts are not announced; use `GET /api/plans`. The server watches with `fs.watch` plus a 10 s listing poll (`name → mtime + size`), and polls until the directory exists if it is missing.
 

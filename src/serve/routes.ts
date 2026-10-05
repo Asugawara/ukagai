@@ -29,6 +29,7 @@ import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
 import { FILE_TYPES, documentDir, resolveDocumentFile, type DocumentScope } from "./files.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
+import type { PlanSummary } from "../contract.js";
 import { PlanSessions } from "./plan-session.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
@@ -57,6 +58,8 @@ export type AppDeps = {
   /** One line to serve.log (plan_instructed) */
   log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
   collect: (session: DecisionSession) => Promise<DecisionContext>;
+  /** Finds the session of a plan file; the server owns it so it can announce a session found later. Defaults to a fresh one */
+  planSessions?: PlanSessions;
 };
 
 const MIME: Record<string, string> = {
@@ -285,7 +288,11 @@ export function createApp(deps: AppDeps): Hono {
 
   // ~/.claude/plans: read-only files, plus a per-plan read mark kept by ukagai (plan.updated / plan.removed come over SSE)
   const { isRead } = deps.planRead;
-  const planSessions = new PlanSessions(() => store.listSessions(), deps.home);
+  const withSession = (p: PlanSummary): PlanSummary => {
+    const session_id = planSessions.cached(p.name);
+    return session_id ? { ...p, session_id } : p;
+  };
+  const planSessions = deps.planSessions ?? new PlanSessions(() => store.listSessions(), deps.home);
   app.get("/api/plans", auth("any"), async (c) => {
     const plans = await listPlans(deps.home, isRead);
     return c.json({
@@ -334,7 +341,7 @@ export function createApp(deps: AppDeps): Hono {
     if (mtime !== undefined) deps.planRead.mark(name, mtime);
     else deps.planRead.unmark(name);
     const summary = await planSummary(dir, name, isRead);
-    if (summary) hub.broadcast("plan.updated", summary);
+    if (summary) hub.broadcast("plan.updated", withSession(summary));
     return c.json({ name, read });
   };
   app.post("/api/plans/:name/read", auth("any"), (c) => setPlanRead(c, true));

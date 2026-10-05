@@ -145,6 +145,19 @@ async function stopEvent(sid: string) {
   assert.equal(res.status, 204);
 }
 
+
+/** A live session whose transcript carries `slug`: a plan file `<slug>.md` pops up only when its session is known */
+async function planSession(slug: string): Promise<void> {
+  const tpath = join(home, ".claude", "projects", "p", `${slug}.jsonl`);
+  mkdirSync(join(home, ".claude", "projects", "p"), { recursive: true });
+  writeFileSync(tpath, `{"type":"user","slug":"${slug}"}\n`);
+  await fetch(base + "/api/events", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ session_id: `s-${slug}`, transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() }),
+  });
+}
+
 const PLANS = () => join(home, ".claude", "plans");
 function writePlan(name: string, text: string) {
   mkdirSync(PLANS(), { recursive: true });
@@ -300,6 +313,7 @@ gui("a click on Stop here sends at once; a click on the instruction card only op
 });
 
 gui("precedence: a question outranks a checkpoint, a checkpoint outranks a plan file; the count includes it; the drawer says recap", async () => {
+  await planSession("ck-plan");
   writePlan("ck-plan.md", "# A plan file\n\n## One\n\nText.\n");
   const c = await seedCheckpoint();
   const q = await seedQuestion();

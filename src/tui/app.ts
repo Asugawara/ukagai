@@ -234,9 +234,14 @@ export class App {
     return this.visiblePlans().filter((p) => this.isNew(p, now));
   }
 
-  /** What `Pending N` counts: the decisions waiting plus the new plans */
+  /** The new plans that flow in by themselves: a plan file whose agent session is unknown has no actions, so it only sits in the list (`b`) until the session is found */
+  private queuedPlans(now: number): PlanSummary[] {
+    return this.newPlans(now).filter((p) => p.session_id);
+  }
+
+  /** What `Pending N` counts: the decisions waiting plus the queued new plans */
   count(now: number): number {
-    return this.pending().length + this.newPlans(now).length;
+    return this.pending().length + this.queuedPlans(now).length;
   }
 
   /** The list at startup / refetch. A plan on screen that is gone leaves the screen; with nothing on screen a new plan comes up by itself */
@@ -254,7 +259,7 @@ export class App {
     this.plans.set(p.name, p);
     if (p.name === this.shownPlan) {
       const have = this.files.get(p.name);
-      if (!have || have.mtime !== p.mtime) this.refreshShown(p.name);
+      if (!have || have.mtime !== p.mtime || have.session_id !== p.session_id) this.refreshShown(p.name);
       return;
     }
     this.autoShow(now);
@@ -275,7 +280,7 @@ export class App {
   /** With nothing on screen, the newest new plan comes up by itself (once its text is here) */
   private autoShow(now: number): void {
     if (this.shownId !== null || this.shownPlan !== null) return;
-    const next = this.newPlans(now)[0];
+    const next = this.queuedPlans(now)[0];
     if (next) this.openPlan(next.name, true);
   }
 
@@ -284,7 +289,7 @@ export class App {
     const sum = this.plans.get(name);
     if (!sum) return;
     const have = this.files.get(name);
-    if (have && have.mtime === sum.mtime) {
+    if (have && have.mtime === sum.mtime && have.session_id === sum.session_id) {
       this.showPlan(name);
       return;
     }

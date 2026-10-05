@@ -1,7 +1,10 @@
-import { open } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 import { isClaudeTranscriptPath, type SessionSummary } from "../contract.js";
 
-/** Only the head of a transcript is read: every line carries the session's slug */
+/**
+ * Bytes read from the end, then from the start, of a transcript. Claude Code assigns the slug lazily, when the session first
+ * enters plan mode: lines written before that have none, every later line carries it
+ */
 export const SLUG_SCAN_BYTES = 256 * 1024;
 /** A session whose last event is older is not "writing a plan" any more */
 export const PLAN_SESSION_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -20,15 +23,24 @@ export function slugOfHead(text: string): string | undefined {
   return undefined;
 }
 
-type Entry = { size: number; slug: string | undefined };
+/** `text` read from `start` of a file: the partial first line of a chunk that does not begin the file is dropped */
+function completeLines(text: string, start: number): string {
+  if (start === 0) return text;
+  const nl = text.indexOf("\n");
+  return nl < 0 ? "" : text.slice(nl + 1);
+}
+
+type Entry = { size: number; slug: string | undefined; headDone: boolean };
 
 /**
  * Which live Claude Code session writes a plan file. Claude Code names the plan after the session's slug and stamps
  * `"slug":"<name>"` on every transcript line, so the session is the one whose transcript carries the plan's name.
  */
 export class PlanSessions {
-  /** transcript path -> what its head said at `size`. A found slug is kept for good; an unknown one is looked up again only when the file grew within the scanned head */
+  /** transcript path -> what its tail / head said at `size`. A found slug is kept for good; an unknown one is looked up again only when the file changed size (one tail read, the head only once) */
   private slugs = new Map<string, Entry>();
+  /** plan name -> the session last found for it (undefined: looked up, none found) */
+  private seen = new Map<string, string | undefined>();
   /** transcript path -> the read in flight (concurrent lookups of one transcript share it) */
   private reading = new Map<string, Promise<string | undefined>>();
 
@@ -36,10 +48,26 @@ export class PlanSessions {
     private listSessions: () => SessionSummary[],
     private home: string,
     private now: () => number = Date.now,
+    /** A plan that was looked up before now has a session (or another one): the UIs learn it without a file write */
+    private onSession?: (planName: string, sessionId: string) => void,
   ) {}
+
+  /** The session last found for a plan, without looking */
+  cached(planName: string): string | undefined {
+    return this.seen.get(planName);
+  }
 
   /** The session id for a plan file name (`<slug>.md`), or undefined */
   async find(planName: string): Promise<string | undefined> {
+    const id = await this.lookup(planName);
+    const had = this.seen.has(planName);
+    const prev = this.seen.get(planName);
+    this.seen.set(planName, id);
+    if (had && id !== undefined && id !== prev) this.onSession?.(planName, id);
+    return id;
+  }
+
+  private async lookup(planName: string): Promise<string | undefined> {
     if (!planName.endsWith(".md")) return undefined;
     const slug = planName.slice(0, -3);
     for (const s of this.listSessions()) {
@@ -67,12 +95,13 @@ export class PlanSessions {
       try {
         const { size } = await fh.stat();
         const hit = this.slugs.get(path);
-        // Still unknown: nothing new to find unless the file grew and the head is not full yet
-        if (hit && (size === hit.size || hit.size >= SLUG_SCAN_BYTES)) return undefined;
-        const buf = Buffer.alloc(Math.min(size, SLUG_SCAN_BYTES));
-        const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-        const slug = slugOfHead(buf.toString("utf8", 0, bytesRead));
-        if (size > 0) this.slugs.set(path, { size, slug });
+        // Still unknown: nothing new to find unless the file changed size
+        if (hit && size === hit.size) return undefined;
+        let slug = await this.scan(fh, size, Math.max(0, size - SLUG_SCAN_BYTES));
+        // The head never changes as the file grows: it is read once (a file up to one chunk long was read whole already)
+        const headDone = hit?.headDone === true || size <= SLUG_SCAN_BYTES;
+        if (slug === undefined && !headDone) slug = await this.scan(fh, size, 0);
+        if (size > 0) this.slugs.set(path, { size, slug, headDone: true });
         return slug;
       } finally {
         await fh.close();
@@ -80,5 +109,13 @@ export class PlanSessions {
     } catch {
       return undefined;
     }
+  }
+
+  /** The slug in the (at most SLUG_SCAN_BYTES long) chunk of the file that starts at `start` */
+  private async scan(fh: FileHandle, size: number, start: number): Promise<string | undefined> {
+    const len = Math.min(size - start, SLUG_SCAN_BYTES);
+    const buf = Buffer.alloc(len);
+    const { bytesRead } = await fh.read(buf, 0, len, start);
+    return slugOfHead(completeLines(buf.toString("utf8", 0, bytesRead), start));
   }
 }
