@@ -171,6 +171,14 @@ button.btn.danger { color: var(--red); border-color: var(--red); }
 button.btn:disabled { opacity: .45; cursor: not-allowed; }
 input[type=text] { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; }
 .reject-box { margin-top: 4px; }
+.instruct-box { display: flex; flex-direction: column; gap: 6px; }
+.instruct-box textarea { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; resize: vertical; }
+.instruct-box button.btn.primary { width: auto; align-self: flex-end; min-height: 32px; }
+.instruct-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.instruct-chips[hidden] { display: none; }
+button.chip { font: inherit; font-size: 12px; max-width: 100%; padding: 3px 10px; min-height: 28px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.chip:hover { border-color: var(--accent); }
+.set textarea { font: inherit; width: 100%; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 
 /* Markdown */
 .md > :first-child { margin-top: 0; }

@@ -65,6 +65,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const dir = plansDir(home);
   const hub = new SseHub();
   const planRead = new PlanReadStore(dataDir, dir);
+  const log = (event: string, fields?: Record<string, string | number | undefined>) => appendLogLine(join(dataDir, "serve.log"), event, fields);
   // First run (no plans-read.json): plans already on disk are not new
   if (!planRead.exists()) planRead.seed(await listPlans(home));
   const store = new Store({
@@ -72,6 +73,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     leaseGraceMs: opts.leaseGraceMs ?? LEASE_GRACE_MS,
     handoffGraceMs: opts.handoffGraceMs,
     broadcast: (event, data) => hub.broadcast(event, data),
+    log,
     planNameOf: (filePath) => planNameOfPath(dir, filePath),
     // A plan decision that leaves `pending` marks its plan read at the current mtime, synchronously and before the store
     // emits decision.updated, so the other UI never sees the closed decision with the plan still new
@@ -101,6 +103,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     settings,
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
+    log,
     collect: (session) => collectContext(session, { home }),
   });
 
@@ -129,7 +132,6 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       hub.broadcast("plan.removed", { name });
     },
   });
-  const log = (event: string, fields?: Record<string, string | number | undefined>) => appendLogLine(join(dataDir, "serve.log"), event, fields);
   // UKAGAI_TERMINAL=none: no terminal at all (the test script sets it so no test asks the real herdr)
   const terminal = opts.terminal ?? (process.env.UKAGAI_TERMINAL === "none" ? new NoTerminal() : new HerdrTerminal("herdr", (error) => log("herdr_failed", { error })));
   startCheckpointDelivery({ store, terminal, log, settings, pollMs: opts.terminalPollMs });

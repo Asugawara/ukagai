@@ -130,6 +130,17 @@ export async function run(argv: string[]): Promise<number> {
         else if (e.type === "read") {
           // Failing to mark a plan read is harmless: it just stays new
           void api.markRead(e.name, e.mtime).catch(() => {});
+        } else if (e.type === "instruct_plan") {
+          void api.instructPlan(e.name, e.text).then(
+            (via) => {
+              app.planInstructed(e.name, via, Date.now());
+              schedule();
+            },
+            (err: unknown) => {
+              app.planInstructFailed(e.name, err instanceof Error ? err.message : String(err), Date.now());
+              schedule();
+            },
+          );
         } else if (e.type === "copy") {
           if (!app.copySupported) continue;
           const p = spawn("pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] });

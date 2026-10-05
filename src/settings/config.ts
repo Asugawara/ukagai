@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { CODEX_DELAY_MAX_S, CODEX_DELAY_MIN_S, DEFAULT_SETTINGS, type Settings } from "../contract.js";
+import { CODEX_DELAY_MAX_S, CODEX_DELAY_MIN_S, DEFAULT_SETTINGS, INSTRUCTION_PRESETS_MAX, INSTRUCTION_PRESET_MAX_CHARS, type Settings } from "../contract.js";
 
 /** Languages the GUI / TUI can display. Agent-facing text (hook messages, skill) is always English. */
 export const LANGS = ["en", "ja"] as const;
@@ -22,6 +22,16 @@ export function isLang(v: unknown): v is Lang {
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const bool = (v: unknown, d: boolean): boolean => (typeof v === "boolean" ? v : d);
 
+/** Presets from anything: strings only, trimmed, blanks and over-long ones dropped, capped */
+function presets(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === "string")
+    .map((x) => x.trim())
+    .filter((x) => x !== "" && x.length <= INSTRUCTION_PRESET_MAX_CHARS)
+    .slice(0, INSTRUCTION_PRESETS_MAX);
+}
+
 /** A settings object from anything: every unknown or malformed field falls back to its default (never throws) */
 export function normalizeConfig(rawIn: unknown): UkagaiConfig {
   const raw = obj(rawIn);
@@ -37,7 +47,7 @@ export function normalizeConfig(rawIn: unknown): UkagaiConfig {
       codex_delay_s: typeof delay === "number" && Number.isInteger(delay) && delay >= CODEX_DELAY_MIN_S && delay <= CODEX_DELAY_MAX_S ? delay : d.checkpoints.codex_delay_s,
       terminal_delivery: bool(cp.terminal_delivery, d.checkpoints.terminal_delivery),
     },
-    plans: { auto_show: bool(obj(raw.plans).auto_show, d.plans.auto_show) },
+    plans: { auto_show: bool(obj(raw.plans).auto_show, d.plans.auto_show), instruction_presets: presets(obj(raw.plans).instruction_presets) },
     notify: {
       sound: bool(obj(raw.notify).sound, d.notify.sound),
       browser: bool(obj(raw.notify).browser, d.notify.browser),

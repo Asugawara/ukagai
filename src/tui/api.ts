@@ -128,6 +128,16 @@ export class TuiApi {
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
   }
 
+  /** Tell the agent writing a plan file something; resolves with how it was delivered. Throws on any failure */
+  async instructPlan(name: string, text: string): Promise<string> {
+    const res = await this.fetch(`/api/plans/${encodeURIComponent(name)}/instruct`, { method: "POST", body: { text }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(j.error ?? `HTTP ${res.status}`, res.status);
+    }
+    return ((await res.json()) as { delivered_via?: string }).delivered_via ?? "hook";
+  }
+
   async answer(id: string, body: Record<string, unknown>): Promise<Decision> {
     const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}/answer`, {
       method: "POST",

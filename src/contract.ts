@@ -249,8 +249,11 @@ export const DecisionResponse = z.object({
   approve: z.boolean().optional(),
   reason: z.string().optional(),
   set_mode_auto: z.boolean().optional(),
+  /** approve_plan only: the human asks the agent to do `text` before the plan is approved (`approve` is absent) */
+  instruct: z.literal(true).optional(),
   /** checkpoint only (see CheckpointResponse) */
   kind: z.enum(["continue", "instruct", "stop"]).optional(),
+  /** the instruction of a checkpoint `instruct` or of an approve_plan `instruct` */
   text: z.string().optional(),
   decided_at: z.string(),
   /** For a checkpoint: when its instruction was handed to the agent */
@@ -272,10 +275,13 @@ export type CheckpointResponse = z.infer<typeof CheckpointResponse>;
 
 /** What the human told the agent through a checkpoint, waiting for the agent's next tool call (one per session, newest wins) */
 export const Instruction = z.object({
+  /** "" for a plan instruction (no decision behind it) */
   decision_id: z.string(),
   kind: z.enum(["instruct", "stop"]),
   text: z.string(),
   created_at: z.string(),
+  /** `plan`: sent from a plan file card while the agent is still writing the plan (the hook words it differently) */
+  about: z.literal("plan").optional(),
 });
 export type Instruction = z.infer<typeof Instruction>;
 
@@ -327,6 +333,15 @@ export const CreateDecisionRequest = z.object({
 });
 export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequest>;
 
+export const INSTRUCTION_MAX_CHARS = 4000;
+
+/** Leads the text of an instruction sent from a plan file card (the hook's context and the terminal line) */
+export const PLAN_INSTRUCT_PREFIX = "[ukagai] About the plan you are writing:";
+
+/** POST /api/plans/:name/instruct */
+export const PlanInstructRequest = z.strictObject({ text: z.string().trim().min(1).max(INSTRUCTION_MAX_CHARS) });
+export type PlanInstructRequest = z.infer<typeof PlanInstructRequest>;
+
 /** POST /api/decisions/:id/answer. Strict so that the key sets are mutually exclusive */
 export const AnswerRequest = z.union([
   // checkpoint: `text` is required for instruct; `via` / `decided_at` of the CheckpointResponse shape are accepted and ignored (the server sets them)
@@ -341,6 +356,8 @@ export const AnswerRequest = z.union([
   z.strictObject({ answers: z.record(z.string(), z.string()) }),
   z.strictObject({ approve: z.literal(true), set_mode_auto: z.boolean().optional() }),
   z.strictObject({ approve: z.literal(false), reason: z.string().min(1) }),
+  // approve_plan only (the route rejects it for other kinds): do `text` first, the plan stays unapproved
+  z.strictObject({ instruct: z.literal(true), text: z.string().trim().min(1).max(INSTRUCTION_MAX_CHARS) }),
   z.strictObject({ fallback: z.literal(true) }),
 ]);
 export type AnswerRequest = z.infer<typeof AnswerRequest>;
@@ -619,6 +636,8 @@ export const PlanSummary = z.object({
   lines: z.number().int().nonnegative(),
   /** The stored read mark equals the current `mtime` (see POST /api/plans/:name/read) */
   read: z.boolean(),
+  /** The live Claude Code session writing this plan (the plan file is named after its slug); absent when none is found */
+  session_id: z.string().optional(),
 });
 export type PlanSummary = z.infer<typeof PlanSummary>;
 
@@ -628,6 +647,7 @@ export const PlanContent = z.object({
   mtime: z.string(),
   markdown: z.string(),
   read: z.boolean(),
+  session_id: z.string().optional(),
 });
 export type PlanContent = z.infer<typeof PlanContent>;
 
@@ -678,6 +698,9 @@ export function stripExplainBlocks(markdown: string): string {
 
 export const CODEX_DELAY_MIN_S = 30;
 export const CODEX_DELAY_MAX_S = 3600;
+export const INSTRUCTION_PRESETS_MAX = 10;
+export const INSTRUCTION_PRESET_MAX_CHARS = 300;
+
 export const Settings = z.object({
   /** Display language of the GUI / TUI (and the language the agent writes explanations in) */
   lang: z.enum(["en", "ja"]),
@@ -695,6 +718,12 @@ export const Settings = z.object({
   plans: z.object({
     /** false: new plan files neither pop up nor count in Pending (still in the drawer list) */
     auto_show: z.boolean(),
+    /** One-click chips on plan cards: trimmed, blank lines dropped, then at most 10 of 1-300 characters */
+    instruction_presets: z
+      .array(z.string())
+      .transform((a) => a.map((t) => t.trim()).filter((t) => t !== ""))
+      .pipe(z.array(z.string().max(INSTRUCTION_PRESET_MAX_CHARS)).max(INSTRUCTION_PRESETS_MAX))
+      .default([]),
   }),
   notify: z.object({
     sound: z.boolean(),
@@ -709,6 +738,6 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   hints: true,
   checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true },
-  plans: { auto_show: true },
+  plans: { auto_show: true, instruction_presets: [] },
   notify: { sound: false, browser: false, title_badge: true },
 };

@@ -17,6 +17,8 @@ export type Effect =
   | { type: "copy"; text: string }
   /** Mark a plan read at the mtime the human read (POST /api/plans/:name/read) */
   | { type: "read"; name: string; mtime: string }
+  /** Tell the agent that is writing a plan file something (POST /api/plans/:name/instruct) */
+  | { type: "instruct_plan"; name: string; text: string }
   | { type: "quit" };
 
 interface Draft {
@@ -24,6 +26,8 @@ interface Draft {
   sel: Set<string>;
   free: { on: boolean; text: string };
   reason: string;
+  /** The instruction typed on a plan and left with Esc */
+  instruct: string;
 }
 
 export const TOAST_MS = 2000;
@@ -95,7 +99,9 @@ export class App {
   onPlans: () => void = () => {};
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
-  private input: { kind: "free" | "reason" | "note"; text: string } | null = null;
+  private input: { kind: "free" | "reason" | "note" | "instruct"; text: string } | null = null;
+  /** Instruction presets (settings plans.instruction_presets) */
+  presets: string[] = [];
   /** The "None of these" picker (index into NONE_TYPES, optional note) */
   private none: { index: number; text: string } | null = null;
   /** The "Can't answer this" picker: `pos` is the row (0-2 the reasons, then the terms checklist), `index` the reason in force */
@@ -141,6 +147,7 @@ export class App {
   /** The settings changed (GET /api/settings, `settings.updated`): the language (unless `--lang` pinned it) */
   settingsUpdated(s: Settings): void {
     if (!this.langLocked) this.lang = s.lang;
+    this.presets = s.plans?.instruction_presets ?? [];
     this.models.clear();
   }
 
@@ -430,7 +437,7 @@ export class App {
     let dr = this.drafts.get(m.id);
     if (!dr) {
       const q = m.question;
-      dr = { cursor: q?.initialCursor ?? 0, sel: new Set(), free: { on: false, text: "" }, reason: "" };
+      dr = { cursor: q?.initialCursor ?? 0, sel: new Set(), free: { on: false, text: "" }, reason: "", instruct: "" };
       // Single select: moving = selecting. Pre-select the initial position (the recommended option, else the first)
       if (q && !q.multi && q.cards[dr.cursor]) dr.sel.add(q.cards[dr.cursor]!.value);
       this.drafts.set(m.id, dr);
@@ -474,6 +481,9 @@ export class App {
       cannot: this.cannot ? { index: this.cannot.index, pos: this.cannot.pos, terms: this.cannot.terms, checked: this.cannot.checked, text: this.cannot.text } : null,
       notice: this.notice(now),
       reason: dr?.reason ?? "",
+      instruct: dr?.instruct ?? "",
+      presets: this.presets,
+      canInstruct: !!m?.readonly && !!this.files.get(m.readonly.name)?.session_id,
       pending: count,
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
       lang: this.lang,
@@ -580,7 +590,7 @@ export class App {
       if (this.mode === "normal") this.wheel(key.dir, key.x);
       return [];
     }
-    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now });
+    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now, presets: this.mode === "input" && this.input?.kind === "instruct" && this.input.text === "" ? Math.min(9, this.presets.length) : 0 });
     this.lastG = lastG;
     return action ? this.apply(action, m, now) : [];
   }
@@ -646,6 +656,7 @@ export class App {
       case "input-backspace": if (this.input) this.input.text = Array.from(this.input.text).slice(0, -1).join(""); return [];
       case "input-cancel": {
         // Esc leaves the box and keeps the text (a note box keeps its own text on Enter, as before)
+        if (this.input?.kind === "instruct" && m) this.draft(m).instruct = this.input.text;
         if (this.input?.kind === "free" && m) {
           const dr = this.draft(m);
           dr.free.text = this.input.text;
@@ -667,6 +678,8 @@ export class App {
     const dr = this.draft(m);
     switch (a.type) {
       case "input-confirm": return this.confirmInput(m, dr, now);
+      case "instruct": return this.startInstruct(m, dr, now);
+      case "preset": if (this.input?.kind === "instruct" && this.presets[a.n - 1] !== undefined) this.input.text = this.presets[a.n - 1]!; return [];
       case "none": return this.openNone(m, dr);
       case "none-move": if (this.none) this.none.index = clamp(this.none.index + a.delta, NONE_TYPES.length); return [];
       case "none-cancel": this.none = null; this.mode = "normal"; return [];
@@ -798,7 +811,7 @@ export class App {
 
   /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, 2 buttons for a plan */
   private slots(m: ScreenModel): number {
-    if (m.kind === "plan") return 2;
+    if (m.kind === "plan") return 3;
     if (m.checkpoint) return CHECKPOINT_CARDS;
     return m.question ? m.question.cards.length + 3 : 0;
   }
@@ -946,9 +959,36 @@ export class App {
     this.mode = "input";
   }
 
+  /** `i` on a plan: the approval card, or a plan file whose session is known. The text typed earlier comes back */
+  private startInstruct(m: ScreenModel, dr: Draft, now: number): Effect[] {
+    if (m.kind !== "plan") return [];
+    if (m.readonly && !this.files.get(m.readonly.name)?.session_id) {
+      this.showToast(t(this.lang, "plan_no_session"), now);
+      return [];
+    }
+    dr.cursor = 2;
+    this.input = { kind: "instruct", text: dr.instruct };
+    this.mode = "input";
+    return [];
+  }
+
   private confirmInput(m: ScreenModel, dr: Draft, now: number): Effect[] {
     const inp = this.input;
     if (!inp) return [];
+    if (inp.kind === "instruct") {
+      dr.instruct = inp.text;
+      const text = inp.text.trim();
+      if (!text) return [];
+      this.input = null;
+      this.mode = "normal";
+      if (m.readonly) {
+        // The text stays in the draft until the server took it (a failed send keeps it)
+        if (this.sending.has(m.id)) return [];
+        this.sending.add(m.id);
+        return [{ type: "instruct_plan", name: m.readonly.name, text }];
+      }
+      return this.emit(m.id, { instruct: true, text });
+    }
     if (inp.kind === "note" && this.cannot) {
       this.cannot.text = inp.text;
       this.input = null;
@@ -995,6 +1035,7 @@ export class App {
     if (m.checkpoint) return dr.cursor === 1 && dr.free.text.trim() ? this.emit(m.id, { kind: "instruct", text: dr.free.text.trim() }) : this.checkpointCard(m, dr, dr.cursor);
     if (m.kind === "plan") {
       if (dr.cursor === 0) return this.approve(m);
+      if (dr.cursor === 2) return this.startInstruct(m, dr, now);
       this.startReason(dr);
       return [];
     }
@@ -1028,6 +1069,20 @@ export class App {
     const key = updated.kind === "checkpoint" && updated.status === "answered" && updated.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[updated.status];
     this.showToast(t(this.lang, key ?? "sent"), now);
     if (updated.id === this.shownId) this.advance(now);
+  }
+
+  /** The server's answer to an instruction sent from a plan file */
+  planInstructed(name: string, via: string, now: number): void {
+    const key = planKeyOf(name);
+    this.sending.delete(key);
+    const dr = this.drafts.get(key);
+    if (dr) dr.instruct = "";
+    this.showToast(t(this.lang, via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), now);
+  }
+
+  planInstructFailed(name: string, message: string, now: number): void {
+    this.sending.delete(planKeyOf(name));
+    this.showToast(t(this.lang, "send_failed", { message }), now);
   }
 
   failed(id: string, message: string, now: number): void {

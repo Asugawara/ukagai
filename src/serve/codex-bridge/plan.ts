@@ -377,7 +377,11 @@ export class PlanBridge {
     const r = d.response;
     let text: string | undefined;
     let mode: "default" | "plan" = "default";
-    if (r?.approve === true) text = IMPLEMENT_TEXT;
+    if (r?.instruct === true && r.text?.trim()) {
+      // Same carrier as a reject with feedback: a new turn in plan mode, so the plan stays unapproved
+      text = `The human has not approved the plan yet and asks you to do this first: ${r.text}\nStay in plan mode, update the plan, then propose it again.`;
+      mode = "plan";
+    } else if (r?.approve === true) text = IMPLEMENT_TEXT;
     else if (r?.approve === false && r.reason?.trim()) {
       text = r.reason;
       mode = "plan";

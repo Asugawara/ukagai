@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTINGS,
   CheckpointRequest,
   PlanReadRequest,
+  PlanInstructRequest,
   Settings,
   CreateDecisionRequest,
   DecisionStatus,
@@ -28,6 +29,7 @@ import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
 import { FILE_TYPES, documentDir, resolveDocumentFile, type DocumentScope } from "./files.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
+import { PlanSessions } from "./plan-session.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
@@ -52,6 +54,8 @@ export type AppDeps = {
   /** Live settings (<dataDir>/config.json). Without it GET /api/settings serves the defaults and PUT is refused */
   settings?: SettingsStore;
   getPort: () => number;
+  /** One line to serve.log (plan_instructed) */
+  log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
   collect: (session: DecisionSession) => Promise<DecisionContext>;
 };
 
@@ -281,15 +285,39 @@ export function createApp(deps: AppDeps): Hono {
 
   // ~/.claude/plans: read-only files, plus a per-plan read mark kept by ukagai (plan.updated / plan.removed come over SSE)
   const { isRead } = deps.planRead;
-  app.get("/api/plans", auth("any"), async (c) => c.json({ plans: await listPlans(deps.home, isRead) }));
+  const planSessions = new PlanSessions(() => store.listSessions(), deps.home);
+  app.get("/api/plans", auth("any"), async (c) => {
+    const plans = await listPlans(deps.home, isRead);
+    return c.json({
+      plans: await Promise.all(
+        plans.map(async (p) => {
+          const session_id = await planSessions.find(p.name);
+          return session_id ? { ...p, session_id } : p;
+        }),
+      ),
+    });
+  });
 
   app.get("/api/plans/:name", auth("any"), async (c) => {
     try {
-      return c.json(await readPlan(deps.home, c.req.param("name"), isRead));
+      const plan = await readPlan(deps.home, c.req.param("name"), isRead);
+      const session_id = await planSessions.find(plan.name);
+      return c.json(session_id ? { ...plan, session_id } : plan);
     } catch (e) {
       if (e instanceof PlanError) return c.json({ error: e.message }, e.status);
       throw e;
     }
+  });
+
+  // Tell the agent that is writing this plan something, while no hook waits (same queue and terminal typing as a checkpoint reply)
+  app.post("/api/plans/:name/instruct", auth("any"), jsonOnly, async (c) => {
+    const name = c.req.param("name") ?? "";
+    const body = await parse(c, PlanInstructRequest);
+    const sessionId = isPlanFile(name) ? await planSessions.find(name) : undefined;
+    if (!sessionId) return c.json({ error: "no session found for this plan" }, 404);
+    const delivered_via = await store.queuePlanInstruction(sessionId, body.text);
+    deps.log?.("plan_instructed", { plan: name, session: sessionId, via: delivered_via });
+    return c.json({ delivered_via });
   });
 
   const setPlanRead = async (c: Context, read: boolean) => {
@@ -353,7 +381,10 @@ export function createApp(deps: AppDeps): Hono {
     if ("kind" in body) patch = { kind: "checkpoint", answer: body.kind, ...(body.text !== undefined ? { text: body.text } : {}) };
     else if ("answers" in body) patch = { kind: "answers", answers: body.answers };
     else if ("fallback" in body) patch = { kind: "fallback" };
-    else if (body.approve) patch = { kind: "approve", ...(body.set_mode_auto ? { set_mode_auto: true } : {}) };
+    else if ("instruct" in body) {
+      if (store.get(id)!.kind !== "approve_plan") return c.json({ error: "instruct is only for approve_plan" }, 400);
+      patch = { kind: "instruct_plan", text: body.text };
+    } else if (body.approve) patch = { kind: "approve", ...(body.set_mode_auto ? { set_mode_auto: true } : {}) };
     else patch = { kind: "reject", reason: body.reason };
     return c.json(store.submitAnswer(id, patch));
   });

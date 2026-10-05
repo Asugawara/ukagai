@@ -89,6 +89,20 @@ function fieldset(title, ...rows) {
   return el("fieldset", {}, el("legend", { text: title }), ...rows);
 }
 
+// ---- instruction presets: one per line, saved when the box loses focus (the server trims, drops blank lines and checks the limits) ----
+function presetsBox() {
+  const id = "plan-presets";
+  const box = el("textarea", { id, rows: "4", spellcheck: "false" });
+  box.value = (s.plans.instruction_presets ?? []).join("\n");
+  const err = el("p", { class: "set-err", role: "alert" });
+  box.addEventListener("change", () => {
+    err.textContent = "";
+    const lines = box.value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    save((n) => { n.plans.instruction_presets = lines; }, (m) => { err.textContent = m; });
+  });
+  return el("div", { class: "set-row" }, el("label", { for: id, text: t("set_plans_presets") }), box, el("p", { class: "set-help", text: t("set_plans_presets_help") }), err);
+}
+
 // ---- notifications ----
 const permText = () => {
   if (typeof Notification === "undefined") return t("set_perm_unsupported");
@@ -140,7 +154,8 @@ function render() {
       el("div", { class: "set-row" }, el("label", { for: delayId, text: t("set_cp_delay") }), delay, el("p", { class: "set-help", text: t("set_cp_delay_help") }), delayErr),
       toggle(t("set_cp_terminal"), t("set_cp_terminal_help"), () => s.checkpoints.terminal_delivery, (n, v) => { n.checkpoints.terminal_delivery = v; })),
     fieldset(t("set_g_plans"),
-      toggle(t("set_plans_auto"), t("set_plans_auto_help"), () => s.plans.auto_show, (n, v) => { n.plans.auto_show = v; })),
+      toggle(t("set_plans_auto"), t("set_plans_auto_help"), () => s.plans.auto_show, (n, v) => { n.plans.auto_show = v; }),
+      presetsBox()),
     fieldset(t("set_g_notify"),
       toggle(t("set_n_sound"), t("set_n_sound_help"), () => s.notify.sound, (n, v) => { n.notify.sound = v; }),
       toggle(t("set_n_browser"), t("set_n_browser_help"), () => s.notify.browser, (n, v) => { n.notify.browser = v; }, {
@@ -176,7 +191,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape" || ev.ctrlKey || ev.metaKey || ev.altKey || ev.isComposing) return;
   const a = document.activeElement;
   // In a text or number box Esc only leaves the box (which commits what was typed); the next Esc goes back
-  if (a instanceof HTMLInputElement && (a.type === "text" || a.type === "number")) { a.blur(); return; }
+  if ((a instanceof HTMLInputElement && (a.type === "text" || a.type === "number")) || a instanceof HTMLTextAreaElement) { a.blur(); return; }
   location.href = "/";
 });
 

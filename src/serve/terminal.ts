@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { PLAN_INSTRUCT_PREFIX } from "../contract.js";
 
 export type TerminalRef = { kind: "herdr"; pane_id: string };
 export type TerminalStatus = "idle" | "working" | "blocked" | "unknown";
@@ -22,6 +23,7 @@ export class TerminalTypeError extends Error {
 const TIMEOUT_MS = 5000;
 const MAX_TEXT = 4000;
 export const REPLY_PREFIX = "[ukagai] Reply to your progress recap:";
+export { PLAN_INSTRUCT_PREFIX };
 
 /** `herdr:w1:p1` — how a TerminalRef is shown on a session */
 export function terminalLabel(ref: TerminalRef): string {
@@ -29,8 +31,8 @@ export function terminalLabel(ref: TerminalRef): string {
 }
 
 /** One line (Enter would submit early otherwise): the reply to a progress recap, control characters and newlines turned into spaces, capped */
-export function replyLine(text: string): string {
-  return `${REPLY_PREFIX} ${text}`.replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
+export function replyLine(text: string, prefix = REPLY_PREFIX): string {
+  return `${prefix} ${text}`.replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_TEXT);
 }
 
 function run(bin: string, args: string[]): Promise<string> {
