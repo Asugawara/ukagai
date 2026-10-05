@@ -159,17 +159,22 @@ test("input hints: a free / instruction box says Esc back; a note box keeps canc
   assert.match(hintOf(n), /Esc cancel/);
 });
 
-test("plan approval: ↑ from Approve lands on the instruction card and opens the box; ↓ in the empty box leaves it (same rules as the free-text card)", () => {
+test("plan approval: ↓ from Approve lands on the instruction card and opens the box; ↓ in the empty box leaves it for Reject, whose reason box opens (same rules as the free-text card)", () => {
   const app = new App();
   app.upsert(decision({ kind: "approve_plan", request: { plan: "# P\n\n## Scope and reversibility\n\nx", planFilePath: "/p" } } as never), clock);
-  assert.equal(T(app).cursor, 1);
+  assert.equal(T(app).cursor, 0);
   assert.equal(app.mode, "normal");
-  press(app, up);
+  press(app, down);
   assert.equal(app.mode, "input");
+  assert.equal(T(app).cursor, 1);
   type(app, "x");
   press(app, down);
   assert.equal(app.mode, "input");
+  assert.equal(T(app).cursor, 1, "with text the arrows stay in the box");
   press(app, { name: "backspace" }, down);
+  assert.equal(T(app).cursor, 2);
+  assert.equal(T(app).input?.kind, "reason");
+  press(app, up, up);
   assert.equal(app.mode, "normal");
-  assert.equal(T(app).cursor, 1);
+  assert.equal(T(app).cursor, 0);
 });

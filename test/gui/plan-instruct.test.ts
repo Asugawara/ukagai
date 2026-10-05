@@ -142,24 +142,24 @@ gui("the box is there from the start (no Instruct button), the selection landing
   assert.equal(ev(`!!document.querySelector("#instruct")`), true, "the box is shown on the first render");
   assert.equal(ev(`!!document.querySelector("#instruct-open")`), false, "no Instruct button");
   assert.equal(ev(`[...document.querySelectorAll("#decision button")].some(b => b.textContent === "Instruct")`), false);
-  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 3, "Send, Approve, Reject");
+  assert.deepEqual(ev(`JSON.stringify([...document.querySelectorAll("#decision .actions > .opt")].map(o => o.dataset.card))`), ["approve", "instruct", "reject"], "one option list: Approve, Instruct, Reject");
   assert.notEqual(active(), "instruct", "the first render does not steal the focus");
   assert.equal(onCard(), false);
   assert.match(ev<string>(`document.querySelector("#foot").textContent`), /i Instruct box/);
   assert.doesNotMatch(ev<string>(`document.querySelector("#foot").textContent`), /i Instruct ·/);
-  // ↑ from Approve (the first selection) lands on the card: focus follows
-  key("ArrowUp");
+  // ↓ from Approve (the first selection) lands on the card: focus follows
+  key("ArrowDown");
   await waitFor("box focused", `document.activeElement?.id === "instruct"`);
   assert.equal(onCard(), true);
   assert.equal(ev(`document.querySelector("#instruct-send").disabled`), true, "empty text cannot be sent");
   key("Enter", "#instruct");
   assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "Enter on an empty box sends nothing");
-  // ↑ ↓ in an empty box leave it and blur; ↓ goes on to Approve
-  key("ArrowDown", "#instruct");
+  // ↑ ↓ in an empty box leave it and blur; ↑ goes back to Approve
+  key("ArrowUp", "#instruct");
   assert.notEqual(active(), "instruct");
   assert.equal(onCard(), false);
-  assert.equal(ev(`document.querySelector("#decision .btn.primary.cursor") !== null && document.querySelector("#decision .btn.primary.cursor").textContent`), "Approve");
-  key("ArrowUp");
+  assert.equal(ev(`document.querySelector("#decision .opt.cursor")?.dataset.card`), "approve");
+  key("ArrowDown");
   await waitFor("box focused again", `document.activeElement?.id === "instruct"`);
   // with text the arrows stay in the box
   typeInto("have Fable review it");
@@ -327,6 +327,41 @@ gui("plan file card: the box shows only when a session maps, and sends to the pl
   assert.equal(ev(`!!document.querySelector("#instruct")`), false);
 });
 
+gui("long plan file card: starts in the plan zone, → lands on the Instruct card with the box focused, ← (empty box) goes back; a live update keeps the zone", async () => {
+  const LONG = readFileSync(new URL("./fixtures/long-plan.md", import.meta.url), "utf8");
+  writeFileSync(join(home, ".claude", "plans", "long-fox.md"), LONG);
+  const tpath = join(home, ".claude", "projects", "p", "s-long.jsonl");
+  writeFileSync(tpath, '{"type":"user","slug":"long-fox"}\n');
+  await api("/api/events", { session_id: "s-long", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await reopen("document.querySelector('#decision .done-reading')");
+  await waitFor("the long plan is shown", `document.querySelector("#background details.plan-sec") && document.querySelector("#instruct")`);
+  const zone = () => ev<string>(`document.getElementById("background").classList.contains("zone-on") ? "plan" : document.getElementById("decision").classList.contains("zone-on") ? "opts" : "none"`);
+  assert.equal(zone(), "plan");
+  assert.equal(onCard(), false);
+  assert.notEqual(active(), "instruct", "the box does not take the focus while a long plan waits to be read");
+  assert.match(ev<string>(`document.querySelector("#foot .hint").textContent`), /^↑↓ Section · Enter Open · o All · → Options/);
+  key("ArrowRight");
+  await waitFor("box focused", `document.activeElement?.id === "instruct"`);
+  assert.equal(zone(), "opts");
+  assert.equal(onCard(), true);
+  assert.match(ev<string>(`document.querySelector("#foot .hint").textContent`), /^↑↓ Pick · Enter Decide · ← Plan/);
+  // a live update of the plan file re-renders the screen: the zone and the focus stay
+  writeFileSync(join(home, ".claude", "plans", "long-fox.md"), LONG.replace("Three pieces change; each is described below.", "Three pieces change; each is described below, once more."));
+  await waitFor("updated section", `document.querySelector("#background .ps-upd:not([hidden])")`, 15000);
+  assert.equal(zone(), "opts");
+  assert.equal(active(), "instruct");
+  key("ArrowLeft", "#instruct");
+  assert.equal(zone(), "plan");
+  assert.notEqual(active(), "instruct");
+  assert.equal(onCard(), false);
+  // with text in the box ← stays a text key
+  key("ArrowRight");
+  typeInto("keep me");
+  key("ArrowLeft", "#instruct");
+  assert.equal(zone(), "opts");
+  rmSync(join(home, ".claude", "plans", "long-fox.md"), { force: true });
+});
+
 gui("settings: the presets textarea saves on change and the chips on the main page follow", async () => {
   ab("open", base + "/settings");
   await waitFor("settings page", `document.querySelector("#plan-presets")`);
@@ -340,6 +375,6 @@ gui("settings: the presets textarea saves on change and the chips on the main pa
   }
   await waitFor("textarea shows the saved lines", `document.querySelector("#plan-presets").value === "First one\\nSecond one"`);
   await seedPlan();
-  await reopen("document.querySelector('#decision .btn.primary')"); // the approval card (the plan file cards have no Approve button)
+  await reopen("document.querySelector('#decision .approve-card')"); // the approval (the plan file cards have no Approve option)
   await waitFor("chips", `[...document.querySelectorAll("#decision .chip")].map(c => c.textContent).join("|") === "First one|Second one"`);
 });

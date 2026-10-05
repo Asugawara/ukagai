@@ -329,7 +329,7 @@ gui("plan: n opens the reason field, Esc cancels, y sends approve: true", async 
   press("n");
   assert.equal(ev(`document.activeElement.id`), "reason");
   press("Escape");
-  assert.equal(ev(`!document.getElementById("reason")`), true);
+  assert.equal(ev(`document.querySelector("#decision .reject-box").hidden`), true);
   press("y");
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(d.response.approve, true);
@@ -372,16 +372,16 @@ gui("arrows: ← / → switch pending decisions (question), Home / End jump to f
   assert.deepEqual(view(), { cursor: 0, checked: 0 });
 });
 
-gui("arrows: ← / → switch pending decisions (plan); buttons move with ↑ / ↓", async () => {
+gui("arrows: ← / → switch pending decisions (short plan); the options move with ↑ / ↓", async () => {
   const q = await seedQuestion({ title: "Question decision" });
   const p = await seedPlan();
   assert.ok(q.id && p.id);
   await reopen();
-  const isPlan = () => ev<boolean>(`!!document.querySelector("#decision .btn.danger")`);
+  const isPlan = () => ev<boolean>(`!!document.querySelector("#decision .approve-card")`);
   assert.equal(isPlan(), false);
   press("ArrowRight");
   assert.equal(isPlan(), true);
-  const cur = () => ev<number>(`[...document.querySelectorAll("#decision .actions > button.btn")].findIndex(b => b.classList.contains("cursor"))`);
+  const cur = () => ev<number>(`[...document.querySelectorAll("#decision .actions > .opt")].findIndex(b => b.classList.contains("cursor"))`);
   assert.equal(cur(), 0);
   press("ArrowDown");
   assert.equal(cur(), 1);
@@ -433,7 +433,7 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   await seedPlan();
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(count("kbd"), 0);
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Send", "Approve", "Reject"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .actions > .opt")].map(o => o.dataset.card))`), ["approve", "instruct", "reject"]);
   const planHint = ev<string>(`document.querySelector("#foot .hint").textContent`);
   assert.ok(planHint.includes("y Approve") && planHint.includes("n Reject") && planHint.includes("i Instruct box"), planHint);
 });

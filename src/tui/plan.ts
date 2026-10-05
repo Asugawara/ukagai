@@ -76,19 +76,22 @@ export function planOutline(md: string): PlanOutline {
   return { lines: lines.length, entries, h2, files: filesIn(0, lines.length).size, long: h2 > PLAN_SHORT_H2 && lines.length > PLAN_SHORT_LINES };
 }
 
-/** Which sections are open, which have been opened at least once (read), and the contents cursor */
+/** Which sections are open, which have been opened at least once (read), the selected section and the zone */
 export interface PlanState {
   open: Set<number>;
   read: Set<number>;
   /** Sections changed (or added) by a live update since they were last opened: shown with a dim `updated` word until opened */
   updated: Set<number>;
+  /** The section selected in the plan zone */
   cur: number;
+  /** The zone the arrows act on: the sections of the plan (left column) or the options (right column) */
+  zone: "plan" | "opts";
 }
 
 /** The first H2 is open and counts as read; the scope section is on screen in the decision column, so it counts as read too */
 export function initialPlanState(o: PlanOutline): PlanState {
   const first = o.entries.find((e) => e.level === 2);
-  return { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), updated: new Set(), cur: first?.i ?? 0 };
+  return { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), updated: new Set(), cur: first?.i ?? 0, zone: "plan" };
 }
 
 /** `level:title` per outline entry: how a changed section is matched with its earlier self */
@@ -104,7 +107,7 @@ export function remapState(o: PlanOutline, prev: { st: PlanState; outline: PlanO
   const prevHeads = headings(prev.outline);
   const prevHashes = prev.outline.entries.map((e) => e.hash);
   const hashes = o.entries.map((e) => e.hash);
-  const st: PlanState = { open: new Set(), read: new Set(), updated: new Set(), cur: 0 };
+  const st: PlanState = { open: new Set(), read: new Set(), updated: new Set(), cur: 0, zone: prev.st.zone };
   let cur: number | null = null;
   o.entries.forEach((e, j) => {
     const i = prevHashes.findIndex((h, k) => h === hashes[j] && !used.has(k));
