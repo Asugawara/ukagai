@@ -381,7 +381,7 @@ gui("arrows: ← / → switch pending decisions (plan); buttons move with ↑ / 
   assert.equal(isPlan(), false);
   press("ArrowRight");
   assert.equal(isPlan(), true);
-  const cur = () => ev<number>(`[...document.querySelectorAll("#decision button.btn")].findIndex(b => b.classList.contains("cursor"))`);
+  const cur = () => ev<number>(`[...document.querySelectorAll("#decision .actions > button.btn")].findIndex(b => b.classList.contains("cursor"))`);
   assert.equal(cur(), 0);
   press("ArrowDown");
   assert.equal(cur(), 1);
@@ -433,9 +433,9 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   await seedPlan();
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(count("kbd"), 0);
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Approve", "Reject", "Instruct"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Send", "Approve", "Reject"]);
   const planHint = ev<string>(`document.querySelector("#foot .hint").textContent`);
-  assert.ok(planHint.includes("y Approve") && planHint.includes("n Reject"), planHint);
+  assert.ok(planHint.includes("y Approve") && planHint.includes("n Reject") && planHint.includes("i Instruct box"), planHint);
 });
 
 gui("blocker: the orange band and the what-you-need-to-do section are in the right column, and Enter alone sends the \"Done. Continue\" option", async () => {

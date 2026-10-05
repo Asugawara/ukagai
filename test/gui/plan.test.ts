@@ -329,12 +329,12 @@ gui("the unread line sits above the buttons, updates as sections are opened and 
   assert.equal(d.response.set_mode_auto, true);
 });
 
-gui("ja: the unread line is 未読 n 節 and the buttons are 承認 / 却下 / 指示", async () => {
+gui("ja: the unread line is 未読 n 節 and the buttons are 送信 (the instruction box) / 承認 / 却下", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   await setLang("ja", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("未読 7 節:")`);
   assert.equal(unreadLine(), "未読 7 節: Changes, Split and owners, Commit granularity, Verification, Observation path +2");
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .btn")].map(b => b.textContent))`), ["承認", "却下", "指示"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .btn")].map(b => b.textContent))`), ["送信", "承認", "却下"]);
   await setLang("en", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("Unread sections (7)")`);
 });
 
@@ -351,7 +351,7 @@ gui("an irreversible long plan is approved with one y too", async () => {
 gui("clicking Approve sends at once", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  ev(`document.querySelector("#decision .btn.primary").click(), "ok"`);
+  ev(`document.querySelector("#decision .actions > .btn.primary").click(), "ok"`); // not the Send button of the instruction card
   await waitStatus(id, "answer_submitted");
 });
 
@@ -377,7 +377,7 @@ gui("a short plan: y sends at once, and the arrows still move between the button
   const { id } = await seedPlan("# Short\n\nStep 1");
   await reopen();
   key("ArrowDown");
-  assert.equal(ev(`[...document.querySelectorAll("#decision .actions .btn")].findIndex(b => b.classList.contains("cursor"))`), 1);
+  assert.equal(ev(`[...document.querySelectorAll("#decision .actions > .btn")].findIndex(b => b.classList.contains("cursor"))`), 1);
   key("y");
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(d.response.approve, true);

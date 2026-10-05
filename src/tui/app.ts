@@ -437,7 +437,7 @@ export class App {
     let dr = this.drafts.get(m.id);
     if (!dr) {
       const q = m.question;
-      dr = { cursor: q?.initialCursor ?? 0, sel: new Set(), free: { on: false, text: "" }, reason: "", instruct: "" };
+      dr = { cursor: q?.initialCursor ?? (m.kind === "plan" && !m.readonly ? 1 : 0), sel: new Set(), free: { on: false, text: "" }, reason: "", instruct: "" };
       // Single select: moving = selecting. Pre-select the initial position (the recommended option, else the first)
       if (q && !q.multi && q.cards[dr.cursor]) dr.sel.add(q.cards[dr.cursor]!.value);
       this.drafts.set(m.id, dr);
@@ -718,12 +718,22 @@ export class App {
         this.mode = "normal";
         return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: body } });
       }
-      case "move": this.moveCursor(m, dr, dr.cursor + a.delta); return this.landOnText(m, dr);
+      case "move": { const was = dr.cursor; this.moveCursor(m, dr, dr.cursor + a.delta); return this.landOnText(m, dr, was); }
       case "top": this.moveCursor(m, dr, 0); return this.landOnText(m, dr);
       case "bottom": this.moveCursor(m, dr, this.slots(m) - 1); return this.landOnText(m, dr);
       case "input-move": {
         // ↑↓ in an empty free-text box walk to the neighbouring card; with text they do nothing (a one-line box)
         const inp = this.input;
+        if (inp?.kind === "instruct") {
+          // The instruction card of a plan: an empty box leaves (the cursor moves on where the arrows move it); the cursor never lands back on the same card
+          if (inp.text !== "") return [];
+          dr.instruct = "";
+          this.input = null;
+          this.mode = "normal";
+          const was = dr.cursor;
+          if (!m.readonly && !m.plan) this.moveCursor(m, dr, dr.cursor + a.delta);
+          return this.landOnText(m, dr, was);
+        }
         if (inp?.kind !== "free" || inp.text !== "") return [];
         dr.free.text = "";
         if (!m.checkpoint) dr.free.on = false;
@@ -744,8 +754,8 @@ export class App {
         return [];
       }
       case "submit": return this.submit(m, dr, now);
-      case "approve": dr.cursor = 0; return this.approve(m);
-      case "reject": dr.cursor = 1; this.startReason(dr); return [];
+      case "approve": dr.cursor = 1; return this.approve(m);
+      case "reject": dr.cursor = 2; this.startReason(dr); return [];
       case "toc-move": {
         if (!m.plan) return [];
         const st = this.planState(m);
@@ -809,7 +819,7 @@ export class App {
     return effects;
   }
 
-  /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, 2 buttons for a plan */
+  /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, the instruction card and 2 buttons for a plan */
   private slots(m: ScreenModel): number {
     if (m.kind === "plan") return 3;
     if (m.checkpoint) return CHECKPOINT_CARDS;
@@ -931,8 +941,10 @@ export class App {
   }
 
   /** The cursor landing on a card with a text box (the checkpoint's instruction card, the free-text card) opens the box at once; `i` still does too */
-  private landOnText(m: ScreenModel, dr: Draft): Effect[] {
+  private landOnText(m: ScreenModel, dr: Draft, was?: number): Effect[] {
     if (this.mode !== "normal") return [];
+    // A plan approval: the instruction card is the first slot (the contents' arrows move the contents, not this cursor)
+    if (m.kind === "plan") return !m.readonly && !m.plan && dr.cursor === 0 && dr.cursor !== was ? this.startInstruct(m, dr, 0) : [];
     const onText = m.checkpoint ? dr.cursor === 1 : !!m.question && dr.cursor === m.question.cards.length + 2;
     return onText ? this.startFree(m, dr) : [];
   }
@@ -966,7 +978,7 @@ export class App {
       this.showToast(t(this.lang, "plan_no_session"), now);
       return [];
     }
-    dr.cursor = 2;
+    dr.cursor = 0;
     this.input = { kind: "instruct", text: dr.instruct };
     this.mode = "input";
     return [];
@@ -1034,8 +1046,8 @@ export class App {
   private submit(m: ScreenModel, dr: Draft, now: number): Effect[] {
     if (m.checkpoint) return dr.cursor === 1 && dr.free.text.trim() ? this.emit(m.id, { kind: "instruct", text: dr.free.text.trim() }) : this.checkpointCard(m, dr, dr.cursor);
     if (m.kind === "plan") {
-      if (dr.cursor === 0) return this.approve(m);
-      if (dr.cursor === 2) return this.startInstruct(m, dr, now);
+      if (dr.cursor === 1) return this.approve(m);
+      if (dr.cursor === 0) return this.startInstruct(m, dr, now);
       this.startReason(dr);
       return [];
     }

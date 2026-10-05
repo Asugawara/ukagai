@@ -1,4 +1,5 @@
-// Instruct from a plan: `i` on an approval opens the instruction input; presets are picked with a digit while the box is empty;
+// Instruct from a plan: the instruction card is always there (no `i` needed) and opens by itself when the cursor lands on it, like the
+// free-text card; `i` jumps to it; presets are picked with a digit while the box is empty;
 // a plan file with a session sends through the plan endpoint (effect), without one it says why.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,6 +13,8 @@ import { decision } from "./helpers.js";
 const ch = (c: string): Key => ({ name: "char", ch: c });
 const enter: Key = { name: "enter" };
 const esc: Key = { name: "esc" };
+const up: Key = { name: "up" };
+const down: Key = { name: "down" };
 let clock = Date.parse("2026-10-05T12:00:00.000Z");
 const press = (app: App, ...keys: Key[]) => keys.flatMap((k) => app.handle(k, (clock += 10)));
 const type = (app: App, s: string) => press(app, ...[...s].map(ch));
@@ -109,4 +112,94 @@ test("plan file: the draft survives a failed send, a second Enter while sending 
   app.planInstructed("swift.md", "hook", clock);
   press(app, ch("i"));
   assert.doesNotMatch(draw(app).text, /Instruction: add tests/);
+});
+
+test("approval: the instruction card is rendered from the start (presets above the box, no `i` needed), the cursor starts on Approve and nothing is typing", () => {
+  const app = approval(["Review adversarially", "Add a rollback plan"]);
+  const { text } = draw(app);
+  assert.match(text, /\[i\] Instruct/);
+  assert.match(text, /1 Review adversarially/);
+  assert.match(text, /2 Add a rollback plan/);
+  assert.match(text, /What should the agent do first\?/);
+  assert.ok(text.indexOf("[i] Instruct") < text.indexOf("[y] Approve"), "the card sits above Approve / Reject");
+  assert.ok(text.indexOf("[y] Approve") < text.indexOf("[n] Reject"));
+  assert.equal(app.mode, "normal");
+  assert.equal(app.view(clock).cursor, 1, "the first render does not open the box");
+});
+
+test("approval: ↑ onto the card opens the box by itself; Esc leaves it keeping the text; ↓ with text stays in the box", () => {
+  const app = approval();
+  press(app, up);
+  assert.equal(app.mode, "input");
+  assert.equal(app.view(clock).input?.kind, "instruct");
+  assert.equal(app.view(clock).cursor, 0);
+  type(app, "draft");
+  press(app, down);
+  assert.equal(app.mode, "input", "with text the arrows stay in the box");
+  assert.equal(app.view(clock).cursor, 0);
+  press(app, esc);
+  assert.equal(app.mode, "normal");
+  assert.equal(app.view(clock).instruct, "draft");
+  assert.match(draw(app).text, /Instruction: draft/);
+  press(app, down);
+  assert.equal(app.mode, "normal");
+  assert.equal(app.view(clock).cursor, 1);
+  press(app, up);
+  assert.equal(app.mode, "input", "back on the card: the box opens with the kept text");
+  assert.match(draw(app).text, /Instruction: draft▏/);
+});
+
+test("approval: ↓ in an empty box moves on to Approve (and Reject) and the box closes; ↑ in an empty box at the top just leaves", () => {
+  const app = approval();
+  press(app, ch("i"));
+  assert.equal(app.mode, "input");
+  press(app, down);
+  assert.equal(app.mode, "normal");
+  assert.equal(app.view(clock).cursor, 1);
+  press(app, up, up);
+  assert.equal(app.mode, "normal", "↑ in the empty box leaves; it does not reopen the same card");
+  assert.equal(app.view(clock).cursor, 0);
+  assert.deepEqual(press(app, enter), [], "Enter on the closed card opens the box and sends nothing");
+  assert.equal(app.mode, "input");
+});
+
+test("approval: i jumps to the card from anywhere and opens the box; y / n still approve / reject outside the box", () => {
+  const app = approval();
+  press(app, down); // Reject
+  assert.equal(app.view(clock).cursor, 2);
+  press(app, ch("i"));
+  assert.equal(app.mode, "input");
+  assert.equal(app.view(clock).cursor, 0);
+  press(app, esc);
+  assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: true } }]);
+  const b = approval();
+  press(b, ch("n"));
+  assert.equal(b.view(clock).input?.kind, "reason");
+});
+
+test("approval: in the box digits and letters are text once there is text; Enter on an empty box sends nothing", () => {
+  const app = approval(["one", "two"]);
+  press(app, up);
+  assert.deepEqual(press(app, enter), []);
+  type(app, "yn1");
+  assert.match(draw(app).text, /Instruction: yn1▏/);
+  assert.equal(press(app, enter).length, 1);
+});
+
+test("plan file with a session: the card is always there, no i needed; without a session it says why and there is no card", async () => {
+  const file = (session_id?: string): PlanContent => ({ name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, ...(session_id ? { session_id } : {}) });
+  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false };
+  const app = new App();
+  app.fetchPlan = async () => file("s-live");
+  app.replacePlans([summary], clock);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.match(draw(app).text, /What should the agent do first\?/);
+  assert.equal(app.mode, "normal");
+  press(app, ch("i"), ...[...("hi")].map(ch));
+  assert.deepEqual(press(app, enter), [{ type: "instruct_plan", name: "swift.md", text: "hi" }]);
+  const lone = new App();
+  lone.fetchPlan = async () => file();
+  lone.replacePlans([summary], clock);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.doesNotMatch(draw(lone).text, /What should the agent do first\?/);
 });

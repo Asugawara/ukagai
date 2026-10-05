@@ -143,9 +143,9 @@ test("plan (long): one y sends at once with auto; the unread sections are one di
   const app = open();
   let { lines } = draw(app);
   const at = lines.findIndex((l) => l.includes("Unread sections (7): Changes, Split and owners"));
-  const btn = lines.findIndex((l) => l.includes("[y] Approve"));
-  assert.ok(at >= 0 && btn > at, lines.join("\n"));
-  assert.match(lines.slice(at, btn).map((l) => l.split(" │ ")[1] ?? "").join(" "), /Verification, Observation path \+2$/, "the line (wrapped) ends right above the buttons");
+  const btn = lines.findIndex((l) => l.includes("[i] Instruct")); // the instruction card is the first row of the actions, Approve / Reject follow
+  assert.ok(at >= 0 && btn > at && lines.findIndex((l) => l.includes("[y] Approve")) > btn, lines.join("\n"));
+  assert.match(lines.slice(at, btn).map((l) => l.split(" │ ")[1] ?? "").join(" "), /Verification, Observation path \+2$/, "the line (wrapped) ends right above the actions");
   assert.ok(!lines.at(-1)!.includes("Press the same key"), "no confirmation in the footer");
   assert.deepEqual(press(app, ch("a")), []);
   assert.deepEqual(press(app, ch("y")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: true } }]);
