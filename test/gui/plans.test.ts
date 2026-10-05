@@ -259,6 +259,9 @@ gui("live update: unchanged sections keep their state, the changed and the new o
   assert.ok(line2().includes("2m ago"), line2());
   key("o");
   assert.equal(ev(openCount), 9);
+  keyN("j", 3);
+  const selBefore = ev<number>(`[...document.querySelectorAll("#background details.plan-sec, #background details.plan-sub")].findIndex(d => d.firstElementChild.classList.contains("sel"))`);
+  assert.equal(selBefore, 3);
   ev(`document.getElementById("background").scrollTop = 300, "ok"`);
   const top = ev<number>(`document.getElementById("background").scrollTop`);
   assert.ok(top > 100, `the left column should scroll (got ${top})`);
@@ -283,7 +286,9 @@ gui("live update: unchanged sections keep their state, the changed and the new o
   assert.equal(ev(`${sec(5)}.querySelector(":scope > summary > .ps-upd").hidden`), true);
   assert.equal(ev(`document.getElementById("background").scrollTop`), top);
   assert.ok(line2().includes("0s ago"), line2());
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 16);
+  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 0, "no contents list");
+  assert.equal(ev(`[...document.querySelectorAll("#background details.plan-sec, #background details.plan-sub")].findIndex(d => d.firstElementChild.classList.contains("sel"))`), selBefore, "the selected section stays");
+  assert.equal(ev(`document.getElementById("background").classList.contains("zone-on")`), true, "the zone stays");
   ab("screenshot", join(SHOTS, "PL3b-plan-live.png"));
   // the updated section stayed open; folding it and opening it again clears the word and marks it read
   ev(`${sec(1)}.querySelector(":scope > summary").click(), "ok"`);
@@ -333,7 +338,7 @@ gui("live update by text: an unchanged heading with changed text marks only that
   await waitFor("idle", IDLE);
 });
 
-gui("a decision takes the screen from a plan: count 2, ] goes to the plan, h back, answering returns to the plan", async () => {
+gui("a decision takes the screen from a plan: count 2, ] goes to the plan, [ back; ← → do not leave a long plan; answering returns to the plan", async () => {
   await arrive("prec.md");
   const { id } = await seedQuestion();
   await waitFor("decision screen", `document.querySelector("#decision .opt")`);
@@ -342,12 +347,15 @@ gui("a decision takes the screen from a plan: count 2, ] goes to the plan, h bac
   key("]");
   await waitFor("plan again", `${SEC}.length === 9`);
   assert.equal(ev(`document.querySelectorAll("#decision .opt:not(.instruct-card)").length`), 0);
-  key("h");
-  await waitFor("decision again", `document.querySelector("#decision .opt")`);
+  // on a long plan ← → h l are the zone keys: they do not cycle between the items (the question's lease is short: few steps)
+  ev(`(() => { for (const k of ["ArrowLeft", "ArrowRight", "h", "l"]) document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); return "ok"; })()`);
+  assert.equal(ev(`${SEC}.length`), 9, "still the plan");
   key("[");
-  await waitFor("plan via [", `${SEC}.length === 9`);
-  key("ArrowLeft");
-  await waitFor("decision via arrow", `document.querySelector("#decision .opt")`);
+  await waitFor("decision again", `document.querySelector("#decision .opt")`);
+  key("ArrowLeft"); // a question: ← → still cycle
+  await waitFor("plan via arrow", `${SEC}.length === 9`);
+  key("Tab");
+  await waitFor("decision via Tab", `document.querySelector("#decision .opt")`);
   key("Enter"); // answers the recommended card at once
   await waitStatus(id, "answer_submitted").catch(() => waitStatus(id, "answered"));
   await waitFor("plan after the answer", `${SEC}.length === 9`);
@@ -361,11 +369,11 @@ gui("upgrade in place: the approval for the shown plan keeps the sections' state
   assert.equal(before.filter((m) => m === "☑").length, 4, "the first section, the two clicked and the scope section");
   const openBefore = ev<number>(openCount);
   const { id } = await seedPlanDecision("up.md", LONG);
-  await waitFor("approval screen", `document.querySelector("#decision .btn.primary")`);
+  await waitFor("approval screen", `document.querySelector("#decision .approve-card")`);
   assert.deepEqual(marks(), before);
   assert.equal(ev(openCount), openBefore);
   assert.equal(line2(), "Approve this plan?");
-  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 3);
+  assert.equal(ev(`document.querySelectorAll("#decision .actions > .opt").length`), 3);
   assert.equal(ev(`document.querySelectorAll("#pending-list .row").length`), 1);
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
   const line = () => ev<string>(`(() => { const e = document.querySelector("#decision .plan-unread"); return !e || e.hidden ? "" : e.textContent; })()`);

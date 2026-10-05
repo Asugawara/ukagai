@@ -114,9 +114,9 @@ export interface Frame {
 }
 
 /** The instruction card of a plan, always shown: its label, the numbered presets (pick one with its digit while the box is empty), then the box (typing, kept with Esc, or the placeholder) */
-function instructCard(v: View, w: number, lang: Lang, on: boolean): { lines: string[]; start: number } {
+function instructCard(v: View, w: number, lang: Lang, on: boolean, key = "i"): { lines: string[]; start: number } {
   const typing = v.input?.kind === "instruct";
-  const label = `${on ? `${BOLD}▸${RESET}` : " "} ${CYAN}[i]${RESET} ${on ? BOLD : ""}${t(lang, "instruct")}${RESET}`;
+  const label = `${on ? `${BOLD}▸${RESET}` : " "} ${CYAN}[${key}]${RESET} ${on ? BOLD : ""}${t(lang, "instruct")}${RESET}`;
   // Nothing typed, no presets: one row, the placeholder beside the label
   if (!typing && !v.instruct && !v.presets.length) return { lines: [`${label}  ${DIM}${t(lang, "instruct_placeholder")}${RESET}`], start: 0 };
   const out: string[] = [label];
@@ -263,69 +263,48 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   if (m.kind === "plan") {
     if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, lang, title: t(lang, "impact_title"), always: true }), "");
     const ro = !!m.readonly;
-    const toc = m.plan && v.plan ? { p: m.plan, st: v.plan } : null;
-    const unread = !ro && toc ? unreadSections(toc.p.outline, toc.st) : [];
-    if (toc) {
-      // The contents: a window of rows around the cursor so the buttons stay on screen (the rest is "▲ n" / "▼ n")
-      const es = toc.p.outline.entries;
-      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (unread.length ? 1 : 0) - 1 - (v.input?.kind === "reason" || v.reason ? 2 : 0) - (v.presets.length || v.input?.kind === "instruct" || v.instruct ? 3 + Math.min(9, v.presets.length) : 0));
-      const size = Math.min(es.length, budget);
-      const start = Math.max(0, Math.min(toc.st.cur - Math.floor(size / 2), es.length - size));
-      lines.push(`${BOLD}${t(lang, "toc_title")}${RESET}`);
-      if (start > 0) lines.push(`${DIM}  ▲ ${start}${RESET}`);
-      for (const e of es.slice(start, start + size)) {
-        const on = toc.st.cur === e.i;
-        if (on) focus = [lines.length, lines.length + 1];
-        // A long title is cut with … so the line count at its end always shows
-        const lead = `${on ? `${BOLD}▸${RESET}` : " "} ${e.level === 3 ? "  " : ""}${toc.st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} `;
-        const count = planCount(lang, "plan_lines", e.lines);
-        const room = Math.max(4, w - width(lead) - width(count) - 2);
-        const title = width(e.plain) > room ? `${truncate(e.plain, room - 1)}…` : e.plain;
-        lines.push(`${lead}${on ? BOLD : ""}${title}${RESET}  ${DIM}${count}${RESET}`);
-      }
-      if (start + size < es.length) lines.push(`${DIM}  ▼ ${es.length - start - size}${RESET}`);
-      lines.push("");
-    }
-    // A plan file on its own: the contents and the one action, Done reading
+    const long = m.plan && v.plan ? { p: m.plan, st: v.plan } : null;
+    // A long plan has two zones; the options take the arrows only in the options zone (a short plan is always there)
+    const optsOn = !long || long.st.zone === "opts";
+    const unread = !ro && long ? unreadSections(long.p.outline, long.st) : [];
+    // A plan file on its own: the one action Done reading, and the Instruct card when the session is known
     if (ro) {
       lines.push(`${CYAN}${t(lang, "plan_done_reading")}${RESET} ${DIM}(Esc)${RESET}`);
       if (v.canInstruct) {
         const start = lines.length;
-        lines.push("", ...instructCard(v, w, lang, true).lines);
-        focus = [start + 1, lines.length];
+        lines.push("", ...instructCard(v, w, lang, optsOn).lines);
+        if (optsOn) focus = [start + 1, lines.length];
       } else {
         lines.push(`${DIM}${t(lang, "plan_no_session")}${RESET}`);
       }
-      const hint = [toc ? t(lang, "hint_planview_toc") : "", v.canInstruct && !v.input ? t(lang, "hint_planview_instruct") : ""].filter(Boolean).join(" · ");
+      const zoneHint = !long ? "" : !v.canInstruct ? t(lang, "hint_planview_zone_only") : t(lang, optsOn ? "hint_planview_zone_opts" : "hint_planview_zone_plan");
+      const hint = [zoneHint, !long && v.canInstruct && !v.input ? t(lang, "hint_planview_instruct") : ""].filter(Boolean).join(" · ");
       return { lines, focus, hint: v.input?.kind === "instruct" ? instructHint(v, lang) : hint };
     }
-    // Information, never a gate: the sections not yet opened, one dim line above the buttons
+    // Information, never a gate: the sections not yet opened, one dim line above the options
     lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
     if (unread.length) lines.push(...wrap(`${DIM}${t(lang, "plan_unread", { n: unread.length, names: unreadNames(unread) })}${RESET}`, w));
-    // The instruction card first (the box is always there, and opens when the cursor lands on it), then Approve / Reject
+    // One option list like a question: 1 Approve (auto), 2 Instruct (its box opens when the cursor lands on it), 3 Reject (so does its reason box)
     const typingInstruct = v.input?.kind === "instruct";
+    const typingReason = v.input?.kind === "reason";
+    const at = (i: number) => optsOn && (v.cursor === i || (i === 1 && typingInstruct) || (i === 2 && typingReason));
+    const mark = (on: boolean) => (on ? `${BOLD}▸${RESET}` : " ");
+    const approveStart = lines.length;
+    lines.push(`${mark(at(0))} ${CYAN}[1]${RESET} ${at(0) ? BOLD : ""}${GREEN}${t(lang, "approve_auto")}${RESET} ${DIM}★ ${t(lang, "recommended_badge")}${RESET}`);
+    if (at(0)) focus = [approveStart, lines.length];
     const cardStart = lines.length;
-    const onCard = typingInstruct || (!toc && v.cursor === 0);
-    const card = instructCard(v, w, lang, onCard).lines;
-    lines.push(...card, ...(card.length > 1 ? [""] : []));
-    if (onCard) focus = [cardStart, cardStart + card.length];
-    const buttons: [string, string][] = [["y", t(lang, "approve")], ["n", t(lang, "reject")]];
-    buttons.forEach(([k, label], i) => {
-      const start = lines.length;
-      // With a contents the arrows and Enter act on it, not on the buttons: no cursor mark on them
-      const on = !toc && !typingInstruct && v.cursor === i + 1;
-      lines.push(`${on ? `${BOLD}▸${RESET}` : " "} ${CYAN}[${k}]${RESET} ${on ? BOLD : ""}${label}${RESET}`);
-      if (on) focus = [start, lines.length];
-    });
-    if (v.input?.kind === "reason") {
-      lines.push("", ...wrap(`  ${t(lang, "reason")}: ${v.input.text}▏`, w));
-    } else if (v.reason) {
-      lines.push("", ...wrap(`${DIM}  ${t(lang, "reason")}: ${v.reason}${RESET}`, w));
-    }
+    const card = instructCard(v, w, lang, at(1), "2").lines;
+    lines.push(...card);
+    if (at(1)) focus = [cardStart, cardStart + card.length];
+    const rejectStart = lines.length;
+    lines.push(`${mark(at(2))} ${CYAN}[3]${RESET} ${at(2) ? BOLD : ""}${t(lang, "reject")}${RESET}`);
+    if (typingReason) lines.push(...wrap(`  ${t(lang, "reason")}: ${v.input!.text}▏`, w));
+    else if (v.reason) lines.push(...wrap(`${DIM}  ${t(lang, "reason")}: ${v.reason}${RESET}`, w));
+    if (at(2)) focus = [rejectStart, lines.length];
     return {
       lines,
       focus,
-      hint: v.input?.kind === "instruct" ? instructHint(v, lang) : v.input ? t(lang, "hint_plan_input") : t(lang, m.plan ? "hint_plan_toc" : "hint_plan"),
+      hint: v.input?.kind === "instruct" ? instructHint(v, lang) : v.input ? t(lang, "hint_plan_input") : t(lang, long ? (optsOn ? "hint_plan_zone_opts" : "hint_plan_zone_plan") : "hint_plan"),
     };
   }
 
@@ -521,7 +500,9 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     if (e.level === 2) parentRow = row;
     const open = st.open.has(e.i);
     const ind = e.level === 3 ? "  " : "";
-    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${st.cur === e.i ? `${BOLD}${CYAN}` : BOLD}${e.plain}${RESET} ${DIM}(${planCount(lang, "plan_lines", e.lines)})${RESET}${st.updated.has(e.i) ? ` ${DIM}${t(lang, "plan_section_updated")}${RESET}` : ""}`;
+    // The selected section: inverted while the plan zone has the arrows, bold cyan otherwise
+    const title = st.cur === e.i ? (st.zone === "plan" ? `\x1b[7m${e.plain}${RESET}` : `${BOLD}${CYAN}${e.plain}${RESET}`) : `${BOLD}${e.plain}${RESET}`;
+    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${title} ${DIM}(${planCount(lang, "plan_lines", e.lines)})${RESET}${st.updated.has(e.i) ? ` ${DIM}${t(lang, "plan_section_updated")}${RESET}` : ""}`;
     for (const l of wrap(head, w)) {
       out.lines.push(l);
       out.wide.push(null);
@@ -601,7 +582,7 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   else if (v.histDetail) left = `${DIM}${t(lang, "footer_history_detail")}${RESET}`;
   else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_full")}${RESET}`;
   else {
-    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
+    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, v.model?.plan ? "footer_switch_plan" : "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
   }
   if (v.conn?.state === "down") left = `${BOLD}${RED}${t(lang, "cannot_connect", { server: v.conn.server })}${RESET}  ${left}`;
   else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}${t(lang, "reconnected")}${RESET}  ${left}`;

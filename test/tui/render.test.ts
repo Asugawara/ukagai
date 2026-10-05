@@ -74,11 +74,11 @@ test("without an explanation (multi-select): raw options and checkboxes", () => 
   for (const s of ["Which ones to include?", "[ ] A", "a is first", "Space Enter send", "The agent did not write an explanation"]) assert.ok(out.includes(s), s);
 });
 
-test("a plan shows approve / reject buttons", () => {
+test("a plan shows the Approve (auto) / Instruct / Reject options", () => {
   const d = decision({ kind: "approve_plan", request: { plan: "# Plan title\n\n## Scope and reversibility\n\nSmall.", planFilePath: "/p" } } as never);
   const out = stripAnsi(render(viewOf(d), { cols: 140, rows: 30 }));
-  for (const s of ["Approve this plan?", "[y] Approve", "[n] Reject", "Scope and reversibility"]) assert.ok(out.includes(s), s);
-  assert.ok(!out.includes("auto") && !out.includes("[a]"));
+  for (const s of ["Approve this plan?", "[1] Approve (continue in auto mode)", "[2] Instruct", "[3] Reject", "Scope and reversibility"]) assert.ok(out.includes(s), s);
+  assert.ok(!out.includes("[a]"));
 });
 
 test("with no pending decisions, the empty message is centered", () => {
@@ -148,7 +148,7 @@ test("ja: the main UI strings are Japanese", () => {
 test("ja: plan buttons, empty state, blocker band", () => {
   const plan = decision({ kind: "approve_plan", request: { plan: "# P\n\n## Scope and reversibility\n\nSmall.", planFilePath: "/p" } } as never);
   const out = stripAnsi(render(viewOf(plan, "ja"), { cols: 140, rows: 30 }));
-  for (const s of ["この計画を承認しますか", "[y] 承認", "[n] 却下"]) assert.ok(out.includes(s), s);
+  for (const s of ["この計画を承認しますか", "[1] 承認（auto モードで続行）", "[2] 指示", "[3] 却下"]) assert.ok(out.includes(s), s);
   const app = new App();
   app.lang = "ja";
   assert.ok(stripAnsi(render(app.view(NOW), { cols: 100, rows: 20 })).includes("判断待ちはありません"));

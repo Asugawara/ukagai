@@ -15,6 +15,7 @@ import { decision } from "./helpers.js";
 const LONG = readFileSync(new URL("../gui/fixtures/long-plan.md", import.meta.url), "utf8");
 const SHORT_C = "# Short plan C\n\n## One\n\nText.\n\n## Two\n\nMore.\n";
 const ch = (c: string): Key => ({ name: "char", ch: c });
+const down: Key = { name: "down" };
 const enter: Key = { name: "enter" };
 const esc: Key = { name: "esc" };
 const tab: Key = { name: "tab" };
@@ -76,7 +77,8 @@ test("a new plan arriving on the idle screen comes up by itself: header, folded 
   assert.equal(heads.length, 9, "the H3 rows of folded sections are hidden");
   assert.equal(heads.filter((h) => h.trim().startsWith("▾")).length, 1, "the first H2 is open");
   const toc = text.split("\n").map((l) => l.split(" │ ")[1] ?? "").filter((l) => /[☐☑]/.test(l));
-  assert.equal(toc.length, 15);
+  assert.equal(toc.length, 0, "there is no contents list in the decision column");
+  assert.equal(app.view(clock).plan!.zone, "plan", "a long plan starts in the plan zone");
   assert.ok(text.includes("Done reading (Esc)"));
   for (const word of ["Approve", "Reject", "Free text", "None of these", "Can't answer", "[y]"]) assert.ok(!text.includes(word), word);
   assert.ok(text.includes("Pending 1"), "a new plan is counted");
@@ -109,7 +111,7 @@ test("live update: a changed section turns unread with `updated`, unchanged ones
   await arrive(app);
   press(app, ch("o"));
   assert.equal(foldedRows(draw(app, 140, 30).text).filter((h) => h.trim().startsWith("▾")).length > 0, true);
-  press(app, tab, { name: "pgdn" });
+  press(app, { name: "pgdn" });
   draw(app, 140, 30);
   const scrolled = app.scroll;
   assert.ok(scrolled > 0, "scrolled down");
@@ -129,7 +131,7 @@ test("live update: a changed section turns unread with `updated`, unchanged ones
   // Opening it clears the word
   const i = app.view(clock).plan!;
   assert.equal(i.updated.size, 1);
-  press(app, tab); // focus back to the decision column (j/k move the contents cursor)
+  assert.equal(i.zone, "plan", "the zone stays through the live update");
   const idx = planOutline(FILES["b.md"].markdown).entries.findIndex((e) => e.plain === "Rollout");
   while (app.view(clock).plan!.cur !== idx) press(app, ch("j"));
   press(app, enter); // it is open already: Enter folds it, the next Enter opens it again and clears the word
@@ -179,7 +181,7 @@ test("decision precedence: a decision takes the screen (Pending 2); ] is the pla
 test("upgrade in place: the approval of the shown plan keeps the folding state, shows the buttons, is one list row; answering leaves nothing to mark read", async () => {
   const { app } = setup();
   await arrive(app);
-  press(app, tab, ch("]"), ch("]"));
+  press(app, down, enter, down, enter); // Changes, then its first subsection
   const open = [...app.view(clock).plan!.open].sort();
   assert.ok(open.length >= 3, "three sections open");
   const ap = decision({ id: "ap", kind: "approve_plan", request: { plan: LONG, planFilePath: "/Users/a/.claude/plans/b.md" } } as never);
@@ -257,7 +259,7 @@ test("works at 100x24 stacked: the plan screen and the idle screen", async () =>
   assert.ok(!text.includes(" │ "), "one column");
   assert.ok(lines[0]!.startsWith("plans/") && lines[0]!.includes("Plan") && lines[1]!.includes("Export retry"));
   // The plan has a session, so the instruction card takes the last rows and the Contents label scrolls out: the folded rows are the contents here
-  assert.ok(text.includes("▸ ☑ Context") && text.includes("Done reading (Esc)"));
+  assert.ok(/[▸▾] ☑ Context/.test(text) && text.includes("Done reading (Esc)"));
   assert.ok(!text.includes("Approve"));
   press(app, esc);
   const idle = draw(app, 100, 24);
@@ -340,4 +342,42 @@ test("a plan file opened by hand from the list while its session is unknown lear
   app.planUpdated({ ...bare, session_id: "s-found" }, clock);
   await tick();
   assert.match(draw(app).text, /What should the agent do first\?/, "the card appears without a file write");
+});
+
+test("long plan file: starts in the plan zone, → lands on the Instruct card (its box opens), ← in the empty box goes back; the hint follows the zone", async () => {
+  const { app } = setup();
+  await arrive(app);
+  const right: Key = { name: "right" };
+  const left: Key = { name: "left" };
+  assert.equal(app.view(clock).plan!.zone, "plan");
+  assert.equal(app.mode, "normal");
+  assert.match(draw(app).text, /j\/k Section · Enter Open → Instruct|j\/k Section · Enter Open · → Instruct/);
+  press(app, right);
+  assert.equal(app.view(clock).plan!.zone, "opts");
+  assert.equal(app.view(clock).input?.kind, "instruct", "the card takes the box at once");
+  assert.match(draw(app).text, /Instruction:/);
+  press(app, left);
+  assert.equal(app.mode, "normal");
+  assert.equal(app.view(clock).plan!.zone, "plan");
+  // the hint in the options zone, with the box closed again (Esc keeps the zone)
+  press(app, right, esc);
+  assert.equal(app.view(clock).plan!.zone, "opts");
+  assert.match(draw(app).text, /Enter Instruct · ← Plan/);
+  assert.deepEqual(press(app, enter), [], "Enter opens the box, it sends nothing");
+  assert.equal(app.mode, "input");
+});
+
+test("long plan file without a session: → has nowhere to go and the zone stays on the sections", async () => {
+  const { app } = setup();
+  FILES["b.md"] = { ...FILES["b.md"]!, session_id: undefined };
+  app.planUpdated({ ...summary(FILES["b.md"]), session_id: undefined }, clock);
+  press(app, ch("b"), enter);
+  await tick();
+  assert.equal(app.shownPlan, "b.md");
+  press(app, { name: "right" }, ch("l"), tab);
+  assert.equal(app.view(clock).plan!.zone, "plan");
+  assert.equal(app.mode, "normal");
+  const { text } = draw(app);
+  assert.match(text, /The agent's session was not found/);
+  assert.match(text, /j\/k Section · Enter Open · o All/);
 });

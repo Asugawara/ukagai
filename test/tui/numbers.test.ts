@@ -65,10 +65,11 @@ test("while typing, a digit is text; in a picker it does nothing", () => {
   assert.deepEqual(press(c, ch("1")), []);
 });
 
-test("plan: digits are ignored; a number with no card (7 of 2) is ignored", () => {
+test("plan: 1-3 are Approve / Instruct / Reject; a number with no card (7 of 2) is ignored", () => {
   const p = new App();
   p.upsert({ ...decision(), kind: "approve_plan", request: { plan: "# P\n\n1. x\n" } } as never, now);
-  assert.deepEqual(press(p, ch("1")), []);
+  assert.deepEqual(press(p, ch("1")), [{ type: "answer", id: "d1", body: { approve: true, set_mode_auto: true } }]);
+  assert.deepEqual(press(p, ch("4")), []);
   assert.deepEqual(press(open(V2_MD), ch("7")), []);
 });
 

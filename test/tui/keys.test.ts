@@ -123,3 +123,35 @@ test("PageUp / PageDown / Ctrl-U / Ctrl-D scroll half a screen", () => {
   for (const n of ["pgdn", "ctrl-d"] as const) assert.deepEqual(interpret({ name: n }, ctx).action, { type: "scroll", delta: 1, unit: "half" });
   for (const n of ["pgup", "ctrl-u"] as const) assert.deepEqual(interpret({ name: n }, ctx).action, { type: "scroll", delta: -1, unit: "half" });
 });
+
+test("long plan: h / l and ← → are the zone keys, j k move the sections in the plan zone and the options in the options zone", () => {
+  const plan = (key: Key, zone: "plan" | "opts", extra: { planOnly?: boolean } = {}) => interpret(key, { mode: "normal", kind: "plan", toc: true, zone, wide: true, focus: zone === "plan" ? "background" : "decision", lastG: 0, now: 1000, ...extra }).action;
+  for (const zone of ["plan", "opts"] as const) {
+    assert.deepEqual(plan(ch("h"), zone), { type: "zone", to: "plan" });
+    assert.deepEqual(plan({ name: "left" }, zone), { type: "zone", to: "plan" });
+    assert.deepEqual(plan(ch("l"), zone), { type: "zone", to: "opts" });
+    assert.deepEqual(plan({ name: "right" }, zone), { type: "zone", to: "opts" });
+    assert.deepEqual(plan(ch("["), zone), { type: "prev" });
+    assert.deepEqual(plan(ch("]"), zone), { type: "next" });
+  }
+  assert.deepEqual(plan(ch("j"), "plan"), { type: "toc-move", delta: 1 });
+  assert.deepEqual(plan({ name: "up" }, "plan"), { type: "toc-move", delta: -1 });
+  assert.deepEqual(plan({ name: "enter" }, "plan"), { type: "toc-toggle" });
+  assert.deepEqual(plan(ch(" "), "plan"), { type: "toc-toggle" });
+  assert.deepEqual(plan(ch("o"), "plan"), { type: "toc-all" });
+  assert.deepEqual(plan({ name: "end" }, "plan"), { type: "toc-edge", to: "last" });
+  assert.deepEqual(plan({ name: "home" }, "plan"), { type: "toc-edge", to: "first" });
+  assert.deepEqual(plan(ch("j"), "opts"), { type: "move", delta: 1 });
+  assert.deepEqual(plan({ name: "enter" }, "opts"), { type: "submit" });
+  assert.deepEqual(plan({ name: "enter" }, "opts", { planOnly: true }), { type: "instruct" });
+  // y n i and 1-3 work from either zone
+  for (const zone of ["plan", "opts"] as const) {
+    assert.deepEqual(plan(ch("y"), zone), { type: "approve" });
+    assert.deepEqual(plan(ch("n"), zone), { type: "reject" });
+    assert.deepEqual(plan(ch("i"), zone), { type: "instruct" });
+    assert.deepEqual(plan(ch("3"), zone), { type: "pick", n: 3 });
+  }
+  // a short plan keeps h l for the pending decisions
+  assert.equal(type(ch("h"), { kind: "plan" }), "prev");
+  assert.equal(type(ch("l"), { kind: "plan" }), "next");
+});

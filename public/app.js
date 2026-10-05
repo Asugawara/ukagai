@@ -1060,23 +1060,36 @@ function renderPlanHead(pd) {
   fitTitle(head);
 }
 
-// Right column of a plan: the contents (long plans) and one text action, `Done reading`
+// Right column of a plan file: the Instruct card (when the session is known) and one text action, `Done reading`.
+// A long plan starts in the plan zone (the sections in the left column); a short one starts on the card
 function renderPlanRight(pd) {
   document.body.append(toastBox);
   const right = $("decision");
-  right.classList.remove("split");
+  right.classList.remove("split", "zone-on");
+  $("background").classList.remove("zone-on");
   const wasTyping = document.activeElement?.id === "instruct";
   document.activeElement?.blur?.();
   right.replaceChildren();
   const outline = planOutline(pd);
   const dr = draftOf(pd);
   const canInstruct = !!pd.session_id;
-  // The box takes the focus when the card is first shown (it is the only thing to act on; with a contents the arrows are the contents' keys) and keeps it across a live update
-  const focusBox = canInstruct && (wasTyping || (dr.cursor == null && !outline));
+  const zoneNow = () => (outline ? planState(pd, outline).zone : "opts");
+  if (outline && !canInstruct) planState(pd, outline).zone = "plan"; // nothing to the right
+  // The box takes the focus when the card is first shown on a short plan (it is the only thing to act on) and keeps it across a live update
+  const focusBox = canInstruct && ((wasTyping && zoneNow() === "opts") || (dr.cursor == null && !outline));
   if (canInstruct) dr.cursor = 0;
   let box = null;
-  ui = { kind: "planview", toc: !!outline, canInstruct, openInstruct: () => box?.ta.focus() };
-  if (outline) right.append(el("div", { class: "qs" }, planToc(pd, outline)));
+  ui = {
+    kind: "planview", toc: !!outline, canInstruct, hasOptions: canInstruct,
+    openInstruct() { if (!canInstruct) return; ui.onInstructFocus(); box.ta.focus(); },
+    onInstructFocus() { if (outline && zoneNow() !== "opts") { planState(pd, outline).zone = "opts"; syncPlan(pd); setHint(planViewHint(pd, outline, canInstruct)); } box.card.classList.add("cursor"); },
+    applyZone() {
+      const on = zoneNow() === "opts";
+      setHint(planViewHint(pd, outline, canInstruct));
+      box?.card.classList.toggle("cursor", on);
+      if (on) syncTyping(box?.ta, true); else if (document.activeElement?.id === "instruct") document.activeElement.blur();
+    },
+  };
   const actions = el("div", { class: "actions" });
   if (canInstruct) {
     box = instructCard(dr, (text) => sendPlanInstruct(pd, dr, text));
@@ -1086,10 +1099,18 @@ function renderPlanRight(pd) {
     el("span", { text: t("plan_done_reading") }), el("kbd", { text: "Esc" })));
   if (!canInstruct) actions.append(el("div", { class: "plan-unread", id: "plan-no-session", text: t("plan_no_session") }));
   right.append(actions);
-  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · ` : ""}←→ ${t("hint_next")} · , ${t("hint_settings")}` }));
+  setHint(planViewHint(pd, outline, canInstruct));
   placeToasts();
-  if (focusBox) syncTyping(box.ta, true);
   if (outline) syncPlan(pd);
+  if (canInstruct) {
+    box.card.classList.toggle("cursor", zoneNow() === "opts");
+    if (focusBox) syncTyping(box.ta, true);
+  }
+}
+
+function planViewHint(pd, outline, canInstruct) {
+  const zone = outline ? `${t(!canInstruct ? "hint_zone_plan_only" : planZone(pd) === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : "";
+  return el("div", { class: "hint", text: `${zone}Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · ` : ""}Tab ${t("hint_next")} · , ${t("hint_settings")}` });
 }
 
 // Esc / the text: mark the plan read (unless it already is), then the next item or the idle screen
@@ -1103,29 +1124,38 @@ function planViewKey(ev) {
   const key = logicalKey(ev);
   const pd = shownPlanPd();
   if (!pd) return;
-  if (ev.target instanceof HTMLTextAreaElement) { // typing an instruction: Esc leaves the box keeping the text, ↑ ↓ in an empty box leave it too
+  if (ev.target instanceof HTMLTextAreaElement) { // typing an instruction: Esc leaves the box keeping the text, ↑ ↓ ← in an empty box leave it too
     if (key === "Escape" || ((key === "ArrowUp" || key === "ArrowDown") && ev.target.value === "")) { ev.preventDefault(); ev.target.blur(); }
+    else if (key === "ArrowLeft" && ev.target.value === "" && planOutline(pd)) { ev.preventDefault(); setPlanZone(pd, "plan"); }
     return;
   }
   ev.preventDefault();
   if (key === "Escape") { doneReading(); return; }
   if (key === "i") { if (pd.session_id) ui?.openInstruct?.(); else toast(t("plan_no_session")); return; }
-  tocKey(pd, key, ev);
+  if (zoneKey(pd, key, ev)) return;
+  if (key === "Enter" && ui?.canInstruct && planZone(pd) === "opts") ui.openInstruct();
 }
 
-// The contents keys of a long plan: the arrows walk the contents; Enter / Space fold the section under the cursor, o opens / closes all, [ ] go to the previous / next section.
+// The zone keys of a long plan. ← / h = the plan zone (the sections in the left column), → / l = the options zone (the right column).
+// In the plan zone ↑ ↓ (j k) move the section selection, Enter / Space fold the section, Home End (gg G) go to the first / last, o opens / closes all.
 // true when the key was one of them
-function tocKey(d, key, ev) {
+function zoneKey(d, key, ev) {
   const o = planOutline(d);
   if (!o) return false;
+  if (key === "ArrowLeft" || key === "h") { ev.preventDefault(); setPlanZone(d, "plan"); return true; }
+  if (key === "ArrowRight" || key === "l") { ev.preventDefault(); setPlanZone(d, "opts"); return true; }
+  if (planZone(d) !== "plan") return false;
   const st = planState(d, o);
+  const now = Date.now();
+  const gg = key === "g" && now - lastG < 1000;
+  lastG = key === "g" && !gg ? now : 0;
   let go;
   if (key === "ArrowUp" || key === "k") go = () => planMoveCursor(d, -1);
   else if (key === "ArrowDown" || key === "j") go = () => planMoveCursor(d, 1);
-  else if (key === "Enter" || key === " ") go = () => planSetOpen(d, st.cur, !st.open.has(st.cur));
+  else if (gg || key === "Home") go = () => planMoveCursor(d, -o.entries.length);
+  else if (key === "G" || key === "End") go = () => planMoveCursor(d, o.entries.length);
+  else if (key === "Enter" || key === " ") go = () => (st.open.has(st.cur) ? planSetOpen(d, st.cur, false) : planReveal(d, st.cur));
   else if (key === "o") go = () => planToggleAll(d);
-  else if (key === "[") go = () => planReveal(d, Math.max(0, st.cur - 1));
-  else if (key === "]") go = () => planReveal(d, Math.min(o.entries.length - 1, st.cur + 1));
   else return false;
   ev.preventDefault();
   ev.target?.blur?.();
@@ -1590,8 +1620,10 @@ const recBox = (v2) => v2?.recBox ? el("div", { class: "rec" }, el("div", { clas
 
 function renderRightBody(d) {
   const root = $("decision");
-  root.classList.remove("split");
+  root.classList.remove("split", "zone-on");
+  $("background").classList.remove("zone-on");
   const wasInstruct = document.activeElement?.id === "instruct";
+  const wasReason = document.activeElement?.id === "reason";
   if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
@@ -1876,62 +1908,76 @@ function renderRightBody(d) {
 
   if (isCheckpoint(d)) { renderCheckpointRight(d, dr, closed, root); return; }
 
-  // approve_plan
+  // approve_plan: the plan column (left) and one option list (right): Approve (auto) / Instruct / Reject
   const qsBox = el("div", { class: "qs" });
   const impact = impactBox(d);
   if (impact) qsBox.append(impact);
-  const outline = planOutline(d);
-  if (outline) qsBox.append(planToc(d, outline));
   root.append(qsBox);
-  // One press sends, for every plan; unread sections are only shown (the dim line above the buttons)
-  const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: t("approve") }));
-  const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }));
+  const outline = planOutline(d);
+  const zoneNow = () => (outline ? planState(d, outline).zone : "opts");
+  // One press sends, for every plan; unread sections are only shown (the dim line above the options)
+  const approve = el("div", { class: "opt approve-card recommended" + (closed ? " off" : ""), role: "button", "data-card": "approve", onclick: () => { if (!closed) send(d, { approve: true, set_mode_auto: true }); } },
+    el("span", { class: "cardkey", text: "1" }),
+    el("div", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("approve_auto") }), el("span", { class: "rec-badge", text: `★ ${t("recommended")}` }))));
   const unread = el("div", { class: "plan-unread", hidden: !unreadText(d), text: unreadText(d) });
   const actions = el("div", { class: "actions" });
-  // The instruction card is always there (above Approve / Reject): the cursor landing on it focuses the box
+  // The instruction card is always there: the cursor landing on it focuses the box
   const box = closed ? null : instructCard(dr, (text) => send(d, { instruct: true, text }));
+  if (box) box.card.prepend(el("span", { class: "cardkey", text: "2" }));
+  const confirm = el("button", {
+    class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
+    onclick: () => send(d, { approve: false, reason: dr.reason.trim() }),
+  });
+  const input = el("input", {
+    type: "text", id: "reason", placeholder: t("reject_placeholder"), value: dr.reason,
+    oninput: (ev) => { dr.reason = ev.target.value; confirm.disabled = !dr.reason.trim(); },
+    onfocus: () => { if (!autoFocusing && !closed && (ui?.cursor !== 2 || zoneNow() !== "opts")) { dr.rejecting = true; ui?.setCursor(2, false, true); } },
+    onkeydown: (ev) => { if (ev.key === "Enter" && dr.reason.trim()) confirm.click(); },
+  });
+  const rejectBox = el("div", { class: "reject-box", hidden: closed || !dr.rejecting }, input, confirm);
+  const reject = el("div", { class: "opt reject-card" + (closed ? " off" : ""), role: "button", "data-card": "reject", onclick: (ev) => { if (!closed && !ev.target.closest(".reject-box")) ui.startReject(); } },
+    el("span", { class: "cardkey", text: "3" }), el("div", { class: "grow" }, el("div", { class: "lab", text: t("reject") }), rejectBox));
+  actions.append(unread, approve);
   if (box) actions.append(box.card);
-  if (dr.rejecting && !closed) {
-    const confirm = el("button", {
-      class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
-      onclick: () => send(d, { approve: false, reason: dr.reason.trim() }),
-    });
-    const input = el("input", {
-      type: "text", id: "reason", placeholder: t("reject_placeholder"), value: dr.reason,
-      oninput: (ev) => { dr.reason = ev.target.value; confirm.disabled = !dr.reason.trim(); },
-      onkeydown: (ev) => { if (ev.key === "Enter" && dr.reason.trim()) confirm.click(); },
-    });
-    actions.append(el("div", { class: "reject-box" }, input), confirm);
-  }
-  actions.append(unread, approve, reject);
-  const keysHint = outline ? t("hint_plan_toc") : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")}`;
-  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")} · , ${t("hint_settings")}`));
+  actions.append(reject);
+  const hist = el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` });
+  const hintFor = () => el("div", { class: "hint" }, `${outline ? `${t(zoneNow() === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · `}y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, hist, `Tab ${t("hint_next")} · , ${t("hint_settings")}`);
+  setHint(hintFor());
   root.append(actions);
-  // Slots: 0 the instruction card (its box), 1 Approve, 2 Reject
-  const buttons = [box?.card, approve, reject];
+  // Slots: 0 Approve, 1 the instruction card (its box), 2 Reject (its reason box)
+  const buttons = [approve, box?.card, reject];
   ui = {
-    kind: "plan", buttons, closed, approve, toc: !!outline, box,
-    // focus: the cursor landed on the card by the user (↑↓, a click), so its box takes the focus; the first render does not steal it
-    setCursor(i, focus = true) {
-      if (outline) return; // the arrows move the contents cursor instead (the buttons are y / n or a click)
+    kind: "plan", buttons, closed, approve, toc: !!outline, box, hasOptions: !closed,
+    // focus: the cursor landed here by the user (↑↓, a click), so the options zone takes over and a card with a box focuses it; the first render does not steal the focus
+    // keep: the box already has the focus (a click, a chip): the cursor and the zone follow it and the focus stays
+    setCursor(i, focus = true, keep = false) {
       i = clamp(i, buttons.length);
+      if (i === 1 && !box) i = i > dr.cursor ? 2 : 0;
       if (i !== dr.cursor) clearConfirm(dr);
       dr.cursor = i;
-      buttons.forEach((b, k) => b?.classList.toggle("cursor", k === i));
-      syncTyping(box?.ta, !closed && focus && i === 0);
+      if ((focus || keep) && outline && planState(d, outline).zone !== "opts") { planState(d, outline).zone = "opts"; syncPlan(d); setHint(hintFor()); }
+      const on = zoneNow() === "opts";
+      buttons.forEach((b, k) => b?.classList.toggle("cursor", on && k === i));
+      if (!(keep && i === 1)) syncTyping(box?.ta, !closed && focus && on && i === 1);
+      // Reject: landing on it opens the reason box; leaving it with nothing typed closes the box again
+      if (i !== 2 && dr.rejecting && !dr.reason.trim()) dr.rejecting = false;
+      const landed = !closed && focus && on && i === 2;
+      if (landed) dr.rejecting = true;
+      rejectBox.hidden = closed || !dr.rejecting;
+      if (landed) { autoFocusing = true; input.focus(); autoFocusing = false; }
+      else if (document.activeElement === input && !(keep && i === 2)) input.blur();
     },
-    // `i`, a click on the card: the cursor goes to the card (also with a contents) and the box takes the focus
-    openInstruct() {
-      if (closed) return;
-      dr.cursor = 0;
-      buttons.forEach((b, k) => b?.classList.toggle("cursor", k === 0));
-      box.ta.focus();
-    },
-    get cursor() { return dr.cursor ?? 1; },
+    startReject() { if (!closed) ui.setCursor(2, true); },
+    // `i`, a click on the card: the cursor goes to the card and the box takes the focus
+    openInstruct() { if (!closed) ui.setCursor(1, true); },
+    onInstructFocus() { if (!autoFocusing && !closed && (ui.cursor !== 1 || zoneNow() !== "opts")) ui.setCursor(1, false, true); },
+    applyZone() { ui.setCursor(dr.cursor ?? 0, zoneNow() === "opts"); setHint(hintFor()); },
+    get cursor() { return dr.cursor ?? 0; },
     toggleExpand: () => toggleExpand(dr),
   };
-  if (!closed) ui.setCursor(dr.cursor ?? 1, false);
-  if (wasInstruct && box) syncTyping(box.ta, true); // a live update keeps the box focused
+  if (!closed) ui.setCursor(dr.cursor ?? 0, false);
+  if (wasInstruct && box && zoneNow() === "opts") syncTyping(box.ta, true); // a live update keeps the box focused
+  if (wasReason && dr.rejecting && !closed && zoneNow() === "opts") { autoFocusing = true; input.focus(); autoFocusing = false; }
   markClamps(root, dr);
   if (outline) syncPlan(d);
 }
@@ -2099,7 +2145,7 @@ function instructCard(dr, onSend) {
     id: "instruct", rows: "3", "aria-label": t("instruct_aria"), placeholder: t("instruct_placeholder"),
     oninput: () => { dr.instruct = ta.value; go.disabled = !ta.value.trim(); },
     // a focus by hand (a click in the box, a chip) moves the cursor onto the card
-    onfocus: () => { if (!autoFocusing && ui?.kind === "plan" && !ui.closed && ui.cursor !== 0) ui.openInstruct(); },
+    onfocus: () => { if (!autoFocusing) ui?.onInstructFocus?.(); },
     onkeydown: (ev) => {
       if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); if (ta.value.trim()) send(); }
     },
@@ -2133,12 +2179,8 @@ async function sendPlanInstruct(pd, dr, text) {
   if (shownId === pd.id) rerenderPlanCard(pd);
 }
 
-function startReject(d) {
-  const dr = draftOf(d);
-  dr.rejecting = true;
-  dr.cursor = 2;
-  renderRight(d);
-  $("reason")?.focus();
+function startReject() {
+  ui?.startReject?.();
 }
 
 // ---- Markdown / Mermaid / diff ----
@@ -2686,7 +2728,7 @@ function planOutlineOf(md) {
 // decision for the same file share it; a decision without planFilePath keeps its own id
 const planKey = (d) => (planFileOf(d) ? PLAN_ID + planFileOf(d) : d.id);
 const outlines = new Map(); // plan key -> { plan, outline }
-const planStates = new Map(); // plan key -> { open, read, upd, cur }
+const planStates = new Map(); // plan key -> { open, read, upd, cur, zone }
 // The outline of a plan, or null when the plan is short (shown as one open document, no contents)
 function planOutline(d) {
   if (d?.kind !== "approve_plan") return null;
@@ -2706,7 +2748,7 @@ function planOutline(d) {
 // are marked `updated` until opened. Sections without a match are new: folded, unread and marked. Removed ones are gone
 function remapPlanState(from, to, st) {
   const used = new Set();
-  const next = { open: new Set(), read: new Set(), upd: new Set(), cur: 0 };
+  const next = { open: new Set(), read: new Set(), upd: new Set(), cur: 0, zone: st.zone };
   for (const e of to.entries) {
     const o = from.entries.find((x) => !used.has(x.i) && x.level === e.level && x.plain === e.plain);
     if (!o) { next.upd.add(e.i); continue; }
@@ -2721,14 +2763,14 @@ function remapPlanState(from, to, st) {
   return next;
 }
 
-// Per-decision state: which sections are open, which have been opened at least once (read), the contents cursor.
+// Per-decision state: which sections are open, which have been opened at least once (read), the selected section, the zone (plan | opts).
 // The first H2 is open (and counts as read); the scope section is on screen in the right column, so it counts as read
 function planState(d, o) {
   const key = planKey(d);
   let st = planStates.get(key);
   if (!st) {
     const first = o.entries.find((e) => e.level === 2);
-    planStates.set(key, (st = { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), upd: new Set(), cur: first?.i ?? 0 }));
+    planStates.set(key, (st = { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), upd: new Set(), cur: first?.i ?? 0, zone: "plan" }));
   }
   return st;
 }
@@ -2748,7 +2790,7 @@ const count = (key, n) => t(n === 1 ? `${key}_one` : key, { n });
 // A section's "n lines · m files" (no files part when its prose names none)
 const metaText = (e) => [count("plan_lines", e.lines), e.files.size ? count("plan_files", e.files.size) : ""].filter(Boolean).join(" · ");
 
-// Mirror the state onto the left column (open, marks) and the contents (marks, cursor)
+// Mirror the state onto the left column (open, marks, the selected section) and the zone rings
 function syncPlan(d) {
   const o = planOutline(d);
   if (!o || d.id !== shownId) return;
@@ -2756,16 +2798,29 @@ function syncPlan(d) {
   for (const e of o.entries) {
     const det = document.querySelector(`#background details[data-i="${e.i}"]`);
     if (det && det.open !== st.open.has(e.i)) det.open = st.open.has(e.i);
-    for (const mark of document.querySelectorAll(`#background details[data-i="${e.i}"] > summary > .ps-mark, #decision .toc-row[data-i="${e.i}"] .toc-mark`)) mark.textContent = st.read.has(e.i) ? "☑" : "☐";
+    for (const mark of document.querySelectorAll(`#background details[data-i="${e.i}"] > summary > .ps-mark`)) mark.textContent = st.read.has(e.i) ? "☑" : "☐";
     for (const w of document.querySelectorAll(`#background details[data-i="${e.i}"] > summary > .ps-upd`)) w.hidden = !st.upd.has(e.i);
-    const row = document.querySelector(`#decision .toc-row[data-i="${e.i}"]`);
-    row?.classList.toggle("cursor", st.cur === e.i);
+    det?.firstElementChild?.classList.toggle("sel", st.cur === e.i);
   }
+  $("background").classList.toggle("zone-on", st.zone === "plan");
+  $("decision").classList.toggle("zone-on", st.zone === "opts");
   if (!d.readonly) {
     syncConfirm(draftOf(d));
     const line = document.querySelector("#decision .plan-unread");
     if (line) { const text = unreadText(d); line.textContent = text; line.hidden = !text; }
   }
+}
+
+const planZone = (d) => { const o = planOutline(d); return o ? planState(d, o).zone : "opts"; };
+// ← / → on a long plan: the plan zone (sections) or the options zone (Approve / Instruct / Reject, or the Instruct card)
+function setPlanZone(d, zone) {
+  const o = planOutline(d);
+  if (!o || !ui?.hasOptions && zone === "opts") return;
+  const st = planState(d, o);
+  if (st.zone === zone) return;
+  st.zone = zone;
+  syncPlan(d);
+  ui.applyZone?.();
 }
 
 function planSetOpen(d, i, open) {
@@ -2790,7 +2845,6 @@ function planReveal(d, i) {
   planState(d, o).cur = i;
   planSetOpen(d, i, true);
   document.querySelector(`#background details[data-i="${i}"]`)?.scrollIntoView({ block: "start" });
-  document.querySelector(`#decision .toc-row[data-i="${i}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
 function planMoveCursor(d, step) {
@@ -2799,7 +2853,7 @@ function planMoveCursor(d, step) {
   const st = planState(d, o);
   st.cur = Math.max(0, Math.min(o.entries.length - 1, st.cur + step));
   syncPlan(d);
-  document.querySelector(`#decision .toc-row[data-i="${st.cur}"]`)?.scrollIntoView({ block: "nearest" });
+  document.querySelector(`#background details[data-i="${st.cur}"] > summary`)?.scrollIntoView({ block: "nearest" });
 }
 
 // `o`: open everything, or close everything when everything is already open
@@ -2870,16 +2924,6 @@ async function renderPlanMarkdown(container, d) {
   pathBadges(container);
   await enhance(container);
   pathBadges(container);
-}
-
-// The contents (right column): one row per H2 / H3 with its read mark and line count
-function planToc(d, o) {
-  const st = planState(d, o);
-  const rows = o.entries.map((e) => el("div", {
-    class: `toc-row l${e.level}${st.cur === e.i ? " cursor" : ""}`, "data-i": String(e.i), title: e.plain,
-    onclick: () => planReveal(d, e.i),
-  }, el("span", { class: "toc-mark", text: st.read.has(e.i) ? "☑" : "☐" }), el("span", { class: "toc-title", text: e.plain }), el("span", { class: "toc-n", text: String(e.lines) })));
-  return el("div", { class: "plan-toc" }, el("div", { class: "impact-cap", text: t("plan_toc") }), ...rows);
 }
 
 // The line next to "Approve this plan?": 9 sections · 219 lines · 14 files, and the plan file's name (full path on hover)
@@ -3352,14 +3396,16 @@ document.addEventListener("keydown", (ev) => {
   if (!typing && key === ",") { ev.preventDefault(); openSettings(); return; }
   if (!typing && key === "f" && hasWide()) { ev.preventDefault(); setFullwide(true); return; }
   if (key === "Tab") { ev.preventDefault(); cycle(ev.shiftKey ? -1 : 1); return; }
+  // On a long plan ← → (h l) switch between the plan zone and the options zone instead (Tab and [ ] still cycle)
+  if (!typing && ui?.toc && (key === "h" || key === "l" || key === "ArrowLeft" || key === "ArrowRight")) { zoneKey(isPlanId(shownId) ? shownPlanPd() : decisions.get(shownId), key, ev); return; }
   if (!typing && (key === "h" || key === "l" || key === "ArrowLeft" || key === "ArrowRight")) {
     ev.preventDefault();
     cycle(key === "l" || key === "ArrowRight" ? 1 : -1);
     return;
   }
   if (!typing && key === "b" && drawerIds().length) { ev.preventDefault(); setDrawer(true); return; }
-  // [ ] cycle through the items, except where they walk the contents of a long plan (h l ← → Tab always cycle)
-  if (!typing && (key === "[" || key === "]") && !ui?.toc) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }
+  // [ ] cycle through the items
+  if (!typing && (key === "[" || key === "]")) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }
   if (isPlanId(shownId)) { planViewKey(ev); return; }
   if (shownId == null) return;
   if (!typing && key === "s") {
@@ -3526,35 +3572,40 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
 
-  // Plan
+  // Plan: the zone keys (a long plan), then the option list Approve / Instruct / Reject
+  const pd = decisions.get(shownId);
   if (typing) {
+    const empty = t.value === "";
+    const leave = (key === "ArrowUp" || key === "ArrowDown") && empty; // an empty box lets the arrows through; with text they stay text-field keys
     if (t.id === "instruct") {
-      // the instruction card: Esc leaves the box keeping the text; ↑ ↓ in an empty box leave it too and move on (no contents: onto the neighbouring slot)
       if (key === "Escape") { ev.preventDefault(); t.blur(); }
-      else if ((key === "ArrowUp" || key === "ArrowDown") && t.value === "") {
-        ev.preventDefault();
-        const next = clamp(ui.cursor + (key === "ArrowDown" ? 1 : -1), ui.buttons.length);
-        if (ui.toc || next === ui.cursor) t.blur(); else ui.setCursor(next);
-      }
-    } else if (key === "Escape") { ev.preventDefault(); cancelReject(); }
+      else if (leave) { ev.preventDefault(); ui.setCursor(ui.cursor + (key === "ArrowDown" ? 1 : -1)); }
+      else if (key === "ArrowLeft" && empty && ui.toc) { ev.preventDefault(); setPlanZone(pd, "plan"); }
+    } else if (t.id === "reason") {
+      if (key === "Escape") { ev.preventDefault(); cancelReject(); }
+      else if (leave) { ev.preventDefault(); ui.setCursor(ui.cursor + (key === "ArrowDown" ? 1 : -1)); }
+      else if (key === "ArrowLeft" && empty && ui.toc) { ev.preventDefault(); setPlanZone(pd, "plan"); }
+    }
     return;
   }
   if (key === "Enter" && isBtn) return;
-  if (ui.toc && !isBtn) {
-    if (tocKey(decisions.get(shownId), key, ev)) return;
-  }
+  if (ui.toc && zoneKey(pd, key, ev)) return;
+  const inPlan = ui.toc && planZone(pd) === "plan";
   if (key === ".") { ev.preventDefault(); ui.toggleExpand(); }
-  else if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
+  else if (key === "Escape" && draftOf(pd).rejecting) { ev.preventDefault(); cancelReject(); }
   else if (key === "i") { ev.preventDefault(); ui.openInstruct(); }
-  else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
-  else if (key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
-  else if (key === "Enter") {
+  else if (key === "y" || key === "1") { ev.preventDefault(); ui.approve.click(); }
+  else if (key === "2") { ev.preventDefault(); ui.openInstruct(); }
+  else if (key === "n" || key === "3") { ev.preventDefault(); ui.startReject(); }
+  else if (!inPlan && (key === "ArrowUp" || key === "k")) { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
+  else if (!inPlan && (key === "ArrowDown" || key === "j")) { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
+  else if (!inPlan && key === "Enter") {
     ev.preventDefault();
-    if (ui.cursor === 0) ui.openInstruct(); // the card: the box takes the focus (sending is Enter in the box)
-    else ui.buttons[ui.cursor].click();
+    if (ui.cursor === 0) ui.approve.click();
+    else if (ui.cursor === 1) ui.openInstruct(); // the card: the box takes the focus (sending is Enter in the box)
+    else if (draftOf(pd).reason.trim()) document.querySelector("#decision .reject-box .btn").click();
+    else ui.startReject();
   }
-  else if (key === "y") { ev.preventDefault(); ui.approve.click(); }
-  else if (key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });
 
 pendingBtn.addEventListener("click", () => setDrawer(!drawerOpen()));

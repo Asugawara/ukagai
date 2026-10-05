@@ -114,6 +114,8 @@ export class App {
   private planStates = new Map<string, { st: PlanState; outline: PlanOutline }>();
   /** The section (contents row) the background should scroll to once the next frame has told where it is */
   private reveal: number | null = null;
+  /** The reveal only brings the heading into view (moving the selection) instead of putting it at the top (opening a section) */
+  private revealNear = false;
   private listIndex = 0;
   private lastG = 0;
   /** Decisions showing a long recommendation in full */
@@ -442,7 +444,7 @@ export class App {
     let dr = this.drafts.get(m.id);
     if (!dr) {
       const q = m.question;
-      dr = { cursor: q?.initialCursor ?? (m.kind === "plan" && !m.readonly ? 1 : 0), sel: new Set(), free: { on: false, text: "" }, reason: "", instruct: "" };
+      dr = { cursor: q?.initialCursor ?? 0, sel: new Set(), free: { on: false, text: "" }, reason: "", instruct: "" };
       // Single select: moving = selecting. Pre-select the initial position (the recommended option, else the first)
       if (q && !q.multi && q.cards[dr.cursor]) dr.sel.add(q.cards[dr.cursor]!.value);
       this.drafts.set(m.id, dr);
@@ -503,7 +505,7 @@ export class App {
       plan: m?.plan ? this.planState(m) : null,
       scroll: this.scroll,
       rscroll: this.rscroll,
-      focus: this.focus,
+      focus: this.effectiveFocus(m),
       hscroll: this.hscroll,
       full: this.full,
       fullHint: this.hintUntil > now,
@@ -540,7 +542,17 @@ export class App {
       // The section the contents / [ ] / Enter asked for: its heading row is only known now. One more frame puts it at the top
       const row = f.secRows[this.reveal];
       this.reveal = null;
-      if (row !== undefined && row !== this.scroll) {
+      const near = this.revealNear && f.wide;
+      this.revealNear = false;
+      if (near && row !== undefined) {
+        // Moving the selection: scroll only as far as the heading needs to be on screen
+        const win = Math.max(1, f.bodyRows - 1);
+        const to = row < this.scroll ? row : row > this.scroll + win - 2 ? row - win + 3 : this.scroll;
+        if (to !== this.scroll) {
+          this.scroll = Math.max(0, Math.min(to, f.scrollMax));
+          return true;
+        }
+      } else if (row !== undefined && row !== this.scroll) {
         this.scroll = Math.max(0, Math.min(row, f.scrollMax));
         return true;
       }
@@ -555,9 +567,30 @@ export class App {
     return false;
   }
 
-  /** Focus matters only in the side-by-side layout. At full width it is the background */
-  private effectiveFocus(): Focus {
-    return this.frame.wide ? (this.full ? "background" : this.focus) : "decision";
+  /** Focus matters only in the side-by-side layout. At full width it is the background. On a long plan it is the zone (plan zone = background, options zone = decision) */
+  private effectiveFocus(m: ScreenModel | null = this.model()): Focus {
+    if (!this.frame.wide) return "decision";
+    if (this.full) return "background";
+    return m?.plan ? (this.zoneOf(m) === "plan" ? "background" : "decision") : this.focus;
+  }
+
+  /** A long plan has a plan zone and an options zone; everything else is always in the options */
+  private zoneOf(m: ScreenModel | null): "plan" | "opts" {
+    return m?.plan ? this.planState(m).zone : "opts";
+  }
+
+  /** Whether the options zone has anything to act on: a plan file needs a session for its Instruct card */
+  private hasOptions(m: ScreenModel): boolean {
+    return !m.readonly || !!this.files.get(m.readonly.name)?.session_id;
+  }
+
+  /** ← → on a long plan: the plan zone, or the options zone where the cursor's card takes over (Instruct opens its box, Reject its reason box) */
+  private setZone(m: ScreenModel, dr: Draft, zone: "plan" | "opts", now: number): Effect[] {
+    if (!m.plan) return [];
+    if (zone === "opts" && !this.hasOptions(m)) return [];
+    this.planState(m).zone = zone;
+    this.rscroll = null;
+    return zone === "opts" ? this.landOnText(m, dr, -1, now) : [];
   }
 
   /** Move the background (the whole screen in the stacked layout) to `to`. For relative moves from the current view `cur`, the caller computes the target */
@@ -595,7 +628,7 @@ export class App {
       if (this.mode === "normal") this.wheel(key.dir, key.x);
       return [];
     }
-    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(), histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now, presets: this.mode === "input" && this.input?.kind === "instruct" && this.input.text === "" ? Math.min(9, this.presets.length) : 0 });
+    const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(m), zone: m?.plan ? this.planState(m).zone : undefined, inputEmpty: this.input?.text === "", histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now, presets: this.mode === "input" && this.input?.kind === "instruct" && this.input.text === "" ? Math.min(9, this.presets.length) : 0 });
     this.lastG = lastG;
     return action ? this.apply(action, m, now) : [];
   }
@@ -656,12 +689,18 @@ export class App {
       case "hscroll": this.hscroll = Math.max(0, Math.min(this.frame.hMax, this.hscroll + a.delta * HSCROLL_STEP)); return [];
       case "hscroll-edge": this.hscroll = a.to === "start" ? 0 : this.frame.hMax; return [];
       case "full": this.full = !this.full; this.scroll = 0; return [];
-      case "focus": this.focus = this.focus === "decision" ? "background" : "decision"; return [];
+      case "focus": {
+        // On a long plan Tab switches the zone (the zone is the focus); with no options to go to it stays
+        if (m?.plan) return this.setZone(m, this.draft(m), this.zoneOf(m) === "plan" ? "opts" : "plan", now);
+        this.focus = this.focus === "decision" ? "background" : "decision";
+        return [];
+      }
       case "input-char": if (this.input) this.input.text += a.ch; return [];
       case "input-backspace": if (this.input) this.input.text = Array.from(this.input.text).slice(0, -1).join(""); return [];
       case "input-cancel": {
         // Esc leaves the box and keeps the text (a note box keeps its own text on Enter, as before)
         if (this.input?.kind === "instruct" && m) this.draft(m).instruct = this.input.text;
+        if (this.input?.kind === "reason" && m) this.draft(m).reason = this.input.text;
         if (this.input?.kind === "free" && m) {
           const dr = this.draft(m);
           dr.free.text = this.input.text;
@@ -723,21 +762,22 @@ export class App {
         this.mode = "normal";
         return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: body } });
       }
-      case "move": { const was = dr.cursor; this.moveCursor(m, dr, dr.cursor + a.delta); return this.landOnText(m, dr, was); }
+      case "move": { const was = dr.cursor; this.moveCursor(m, dr, dr.cursor + a.delta); return this.landOnText(m, dr, was, now); }
       case "top": this.moveCursor(m, dr, 0); return this.landOnText(m, dr);
       case "bottom": this.moveCursor(m, dr, this.slots(m) - 1); return this.landOnText(m, dr);
       case "input-move": {
         // ↑↓ in an empty free-text box walk to the neighbouring card; with text they do nothing (a one-line box)
         const inp = this.input;
-        if (inp?.kind === "instruct") {
-          // The instruction card of a plan: an empty box leaves (the cursor moves on where the arrows move it); the cursor never lands back on the same card
+        if (inp?.kind === "instruct" || inp?.kind === "reason") {
+          // The instruction / reason box of a plan: an empty box leaves (the cursor moves on where the arrows move it; the plan file's one card stays)
           if (inp.text !== "") return [];
-          dr.instruct = "";
+          if (inp.kind === "instruct") dr.instruct = "";
+          else dr.reason = "";
           this.input = null;
           this.mode = "normal";
           const was = dr.cursor;
-          if (!m.readonly && !m.plan) this.moveCursor(m, dr, dr.cursor + a.delta);
-          return this.landOnText(m, dr, was);
+          if (!m.readonly) this.moveCursor(m, dr, dr.cursor + a.delta);
+          return this.landOnText(m, dr, was, now);
         }
         if (inp?.kind !== "free" || inp.text !== "") return [];
         dr.free.text = "";
@@ -759,13 +799,34 @@ export class App {
         return [];
       }
       case "submit": return this.submit(m, dr, now);
-      case "approve": dr.cursor = 1; return this.approve(m);
-      case "reject": dr.cursor = 2; this.startReason(dr); return [];
+      case "approve": dr.cursor = 0; this.toOptions(m); return this.approve(m);
+      case "reject": dr.cursor = 2; this.toOptions(m); this.startReason(dr); return [];
+      case "zone": return this.setZone(m, dr, a.to, now);
+      case "input-zone": {
+        // ← in an empty instruction / reason box leaves it for the plan zone
+        const inp = this.input;
+        if (!m.plan || (inp?.kind !== "instruct" && inp?.kind !== "reason") || inp.text !== "") return [];
+        if (inp.kind === "instruct") dr.instruct = "";
+        else dr.reason = "";
+        this.input = null;
+        this.mode = "normal";
+        return this.setZone(m, dr, "plan", now);
+      }
       case "toc-move": {
         if (!m.plan) return [];
         const st = this.planState(m);
         st.cur = clamp(st.cur + a.delta, m.plan.outline.entries.length);
+        this.reveal = st.cur;
+        this.revealNear = true;
         this.rscroll = null;
+        return [];
+      }
+      case "toc-edge": {
+        if (!m.plan) return [];
+        const st = this.planState(m);
+        st.cur = a.to === "first" ? 0 : m.plan.outline.entries.length - 1;
+        this.reveal = st.cur;
+        this.revealNear = true;
         return [];
       }
       case "toc-toggle": {
@@ -777,15 +838,6 @@ export class App {
       }
       case "toc-all": {
         if (m.plan) toggleAll(m.plan.outline, this.planState(m));
-        return [];
-      }
-      case "toc-section": {
-        if (!m.plan) return [];
-        const st = this.planState(m);
-        st.cur = clamp(st.cur + a.delta, m.plan.outline.entries.length);
-        setOpen(m.plan.outline, st, st.cur, true);
-        this.reveal = st.cur;
-        this.rscroll = null;
         return [];
       }
       default: return [];
@@ -824,7 +876,7 @@ export class App {
     return effects;
   }
 
-  /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, the instruction card and 2 buttons for a plan */
+  /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, Approve, the instruction card and Reject for a plan */
   private slots(m: ScreenModel): number {
     if (m.kind === "plan") return 3;
     if (m.checkpoint) return CHECKPOINT_CARDS;
@@ -860,6 +912,16 @@ export class App {
 
   /** `1`-`9`: send the card at once. A heavy card (irreversible) first moves the cursor there and asks for the same key (or Enter) again */
   private pick(m: ScreenModel, dr: Draft, i: number, now: number): Effect[] {
+    if (m.kind === "plan") {
+      // 1 Approve (auto) · 2 Instruct · 3 Reject: the cursor goes there and the card does its thing at once
+      if (m.readonly) return [];
+      this.toOptions(m);
+      dr.cursor = i;
+      if (i === 0) return this.approve(m);
+      if (i === 1) return this.startInstruct(m, dr, now);
+      this.startReason(dr);
+      return [];
+    }
     if (m.checkpoint) return this.checkpointCard(m, dr, i);
     const q = m.question;
     if (!q || q.multi || i >= q.cards.length) return [];
@@ -907,7 +969,7 @@ export class App {
     if (!n) return;
     // With no options the cursor never rests on the hidden None of these / Can't answer rows (slots 0 and 1)
     dr.cursor = m.question && !m.question.cards.length ? Math.max(2, clamp(to, n)) : clamp(to, n);
-    this.scroll = 0;
+    if (!(m.plan && this.frame.wide)) this.scroll = 0; // a long plan keeps its place while the options change
     this.rscroll = null;
     const q = m.question;
     if (!q || q.multi) return;
@@ -946,10 +1008,16 @@ export class App {
   }
 
   /** The cursor landing on a card with a text box (the checkpoint's instruction card, the free-text card) opens the box at once; `i` still does too */
-  private landOnText(m: ScreenModel, dr: Draft, was?: number): Effect[] {
+  private landOnText(m: ScreenModel, dr: Draft, was?: number, now = 0): Effect[] {
     if (this.mode !== "normal") return [];
-    // A plan approval: the instruction card is the first slot (the contents' arrows move the contents, not this cursor)
-    if (m.kind === "plan") return !m.readonly && !m.plan && dr.cursor === 0 && dr.cursor !== was ? this.startInstruct(m, dr, 0) : [];
+    // A plan: the Instruct card (slot 1; the plan file's only card) and the Reject card (slot 2, its reason box) open their box when the cursor lands on them
+    if (m.kind === "plan") {
+      if (dr.cursor === was) return [];
+      if (m.readonly) return this.startInstruct(m, dr, now);
+      if (dr.cursor === 1) return this.startInstruct(m, dr, now);
+      if (dr.cursor === 2) this.startReason(dr);
+      return [];
+    }
     const onText = m.checkpoint ? dr.cursor === 1 : !!m.question && dr.cursor === m.question.cards.length + 2;
     return onText ? this.startFree(m, dr) : [];
   }
@@ -983,10 +1051,16 @@ export class App {
       this.showToast(t(this.lang, "plan_no_session"), now);
       return [];
     }
-    dr.cursor = 0;
+    dr.cursor = m.readonly ? 0 : 1;
+    this.toOptions(m);
     this.input = { kind: "instruct", text: dr.instruct };
     this.mode = "input";
     return [];
+  }
+
+  /** Whatever picks an option (y n i 1-3) puts a long plan in the options zone */
+  private toOptions(m: ScreenModel): void {
+    if (m.plan) this.planState(m).zone = "opts";
   }
 
   private confirmInput(m: ScreenModel, dr: Draft, now: number): Effect[] {
@@ -1051,8 +1125,10 @@ export class App {
   private submit(m: ScreenModel, dr: Draft, now: number): Effect[] {
     if (m.checkpoint) return dr.cursor === 1 && dr.free.text.trim() ? this.emit(m.id, { kind: "instruct", text: dr.free.text.trim() }) : this.checkpointCard(m, dr, dr.cursor);
     if (m.kind === "plan") {
-      if (dr.cursor === 1) return this.approve(m);
-      if (dr.cursor === 0) return this.startInstruct(m, dr, now);
+      if (dr.cursor === 0) return this.approve(m);
+      if (dr.cursor === 1) return this.startInstruct(m, dr, now);
+      // Reject: a reason left in the box goes at once, else the box opens
+      if (dr.reason.trim()) return this.emit(m.id, { approve: false, reason: dr.reason.trim() });
       this.startReason(dr);
       return [];
     }

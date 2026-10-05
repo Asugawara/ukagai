@@ -1,4 +1,4 @@
-// Checks the long-plan screen (public/app.js: folding sections, contents, read marks, unread line) against a real server and a
+// Checks the long-plan screen (public/app.js: folding sections, the plan / options zones, read marks, unread line) against a real server and a
 // real browser (agent-browser). Skipped when agent-browser is not on PATH. Keys are sent as KeyboardEvents (eval), not with `press`.
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -151,11 +151,24 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
 }
 
 const openCount = `document.querySelectorAll("#background details.plan-sec[open]").length`;
-const tocRow = (title: string) => `[...document.querySelectorAll("#decision .toc-row")].find(r => r.querySelector(".toc-title").textContent.startsWith(${JSON.stringify(title)}))`;
 const secOf = (title: string) => `[...document.querySelectorAll("#background details.plan-sec, #background details.plan-sub")].find(d => d.querySelector(":scope > summary .ps-title").textContent.startsWith(${JSON.stringify(title)}))`;
-const mark = (title: string) => ev<string>(`${tocRow(title)}.querySelector(".toc-mark").textContent`);
+const mark = (title: string) => ev<string>(`${secOf(title)}.querySelector(":scope > summary .ps-mark").textContent`);
+/** The title of the selected section (the summary row with .sel) */
+const selTitle = () => ev<string>(`document.querySelector("#background details > summary.sel .ps-title").textContent`);
+/** Index of a section among all <details> of the plan column, and of the selected one */
+const indexOf = (title: string) => ev<number>(`[...document.querySelectorAll("#background details.plan-sec, #background details.plan-sub")].indexOf(${secOf(title)})`);
+const selIndex = () => ev<number>(`[...document.querySelectorAll("#background details.plan-sec, #background details.plan-sub")].findIndex(d => d.firstElementChild.classList.contains("sel"))`);
+/** Walk the selection to a section with j / k */
+function goTo(title: string) {
+  const n = indexOf(title) - selIndex();
+  if (n) keyN(n > 0 ? "j" : "k", Math.abs(n));
+}
+const zone = () => ev<string>(`document.getElementById("background").classList.contains("zone-on") ? "plan" : document.getElementById("decision").classList.contains("zone-on") ? "opts" : "none"`);
+const cards = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .actions > .opt")].map(o => o.dataset.card))`);
+const cardCursor = () => ev<string>(`document.querySelector("#decision .opt.cursor")?.dataset.card ?? ""`);
+const hint = () => ev<string>(`document.querySelector("#foot .hint").textContent`);
 
-gui("a long plan folds into one <details> per H2 (only the first open), the contents lists 15 rows, the header counts 9 sections · 200 lines · 12 files", async () => {
+gui("a long plan folds into one <details> per H2 (only the first open), there is no contents list, the header counts 9 sections · 200 lines · 12 files", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   assert.equal(ev(`document.querySelectorAll("#background details.plan-sec").length`), 9);
@@ -163,9 +176,7 @@ gui("a long plan folds into one <details> per H2 (only the first open), the cont
   assert.equal(ev(openCount), 1);
   assert.equal(ev(`document.querySelector("#background details.plan-sec").open`), true);
   assert.equal(ev(`document.querySelector("#background details.plan-sec > summary .ps-title").textContent`), "Context");
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-row").length`), 15);
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-row.l2").length`), 9);
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-row.l3").length`), 6);
+  assert.equal(ev(`document.querySelectorAll("#decision .toc-row, #decision .plan-toc").length`), 0);
   assert.equal(ev(`document.querySelector("#head .plan-stats").textContent`), "9 sections · 200 lines · 12 files");
   assert.equal(ev(`document.querySelector("#head .plan-file").textContent`), "export-retry.md");
   assert.equal(ev(`document.querySelector("#head .plan-file").title`), "/Users/someone/.claude/plans/export-retry.md");
@@ -178,32 +189,34 @@ gui("a long plan folds into one <details> per H2 (only the first open), the cont
   assert.equal(ev(`${secOf("Rollout")}.querySelector("p").checkVisibility()`), false);
 });
 
-gui("ja: the summary, contents and header use Japanese words", async () => {
+gui("ja: the summary, hint and header use Japanese words", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   await setLang("ja", `document.querySelector("#head .plan-stats")?.textContent === "9 節 · 200 行 · 12 ファイル"`);
-  assert.equal(ev(`document.querySelector("#decision .plan-toc .impact-cap").textContent`), "目次");
   assert.equal(ev(`document.querySelector("#background details.plan-sec > summary .ps-meta").textContent`), "16 行 · 2 ファイル");
-  assert.ok(ev<string>(`document.querySelector("#foot .hint").textContent`).startsWith("↑↓ 目次"));
+  assert.ok(ev<string>(`document.querySelector("#foot .hint").textContent`).startsWith("↑↓ 節 · Enter 開閉"));
   await setLang("en", `document.querySelector("#head .plan-stats")?.textContent === "9 sections · 200 lines · 12 files"`);
 });
 
-gui("clicking a contents row opens the section, marks it read and scrolls the left column to it", async () => {
+gui("Enter on the selected section opens it, marks it read and scrolls the left column to it", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   assert.equal(mark("Verification"), "☐");
   assert.equal(mark("Context"), "☑");
   assert.equal(ev(`document.getElementById("background").scrollTop`), 0);
-  ev(`${tocRow("Verification")}.click(), "ok"`);
+  goTo("Verification");
+  assert.equal(selTitle(), "Verification");
+  assert.equal(ev(`${secOf("Verification")}.open`), false, "moving does not open");
+  key("Enter");
   await waitFor("Verification open", `${secOf("Verification")}.open`);
   assert.equal(mark("Verification"), "☑");
-  assert.equal(ev(`${secOf("Verification")}.querySelector(":scope > summary .ps-mark").textContent`), "☑");
   assert.ok(ev<number>(`document.getElementById("background").scrollTop`) > 0, "scrolled");
   // its heading row is at the top of the left column
   const gap = ev<number>(`${secOf("Verification")}.querySelector("summary").getBoundingClientRect().top - document.getElementById("background").getBoundingClientRect().top`);
   assert.ok(gap >= -2 && gap < 40, `summary near the top (gap ${gap})`);
-  // an H3 row opens its H2 as well
-  ev(`${tocRow("Unit tests")}.click(), "ok"`);
+  // an H3 opens its H2 as well
+  goTo("Unit tests");
+  key("Enter");
   await waitFor("Unit tests open", `${secOf("Unit tests")}.open && ${secOf("Verification")}.open`);
   assert.equal(mark("Unit tests"), "☑");
 });
@@ -225,8 +238,7 @@ gui("o opens everything and o again folds everything", async () => {
   await reopen("document.querySelector('#background details.plan-sec')");
   key("o");
   await waitFor("all open", `document.querySelectorAll("#background details[open]").length === 15`);
-  assert.equal(ev(`document.querySelectorAll("#decision .toc-mark").length`), 15);
-  assert.equal(ev(`[...document.querySelectorAll("#decision .toc-mark")].every(m => m.textContent === "☑")`), true);
+  assert.equal(ev(`[...document.querySelectorAll("#background details > summary .ps-mark")].every(m => m.textContent === "☑")`), true);
   key("o");
   await waitFor("all closed", `document.querySelectorAll("#background details[open]").length === 0`);
   assert.equal(mark("Rollout"), "☑", "read marks stay");
@@ -246,57 +258,229 @@ gui("an open section's heading row sticks to the top of the left column while it
   assert.ok(sub.includes("Backend usecase") || sub.includes("HTTP handler") || sub.includes("Worker"), `an H3 summary sits under the H2 summary: ${sub}`);
 });
 
-gui("j / k move the contents cursor, Enter and Space fold the section under it", async () => {
+gui("j / k / ↑ / ↓ move the section selection, Home End gg G jump, Enter and Space fold the section under it", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  const cur = () => ev<string>(`document.querySelector("#decision .toc-row.cursor .toc-title").textContent`);
-  assert.equal(cur(), "Context");
+  assert.equal(selTitle(), "Context");
   key("j");
-  assert.equal(cur(), "Changes");
+  assert.equal(selTitle(), "Changes");
   key("ArrowDown");
-  assert.ok(cur().startsWith("1. Backend usecase"));
+  assert.ok(selTitle().startsWith("1. Backend usecase"));
   key("k");
-  assert.equal(cur(), "Changes");
+  assert.equal(selTitle(), "Changes");
+  key("ArrowUp");
+  assert.equal(selTitle(), "Context");
+  key("ArrowUp");
+  assert.equal(selTitle(), "Context", "stays at the first");
+  key("End");
+  assert.equal(selTitle(), "Scope and reversibility");
+  key("j");
+  assert.equal(selTitle(), "Scope and reversibility", "stays at the last");
+  key("Home");
+  assert.equal(selTitle(), "Context");
+  key("G");
+  assert.equal(selTitle(), "Scope and reversibility");
+  key("g");
+  key("g");
+  assert.equal(selTitle(), "Context");
+  goTo("Changes");
   key("Enter");
   await waitFor("Changes open", `${secOf("Changes")}.open`);
   key(" ");
   await waitFor("Changes closed", `!${secOf("Changes")}.open`);
   key("Enter");
   await waitFor("Changes open again", `${secOf("Changes")}.open`);
+  assert.equal(selTitle(), "Changes", "the selection stays on the section it folded");
   // Enter did not approve anything
-  assert.equal(ev(`!!document.querySelector("#decision .btn.primary") && !document.querySelector("#decision .confirm-bar")`), true);
+  assert.equal(count("#decision .confirm-bar"), 0);
+  assert.equal(ev(`document.querySelectorAll("#decision .approve-card").length`), 1);
 });
 
-gui("[ and ] open and go to the previous / next section (H3 rows included)", async () => {
+gui("the selected section is visible: moving the selection scrolls it into view", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  const cur = () => ev<string>(`document.querySelector("#decision .toc-row.cursor .toc-title").textContent`);
+  key("o");
+  await waitFor("all open", `document.querySelectorAll("#background details[open]").length === 15`);
+  ev(`document.getElementById("background").scrollTop = 0, "ok"`);
+  key("End");
+  await sleep(200);
+  const inView = ev<boolean>(`(() => { const r = document.querySelector("#background summary.sel").getBoundingClientRect(); const b = document.getElementById("background").getBoundingClientRect(); return r.top >= b.top - 1 && r.bottom <= b.bottom + 1; })()`);
+  assert.equal(inView, true);
+});
+
+gui("the plan zone is where a long plan starts (section 1 selected, ring on the plan column); → goes to the options, ← back, and the hint follows the zone", async () => {
+  await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  assert.equal(zone(), "plan");
+  assert.equal(selTitle(), "Context");
+  assert.equal(cardCursor(), "", "no option is under the cursor in the plan zone");
+  assert.equal(hint().startsWith("↑↓ Section · Enter Open · o All · → Options"), true, hint());
+  key("ArrowRight");
+  assert.equal(zone(), "opts");
+  assert.equal(cardCursor(), "approve");
+  assert.equal(hint().startsWith("↑↓ Pick · Enter Decide · ← Plan"), true, hint());
+  // in the options zone ↑ ↓ do not move the section selection
+  key("ArrowDown");
+  assert.equal(selTitle(), "Context");
+  assert.equal(cardCursor(), "instruct");
+  key("ArrowLeft");
+  assert.equal(zone(), "plan");
+  assert.equal(cardCursor(), "");
+  assert.equal(ev(`document.activeElement === document.getElementById("instruct")`), false, "the box lost the focus");
+  key("l");
+  assert.equal(zone(), "opts");
+  assert.equal(cardCursor(), "instruct", "the option cursor is remembered");
+  key("h");
+  assert.equal(zone(), "plan");
+  await setLang("ja", `document.querySelector("#foot .hint")?.textContent.startsWith("↑↓ 節")`);
+  key("ArrowRight");
+  assert.equal(hint().startsWith("↑↓ 選ぶ · Enter 決定 · ← 計画"), true, hint());
+  await setLang("en", `document.querySelector("#foot .hint")?.textContent.startsWith("↑↓ Pick")`);
+});
+
+gui("← and → no longer cycle between pending items on a long plan, but Tab and [ ] still do", async () => {
+  await seedPlan(LONG);
+  await seedPlan(LONG.replace(/^# .*/m, "# Another plan"));
+  await reopen("document.querySelector('#background details.plan-sec')");
+  const shown = () => ev<string>(`document.querySelector("#head .v2-title")?.textContent ?? ""`);
+  const first = shown();
+  keyN("ArrowRight", 1);
+  key("ArrowLeft");
+  key("l");
+  key("h");
+  assert.equal(shown(), first, "still the same item");
   key("]");
-  await waitFor("Changes open", `${secOf("Changes")}.open`);
-  assert.equal(cur(), "Changes");
-  key("]");
-  await waitFor("first H3 open", `${secOf("1. Backend usecase")}.open`);
-  assert.ok(cur().startsWith("1. Backend usecase"));
-  key("]");
-  assert.ok(cur().startsWith("2. HTTP handler"));
-  await waitFor("second H3 open", `${secOf("2. HTTP handler")}.open`);
+  await waitFor("another item", `document.querySelector("#head .v2-title").textContent !== ${JSON.stringify(first)}`);
   key("[");
-  assert.ok(cur().startsWith("1. Backend usecase"));
-  assert.equal(ev(openCount), 2);
-  // [ at the first row and ] at the last row stay put
-  keyN("]", 20);
-  assert.equal(cur(), "Scope and reversibility");
-  keyN("[", 20);
-  assert.equal(cur(), "Context");
+  await waitFor("back", `document.querySelector("#head .v2-title").textContent === ${JSON.stringify(first)}`);
+  key("Tab");
+  await waitFor("Tab cycles", `document.querySelector("#head .v2-title").textContent !== ${JSON.stringify(first)}`);
+});
+
+gui("the option list is Approve (auto) / Instruct / Reject in that order; Approve is first, primary and says auto mode", async () => {
+  await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  assert.deepEqual(cards(), ["approve", "instruct", "reject"]);
+  assert.equal(ev(`document.querySelector("#decision .actions > .opt:first-of-type, #decision .actions > .opt").dataset.card`), "approve");
+  assert.equal(ev(`document.querySelector("#decision .opt.approve-card").classList.contains("recommended")`), true);
+  assert.equal(ev(`document.querySelector("#decision .approve-card .lab > span").textContent`), "Approve (continue in auto mode)");
+  assert.deepEqual(ev(`JSON.stringify([...document.querySelectorAll("#decision .opt .cardkey")].map(k => k.textContent))`), ["1", "2", "3"]);
+  await setLang("ja", `document.querySelector("#decision .approve-card .lab > span")?.textContent === "承認（auto モードで続行）"`);
+  await setLang("en", `document.querySelector("#decision .approve-card .lab > span")?.textContent === "Approve (continue in auto mode)"`);
+});
+
+gui("Enter on Approve in the options zone sends {approve: true, set_mode_auto: true}", async () => {
+  const { id } = await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  key("Enter"); // the plan zone: this folds Context, it does not approve
+  await waitFor("Context folded", `!${secOf("Context")}.open`);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  key("ArrowRight");
+  assert.equal(cardCursor(), "approve");
+  key("Enter");
+  const d = await waitStatus(id, "answer_submitted");
+  assert.equal(d.response.approve, true);
+  assert.equal(d.response.set_mode_auto, true);
+});
+
+gui("Instruct card: landing on it focuses the box; ↑ ↓ leave an empty box, stay with text; Esc blurs keeping the text; Enter in the box sends the instruction", async () => {
+  const { id } = await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  const focused = () => ev<boolean>(`document.activeElement === document.getElementById("instruct")`);
+  key("ArrowRight");
+  assert.equal(focused(), false, "Approve is under the cursor");
+  key("ArrowDown");
+  assert.equal(cardCursor(), "instruct");
+  assert.equal(focused(), true);
+  // typing text: ↑ ↓ stay in the box
+  ev(`(() => { const t = document.getElementById("instruct"); t.value = "run the review"; t.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()`);
+  ev(`document.getElementById("instruct").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })), "ok"`);
+  assert.equal(cardCursor(), "instruct");
+  assert.equal(focused(), true);
+  // Esc blurs and keeps the text
+  ev(`document.getElementById("instruct").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })), "ok"`);
+  assert.equal(focused(), false);
+  assert.equal(ev(`document.getElementById("instruct").value`), "run the review");
+  // i jumps back to the card
+  key("i");
+  assert.equal(focused(), true);
+  // empty box: ↑ leaves it for Approve
+  ev(`(() => { const t = document.getElementById("instruct"); t.value = ""; t.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()`);
+  ev(`document.getElementById("instruct").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })), "ok"`);
+  assert.equal(cardCursor(), "approve");
+  assert.equal(focused(), false);
+  // Enter in the box sends the instruction (no approval)
+  key("i");
+  ev(`(() => { const t = document.getElementById("instruct"); t.value = "run the review"; t.dispatchEvent(new Event("input", { bubbles: true })); t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); return "ok"; })()`);
+  const d = await waitStatus(id, "answer_submitted");
+  assert.equal(d.response.instruct, true);
+  assert.equal(d.response.text, "run the review");
+});
+
+gui("Reject: landing on it opens the reason box focused; Enter with a reason sends the rejection; an empty box lets ↑ leave", async () => {
+  const { id } = await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  const focusedReason = () => ev<boolean>(`document.activeElement === document.getElementById("reason")`);
+  const reasonShown = () => ev<boolean>(`!document.querySelector("#decision .reject-box").hidden`);
+  assert.equal(reasonShown(), false);
+  key("ArrowRight");
+  keyN("ArrowDown", 2);
+  assert.equal(cardCursor(), "reject");
+  assert.equal(reasonShown(), true);
+  assert.equal(focusedReason(), true);
+  // an empty reason box: ↑ goes back to Instruct and the box closes again
+  ev(`document.getElementById("reason").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })), "ok"`);
+  assert.equal(cardCursor(), "instruct");
+  assert.equal(reasonShown(), false, "nothing typed: the box closes");
+  key("ArrowDown");
+  assert.equal(focusedReason(), true);
+  // Enter with an empty reason sends nothing
+  ev(`document.getElementById("reason").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })), "ok"`);
+  await sleep(200);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  // with a reason, Enter in the box sends the rejection
+  ev(`(() => { const t = document.getElementById("reason"); t.value = "wrong approach"; t.dispatchEvent(new Event("input", { bubbles: true })); t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); return "ok"; })()`);
+  const d = await waitStatus(id, "answer_submitted");
+  assert.equal(d.response.approve, false);
+  assert.equal(d.response.reason, "wrong approach");
+});
+
+gui("y approves, n opens the reason box, i the instruction box, 2 / 3 select Instruct / Reject, from either zone", async () => {
+  const { id } = await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  assert.equal(zone(), "plan");
+  key("i");
+  assert.equal(zone(), "opts");
+  assert.equal(cardCursor(), "instruct");
+  assert.equal(ev(`document.activeElement === document.getElementById("instruct")`), true);
+  key("ArrowLeft"); // in an empty box
+  assert.equal(zone(), "plan");
+  key("n");
+  assert.equal(zone(), "opts");
+  assert.equal(cardCursor(), "reject");
+  assert.equal(ev(`document.activeElement === document.getElementById("reason")`), true);
+  ev(`document.getElementById("reason").blur(), "ok"`);
+  key("2");
+  assert.equal(cardCursor(), "instruct");
+  ev(`document.getElementById("instruct").blur(), "ok"`);
+  key("3");
+  assert.equal(cardCursor(), "reject");
+  ev(`document.getElementById("reason").blur(), "ok"`);
+  key("ArrowLeft");
+  assert.equal(zone(), "plan");
+  key("y");
+  const d = await waitStatus(id, "answer_submitted");
+  assert.equal(d.response.approve, true);
+  assert.equal(d.response.set_mode_auto, true);
 });
 
 const count = (sel: string) => ev<number>(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
 const unreadLine = () => ev<string>(`(() => { const e = document.querySelector("#decision .plan-unread"); return !e || e.hidden ? "" : e.textContent; })()`);
 
-gui("one y sends at once with set_mode_auto: true, even with unread sections; the decision has three buttons (Approve / Reject / Instruct) and no confirm bar", async () => {
+gui("one y sends at once with set_mode_auto: true, even with unread sections; the decision has three options (Approve / Instruct / Reject) and no confirm bar", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  assert.equal(count("#decision .btn"), 3);
+  assert.equal(count("#decision .actions > .opt"), 3);
   assert.equal(count("#decision .confirm-bar"), 0);
   key("y");
   const d = await waitStatus(id, "answer_submitted");
@@ -316,8 +500,9 @@ gui("the unread line sits above the buttons, updates as sections are opened and 
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   assert.equal(unreadLine(), "Unread sections (7): Changes, Split and owners, Commit granularity, Verification, Observation path +2");
-  assert.equal(ev(`document.querySelector("#decision .plan-unread").nextElementSibling.classList.contains("primary")`), true, "directly above the buttons");
-  ev(`${tocRow("Changes")}.click(), "ok"`);
+  assert.equal(ev(`document.querySelector("#decision .plan-unread").nextElementSibling.classList.contains("approve-card")`), true, "directly above the options");
+  goTo("Changes");
+  key("Enter");
   await waitFor("Changes open", `${secOf("Changes")}.open`);
   await waitFor("line updated", `document.querySelector("#decision .plan-unread").textContent.startsWith("Unread sections (6): Split and owners, Commit granularity")`);
   key("o");
@@ -329,12 +514,12 @@ gui("the unread line sits above the buttons, updates as sections are opened and 
   assert.equal(d.response.set_mode_auto, true);
 });
 
-gui("ja: the unread line is 未読 n 節 and the buttons are 送信 (the instruction box) / 承認 / 却下", async () => {
+gui("ja: the unread line is 未読 n 節 and the options are 承認（auto モードで続行） / 指示 / 却下", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   await setLang("ja", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("未読 7 節:")`);
   assert.equal(unreadLine(), "未読 7 節: Changes, Split and owners, Commit granularity, Verification, Observation path +2");
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .btn")].map(b => b.textContent))`), ["送信", "承認", "却下"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .actions > .opt .lab")].map(l => l.firstChild.textContent))`), ["承認（auto モードで続行）", "指示", "却下"]);
   await setLang("en", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("Unread sections (7)")`);
 });
 
@@ -351,7 +536,7 @@ gui("an irreversible long plan is approved with one y too", async () => {
 gui("clicking Approve sends at once", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  ev(`document.querySelector("#decision .actions > .btn.primary").click(), "ok"`); // not the Send button of the instruction card
+  ev(`document.querySelector("#decision .approve-card").click(), "ok"`);
   await waitStatus(id, "answer_submitted");
 });
 
@@ -373,29 +558,33 @@ gui("a short plan (two H2, or 40 lines or fewer) stays one open document with no
   assert.equal(ev(`document.querySelectorAll("#decision .plan-toc, #background details.plan-sec").length`), 0);
 });
 
-gui("a short plan: y sends at once, and the arrows still move between the buttons", async () => {
+gui("a short plan: y sends at once, the options zone is where it starts and the arrows move between the options (← → still cycle items)", async () => {
   const { id } = await seedPlan("# Short\n\nStep 1");
   await reopen();
+  assert.equal(zone(), "none", "no zones on a short plan");
+  assert.equal(cardCursor(), "approve");
   key("ArrowDown");
-  assert.equal(ev(`[...document.querySelectorAll("#decision .actions > .btn")].findIndex(b => b.classList.contains("cursor"))`), 1);
+  assert.equal(cardCursor(), "instruct");
+  key("ArrowDown");
+  assert.equal(cardCursor(), "reject");
   key("y");
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(d.response.approve, true);
 });
 
-gui("at 1000x700 the approve buttons and the hint are on screen, and the contents scroll inside their own box", async () => {
+gui("at 1000x700 the options and the hint are on screen, and the selected section stays in the plan column", async () => {
   await seedPlan(LONG);
   ab("set", "viewport", "1000", "700");
   await reopen("document.querySelector('#background details.plan-sec')");
   const visible = (sel: string) => ev<boolean>(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.width > 0; })()`);
-  assert.equal(visible("#decision .btn.primary"), true);
-  assert.equal(visible("#decision .btn.danger"), true);
+  assert.equal(visible("#decision .approve-card"), true);
+  assert.equal(visible("#decision .reject-card"), true);
   assert.equal(visible("#foot .hint"), true);
-  // moving the cursor to the last row keeps the buttons where they are and scrolls the contents box
+  // moving the selection to the last section keeps the options where they are
   keyN("j", 14);
-  assert.equal(ev(`document.querySelector("#decision .toc-row.cursor .toc-title").textContent`), "Scope and reversibility");
-  assert.equal(visible("#decision .btn.primary"), true);
-  assert.equal(visible("#decision .toc-row.cursor"), true);
+  assert.equal(selTitle(), "Scope and reversibility");
+  assert.equal(visible("#decision .approve-card"), true);
+  assert.equal(visible("#background summary.sel"), true);
 });
 
 gui("backticked paths in the plan are click-to-copy badges, and clicking one inside a summary does not fold the section", async () => {
@@ -408,14 +597,14 @@ gui("backticked paths in the plan are click-to-copy badges, and clicking one ins
   await waitFor("copied", `window.__copied.length === 1`);
   assert.equal(ev(`window.__copied[0]`), "src/export/usecase.ts");
   // open Changes: its H3 summaries carry paths
-  ev(`${tocRow("Changes")}.click(), "ok"`);
+  ev(`${secOf("Changes")}.querySelector("summary").click(), "ok"`);
   await waitFor("Changes open", `${secOf("Changes")}.open`);
   ev(`${secOf("1. Backend usecase")}.querySelector("summary .cbadge").click(), "ok"`);
   await waitFor("copied again", `window.__copied.length === 2`);
   assert.equal(ev(`window.__copied[1]`), "src/export/usecase.ts");
   assert.equal(ev(`${secOf("1. Backend usecase")}.open`), false, "the click copied; it did not open the section");
   // code that is not a path is not a badge
-  ev(`${tocRow("Verification")}.click(), "ok"`);
+  ev(`${secOf("Verification")}.querySelector("summary").click(), "ok"`);
   await waitFor("Verification open", `${secOf("Verification")}.open`);
   assert.equal(ev(`[...document.querySelectorAll("#background code.cbadge")].some(c => c.textContent === "npm test")`), false);
 });
@@ -425,8 +614,26 @@ gui("screenshots: 1440x900 folded, and with one section open", async () => {
   await reopen("document.querySelector('#background details.plan-sec')");
   await sleep(300);
   ab("screenshot", join(SHOTS, "PL1-plan-folded.png"));
-  ev(`${tocRow("Verification")}.click(), "ok"`);
+  goTo("Verification");
+  key("Enter");
   await waitFor("Verification open", `${secOf("Verification")}.open`);
   await sleep(300);
   ab("screenshot", join(SHOTS, "PL1-plan-one-open.png"));
+});
+
+gui("screenshots for PL4: 1280 px, the plan zone with a section selected, and the options zone with the Instruct box focused", async () => {
+  await seedPlan(LONG);
+  ab("set", "viewport", "1280", "800");
+  await reopen("document.querySelector('#background details.plan-sec')");
+  goTo("Changes");
+  key("Enter");
+  await waitFor("Changes open", `${secOf("Changes")}.open`);
+  key("j");
+  await sleep(300);
+  ab("screenshot", join(SHOTS, "PL4-plan-zone.png"));
+  key("ArrowRight");
+  key("ArrowDown");
+  assert.equal(cardCursor(), "instruct");
+  await sleep(300);
+  ab("screenshot", join(SHOTS, "PL4-options.png"));
 });

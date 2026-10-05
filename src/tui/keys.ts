@@ -132,11 +132,14 @@ export type Action =
   /** `i` on a plan (approval or plan file): the instruction box; in it `1`-`9` put a preset into the empty box */
   | { type: "instruct" }
   | { type: "preset"; n: number }
-  /** A long plan: move the contents cursor, open / close the section under it, open / close all, go to the previous / next section (opening it) */
+  /** A long plan, plan zone: move the section selection, open / close the selected section, open / close all, jump to the first / last section */
   | { type: "toc-move"; delta: 1 | -1 }
   | { type: "toc-toggle" }
   | { type: "toc-all" }
-  | { type: "toc-section"; delta: 1 | -1 }
+  | { type: "toc-edge"; to: "first" | "last" }
+  /** A long plan: go to the plan zone (← h) or the options zone (→ l); `input-zone` does it from an empty instruction box */
+  | { type: "zone"; to: "plan" | "opts" }
+  | { type: "input-zone" }
   /** Jump the background to the next footnote definition (`e`) */
   | { type: "footnote" }
   /** "None of these…": open the reason picker, move in it, send, add a note, close */
@@ -190,8 +193,12 @@ export interface KeyContext {
   full?: boolean;
   /** Whether there is a diagram that can be shifted sideways */
   hscrollable?: boolean;
-  /** A long plan: the plan is folded into sections with a contents */
+  /** A long plan: the plan is folded into sections, with a plan zone and an options zone */
   toc?: boolean;
+  /** A long plan: the zone the arrows act on */
+  zone?: "plan" | "opts";
+  /** The text box that is open has no text in it */
+  inputEmpty?: boolean;
   /** Number of instruction presets that a digit can pick (the instruction box is open and empty), else 0 */
   presets?: number;
   /** A plan file shown on its own: read-only, `y a n` / answers do nothing, Esc is Done reading */
@@ -216,6 +223,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
       case "esc": return done({ type: "input-cancel" });
       case "up": return done({ type: "input-move", delta: -1 });
       case "down": return done({ type: "input-move", delta: 1 });
+      case "left": return ctx.toc && ctx.inputEmpty ? done({ type: "input-zone" }) : done(null);
       case "backspace": return done({ type: "input-backspace" });
       case "char":
         if (ctx.presets && key.ch >= "1" && key.ch <= "9" && Number(key.ch) <= ctx.presets) return done({ type: "preset", n: Number(key.ch) });
@@ -308,14 +316,21 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (key.name === "ctrl-d" || key.name === "pgdn") return done({ type: "scroll", delta: 1, unit: "half" });
   if (key.name === "ctrl-u" || key.name === "pgup") return done({ type: "scroll", delta: -1, unit: "half" });
   if (ctx.toc && ctx.kind === "plan") {
-    // Enter / Space fold the section under the contents cursor; j/k move that cursor while the decision column is focused (the background scrolls instead).
-    // [ ] go to the previous / next section where they do not switch pending decisions (background focus, or the stacked layout)
-    if (ch === "o") return done({ type: "toc-all" });
-    if (key.name === "enter" || ch === " ") return done({ type: "toc-toggle" });
-    if (ch === "[" && (ctx.focus === "background" || !ctx.wide)) return done({ type: "toc-section", delta: -1 });
-    if (ch === "]" && (ctx.focus === "background" || !ctx.wide)) return done({ type: "toc-section", delta: 1 });
-    if (ctx.focus !== "background" && down) return done({ type: "toc-move", delta: 1 });
-    if (ctx.focus !== "background" && up) return done({ type: "toc-move", delta: -1 });
+    // A long plan has two zones. ← h = the plan zone (the sections), → l = the options zone (Approve / Instruct / Reject). h l no longer switch pending decisions here: [ ] do (and Tab switches the zone)
+    if (ch === "h" || key.name === "left") return done({ type: "zone", to: "plan" });
+    if (ch === "l" || key.name === "right") return done({ type: "zone", to: "opts" });
+    // A plan file has one card, Instruct: Enter in the options zone opens its box
+    if (ctx.zone === "opts" && ctx.planOnly && key.name === "enter") return done({ type: "instruct" });
+    // The plan zone: j k ↑ ↓ move the section selection, Enter / Space fold the section, o opens / closes all, Home End gg G go to the first / last
+    if (ctx.zone === "plan") {
+      if (ch === "o") return done({ type: "toc-all" });
+      if (key.name === "enter" || ch === " ") return done({ type: "toc-toggle" });
+      if (down) return done({ type: "toc-move", delta: 1 });
+      if (up) return done({ type: "toc-move", delta: -1 });
+      if (key.name === "home") return done({ type: "toc-edge", to: "first" });
+      if (key.name === "end" || ch === "G") return done({ type: "toc-edge", to: "last" });
+      if (ch === "g") return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "toc-edge", to: "first" }) : done(null, ctx.now);
+    }
   }
   if (ctx.focus === "background") {
     if (down) return done({ type: "scroll", delta: 1, unit: "line" });
@@ -344,6 +359,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ctx.kind === "plan") {
     if (ch === "y") return done({ type: "approve" });
     if (ch === "n") return done({ type: "reject" });
+    if (ch === "1" || ch === "2" || ch === "3") return done({ type: "pick", n: Number(ch) });
     if (ch === ".") return done({ type: "rec" });
     return done(null);
   }

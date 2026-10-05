@@ -39,14 +39,14 @@ body {
 .overlay-card:focus { outline: none; }
 .hd.blocker .pending-btn:focus-visible { outline-color: #1d1d1f; }
 input[type=radio], input[type=checkbox] { accent-color: var(--accent); }
-.q-top, .q-cards, .drawer ul, .overlay-card, .hist-list, .hist-full, #background, #decision, .plan-toc { overscroll-behavior: contain; }
+.q-top, .q-cards, .drawer ul, .overlay-card, .hist-list, .hist-full, #background, #decision { overscroll-behavior: contain; }
 .headline, .v2-title, .q .question, .overlay-title { text-wrap: balance; }
 .opt .desc, .approval-q, .cp-recap, .md p, .md li, .rec, .against, .unknowns { text-wrap: pretty; }
 @media (pointer: coarse) {
   .pending-btn, .more-chip, .done-reading, .none-card, .cannot-card, .copy-btn { min-height: 32px; display: inline-flex; align-items: center; }
   .none-type, .cannot-reason, .cannot-term { min-height: 32px; display: flex; align-items: center; }
   .wide-chip { min-height: 32px; }
-  .toc-row, .hist-row { min-height: 32px; }
+  .hist-row { min-height: 32px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-delay: 0s !important; scroll-behavior: auto !important; }
@@ -434,16 +434,18 @@ pre code.hljs { background: none; padding: 0; }
 .ps-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .ps-meta { flex: none; font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
 .md details.plan-sec > :not(summary) { margin-left: 2px; }
-.plan-toc { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 4px; margin-bottom: 12px; font-size: 13px; max-height: 36vh; overflow: auto; }
-.plan-toc .impact-cap { padding: 0 8px 2px; }
-.toc-row { display: flex; align-items: baseline; gap: 6px; padding: 2px 8px; border-radius: 4px; cursor: pointer; }
-.toc-row.l3 { padding-left: 24px; }
-.toc-row:hover { background: var(--accent-bg); }
-.toc-row.cursor { background: var(--accent-bg); box-shadow: inset 2px 0 0 var(--accent); }
-.toc-mark { flex: none; color: var(--muted); }
-.toc-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toc-row.l2 .toc-title { font-weight: 600; }
-.toc-n { flex: none; font-size: 12px; color: var(--muted); }
+/* The selected section (plan zone) and the zone rings: the column that takes the arrow keys has an accent edge */
+.md details.plan-sec > summary.sel, .md details.plan-sub > summary.sel { background: var(--accent-bg); box-shadow: inset 2px 0 0 var(--muted); }
+#background.zone-on { box-shadow: inset 2px 0 0 var(--accent); }
+#background.zone-on .md details > summary.sel { box-shadow: inset 3px 0 0 var(--accent); }
+#decision.zone-on { box-shadow: inset -2px 0 0 var(--accent); }
+.opt.approve-card { border-color: var(--accent); background: var(--accent-bg); }
+.opt.approve-card .lab, .opt.reject-card .lab { margin-bottom: 0; }
+.opt.reject-card .lab { color: var(--red); }
+.opt.off { opacity: .45; cursor: not-allowed; }
+.opt.reject-card .reject-box { display: flex; gap: 6px; margin-top: 6px; }
+.opt.reject-card .reject-box[hidden] { display: none; }
+.opt.reject-card .reject-box button { flex: none; }
 .plan-meta { flex: none; display: flex; gap: 10px; margin-top: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .plan-file { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
 /* Room below the last section so that any section can be scrolled up to the top of the left column */

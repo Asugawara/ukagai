@@ -24,12 +24,12 @@ test("plan model: the 'Scope and reversibility' section is picked up (present / 
   assert.equal(ja.impact, "- 戻せる");
 });
 
-test("render: the impact box appears above the y button, and not without the section", () => {
+test("render: the impact box appears above the Approve option, and not without the section", () => {
   const app = new App();
   app.upsert(planDecision("# P\n\n## Scope and reversibility\n\n- scope: repo\n- reversible\n"), NOW);
   const lines = stripAnsi(render(app.view(NOW), { cols: 140, rows: 40 })).split("\n");
   const imp = lines.findIndex((l) => l.includes("Scope and reversibility") && l.includes("┌"));
-  const y = lines.findIndex((l) => l.includes("[y] Approve"));
+  const y = lines.findIndex((l) => l.includes("[1] Approve"));
   assert.ok(imp >= 0 && y > imp, `imp=${imp} y=${y}`);
   assert.ok(lines.some((l) => l.includes("scope: repo")));
 
