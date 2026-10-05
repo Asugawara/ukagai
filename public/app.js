@@ -671,6 +671,38 @@ function placePending() {
   } else stashPending();
 }
 
+// The tab icon: the same mark as favicon.svg drawn with canvas primitives; with n >= 1 pending the square carries the count (cap "5+"),
+// red when a blocker waits (like the title's waiting cue). Always on, independent of notify.title_badge. Redraws only when the key changes.
+let faviconKey = "";
+let faviconPng = null;
+function updateFavicon(n, blocked) {
+  const key = n <= 0 ? "0" : `${Math.min(n, 6)}${blocked ? "b" : ""}`;
+  if (key === faviconKey) return;
+  const link = document.querySelector('link[rel=icon][type="image/svg+xml"]');
+  let cv, g;
+  try { cv = document.createElement("canvas"); g = cv.getContext && cv.getContext("2d"); } catch { return; }
+  if (!g || !link) return;
+  faviconKey = key;
+  // The static PNG fallback link would compete with the drawn icon: take it out while a count shows, put it back at 0
+  const png = document.querySelector('link[rel=icon][type="image/png"]');
+  if (png) { faviconPng = png; png.remove(); }
+  if (n <= 0) {
+    link.href = "/public/favicon.svg";
+    if (faviconPng) link.after(faviconPng);
+    return;
+  }
+  cv.width = cv.height = 64;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue(blocked ? "--red" : "--accent").trim();
+  g.fillStyle = bg || (blocked ? "#dc2626" : "#2563eb");
+  g.beginPath(); g.roundRect(0, 0, 64, 64, 14); g.fill();
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = `bold ${n > 5 ? 38 : 50}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  g.fillText(n > 5 ? "5+" : String(n), 32, 35);
+  const next = link.cloneNode();
+  next.href = cv.toDataURL("image/png");
+  link.replaceWith(next); // a replaced element makes the browser refetch the icon
+}
+
 let announcedCount = 0;
 let loaded = false; // set once the first loadAll() has filled the queue, so the initial load is not announced item by item
 function renderHeader() {
@@ -683,6 +715,7 @@ function renderHeader() {
   const blocked = pendingList().some(isBlocker);
   // title_badge only drops the (N) count; the "waiting" cue of a blocker stays
   document.title = n > 0 ? `${settings.notify.title_badge ? `(${n}) ` : ""}ukagai${blocked ? ` · ${t("title_waiting")}` : ""}` : "ukagai";
+  updateFavicon(n, blocked);
 }
 
 // Header: repository / branch / worktree chips, reversibility, scope. branch is the only context field that may be rendered

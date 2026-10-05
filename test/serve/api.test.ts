@@ -295,6 +295,22 @@ test("serving /public/* and rejecting path traversal", async () => {
   assert.equal(t.status, 404);
 });
 
+test("favicon: /public/favicon.svg is image/svg+xml with nosniff, /favicon.ico answers 204 (not 404)", async () => {
+  const env = await setup();
+  const r = await fetch(env.url + "/public/favicon.svg");
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("content-type"), "image/svg+xml");
+  assert.equal(r.headers.get("x-content-type-options"), "nosniff");
+  assert.match(await r.text(), /^<svg /);
+  const png = await fetch(env.url + "/public/favicon.png");
+  assert.equal(png.headers.get("content-type"), "image/png");
+  const ico = await fetch(env.url + "/favicon.ico");
+  assert.equal(ico.status, 204);
+  for (const page of ["/", "/settings"]) {
+    assert.ok((await (await fetch(env.url + page)).text()).includes('<link rel="icon" href="/public/favicon.svg" type="image/svg+xml">'), `${page} links the icon`);
+  }
+});
+
 test("GET / adds an mtime version (?v=) to app.js / app.css, and /public/* ignores the query", async () => {
   const env = await setup();
   const html = await (await fetch(env.url + "/")).text();
