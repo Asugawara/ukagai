@@ -78,8 +78,13 @@ test("plan file: a session shows the box and sends through the plan endpoint; no
   for (const withSession of [true, false]) {
     const app = new App();
     app.fetchPlan = async () => file(withSession ? "s-live" : undefined);
-    app.replacePlans([summary], clock);
+    app.replacePlans([withSession ? { ...summary, session_id: "s-live" } : summary], clock);
     await new Promise((r) => setTimeout(r, 5));
+    if (!withSession) {
+      assert.equal(app.shownPlan, null, "a plan without a session does not come up by itself");
+      press(app, ch("b"), enter); // opened by hand from the list
+      await new Promise((r) => setTimeout(r, 5));
+    }
     if (withSession) {
       assert.match(draw(app).text, /\[i\] Instruct/);
       press(app, ch("i"));
@@ -95,7 +100,7 @@ test("plan file: a session shows the box and sends through the plan endpoint; no
 
 test("plan file: the draft survives a failed send, a second Enter while sending does nothing, success clears it", async () => {
   const file: PlanContent = { name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, session_id: "s-live" };
-  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file.mtime, bytes: 20, sections: 1, lines: 5, read: false };
+  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file.mtime, bytes: 20, sections: 1, lines: 5, read: false, session_id: "s-live" };
   const app = new App();
   app.fetchPlan = async () => file;
   app.replacePlans([summary], clock);
@@ -191,7 +196,7 @@ test("plan file with a session: the card is always there, no i needed; without a
   const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false };
   const app = new App();
   app.fetchPlan = async () => file("s-live");
-  app.replacePlans([summary], clock);
+  app.replacePlans([{ ...summary, session_id: "s-live" }], clock);
   await new Promise((r) => setTimeout(r, 5));
   assert.match(draw(app).text, /What should the agent do first\?/);
   assert.equal(app.mode, "normal");
@@ -200,6 +205,7 @@ test("plan file with a session: the card is always there, no i needed; without a
   const lone = new App();
   lone.fetchPlan = async () => file();
   lone.replacePlans([summary], clock);
+  press(lone, ch("b"), enter);
   await new Promise((r) => setTimeout(r, 5));
   assert.doesNotMatch(draw(lone).text, /What should the agent do first\?/);
 });

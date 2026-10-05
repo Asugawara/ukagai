@@ -119,6 +119,18 @@ async function seedQuestion(): Promise<{ id: string }> {
   return { id: d.id };
 }
 
+/** A live session whose transcript carries `slug` (the plan file `<slug>.md` is then its plan); `withSlug: false` writes a transcript that has none yet */
+async function registerSession(slug: string, withSlug = true): Promise<string> {
+  const tpath = join(home, ".claude", "projects", "p", `${slug}.jsonl`);
+  writeFileSync(tpath, withSlug ? `{"type":"user","slug":"${slug}"}\n` : '{"type":"user"}\n');
+  await fetch(base + "/api/events", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ session_id: `s-${slug}`, transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() }),
+  });
+  return tpath;
+}
+
 const PLANS = () => join(home, ".claude", "plans");
 const SHORT_A = "# Short plan A\n\n## One\n\nText with `src/a.ts`.\n";
 
@@ -149,6 +161,9 @@ before(async () => {
     await sleep(100);
   }
   token = readFileSync(join(dataDir, "token"), "utf8").trim();
+  // A plan file pops up only when its agent session is known: the plans of these tests each have a live session whose transcript carries the slug
+  mkdirSync(join(home, ".claude", "projects", "p"), { recursive: true });
+  for (const slug of ["auto", "diff", "done", "gone", "ja", "live", "old", "prec", "r1", "up"]) await registerSession(slug);
   ab("open", base + "/", "--viewport", "1440x900");
   opened = true;
 });
@@ -211,7 +226,7 @@ gui("a new plan shows itself within 2 s: read-only, 9 sections with only the fir
   assert.ok(l2.startsWith("Plan") && l2.includes("updated"), l2);
   assert.equal(ev(`document.querySelector("#head .plan-stats").textContent`), "9 sections · 200 lines · 12 files");
   assert.equal(ev(`document.querySelector("#head .plan-file").textContent`), "auto.md");
-  assert.equal(ev(`document.querySelectorAll(".btn, .opt, .free-text, .none-card, .cannot-card, .escape-row").length`), 0);
+  assert.equal(ev(`document.querySelectorAll(".btn:not(#instruct-send), .opt:not(.instruct-card), .free-text, .none-card, .cannot-card, .escape-row").length`), 0); // a plan file with a session carries the instruction card, nothing else
   const text = ev<string>(`document.getElementById("main").textContent`);
   for (const w of ["Approve", "Reject", "Answer", "None of these", "Can't answer", "read only"]) assert.ok(!text.includes(w), w);
   assert.equal(ev(`document.querySelector("#decision .done-reading").textContent`), "Done readingEsc");
@@ -326,7 +341,7 @@ gui("a decision takes the screen from a plan: count 2, ] goes to the plan, h bac
   assert.equal(ev(`document.getElementById("pending-btn").hidden`), false);
   key("]");
   await waitFor("plan again", `${SEC}.length === 9`);
-  assert.equal(ev(`document.querySelectorAll("#decision .opt").length`), 0);
+  assert.equal(ev(`document.querySelectorAll("#decision .opt:not(.instruct-card)").length`), 0);
   key("h");
   await waitFor("decision again", `document.querySelector("#decision .opt")`);
   key("[");
@@ -431,4 +446,34 @@ gui("screenshot: the idle screen at 1440x900 (no plan list)", async () => {
   await sleep(500);
   assert.equal(ev(`document.getElementById("recent")`), null);
   ab("screenshot", join(SHOTS, "PL3e-idle.png"));
+});
+
+gui("a plan file without a session is never shown by itself: no pop-up, not in Pending, listed in the drawer with the hint", async () => {
+  await reopen(IDLE);
+  writePlan("nosession.md", SHORT_A);
+  await waitFor("plan known to the page", `document.getElementById("pending-btn") && !document.getElementById("pending-btn").hidden`, 4000);
+  await sleep(800);
+  assert.equal(ev(IDLE), true, "the idle screen stays");
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "0");
+  assert.ok(!ev<string>(`document.title`).startsWith("(1)"));
+  key("b");
+  await waitFor("drawer row", `document.body.textContent.includes("Short plan A")`);
+  key("Escape");
+  await sleep(200);
+});
+
+gui("a plan file whose session is found later pops up as new once plan.updated carries session_id", async () => {
+  await reopen(IDLE);
+  const tpath = await registerSession("late", false);
+  writePlan("late.md", SHORT_A);
+  await waitFor("plan listed", `document.getElementById("pending-btn") && !document.getElementById("pending-btn").hidden`, 4000);
+  await api("/api/plans"); // the lookup runs once with no slug on record
+  await sleep(500);
+  assert.equal(ev(IDLE), true, "no session yet: nothing pops up");
+  writeFileSync(tpath, '{"type":"user"}\n{"type":"assistant","slug":"late"}\n'); // Claude Code assigns the slug lazily, later in the transcript
+  await api("/api/plans"); // the next lookup finds it and announces it
+  await waitFor("pop-up after the session is known", `document.querySelector("#head .plan-file")?.textContent === "late.md"`, 5000);
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
+  key("Escape");
+  await waitFor("idle", IDLE);
 });

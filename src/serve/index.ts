@@ -14,7 +14,8 @@ import { startCheckpointDelivery } from "./deliver.js";
 import { PlanReadStore } from "./plan-read.js";
 import { startPlanWatcher } from "./plan-watch.js";
 import { startRecapWatcher } from "./recap-watch.js";
-import { listPlans, planNameOfPath, planSummarySync } from "./plans.js";
+import { PlanSessions } from "./plan-session.js";
+import { listPlans, planNameOfPath, planSummary, planSummarySync } from "./plans.js";
 import { createApp } from "./routes.js";
 import { SettingsStore } from "./settings.js";
 import { SseHub } from "./sse.js";
@@ -82,10 +83,22 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       const summary = planSummarySync(dir, d.plan_name);
       if (!summary) return;
       planRead.mark(d.plan_name, summary.mtime);
-      hub.broadcast("plan.updated", { ...summary, read: true });
+      const session_id = planSessions.cached(d.plan_name);
+      hub.broadcast("plan.updated", { ...summary, read: true, ...(session_id ? { session_id } : {}) });
     },
   });
   store.load();
+  // A plan whose session is found after the plan was announced (the transcript gets its slug lazily): tell the UIs
+  const planSessions = new PlanSessions(
+    () => store.listSessions(),
+    home,
+    Date.now,
+    (name, session_id) => {
+      void planSummary(dir, name, planRead.isRead).then((summary) => {
+        if (summary) hub.broadcast("plan.updated", { ...summary, session_id });
+      });
+    },
+  );
 
   const settings = await SettingsStore.load(dataDir);
   const { lang } = settings.get();
@@ -98,6 +111,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     hub,
     token,
     home,
+    planSessions,
     dataDir,
     lang,
     settings,
@@ -126,7 +140,10 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     pollMs: opts.planPollMs,
     debounceMs: opts.planDebounceMs,
     isRead: planRead.isRead,
-    onChange: (summary) => hub.broadcast("plan.updated", summary),
+    // The lookup comes first: it records what this announcement carries, so a later find is a change
+    onChange: (summary) => {
+      void planSessions.find(summary.name).then((session_id) => hub.broadcast("plan.updated", session_id ? { ...summary, session_id } : summary));
+    },
     onRemove: (name) => {
       planRead.remove(name);
       hub.broadcast("plan.removed", { name });
@@ -134,6 +151,11 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   });
   // UKAGAI_TERMINAL=none: no terminal at all (the test script sets it so no test asks the real herdr)
   const terminal = opts.terminal ?? (process.env.UKAGAI_TERMINAL === "none" ? new NoTerminal() : new HerdrTerminal("herdr", (error) => log("herdr_failed", { error })));
+  // Looks for the session of every plan file on a timer: without a client asking, nobody else would
+  const sessionPoll = setInterval(() => {
+    void listPlans(home, planRead.isRead).then((plans) => Promise.all(plans.map((p) => planSessions.find(p.name)))).catch(() => {});
+  }, opts.planPollMs ?? 10000);
+  sessionPoll.unref();
   startCheckpointDelivery({ store, terminal, log, settings, pollMs: opts.terminalPollMs });
   const recapWatcher = startRecapWatcher({ store, home, pollMs: opts.recapPollMs, settings, log });
   const codexBridge = opts.codexBridge
@@ -151,6 +173,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       new Promise<void>((resolve) => {
         codexBridge?.close();
         planWatcher.stop();
+        clearInterval(sessionPoll);
         recapWatcher.stop();
         store.close();
         hub.closeAll();

@@ -100,6 +100,19 @@ function png(w: number, h: number, [r, g, b]: [number, number, number]): Buffer 
 }
 
 const QUESTION = "Which store should hold the cache, A or B?";
+
+/** A live session whose transcript carries `slug`: a plan file `<slug>.md` pops up only when its session is known */
+async function planSession(slug: string): Promise<void> {
+  const tpath = join(home, ".claude", "projects", "p", `${slug}.jsonl`);
+  mkdirSync(join(home, ".claude", "projects", "p"), { recursive: true });
+  writeFileSync(tpath, `{"type":"user","slug":"${slug}"}\n`);
+  await fetch(base + "/api/events", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ session_id: `s-${slug}`, transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() }),
+  });
+}
+
 const EX_MD = readFileSync(new URL("./fixtures/dialect.md", import.meta.url), "utf8");
 const PLAN_MD = "# Image plan\n\n## One\n\nBefore the change:\n\n![Plan screenshot](img/plan-shot.png)\n\nAfter.\n";
 
@@ -438,6 +451,7 @@ gui("a plan file renders its image through plan=<name> and a <details> in a plan
   ab("open", base + "/");
   await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
   const dir = join(home, ".claude", "plans");
+  await planSession("image-plan");
   writeFileSync(join(dir, name), planMd);
   await waitFor("plan screen", `document.querySelector("${BG} figure.doc-img img")`, 8000);
   assert.equal(ev<string>(`document.querySelector("${BG} figure.doc-img img").getAttribute("src")`), `/api/files?plan=${encodeURIComponent(name)}&path=${encodeURIComponent("img/plan-shot.png")}`);

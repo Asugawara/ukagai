@@ -57,9 +57,9 @@ test("refetch: plans are fetched on connect, and the safety poll skips them whil
 
 test("a repaint of an open long plan renders nothing again; a new width or language does", async () => {
   const app = new App();
-  const file: PlanContent = { name: "b.md", title: "Export retry", mtime: new Date(NOW - 3600_000).toISOString(), markdown: LONG, read: false } as PlanContent;
+  const file: PlanContent = { name: "b.md", title: "Export retry", mtime: new Date(NOW - 3600_000).toISOString(), markdown: LONG, read: false, session_id: "s-plan" } as PlanContent;
   app.fetchPlan = async () => file;
-  app.planUpdated({ name: "b.md", title: file.title, mtime: file.mtime, bytes: LONG.length, sections: 9, lines: 200, read: false }, NOW);
+  app.planUpdated({ name: "b.md", title: file.title, mtime: file.mtime, bytes: LONG.length, sections: 9, lines: 200, read: false, session_id: "s-plan" }, NOW);
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(app.shownPlan, "b.md");
   const paint = (cols: number) => renderFrame(app.view(NOW), { cols, rows: 50 }).text;

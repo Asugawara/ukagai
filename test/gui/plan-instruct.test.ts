@@ -318,8 +318,8 @@ gui("plan file card: the box shows only when a session maps, and sends to the pl
   const ins = await api("/api/sessions/s-early/instruction");
   assert.equal(ins.instruction.text, "add a rollback section");
   assert.equal(ins.instruction.about, "plan");
-  // the plan without a session: no box, and the hint says why
-  key("l");
+  // the plan without a session: it never came up by itself; opened by hand from the drawer it has no box, and the hint says why
+  ev(`document.querySelector('.plan-row[data-name="lonely.md"]').click(), "ok"`);
   await waitFor("lonely shown", `document.querySelector("#head .v2-title")?.textContent === "Lonely"`);
   assert.equal(ev(`!!document.querySelector("#instruct")`), false);
   assert.equal(ev(`document.querySelector("#plan-no-session").textContent`), "The agent's session was not found");

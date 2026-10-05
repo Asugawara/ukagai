@@ -24,11 +24,11 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 const ago = (ms: number) => new Date(clock - ms).toISOString();
 
 function file(name: string, title: string, markdown: string, ageMs: number): PlanContent {
-  return { name, title, mtime: ago(ageMs), markdown, read: false };
+  return { name, title, mtime: ago(ageMs), markdown, read: false, session_id: "s-plan" };
 }
 function summary(f: PlanContent, read = false): PlanSummary {
   const o = planOutline(f.markdown);
-  return { name: f.name, title: f.title, mtime: f.mtime, bytes: f.markdown.length, sections: o.h2, lines: o.lines, read };
+  return { name: f.name, title: f.title, mtime: f.mtime, bytes: f.markdown.length, sections: o.h2, lines: o.lines, read, session_id: f.session_id };
 }
 
 let FILES: Record<string, PlanContent>;
@@ -256,7 +256,8 @@ test("works at 100x24 stacked: the plan screen and the idle screen", async () =>
   const { text, lines } = draw(app, 100, 24);
   assert.ok(!text.includes(" │ "), "one column");
   assert.ok(lines[0]!.startsWith("plans/") && lines[0]!.includes("Plan") && lines[1]!.includes("Export retry"));
-  assert.ok(text.includes("Contents") && text.includes("Done reading (Esc)"));
+  // The plan has a session, so the instruction card takes the last rows and the Contents label scrolls out: the folded rows are the contents here
+  assert.ok(text.includes("▸ ☑ Context") && text.includes("Done reading (Esc)"));
   assert.ok(!text.includes("Approve"));
   press(app, esc);
   const idle = draw(app, 100, 24);
@@ -304,4 +305,39 @@ test("TUI and GUI use the same words for plans", async () => {
   for (const lang of ["en", "ja"] as const) {
     for (const k of ["plan_sections", "plan_sections_one", "plan_lines", "plan_lines_one", "plan_files", "plan_files_one"] as const) assert.equal(MESSAGES[lang][k], GUI[lang]![k], `${lang}.${k}`);
   }
+});
+
+test("a plan file without a session does not come up by itself and is not in Pending; it is in the list (b); it comes up once plan.updated carries its session", async () => {
+  const { app } = setup();
+  const bare = { ...summary(FILES["c.md"]!), session_id: undefined };
+  app.planUpdated(bare, clock);
+  await tick();
+  assert.equal(app.shownPlan, null, "nothing pops up");
+  assert.equal(app.count(clock), 0, "not counted in Pending");
+  press(app, ch("b"));
+  assert.equal(app.view(clock).list!.items.length, 1, "listed in b");
+  press(app, esc);
+  app.replacePlans([bare], clock); // a refetch does not change that
+  await tick();
+  assert.equal(app.shownPlan, null);
+  FILES["c.md"] = { ...FILES["c.md"]!, session_id: "s-found" };
+  app.planUpdated({ ...bare, session_id: "s-found" }, clock); // the server found the session
+  await tick();
+  assert.equal(app.shownPlan, "c.md", "now it is a new plan like any other");
+  assert.equal(app.count(clock), 1);
+});
+
+test("a plan file opened by hand from the list while its session is unknown learns the session when plan.updated carries it", async () => {
+  const { app } = setup();
+  const bare = { ...summary(FILES["c.md"]!), session_id: undefined };
+  FILES["c.md"] = { ...FILES["c.md"]!, session_id: undefined };
+  app.planUpdated(bare, clock);
+  press(app, ch("b"), { name: "enter" });
+  await tick();
+  assert.equal(app.shownPlan, "c.md");
+  assert.doesNotMatch(draw(app).text, /What should the agent do first\?/);
+  FILES["c.md"] = { ...FILES["c.md"]!, session_id: "s-found" };
+  app.planUpdated({ ...bare, session_id: "s-found" }, clock);
+  await tick();
+  assert.match(draw(app).text, /What should the agent do first\?/, "the card appears without a file write");
 });
