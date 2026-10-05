@@ -222,6 +222,8 @@ gui("a new plan shows itself within 2 s: read-only, 9 sections with only the fir
   assert.equal(ev(openCount), 1);
   assert.equal(ev(`document.querySelector("#background details.plan-sec").open`), true);
   assert.equal(ev(`document.querySelector("#head .v2-title").textContent`), "Plan: add retry to the export job");
+  assert.equal(ev(`document.querySelector("#head .hd-top .origin").textContent`), "plans/"); // the origin alone on row 1
+  assert.equal(ev(`!!document.querySelector("#head .hd-top .v2-title")`), false);
   const l2 = line2();
   assert.ok(l2.startsWith("Plan") && l2.includes("updated"), l2);
   assert.equal(ev(`document.querySelector("#head .plan-stats").textContent`), "9 sections · 200 lines · 12 files");
