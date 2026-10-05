@@ -269,6 +269,8 @@ export class Store {
       const denial = req.explanation?.attached_via === "after_deny" ? this.findRecentDenial(decision, now) : undefined;
       if (denial) decision.first_denied_at = denial.created_at;
     }
+    // A new plan: the human decides again, so an approval left from the previous one no longer applies
+    if (!denied && req.kind === "approve_plan") this.modeSwitches.delete(session.session_id);
     this.decisions.set(decision.id, decision);
     this.byToolUse.set(decision.tool_use_id, decision.id);
     this.persist(decision);
@@ -782,6 +784,7 @@ export class Store {
   private endCheckpoints(sessionId: string, live: boolean): void {
     this.instructions.delete(sessionId);
     this.stoppedSessions.delete(sessionId);
+    this.modeSwitches.delete(sessionId);
     if (!live) return;
     for (const d of this.decisions.values()) {
       if (d.kind === "checkpoint" && d.session.session_id === sessionId && d.status === "pending") this.closeCheckpoint(d, "session_end");

@@ -67,7 +67,6 @@ export async function sessionContext(
 export async function permissionRequest(raw: Record<string, unknown>, client: Client): Promise<Out | null> {
   const base = HookInputBase.safeParse(raw);
   if (!base.success) return null;
-  if (raw["tool_name"] !== "Write" && raw["tool_name"] !== "Edit") return null;
   const id = base.data.session_id;
   if (!(await client.getPendingModeSwitch(id))) return null;
   if (!(await client.consumeModeSwitch(id))) return null;

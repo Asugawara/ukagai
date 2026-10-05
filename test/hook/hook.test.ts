@@ -582,12 +582,41 @@ test("PermissionRequest: pending-mode-switch present → emits setMode auto and 
   });
 });
 
-test("PermissionRequest: absent → empty; tools other than Write / Edit are empty too", async () => {
+for (const tool_name of ["Bash", "WebFetch"]) {
+  test(`PermissionRequest (${tool_name}): pending-mode-switch present → emits setMode auto and consumes it`, async () => {
+    const h: Handler = (req, res) =>
+      req.method === "GET" && req.path === "/api/sessions/s1/pending-mode-switch" ? json(res, 200, { pending: true }) : false;
+    await withServer(h, async (f, d) => {
+      const r = await runHook(args(f, d), JSON.stringify(perm({ tool_name })));
+      assert.deepEqual(JSON.parse(r.stdout), {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }] },
+        },
+      });
+      assert.ok(f.calls.some((c) => c.method === "POST" && c.path === "/api/sessions/s1/pending-mode-switch/consume"));
+    });
+  });
+}
+
+test("PermissionRequest: no pending record → empty for Write, Bash and WebFetch, and nothing is consumed", async () => {
   await withServer(() => false, async (f, d) => {
-    assert.equal((await runHook(args(f, d), JSON.stringify(perm()))).stdout, "");
-    assert.equal((await runHook(args(f, d), JSON.stringify(perm({ tool_name: "Bash" })))).stdout, "");
+    for (const tool_name of ["Write", "Bash", "WebFetch"]) {
+      assert.equal((await runHook(args(f, d), JSON.stringify(perm({ tool_name })))).stdout, "");
+    }
     assert.ok(!f.calls.some((c) => c.path.endsWith("/consume")));
   });
+});
+
+test("PermissionRequest: server absent → empty, exit 0, under 1.5 seconds", async () => {
+  const f = await fakeServer();
+  const port = f.port;
+  await f.close();
+  const t0 = Date.now();
+  const r = await runHook(["--server", `http://127.0.0.1:${port}`, "--data-dir", dataDirWithToken()], JSON.stringify(perm({ tool_name: "Bash" })));
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, "");
+  assert.ok(Date.now() - t0 < 1500);
 });
 
 for (const ev of ["SessionStart", "SubagentStart"]) {

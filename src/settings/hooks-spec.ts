@@ -88,7 +88,7 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
       ...(opts.observe ? [] : group(mk([CHECKPOINT_FLAG], 3), CHECKPOINT_MATCHER)),
       ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], 3), PLAN_CONTEXT_MATCHER)),
     ],
-    PermissionRequest: group(mk([], 5), "Write|Edit"),
+    PermissionRequest: group(mk([], 5)),
     SessionStart: group(mk(opts.autostart === false ? ["--no-autostart"] : [], 5)),
     SubagentStart: group(mk([], 5)),
     UserPromptSubmit: [

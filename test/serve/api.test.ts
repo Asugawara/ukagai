@@ -441,14 +441,14 @@ test("session state and pending-mode-switch", async () => {
   assert.equal(a.status, 200);
   await ev("UserPromptSubmit");
   assert.equal(await state(), "working");
-  await ev("SessionEnd");
-  assert.equal(await state(), "ended");
   assert.equal((await pms()).pending, true);
   const c1 = await api(env, "/api/sessions/sess-1/pending-mode-switch/consume", { body: {} });
   assert.deepEqual(await c1.json(), { consumed: true });
   const c2 = await api(env, "/api/sessions/sess-1/pending-mode-switch/consume", { body: {} });
   assert.deepEqual(await c2.json(), { consumed: false });
   assert.equal((await pms()).pending, false);
+  await ev("SessionEnd");
+  assert.equal(await state(), "ended");
 });
 
 test("decision.created arrives over SSE", async () => {

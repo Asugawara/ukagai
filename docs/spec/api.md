@@ -222,7 +222,7 @@ The same API is used when the GUI sends "opened the session list panel" as a sup
 
 ### GET /api/sessions/:id/pending-mode-switch / POST .../consume
 
-The bodies are `PendingModeSwitch` / `ConsumeModeSwitchResponse` in `contract.ts`. The record is created by an answer with `approve: true, set_mode_auto: true` and expires after 120 seconds (`MODE_SWITCH_TTL_MS`).
+The bodies are `PendingModeSwitch` / `ConsumeModeSwitchResponse` in `contract.ts`. The record is created by an answer with `approve: true, set_mode_auto: true` and expires after 60 minutes (`MODE_SWITCH_TTL_MS`). Its consumer is the `PermissionRequest` hook, which has no matcher: the first permission prompt of **any** tool (Bash, Write, WebFetch, …) after the approval takes it and answers `setMode auto`. (After a hook-allowed ExitPlanMode Claude Code lands in the default mode, and the first prompt is usually not Write / Edit.) The record is also cleared when the session ends (`SessionEnd`) and when a new `approve_plan` decision is created for the session (a new plan: the human decides again).
 
 ```json
 { "pending": false }
