@@ -1,0 +1,297 @@
+// Instruct from a plan card in the real GUI: the approval card (Instruct box, presets as chips, Esc keeps the text, Enter sends
+// { instruct, text }), the early plan file card (box only when a session maps), and the presets textarea on /settings.
+// A real server (temp HOME) and a real browser (agent-browser). Skipped when agent-browser is not on PATH.
+import { after, before, test, type TestContext } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const HAS_BROWSER = spawnSync("agent-browser", ["--version"], { stdio: "ignore" }).status === 0;
+const SHOTS = process.env.UKAGAI_SHOTS_DIR ?? join(tmpdir(), "ukagai-shots");
+mkdirSync(SHOTS, { recursive: true });
+const PLAN = "# Export retry\n\n## Context\n\nThe export job fails on a flaky upload.\n\n## Scope and reversibility\n\nReversibility: reversible\nScope: file\n\n## Steps\n\n- [ ] add retry\n";
+
+let home = "";
+let dataDir = "";
+let port = 0;
+let token = "";
+let serve: ChildProcess | undefined;
+let base = "";
+let opened = false;
+let seq = 0;
+const session = `ukagai-plin-${process.pid}-${Date.now().toString(36)}`;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const s = createServer();
+    s.once("error", reject);
+    s.listen(0, "127.0.0.1", () => {
+      const p = (s.address() as { port: number }).port;
+      s.close(() => resolve(p));
+    });
+  });
+}
+function ab(...args: string[]): string {
+  return execFileSync("agent-browser", args, { env: { ...process.env, AGENT_BROWSER_SESSION: session }, encoding: "utf8", timeout: 30000 }).trim();
+}
+function ev<T = any>(js: string): T {
+  const out = ab("eval", js).split("\n").at(-1)!;
+  let v: unknown = JSON.parse(out);
+  if (typeof v === "string") {
+    try { v = JSON.parse(v); } catch {}
+  }
+  return v as T;
+}
+async function waitFor(what: string, js: string, ms = 8000): Promise<void> {
+  const end = Date.now() + ms;
+  for (;;) {
+    let ok = false;
+    try { ok = ev(`!!(${js})`) === true; } catch {}
+    if (ok) return;
+    assert.ok(Date.now() < end, `condition not met in time: ${what}`);
+    await sleep(100);
+  }
+}
+/** A key as a real KeyboardEvent; `target` is a CSS selector (default: the document) */
+const key = (k: string, target = "", init = "") =>
+  ev(`(${target ? `document.querySelector(${JSON.stringify(target)})` : "document"}).dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)}, bubbles: true, cancelable: true${init} })), "ok"`);
+/** Put text in the instruction box the way typing does */
+const typeInto = (text: string) => ev(`(() => { const t = document.querySelector("#instruct"); t.focus(); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()`);
+
+async function api(path: string, body?: unknown, method?: string) {
+  const go = () => fetch(base + path, {
+    method: method ?? (body === undefined ? "GET" : "POST"),
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const res = await go().catch(() => go()); // a kept-alive socket may have been reset while the browser worked
+  const text = await res.text();
+  return (text ? JSON.parse(text) : null) as any;
+}
+async function setPresets(presets: string[]) {
+  const s = await api("/api/settings");
+  s.plans.instruction_presets = presets;
+  await api("/api/settings", s, "PUT");
+}
+async function seedPlan(sid?: string, transcriptPath?: string): Promise<{ id: string }> {
+  const n = ++seq;
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_pli_${process.pid}_${n}`,
+    kind: "approve_plan",
+    session: { session_id: sid ?? `00000000-0000-0000-0002-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: transcriptPath ?? join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan: PLAN, planFilePath: "/Users/someone/.claude/plans/export-retry.md" },
+  });
+  assert.ok(d.id, JSON.stringify(d));
+  return { id: d.id };
+}
+async function cancelAll() {
+  for (const d of (await api("/api/decisions?status=pending")) as { id: string }[]) await api(`/api/decisions/${d.id}/cancel`, {});
+}
+async function reopen(ready: string) {
+  ab("open", base + "/");
+  await waitFor("screen render", ready);
+}
+
+before(async () => {
+  if (!HAS_BROWSER) return;
+  home = mkdtempSync(join(tmpdir(), "ukagai-plin-"));
+  dataDir = join(home, "data");
+  mkdirSync(join(home, ".claude", "plans"), { recursive: true });
+  mkdirSync(join(home, ".claude", "projects", "p"), { recursive: true });
+  port = await freePort();
+  base = `http://127.0.0.1:${port}`;
+  serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home, UKAGAI_TERMINAL: "none" } });
+  const end = Date.now() + 20000;
+  for (;;) {
+    try { if ((await fetch(base + "/healthz")).ok) break; } catch {}
+    assert.ok(Date.now() < end, "serve did not start");
+    await sleep(100);
+  }
+  token = readFileSync(join(dataDir, "token"), "utf8").trim();
+  ab("open", base + "/", "--viewport", "1280x800");
+  opened = true;
+});
+after(async () => {
+  if (opened) { try { ab("close"); } catch {} }
+  serve?.kill();
+  if (home) rmSync(home, { recursive: true, force: true });
+});
+
+function gui(name: string, fn: (t: TestContext) => Promise<void>) {
+  test(`GUI plan instruct: ${name}`, { skip: HAS_BROWSER ? false : "agent-browser is not installed" }, async (t) => {
+    await cancelAll();
+    await setPresets([]);
+    ab("set", "viewport", "1280", "800");
+    try { await fn(t); } finally { await cancelAll(); }
+  });
+}
+
+gui("i opens the box, Esc closes it keeping the text, Enter sends { instruct, text } and the history reads Instructed", async () => {
+  const { id } = await seedPlan();
+  await reopen("document.querySelector('#decision .btn')");
+  assert.equal(ev(`!!document.querySelector("#instruct")`), false);
+  assert.match(ev<string>(`document.querySelector("#foot").textContent`), /i Instruct/);
+  key("i");
+  await waitFor("box open and focused", `document.activeElement?.id === "instruct"`);
+  assert.equal(ev(`document.querySelector("#instruct-send").disabled`), true, "empty text cannot be sent");
+  key("Enter", "#instruct");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "Enter on an empty box sends nothing");
+  typeInto("have Fable review it");
+  assert.equal(ev(`document.querySelector("#instruct-send").disabled`), false);
+  key("Escape", "#instruct");
+  await waitFor("box closed", `!document.querySelector("#instruct")`);
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  key("i");
+  await waitFor("box reopened", `document.querySelector("#instruct")`);
+  assert.equal(ev(`document.querySelector("#instruct").value`), "have Fable review it", "Esc kept the text");
+  key("Enter", "#instruct", ", shiftKey: true");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "Shift+Enter does not send");
+  key("Enter", "#instruct");
+  const done = await (async () => {
+    const end = Date.now() + 5000;
+    for (;;) {
+      const d = await api(`/api/decisions/${id}`);
+      if (d.status === "answer_submitted") return d;
+      assert.ok(Date.now() < end, `not answered: ${d.status}`);
+      await sleep(100);
+    }
+  })();
+  assert.deepEqual({ instruct: done.response.instruct, text: done.response.text, approve: done.response.approve }, { instruct: true, text: "have Fable review it", approve: undefined });
+  await waitFor("toast says Instructed", `document.body.textContent.includes("Instructed: have Fable review it")`);
+});
+
+gui("history: an instructed approval reads Instructed and carries no 'not delivered yet' mark", async () => {
+  const tpath = join(home, ".claude", "projects", "p", "s-hist.jsonl");
+  writeFileSync(tpath, JSON.stringify({ type: "user", timestamp: "2026-10-05T00:00:00.000Z", message: { role: "user", content: "make the export retry" } }) + "\n");
+  const first = await seedPlan("s-hist", tpath);
+  await seedPlan("s-hist", tpath);
+  await reopen("document.querySelector('#decision .btn')");
+  // answer the first decision through the API: the second one stays on screen
+  await api(`/api/decisions/${first.id}/answer`, { instruct: true, text: "have Fable review it" });
+  const end = Date.now() + 10000;
+  while (!ev<boolean>(`!!document.querySelector(".hist-row")`) && Date.now() < end) { key("s"); await sleep(300); } // the history loads lazily
+  assert.ok(ev<boolean>(`!!document.querySelector(".hist-row")`), "history overlay did not open");
+  const rows = ev<string[]>(`JSON.stringify([...document.querySelectorAll(".hist-row")].map(r => r.textContent))`);
+  const row = rows.find((r) => r.includes("Instructed: have Fable review it"));
+  assert.ok(row, JSON.stringify(rows));
+  assert.ok(!/not delivered/i.test(row!), row);
+});
+
+gui("two rapid Enters send exactly one instruction request", async () => {
+  const { id } = await seedPlan();
+  await reopen("document.querySelector('#decision .btn')");
+  key("i");
+  await waitFor("box", `document.activeElement?.id === "instruct"`);
+  typeInto("only once");
+  ev(`(() => { const t = document.querySelector("#instruct"); for (let i = 0; i < 2; i++) t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); return "ok"; })()`);
+  const end = Date.now() + 5000;
+  for (;;) {
+    const d = await api(`/api/decisions/${id}`);
+    if (d.status === "answer_submitted") break;
+    assert.ok(Date.now() < end, "not answered");
+    await sleep(100);
+  }
+  await sleep(500);
+  assert.equal((await api(`/api/decisions/${id}`)).response.text, "only once");
+});
+
+gui("plan file card: two rapid Enters queue the instruction once", async () => {
+  writeFileSync(join(home, ".claude", "plans", "quick-fox.md"), PLAN);
+  const tpath = join(home, ".claude", "projects", "p", "s-quick.jsonl");
+  writeFileSync(tpath, '{"type":"user","slug":"quick-fox"}\n');
+  await api("/api/events", { session_id: "s-quick", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await reopen("document.querySelector('#decision .done-reading')");
+  const pick = () => ev<string>(`document.querySelector("#head .plan-file")?.textContent ?? ""`);
+  for (let i = 0; i < 6 && pick() !== "quick-fox.md"; i++) { key("l"); await sleep(300); }
+  assert.equal(pick(), "quick-fox.md");
+  key("i");
+  await waitFor("box", `document.activeElement?.id === "instruct"`);
+  typeInto("only once");
+  ev(`(() => { const t = document.querySelector("#instruct"); for (let i = 0; i < 2; i++) t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); return "ok"; })()`);
+  await waitFor("sent toast", `document.body.textContent.includes("Sent to the agent")`);
+  await sleep(300);
+  const ins = await api("/api/sessions/s-quick/instruction");
+  assert.equal(ins.instruction.text, "only once", "a second send would have joined the text twice");
+  rmSync(join(home, ".claude", "plans", "quick-fox.md"), { force: true });
+});
+
+gui("chips: a click fills the box, the same chip again sends; the presets update live from the settings", async () => {
+  const { id } = await seedPlan();
+  await setPresets(["Review adversarially", "Add a rollback plan"]);
+  await reopen("document.querySelector('#decision .btn')");
+  key("i");
+  await waitFor("two chips", `document.querySelectorAll("#decision .instruct-chips .chip").length === 2`);
+  ab("screenshot", join(SHOTS, "PL1-approval.png"));
+  ev(`document.querySelectorAll("#decision .chip")[1].click(), "ok"`);
+  assert.equal(ev(`document.querySelector("#instruct").value`), "Add a rollback plan");
+  assert.equal(ev(`document.activeElement.id`), "instruct");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "the first click only fills the box");
+  // a change of the presets shows without a reload
+  await setPresets(["Only this one"]);
+  await waitFor("chips replaced", `[...document.querySelectorAll("#decision .chip")].map(c => c.textContent).join("|") === "Only this one"`);
+  ev(`document.querySelector("#decision .chip").click(), "ok"`);
+  assert.equal(ev(`document.querySelector("#instruct").value`), "Only this one");
+  ev(`document.querySelector("#decision .chip").click(), "ok"`);
+  const end = Date.now() + 5000;
+  for (;;) {
+    const d = await api(`/api/decisions/${id}`);
+    if (d.status === "answer_submitted") { assert.equal(d.response.text, "Only this one"); break; }
+    assert.ok(Date.now() < end, `not answered: ${d.status}`);
+    await sleep(100);
+  }
+});
+
+gui("plan file card: the box shows only when a session maps, and sends to the plan endpoint", async () => {
+  writeFileSync(join(home, ".claude", "plans", "swift-otter.md"), PLAN);
+  writeFileSync(join(home, ".claude", "plans", "lonely.md"), PLAN.replace("Export retry", "Lonely"));
+  const tpath = join(home, ".claude", "projects", "p", "s-early.jsonl");
+  writeFileSync(tpath, '{"type":"user","slug":"swift-otter"}\n');
+  await api("/api/events", { session_id: "s-early", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await setPresets(["Review adversarially"]);
+  await reopen("document.querySelector('#decision .done-reading')");
+  // two new plan files: show swift-otter (has a session) first, then lonely
+  const title = () => ev<string>(`document.querySelector("#head .v2-title")?.textContent ?? ""`);
+  if (title() !== "Export retry") { key("l"); await waitFor("swift-otter shown", `document.querySelector("#head .v2-title")?.textContent === "Export retry"`); }
+  assert.equal(ev(`!!document.querySelector("#instruct-open")`), true);
+  assert.equal(ev(`!!document.querySelector("#plan-no-session")`), false);
+  key("i");
+  await waitFor("box", `document.activeElement?.id === "instruct"`);
+  ab("screenshot", join(SHOTS, "PL1-planfile.png"));
+  typeInto("add a rollback section");
+  key("Enter", "#instruct");
+  await waitFor("sent toast", `document.body.textContent.includes("Sent to the agent")`);
+  const ins = await api("/api/sessions/s-early/instruction");
+  assert.equal(ins.instruction.text, "add a rollback section");
+  assert.equal(ins.instruction.about, "plan");
+  // the plan without a session: no box, and the hint says why
+  key("l");
+  await waitFor("lonely shown", `document.querySelector("#head .v2-title")?.textContent === "Lonely"`);
+  assert.equal(ev(`!!document.querySelector("#instruct-open")`), false);
+  assert.equal(ev(`document.querySelector("#plan-no-session").textContent`), "The agent's session was not found");
+  key("i");
+  assert.equal(ev(`!!document.querySelector("#instruct")`), false);
+});
+
+gui("settings: the presets textarea saves on change and the chips on the main page follow", async () => {
+  ab("open", base + "/settings");
+  await waitFor("settings page", `document.querySelector("#plan-presets")`);
+  ev(`(() => { const t = document.querySelector("#plan-presets"); t.value = "  First one  \\n\\n Second one "; t.dispatchEvent(new Event("change", { bubbles: true })); return "ok"; })()`);
+  const end = Date.now() + 5000;
+  for (;;) {
+    const s = await api("/api/settings");
+    if (s.plans.instruction_presets.length) { assert.deepEqual(s.plans.instruction_presets, ["First one", "Second one"]); break; }
+    assert.ok(Date.now() < end, "presets not saved");
+    await sleep(100);
+  }
+  await waitFor("textarea shows the saved lines", `document.querySelector("#plan-presets").value === "First one\\nSecond one"`);
+  await seedPlan();
+  await reopen("document.querySelector('#decision .btn.primary')"); // the approval card (the plan file cards have no Approve button)
+  key("i");
+  await waitFor("chips", `[...document.querySelectorAll("#decision .chip")].map(c => c.textContent).join("|") === "First one|Second one"`);
+});

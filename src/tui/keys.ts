@@ -129,6 +129,9 @@ export type Action =
   | { type: "quit" }
   | { type: "approve" }
   | { type: "reject" }
+  /** `i` on a plan (approval or plan file): the instruction box; in it `1`-`9` put a preset into the empty box */
+  | { type: "instruct" }
+  | { type: "preset"; n: number }
   /** A long plan: move the contents cursor, open / close the section under it, open / close all, go to the previous / next section (opening it) */
   | { type: "toc-move"; delta: 1 | -1 }
   | { type: "toc-toggle" }
@@ -189,6 +192,8 @@ export interface KeyContext {
   hscrollable?: boolean;
   /** A long plan: the plan is folded into sections with a contents */
   toc?: boolean;
+  /** Number of instruction presets that a digit can pick (the instruction box is open and empty), else 0 */
+  presets?: number;
   /** A plan file shown on its own: read-only, `y a n` / answers do nothing, Esc is Done reading */
   planOnly?: boolean;
   /** Whether one instruction is shown in full in the background column (Esc leaves it) */
@@ -212,7 +217,9 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
       case "up": return done({ type: "input-move", delta: -1 });
       case "down": return done({ type: "input-move", delta: 1 });
       case "backspace": return done({ type: "input-backspace" });
-      case "char": return done({ type: "input-char", ch: key.ch });
+      case "char":
+        if (ctx.presets && key.ch >= "1" && key.ch <= "9" && Number(key.ch) <= ctx.presets) return done({ type: "preset", n: Number(key.ch) });
+        return done({ type: "input-char", ch: key.ch });
       default: return done(null);
     }
   }
@@ -324,6 +331,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ch === "h" || key.name === "left") return ctx.kind === "plan" && key.name === "left" ? done({ type: "move", delta: -1 }) : done({ type: "prev" });
   if (ch === "l" || key.name === "right") return ctx.kind === "plan" && key.name === "right" ? done({ type: "move", delta: 1 }) : done({ type: "next" });
   if (ch === "b") return done({ type: "list" });
+  if (ctx.kind === "plan" && ch === "i") return done({ type: "instruct" });
   // Nothing to answer on a plan file: j/k only scroll (the contents cursor moved above)
   if (ctx.planOnly && down) return done({ type: "scroll", delta: 1, unit: "line" });
   if (ctx.planOnly && up) return done({ type: "scroll", delta: -1, unit: "line" });

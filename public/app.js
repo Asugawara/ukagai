@@ -134,7 +134,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---- Settings (GET /api/settings, SSE settings.updated; edited on /settings) ----
 // Same shape as the Settings schema in src/contract.ts. `loaded` below does not depend on it: the defaults apply until the first fetch lands
-const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: true }, notify: { sound: false, browser: false, title_badge: true } };
+const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: true, instruction_presets: [] }, notify: { sound: false, browser: false, title_badge: true } };
 let settings = DEFAULT_SETTINGS;
 const isDark = () => settings.theme === "dark" || (settings.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
 function applySettings(s) {
@@ -155,6 +155,7 @@ function applySettings(s) {
   else if (loaded) { // plan auto-show and the title badge show without a reload
     const changed = (k) => JSON.stringify(prev[k]) !== JSON.stringify(settings[k]);
     if (changed("plans") && settings.plans.auto_show && shownId == null) advance();
+    fillChips(); // the instruction presets show without a reload
     refreshItems();
   }
 }
@@ -819,7 +820,11 @@ function historyItems(h, sid) {
   const replies = [...decisions.values()]
     .filter((x) => isCheckpoint(x) && x.session.session_id === sid && x.status === "answered" && x.response && x.response.kind !== "continue")
     .map((x) => ({ first: false, at: x.response.decided_at, text: x.response.text || t("checkpoint_stop"), delivered: !!x.response.delivered_at }));
-  const later = [...rest.map((e) => ({ first: false, ...e })), ...replies].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  // An approval answered with an instruction reads "Instructed: …"
+  const instructed = [...decisions.values()]
+    .filter((x) => x.kind === "approve_plan" && x.session.session_id === sid && x.response?.instruct)
+    .map((x) => ({ first: false, at: x.response.decided_at, text: t("plan_instructed", { text: x.response.text }) })); // no delivered mark: the hook answers the waiting ExitPlanMode itself
+  const later = [...rest.map((e) => ({ first: false, ...e })), ...replies, ...instructed].sort((a, b) => String(a.at).localeCompare(String(b.at)));
   return [...(h.first && !isTypedReply(h.first) ? [{ first: true, ...h.first }] : []), ...later];
 }
 
@@ -912,7 +917,7 @@ const isNewName = (name) => newPlans().some((x) => x.name === name);
 const queuedPlans = () => (settings.plans.auto_show ? newPlans() : []);
 const itemIds = () => [...pendingList().map((d) => d.id), ...queuedPlans().map((p) => PLAN_ID + p.name)];
 const drawerIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
-const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name } });
+const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name }, session_id: data.session_id });
 const shownPlanPd = () => (isPlanId(shownId) && planData.has(planNameOf(shownId)) ? planPd(planData.get(planNameOf(shownId))) : null);
 const ageText = (iso) => t("history_ago", { t: elapsed(iso) });
 const planStatsText = (p) => [count("plan_sections", p.sections), count("plan_lines", p.lines)].join(" · ");
@@ -989,7 +994,7 @@ async function refreshPlanData(name) {
   const old = planData.get(name);
   planData.set(name, data);
   if (shownId !== PLAN_ID + name) return;
-  if (old?.markdown === data.markdown) return; // only the mtime moved: nothing to redraw (the age text keeps ticking)
+  if (old?.markdown === data.markdown && old?.session_id === data.session_id) return; // only the mtime moved: nothing to redraw (the age text keeps ticking)
   const keep = $("background").scrollTop;
   const keepRight = $("decision").scrollTop;
   renderAll();
@@ -1029,12 +1034,18 @@ function renderPlanRight(pd) {
   document.activeElement?.blur?.();
   right.replaceChildren();
   const outline = planOutline(pd);
-  ui = { kind: "planview", toc: !!outline };
+  const dr = draftOf(pd);
+  const canInstruct = !!pd.session_id;
+  ui = { kind: "planview", toc: !!outline, canInstruct };
   if (outline) right.append(el("div", { class: "qs" }, planToc(pd, outline)));
-  right.append(el("div", { class: "actions" },
-    el("div", { class: "done-reading", role: "button", tabindex: "-1", onclick: doneReading },
-      el("span", { text: t("plan_done_reading") }), el("kbd", { text: "Esc" }))));
-  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ←→ ${t("hint_next")} · , ${t("hint_settings")}` }));
+  const actions = el("div", { class: "actions" });
+  if (canInstruct && dr.instructing) actions.append(instructBox(dr, (text) => sendPlanInstruct(pd, dr, text)));
+  actions.append(el("div", { class: "done-reading", role: "button", tabindex: "-1", onclick: doneReading },
+    el("span", { text: t("plan_done_reading") }), el("kbd", { text: "Esc" })));
+  if (canInstruct && !dr.instructing) actions.append(el("button", { class: "btn", type: "button", id: "instruct-open", onclick: () => startInstruct(pd) }, el("span", { text: t("instruct") })));
+  if (!canInstruct) actions.append(el("div", { class: "plan-unread", id: "plan-no-session", text: t("plan_no_session") }));
+  right.append(actions);
+  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("instruct")} · ` : ""}←→ ${t("hint_next")} · , ${t("hint_settings")}` }));
   placeToasts();
   if (outline) syncPlan(pd);
 }
@@ -1050,8 +1061,14 @@ function planViewKey(ev) {
   const key = logicalKey(ev);
   const pd = shownPlanPd();
   if (!pd) return;
+  if (ev.target instanceof HTMLTextAreaElement) { // typing an instruction: only Esc (closes the box, keeps the text) is ours
+    if (key === "Escape") { ev.preventDefault(); cancelInstruct(pd); }
+    return;
+  }
   ev.preventDefault();
+  if (key === "Escape" && draftOf(pd).instructing) { cancelInstruct(pd); return; }
   if (key === "Escape") { doneReading(); return; }
+  if (key === "i") { if (pd.session_id) startInstruct(pd); else toast(t("plan_no_session")); return; }
   tocKey(pd, key, ev);
 }
 
@@ -1148,7 +1165,7 @@ function blockerShown(d, it) {
 function draftOf(d) {
   let dr = drafts.get(d.id);
   if (!dr) {
-    drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", cursor: null }));
+    drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", instructing: false, instruct: "", cursor: null }));
     const kept = restored[d.id]; // typed text kept across a reload for a new build
     if (kept) {
       for (const [qi, f] of Object.entries(kept.free ?? {})) dr.free.set(Number(qi), { on: !!f.on, text: String(f.text ?? "") });
@@ -1192,7 +1209,7 @@ const STATUS_KEYS = {
 };
 const statusText = (status, fallbackKey) => t(STATUS_KEYS[status] ?? fallbackKey);
 // An answered checkpoint was sent, not delivered: its text reaches the agent later (the delivered toast follows)
-const answeredText = (d, fallbackKey) => (isCheckpoint(d) && d.status === "answered" && d.response?.kind !== "continue" ? t("checkpoint_sent") : statusText(d.status, fallbackKey));
+const answeredText = (d, fallbackKey) => (d.response?.instruct ? t("plan_instructed", { text: clip(d.response.text ?? "") }) : isCheckpoint(d) && d.status === "answered" && d.response?.kind !== "continue" ? t("checkpoint_sent") : statusText(d.status, fallbackKey));
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
@@ -1827,8 +1844,10 @@ function renderRightBody(d) {
   // One press sends, for every plan; unread sections are only shown (the dim line above the buttons)
   const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: t("approve") }));
   const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }));
+  const instruct = el("button", { class: "btn", type: "button", disabled: closed, id: "instruct-open", onclick: () => startInstruct(d) }, el("span", { text: t("instruct") }));
   const unread = el("div", { class: "plan-unread", hidden: !unreadText(d), text: unreadText(d) });
   const actions = el("div", { class: "actions" });
+  if (dr.instructing && !closed) actions.append(instructBox(dr, (text) => send(d, { instruct: true, text })));
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
       class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
@@ -1841,11 +1860,11 @@ function renderRightBody(d) {
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(unread, approve, reject);
+  actions.append(unread, approve, reject, instruct);
   const keysHint = outline ? t("hint_plan_toc") : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")}`;
-  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")} · , ${t("hint_settings")}`));
+  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · i ${t("instruct")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")} · , ${t("hint_settings")}`));
   root.append(actions);
-  const buttons = [approve, reject];
+  const buttons = [approve, reject, instruct];
   ui = {
     kind: "plan", buttons, closed, approve, toc: !!outline,
     setCursor(i) {
@@ -1984,8 +2003,90 @@ function syncNone() {
   document.querySelectorAll("#decision .none-type").forEach((e, k) => e.classList.toggle("cursor", k === none.cursor));
 }
 
+// ---- Instruct: tell the agent to do something before the plan is approved (approval card) or while it is still writing it (plan file card) ----
+
+// The presets as chips (also rebuilt when the settings change). A chip puts its text in the box; the same chip again sends it
+function fillChips() {
+  for (const box of document.querySelectorAll(".instruct-chips")) {
+    const { ta, send } = box._ctx;
+    box.replaceChildren(...settings.plans.instruction_presets.map((p) => el("button", {
+      class: "chip", type: "button", title: p, text: p,
+      onclick: () => {
+        if (ta.value === p) { if (p.trim()) send(p.trim()); return; }
+        ta.value = p;
+        ta.dispatchEvent(new Event("input"));
+        ta.focus();
+        const n = ta.value.length;
+        ta.setSelectionRange(n, n);
+      },
+    })));
+    box.hidden = !box.children.length;
+  }
+}
+
+// The box: chips above a textarea (Enter sends, Shift+Enter a new line), and a Send button. `dr.instruct` keeps the text while the box is closed
+// `onSend(text)` returns a promise; until it settles the box is busy (textarea, Send and chips disabled, a second Enter or click does nothing)
+function instructBox(dr, onSend) {
+  const sendText = async (text) => {
+    if (dr.sending || !text) return;
+    dr.sending = true;
+    setBusy(true);
+    try { await onSend(text); } finally { dr.sending = false; setBusy(false); }
+  };
+  const setBusy = (on) => {
+    ta.disabled = on;
+    go.disabled = on || !ta.value.trim();
+    for (const c of box.querySelectorAll(".chip")) c.disabled = on;
+  };
+  const send = () => sendText(ta.value.trim());
+  const go = el("button", { class: "btn primary", type: "button", id: "instruct-send", disabled: !dr.instruct.trim(), text: t("send_instruction"), onclick: send });
+  const ta = el("textarea", {
+    id: "instruct", rows: "3", "aria-label": t("instruct_aria"), placeholder: t("instruct_placeholder"),
+    oninput: () => { dr.instruct = ta.value; go.disabled = !ta.value.trim(); },
+    onkeydown: (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); if (ta.value.trim()) send(); }
+    },
+  });
+  ta.value = dr.instruct;
+  const chips = el("div", { class: "instruct-chips" });
+  chips._ctx = { ta, send: sendText };
+  const box = el("div", { class: "instruct-box" }, chips, ta, go);
+  queueMicrotask(fillChips);
+  return box;
+}
+
+function rerenderPlanCard(d) {
+  if (isPlanId(d.id)) { const pd = shownPlanPd(); if (pd) renderPlanRight(pd); } else renderRight(d);
+}
+function startInstruct(d) {
+  const dr = draftOf(d);
+  dr.instructing = true;
+  dr.rejecting = false;
+  if (!isPlanId(d.id)) dr.cursor = 2;
+  rerenderPlanCard(d);
+  $("instruct")?.focus();
+}
+function cancelInstruct(d) {
+  draftOf(d).instructing = false;
+  rerenderPlanCard(d);
+}
+// A plan file card: no decision waits, so the text goes to the session that writes the plan
+async function sendPlanInstruct(pd, dr, text) {
+  try {
+    const { delivered_via } = await post(`/api/plans/${encodeURIComponent(planNameOf(pd.id))}/instruct`, { text });
+    dr.instruct = "";
+    dr.instructing = false;
+    toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), { kind: "ok" });
+  } catch (e) {
+    if (e.status === 409) toast(e.message, { kind: "lost", ms: 4000 }); // e.g. a stop is queued for the session
+    else if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
+  }
+  if (shownId === pd.id) rerenderPlanCard(pd);
+}
+
 function startReject(d) {
   const dr = draftOf(d);
+  dr.instructing = false;
   dr.rejecting = true;
   dr.cursor = 2;
   renderRight(d);
@@ -3188,7 +3289,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const t = ev.target;
-  const typing = t instanceof HTMLInputElement && t.type === "text";
+  const typing = (t instanceof HTMLInputElement && t.type === "text") || t instanceof HTMLTextAreaElement;
   // Keys during IME composition in a text field go to the input. Outside fields, judge by the physical key even with an IME on (logicalKey)
   if (typing && (ev.isComposing || ev.keyCode === 229)) return;
   if (document.body.classList.contains("fullwide")) {
@@ -3379,7 +3480,7 @@ document.addEventListener("keydown", (ev) => {
 
   // Plan
   if (typing) {
-    if (key === "Escape") { ev.preventDefault(); cancelReject(); }
+    if (key === "Escape") { ev.preventDefault(); if (t.id === "instruct") cancelInstruct(decisions.get(shownId)); else cancelReject(); }
     return;
   }
   if (key === "Enter" && isBtn) return;
@@ -3388,6 +3489,8 @@ document.addEventListener("keydown", (ev) => {
   }
   if (key === ".") { ev.preventDefault(); ui.toggleExpand(); }
   else if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
+  else if (key === "Escape" && draftOf(decisions.get(shownId)).instructing) { ev.preventDefault(); cancelInstruct(decisions.get(shownId)); }
+  else if (key === "i") { ev.preventDefault(); startInstruct(decisions.get(shownId)); }
   else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
   else if (key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
   else if (key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }

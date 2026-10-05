@@ -293,10 +293,10 @@ gui("[ and ] open and go to the previous / next section (H3 rows included)", asy
 const count = (sel: string) => ev<number>(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
 const unreadLine = () => ev<string>(`(() => { const e = document.querySelector("#decision .plan-unread"); return !e || e.hidden ? "" : e.textContent; })()`);
 
-gui("one y sends at once with set_mode_auto: true, even with unread sections; the decision has two buttons and no confirm bar", async () => {
+gui("one y sends at once with set_mode_auto: true, even with unread sections; the decision has three buttons (Approve / Reject / Instruct) and no confirm bar", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  assert.equal(count("#decision .btn"), 2);
+  assert.equal(count("#decision .btn"), 3);
   assert.equal(count("#decision .confirm-bar"), 0);
   key("y");
   const d = await waitStatus(id, "answer_submitted");
@@ -329,12 +329,12 @@ gui("the unread line sits above the buttons, updates as sections are opened and 
   assert.equal(d.response.set_mode_auto, true);
 });
 
-gui("ja: the unread line is 未読 n 節 and the buttons are 承認 / 却下", async () => {
+gui("ja: the unread line is 未読 n 節 and the buttons are 承認 / 却下 / 指示", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   await setLang("ja", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("未読 7 節:")`);
   assert.equal(unreadLine(), "未読 7 節: Changes, Split and owners, Commit granularity, Verification, Observation path +2");
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .btn")].map(b => b.textContent))`), ["承認", "却下"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .btn")].map(b => b.textContent))`), ["承認", "却下", "指示"]);
   await setLang("en", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("Unread sections (7)")`);
 });
 

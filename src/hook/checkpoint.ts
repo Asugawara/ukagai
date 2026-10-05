@@ -1,3 +1,4 @@
+import { PLAN_INSTRUCT_PREFIX } from "../contract.js";
 import type { Client } from "./client.js";
 
 /** The common path is a single 404; the hook as a whole must stay well under a second */
@@ -27,10 +28,11 @@ export async function checkpointInstruction(
     };
   }
   if (text === "") return null;
+  const lead = ins.about === "plan" ? PLAN_INSTRUCT_PREFIX : "[ukagai] The human read your progress recap and says:";
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      additionalContext: `[ukagai] The human read your progress recap and says: ${text}\n${INSTRUCT_SUFFIX}`,
+      additionalContext: `${lead} ${text}\n${INSTRUCT_SUFFIX}`,
     },
   };
 }

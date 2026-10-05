@@ -350,7 +350,7 @@ gui("upgrade in place: the approval for the shown plan keeps the sections' state
   assert.deepEqual(marks(), before);
   assert.equal(ev(openCount), openBefore);
   assert.equal(line2(), "Approve this plan?");
-  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 2);
+  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 3);
   assert.equal(ev(`document.querySelectorAll("#pending-list .row").length`), 1);
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
   const line = () => ev<string>(`(() => { const e = document.querySelector("#decision .plan-unread"); return !e || e.hidden ? "" : e.textContent; })()`);

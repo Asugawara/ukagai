@@ -27,6 +27,7 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/metrics` | GUI | Aggregates for (a')(b)(d) |
 | `GET /api/decisions/:id/history` | GUI / TUI (cookie or Bearer) | The human instructions of the decision's session (first + last 20), read from the transcript on request |
 | `GET /api/plans` / `GET /api/plans/:name` | GUI / TUI (cookie or Bearer) | Read-only view of the plan files Claude Code writes to `~/.claude/plans` (list, and one file). See below |
+| `POST /api/plans/:name/instruct` | GUI / TUI (cookie or Bearer) | Tell the agent that is still writing a plan something (queued like a checkpoint reply, typed into its terminal when idle). See below |
 | `GET /api/files` | GUI / TUI (cookie or Bearer) | An image of the document being shown (explanation or plan), from an allowlisted folder. See below |
 | `POST /api/plans/:name/read` / `DELETE /api/plans/:name/read` | GUI / TUI (cookie or Bearer) | Mark a plan read (at a given `mtime`) / unread again. Kept in `<data-dir>/plans-read.json`. See below |
 | `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja", "build": string }`: the display language (the live `lang` setting, see `GET /api/settings`) and the current `app.js` version (the `?v=` value). The GUI reloads itself when `build` differs from its own |
@@ -116,7 +117,7 @@ Returns what the human typed in the session, so a viewer can see what the sessio
 }
 ```
 
-The response for `approve_plan` carries `approve` / `reason` / `set_mode_auto` instead of `answers`. When `via` is `terminal`, `{fallback:true}` was sent, and the hook exits without printing anything.
+The response for `approve_plan` carries `approve` / `reason` / `set_mode_auto` (or `instruct` / `text`) instead of `answers`. When `via` is `terminal`, `{fallback:true}` was sent, and the hook exits without printing anything.
 
 - Unanswered and `timeout_ms` (default 25000) has passed: 204 (no body). Terminal states such as `answered` / `hook_disconnected` return 410 (`{error, status}`) immediately without waiting.
 - `timeout_ms` is clamped to 0–600000. If it is not a number, the default is used.
@@ -144,20 +145,22 @@ Bearer required. `Content-Type: application/json` is required, so send `{}`. If 
 
 ### POST /api/decisions/:id/answer
 
-The request is one of the following 4 shapes (`AnswerRequest`. Mixed keys give 400):
+The request is one of the following 5 shapes (`AnswerRequest`. Mixed keys give 400):
 
 ```json
 { "answers": { "Which do you choose, A or B?": "B" } }
 { "approve": true, "set_mode_auto": true }
 { "approve": false, "reason": "Narrow the scope first, then resubmit" }
+{ "instruct": true, "text": "Have a second model review this plan adversarially and fold the critical findings in" }
 { "fallback": true }
 ```
 
-A progress checkpoint (`kind: "checkpoint"`) takes a fifth shape, `{ "kind": "continue" | "instruct" | "stop", "text"?: string }` (`text` is required and non-blank for `instruct`; `via` / `decided_at` may be sent and are ignored). It answers only checkpoints and the 4 shapes above never fit one (400).
+A progress checkpoint (`kind: "checkpoint"`) takes a sixth shape, `{ "kind": "continue" | "instruct" | "stop", "text"?: string }` (`text` is required and non-blank for `instruct`; `via` / `decided_at` may be sent and are ignored). It answers only checkpoints and the 5 shapes above never fit one (400).
 
 - The values of `answers` are strings only. For `multiSelect`, it is one string of the labels joined with `MULTI_SELECT_SEPARATOR` (tentatively `", "`).
 - `approve: false` requires `reason` as a non-empty string.
 - `set_mode_auto` is allowed only with `approve: true`.
+- `{ "instruct": true, "text": "…" }` is for `approve_plan` only (400 for any other kind): "do this before I approve". `text` is trimmed, 1 to 4000 characters. It is stored like a reject (`answer_submitted`, same events, same history) with the response `{ "via": "gui", "instruct": true, "text": "…", "decided_at": … }` (`approve` and `reason` are absent). The hook answers ExitPlanMode with a deny whose reason is `[ukagai] The human has not approved the plan yet and asks you to do this first: <text>` followed by `You are still in plan mode: do it (research, subagents and reviews are fine; do not edit project files), update the plan file, then call ExitPlanMode again.`; the agent's next ExitPlanMode is a new decision. The Codex bridge starts a Plan-mode turn with the same text (like a reject with feedback).
 - `{fallback:true}` transitions `pending` → `fallback` (the GUI does not send it; the button was removed). Anything else transitions `pending` → `answer_submitted`.
 
 Response 200: the updated `Decision`.
@@ -269,16 +272,17 @@ Read-only access to the plan files Claude Code writes in plan mode, so a plan ca
 `GET /api/plans` → 200
 
 ```json
-{ "plans": [ { "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "bytes": 1234, "sections": 4, "lines": 60, "read": false } ] }
+{ "plans": [ { "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "bytes": 1234, "sections": 4, "lines": 60, "read": false, "session_id": "…" } ] }
 ```
 
+- `session_id` (optional, also on the detail) is the live Claude Code session writing the plan: Claude Code names the plan after the session's `slug` and every transcript line carries `"slug":"<name>"`, so it is the session (not ended, last event within 6 hours, transcript under `~/.claude/projects/`) whose transcript has that slug in its first 256 KB. Absent when none is found. The `plan.updated` SSE event carries no `session_id`; clients get it from these two calls.
 - Only `*.md` files, newest `mtime` first, at most 50. Names starting with `.` are skipped. A file whose `realpath` is outside the plans directory (a symlink leading out) is not listed. A missing directory gives `{ "plans": [] }`.
 - `name` is the file name including `.md`. `title` is the first H1 (`# …`, outside code fences), or `name` if there is none. `sections` counts H2 headings (outside code fences). `lines` counts lines (0 for an empty file). A file over 1 MB is listed with `title = name` and `sections = 0`. `read` is true when the stored read mark equals the current `mtime`.
 
 `GET /api/plans/:name` → 200
 
 ```json
-{ "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "markdown": "# Add X\n…", "read": false }
+{ "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "markdown": "# Add X\n…", "read": false, "session_id": "…" }
 ```
 
 - 400 if `name` is empty or contains `/`, `\`, `..` or a NUL, or starts with `.` (URL-encoded separators are decoded first). 404 if the file does not exist, is not a regular file, or its `realpath` is outside the plans directory. 413 if it is larger than 1 MB.
@@ -307,7 +311,11 @@ The settings page (`/settings`) edits `<data-dir>/config.json` through these two
     "codex_delay_s": 180,            // integer 30..3600: quiet time after a finished Codex turn; read when the timer is armed
     "terminal_delivery": true        // false: a reply is never typed into a herdr pane; it waits for the agent's next tool call (no terminal is looked up)
   },
-  "plans": { "auto_show": true },    // false: new plan files do not pop up and do not count in Pending (the drawer list and an arriving approval still show them)
+  "plans": {
+    // one-click chips on plan cards: at most 10 lines of 1-300 characters (trimmed, blank lines dropped)
+    "instruction_presets": [],
+    "auto_show": true,   // false: new plan files do not pop up and do not count in Pending (the drawer list and an arriving approval still show them)
+  },
   "notify": {
     "sound": false,                  // a short beep on a new decision while the GUI tab is not focused
     "browser": false,                // a browser Notification on a new decision while the tab is hidden (the page asks the browser for permission when it is turned on)
@@ -323,6 +331,10 @@ A failed write (for example a read-only data directory) is a 500 `{ "error": "in
 `config.json` is read tolerantly (`readConfig`): a missing or malformed file, or any unknown / invalid field, falls back to that field's default and never throws (a key an older version wrote is ignored); `writeConfig` writes the whole object. `install --lang` keeps the other settings. Not settings: ports, the data directory, hook budgets, the Codex home.
 
 Live application, without a restart: the recap watcher, the Codex bridge (`codex_delay_s` at arm time) and the terminal delivery read the current value at the moment they act; `lang` changes what `GET /api/config`, the injected `<html lang data-lang>` and the next GUI / TUI load use (the hook reads `config.json` per call already). `theme`, `hints`, `plans.auto_show`, and `notify.*` are applied by the GUI itself; the TUI takes `lang` (unless `--lang` pinned it) from `GET /api/settings` at start, on every reconnect refetch and on `settings.updated`.
+
+### POST /api/plans/:name/instruct
+
+Cookie or Bearer, JSON. Body `{ "text": "…" }` (trimmed, 1 to 4000 characters, else 400). Tells the agent that is still writing the plan something while no hook waits. 404 when no session maps to the plan (see `session_id` above). Otherwise the text is delivered exactly like a checkpoint "instruct" reply: queued for `GET /api/sessions/:id/instruction` (the agent's next tool call; the hook words it `[ukagai] About the plan you are writing: <text>`), and typed into the agent's terminal when the agent is idle and its terminal is found (same line, same rules as a checkpoint reply). The session has one queue slot: if a checkpoint `stop` is queued the call is 409 `{ "error": "a stop is queued for this session" }` (the stop must still reach the agent); if a checkpoint reply or an earlier plan instruction is queued, the texts are joined with a newline (capped at 4000 characters) and the earlier one keeps its identity, so its checkpoint is marked delivered when the joined text is consumed or typed. A plan instruction that is queued while the agent works is typed into its terminal when the agent goes idle (`Stop`), and is dropped (log line `plan_instruction_dropped`) when an `approve_plan` decision is created for the session (the human instructs on the approval card then). Plan instructions are not persisted: a server restart loses an undelivered one (checkpoint replies still survive). No decision record is created. 200 `{ "delivered_via": "hook" | "terminal" | "noop" }` (`hook`: waiting for the next tool call; `terminal`: typed; `noop` is unused here), and one `plan_instructed` line goes to `serve.log`.
 
 ### POST /api/plans/:name/read / DELETE /api/plans/:name/read
 
@@ -353,7 +365,7 @@ Claude Code writes a "session recap" into the session transcript when the human 
 - **Decision.** `kind: "checkpoint"`, `request: { recap, recap_at }` (`recap_at` = the line's `timestamp`). `tool_use_id` = `checkpoint:<session_id>:<recap_at>`, `fingerprint` = sha256 of `recap_at`. No `lease_until`, no `explanation` (the GUI / TUI treat it as `none_reason: "not_required"`), `context` is `{}`. Creating one emits `decision.created` and does **not** change the session state (the session keeps working / idle). `POST /api/decisions` (Bearer) accepts it too (the `request` must be `{ recap, recap_at }`, no `status`), which is how tests and the UI harness seed one.
 - **Watcher** (`src/serve/recap-watch.ts`). For every session whose `last_event_at` is within 6 h, whose state is not `ended` and whose `transcript_path` is under `~/.claude/projects` (checked with `isAllowedTranscriptPath`), the server keeps a byte offset into the transcript. Every 5 s (`recapPollMs`) and on each hook event of that session it reads from the offset to the end, consumes complete lines only, parses just the lines containing `"away_summary"` and creates a checkpoint for each. The offset starts at the end of the file the first time a session is seen (old recaps are never replayed, also after a server restart); a file larger than 256 MB is skipped; a file that shrank resets to its end. A `UserPromptSubmit` scan advances the offset without creating anything (a recap older than the human's prompt is stale).
 - **Lifecycle.** `pending` → `answered` (the human; there is no hook ack, so `response.delivered_at` means the reply reached the agent, see `delivered_via` under "Delivery") or `cancelled` with `status_reason`: `superseded` (a newer recap or checkpoint of the session), `new_prompt` (the session's next `UserPromptSubmit`), `session_end`, `expired` (pending for 12 h, `CHECKPOINT_TTL_MS`, swept with the lease monitor). The `pending → answered` step is made by the store directly (the transition table above is for blocking decisions). Checkpoints are ignored by `GET /api/sessions/:id/open`.
-- **Answer.** `POST /api/decisions/:id/answer` with `{ kind, text? }` → `response: { via: "gui", kind, text?, decided_at }` (`CheckpointResponse`). 409 if the checkpoint is not `pending`. `continue` makes no instruction. `instruct` / `stop` queue an **instruction** `{ decision_id, kind, text, created_at }` for the session (one per session, a newer one replaces an undelivered older one; `text` is `""` for a bare `stop`). It survives a restart (rebuilt from the undelivered answered checkpoints, at most 12 h old) and is dropped at `SessionEnd`.
+- **Answer.** `POST /api/decisions/:id/answer` with `{ kind, text? }` → `response: { via: "gui", kind, text?, decided_at }` (`CheckpointResponse`). 409 if the checkpoint is not `pending`. `continue` makes no instruction. `instruct` / `stop` queue an **instruction** `{ decision_id, kind, text, created_at, about? }` for the session (`about: "plan"` with `decision_id: ""` marks one from a plan file card, see `POST /api/plans/:name/instruct`) (one per session, a newer one replaces an undelivered older one; `text` is `""` for a bare `stop`). It survives a restart (rebuilt from the undelivered answered checkpoints, at most 12 h old) and is dropped at `SessionEnd`.
 - **Delivery** (Claude Code sessions; Codex is delivered by the bridge). An idle agent calls no tool, so the hook alone would hand the reply over only after the human typed something themselves. `response.delivered_at` is set together with `response.delivered_via` (`hook` | `terminal` | `bridge` | `noop`) and `decision.updated` is emitted. When a checkpoint is created the server looks up the session's terminal (`src/serve/terminal.ts`; today herdr: `herdr pane list`, the pane whose `agent_session.value` is the session id) and shows it as `SessionSummary.terminal` (e.g. `"herdr:w1:p1"`, optional, in `GET /api/sessions` and `session.updated`).
 
   | Answer | Session state | How it arrives |
@@ -412,7 +424,7 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 | Authorization | Endpoints |
 |---|---|
 | Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `POST /api/decisions/:id/handoff`, `GET /api/sessions/:id/open`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
-| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `GET /api/files`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/settings`, `PUT /api/settings`, `GET /api/stream` |
+| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `GET /api/files`, `POST /api/plans/:name/instruct`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/settings`, `PUT /api/settings`, `GET /api/stream` |
 | none | `GET /healthz`, `GET /`, `GET /settings` (and `/settings/`), `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
 - **Content-Type**: **every POST** (including ack / consume, which have no body) requires `application/json` (otherwise 415). If there is no body, send `{}`. The order of checks is Host (400) → authorization (401) → Content-Type (415) → body (400).

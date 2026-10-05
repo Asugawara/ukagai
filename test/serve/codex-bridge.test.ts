@@ -239,6 +239,20 @@ test("Reject with feedback sends turn/start in plan mode with the feedback", asy
   await until(() => env.h.store.get(d.id)?.status === "answered", "answered");
 });
 
+test("Instruct sends turn/start in plan mode with the text and acks the decision", async () => {
+  const env = await setup();
+  await ready(env);
+  env.fake.planTurn("turn-i");
+  const d = await until(() => plans(env)[0], "decision");
+  const r = await call(env, `/api/decisions/${d.id}/answer`, { instruct: true, text: "Review the plan for gaps first." });
+  assert.equal(r.status, 200);
+  const ts = await until(() => env.fake.methods("turn/start")[0], "turn/start");
+  assert.equal(ts.params.collaborationMode.mode, "plan");
+  assert.match(ts.params.input[0].text, /^The human has not approved the plan yet and asks you to do this first: Review the plan for gaps first\.\n/);
+  await until(() => env.h.store.get(d.id)?.status === "answered", "answered");
+  assert.ok(env.h.store.get(d.id)?.response?.delivered_at);
+});
+
 test("Reject without feedback (whitespace only) sends nothing", async () => {
   const env = await setup();
   await ready(env);

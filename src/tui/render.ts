@@ -41,7 +41,11 @@ export interface View {
   selected: ReadonlySet<string>;
   free: { on: boolean; text: string };
   /** Text being typed (free text / rejection reason); null when not typing */
-  input: { kind: "free" | "reason" | "note"; text: string } | null;
+  input: { kind: "free" | "reason" | "note" | "instruct"; text: string } | null;
+  /** The instruction typed and left with Esc (shown dim); the presets; whether the plan file has a session to instruct */
+  instruct: string;
+  presets: readonly string[];
+  canInstruct: boolean;
   /** The "None of these" reason picker (index into NONE_TYPES, optional note); null when closed */
   none: { index: number; text: string } | null;
   /** The "Can't answer this" picker (reason in force, row, terms with their ticks, note); null when closed */
@@ -107,6 +111,23 @@ export interface Frame {
   footRows: number[];
   /** Scroll positions of each contents row's heading in a long plan (a hidden H3 points at its H2) */
   secRows: number[];
+}
+
+/** The instruction box of a plan: numbered presets while typing (pick one with its digit), then the text being typed or left */
+function instructBox(v: View, w: number, lang: Lang): string[] {
+  const out: string[] = [];
+  if (v.input?.kind === "instruct") {
+    out.push("");
+    v.presets.slice(0, 9).forEach((p, i) => out.push(...wrap(`${DIM}${i + 1}${RESET} ${p}`, w)));
+    out.push(...wrap(`  ${t(lang, "instruct_label")}: ${v.input.text}▏`, w));
+  } else if (v.instruct) {
+    out.push("", ...wrap(`${DIM}  ${t(lang, "instruct_label")}: ${v.instruct}${RESET}`, w));
+  }
+  return out;
+}
+
+function instructHint(v: View, lang: Lang): string {
+  return t(lang, v.presets.length && v.input?.text === "" ? "hint_plan_instruct" : "hint_plan_instruct_typed");
 }
 
 /** The background column's lines, plus where each section of a long plan starts */
@@ -246,7 +267,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     if (toc) {
       // The contents: a window of rows around the cursor so the buttons stay on screen (the rest is "▲ n" / "▼ n")
       const es = toc.p.outline.entries;
-      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (unread.length ? 1 : 0) - (v.input?.kind === "reason" || v.reason ? 2 : 0));
+      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (unread.length ? 1 : 0) - 1 - (v.input?.kind === "reason" || v.reason ? 2 : 0) - (v.input?.kind === "instruct" ? 2 + Math.min(9, v.presets.length) : v.instruct ? 2 : 0));
       const size = Math.min(es.length, budget);
       const start = Math.max(0, Math.min(toc.st.cur - Math.floor(size / 2), es.length - size));
       lines.push(`${BOLD}${t(lang, "toc_title")}${RESET}`);
@@ -267,12 +288,19 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     // A plan file on its own: the contents and the one action, Done reading
     if (ro) {
       lines.push(`${CYAN}${t(lang, "plan_done_reading")}${RESET} ${DIM}(Esc)${RESET}`);
-      return { lines, focus, hint: toc ? t(lang, "hint_planview_toc") : "" };
+      if (v.canInstruct) {
+        lines.push(`${CYAN}[i]${RESET} ${t(lang, "instruct")}`);
+        lines.push(...instructBox(v, w, lang));
+      } else {
+        lines.push(`${DIM}${t(lang, "plan_no_session")}${RESET}`);
+      }
+      const hint = [toc ? t(lang, "hint_planview_toc") : "", v.canInstruct && !v.input ? t(lang, "hint_planview_instruct") : ""].filter(Boolean).join(" · ");
+      return { lines, focus, hint: v.input?.kind === "instruct" ? instructHint(v, lang) : hint };
     }
     // Information, never a gate: the sections not yet opened, one dim line above the buttons
     lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
     if (unread.length) lines.push(...wrap(`${DIM}${t(lang, "plan_unread", { n: unread.length, names: unreadNames(unread) })}${RESET}`, w));
-    const buttons: [string, string][] = [["y", t(lang, "approve")], ["n", t(lang, "reject")]];
+    const buttons: [string, string][] = [["y", t(lang, "approve")], ["n", t(lang, "reject")], ["i", t(lang, "instruct")]];
     buttons.forEach(([k, label], i) => {
       const start = lines.length;
       // With a contents the arrows and Enter act on it, not on the buttons: no cursor mark on them
@@ -285,10 +313,11 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     } else if (v.reason) {
       lines.push("", ...wrap(`${DIM}  ${t(lang, "reason")}: ${v.reason}${RESET}`, w));
     }
+    lines.push(...instructBox(v, w, lang));
     return {
       lines,
       focus,
-      hint: v.input ? t(lang, "hint_plan_input") : t(lang, m.plan ? "hint_plan_toc" : "hint_plan"),
+      hint: v.input?.kind === "instruct" ? instructHint(v, lang) : v.input ? t(lang, "hint_plan_input") : t(lang, m.plan ? "hint_plan_toc" : "hint_plan"),
     };
   }
 

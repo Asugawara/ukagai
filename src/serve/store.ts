@@ -9,6 +9,7 @@ import {
   checkpointToolUseId,
   DENY_LINK_WINDOW_MS,
   HANDOFF_GRACE_MS,
+  INSTRUCTION_MAX_CHARS,
   MODE_SWITCH_TTL_MS,
   bodyHash,
   canTransition,
@@ -49,12 +50,15 @@ export type StoreOptions = {
   onTransition?: (d: Decision, from: DecisionStatus, to: DecisionStatus) => void;
   /** Basename of the plan file a path points at inside the plans directory, or null (resolved once when an approve_plan decision is created) */
   planNameOf?: (filePath: string) => string | null;
+  /** One line to serve.log (plan_instruction_dropped) */
+  log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
 };
 
 export type AnswerPatch =
   | { kind: "answers"; answers: Record<string, string> }
   | { kind: "approve"; set_mode_auto?: boolean }
   | { kind: "reject"; reason: string }
+  | { kind: "instruct_plan"; text: string }
   | { kind: "fallback" }
   | { kind: "checkpoint"; answer: "continue" | "instruct" | "stop"; text?: string };
 
@@ -116,6 +120,8 @@ export class Store {
   onCheckpointDeliverable: ((d: Decision) => void) | undefined;
   /** A checkpoint was created for a session (the terminal delivery looks up where its terminal is) */
   onCheckpointCreated: ((d: Decision) => void) | undefined;
+  /** Types a queued plan instruction into the idle agent's terminal; true when it went in (set by the terminal delivery) */
+  deliverPlanInstruction: ((sessionId: string, ins: Instruction) => Promise<boolean>) | undefined;
   private monitor: NodeJS.Timeout | undefined;
 
   // Aggregates rebuilt from events
@@ -267,6 +273,12 @@ export class Store {
     this.byToolUse.set(decision.tool_use_id, decision.id);
     this.persist(decision);
     this.markActivity(session.session_id, now);
+    // The agent reached ExitPlanMode: an instruction queued for the plan it was writing is stale (the human instructs on the approval card now)
+    const stale = this.instructions.get(session.session_id);
+    if (!denied && req.kind === "approve_plan" && stale?.about === "plan" && stale.decision_id === "") {
+      this.instructions.delete(session.session_id);
+      this.opts.log?.("plan_instruction_dropped", { session: session.session_id, decision: decision.id });
+    }
     if (!denied) {
       this.emit("decision.created", decision);
       this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
@@ -411,9 +423,37 @@ export class Store {
     return undefined;
   }
 
+  /**
+   * An instruction from a plan file card: queued for the session's next tool call (newest wins, like a checkpoint reply). An idle
+   * Claude Code agent calls no tool, so it is offered to the terminal delivery, which resolves with how it went
+   */
+  async queuePlanInstruction(sessionId: string, text: string): Promise<DeliveredVia> {
+    const created_at = new Date().toISOString();
+    const queued = this.instructions.get(sessionId);
+    // A queued stop must still reach the agent; a queued reply or earlier plan instruction keeps its identity (so its checkpoint is marked delivered) and the texts are joined
+    if (queued?.kind === "stop") throw new HttpError(409, "a stop is queued for this session");
+    const ins: Instruction = queued
+      ? { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
+      : { decision_id: "", kind: "instruct", text, created_at, about: "plan" };
+    this.instructions.set(sessionId, ins);
+    if (this.sessions.get(sessionId)?.state !== "idle" || !this.deliverPlanInstruction) return "hook";
+    try {
+      return (await this.deliverPlanInstruction(sessionId, ins)) ? "terminal" : "hook";
+    } catch {
+      return "hook";
+    }
+  }
+
   /** A claimed instruction could not be typed: back on the queue for the hook, unless a newer one took its place */
   requeueInstruction(sessionId: string, ins: Instruction): void {
     if (!this.instructions.has(sessionId)) this.instructions.set(sessionId, ins);
+  }
+
+  /** The queued plan instruction of a session, taken off the queue for the terminal delivery (undefined when the hook took it first or the agent is not idle) */
+  claimPlanInstruction(sessionId: string, ins: Instruction): Instruction | undefined {
+    if (this.instructions.get(sessionId) !== ins || this.sessions.get(sessionId)?.state !== "idle") return undefined;
+    this.instructions.delete(sessionId);
+    return ins;
   }
 
   /** A claimed instruction reached the agent's terminal */
@@ -504,6 +544,9 @@ export class Store {
         break;
       case "reject":
         response = { via: "gui", approve: false, reason: patch.reason, decided_at };
+        break;
+      case "instruct_plan":
+        response = { via: "gui", instruct: true, text: patch.text, decided_at };
         break;
       case "fallback":
         response = { via: "terminal", decided_at };
@@ -757,6 +800,11 @@ export class Store {
   private offerQueuedInstruction(sessionId: string): void {
     const ins = this.instructions.get(sessionId);
     if (!ins) return;
+    // A plan instruction has no decision behind it: type it now that the agent is idle
+    if (ins.about === "plan" && ins.decision_id === "") {
+      void Promise.resolve(this.deliverPlanInstruction?.(sessionId, ins)).catch(() => {});
+      return;
+    }
     const d = this.decisions.get(ins.decision_id);
     if (!d || d.session.agent === "codex") return;
     if (ins.kind === "stop") {

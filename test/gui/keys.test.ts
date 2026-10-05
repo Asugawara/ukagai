@@ -433,7 +433,7 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   await seedPlan();
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(count("kbd"), 0);
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Approve", "Reject"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision button.btn")].map(b => b.textContent))`), ["Approve", "Reject", "Instruct"]);
   const planHint = ev<string>(`document.querySelector("#foot .hint").textContent`);
   assert.ok(planHint.includes("y Approve") && planHint.includes("n Reject"), planHint);
 });

@@ -1,7 +1,7 @@
-import { CHECKPOINT_TTL_MS, type Decision } from "../contract.js";
+import { CHECKPOINT_TTL_MS, PLAN_INSTRUCT_PREFIX, type Decision } from "../contract.js";
 import type { SettingsStore } from "./settings.js";
 import type { Store } from "./store.js";
-import { replyLine, terminalLabel, TerminalTypeError, type Terminal } from "./terminal.js";
+import { REPLY_PREFIX, replyLine, terminalLabel, TerminalTypeError, type Terminal } from "./terminal.js";
 
 export type DeliveryOptions = {
   store: Store;
@@ -45,6 +45,30 @@ export function startCheckpointDelivery(opts: DeliveryOptions): void {
     void deliver(d).catch((err) => log("terminal_deliver_failed", { decision: d.id, error: String(err) }));
   };
 
+  store.deliverPlanInstruction = async (sid, queued) => {
+    if (settings && !settings.get().checkpoints.terminal_delivery) return false;
+    const found = await refreshTerminal(sid);
+    if (!found) return false;
+    let status = found.status;
+    for (let i = 0; i < polls && status === "working"; i++) {
+      await sleep(pollMs);
+      status = await terminal.status(found.ref);
+    }
+    if (status !== "idle") return false;
+    const ins = store.claimPlanInstruction(sid, queued);
+    if (!ins) return false;
+    try {
+      await terminal.type(found.ref, replyLine(ins.text, ins.about === "plan" ? PLAN_INSTRUCT_PREFIX : REPLY_PREFIX));
+    } catch (err) {
+      const textSent = err instanceof TerminalTypeError && err.textSent;
+      if (!textSent) store.requeueInstruction(sid, ins);
+      log(textSent ? "terminal_enter_failed" : "terminal_type_failed", { session: sid, error: String(err) });
+      return textSent;
+    }
+    store.deliveredToTerminal(ins.decision_id); // a checkpoint reply that the plan instruction was joined to; no-op for a plain one
+    return true;
+  };
+
   async function refreshTerminal(sid: string) {
     const found = await terminal.find(sid);
     store.setTerminal(sid, found ? terminalLabel(found.ref) : undefined);
@@ -78,7 +102,7 @@ export function startCheckpointDelivery(opts: DeliveryOptions): void {
     const ins = store.claimInstruction(d.id, CHECKPOINT_TTL_MS);
     if (!ins) return; // the hook took it first, the agent is no longer idle, or the reply is too old to type
     try {
-      await terminal.type(ref, replyLine(text));
+      await terminal.type(ref, replyLine(ins.text)); // the queue may hold a reply joined with a plan instruction
     } catch (err) {
       const textSent = err instanceof TerminalTypeError && err.textSent;
       // The text is in the composer already: typing or handing it over again would duplicate it

@@ -93,7 +93,7 @@ test("install --lang keeps the other settings of an existing config.json (with a
   const saved = {
     lang: "en", theme: "dark", hints: false,
     checkpoints: { enabled: false, codex_delay_s: 600, terminal_delivery: false },
-    plans: { auto_show: false },
+    plans: { auto_show: false, instruction_presets: [] },
     notify: { sound: true, browser: false, title_badge: false },
   };
   await writeFile(join(e.dataDir, "config.json"), JSON.stringify(saved));
