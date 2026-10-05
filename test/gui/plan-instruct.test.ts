@@ -1,5 +1,6 @@
-// Instruct from a plan card in the real GUI: the approval card (Instruct box, presets as chips, Esc keeps the text, Enter sends
-// { instruct, text }), the early plan file card (box only when a session maps), and the presets textarea on /settings.
+// Instruct from a plan card in the real GUI: the approval card (the Instruct box is always there like a question's free-text card and takes the
+// focus when the selection lands on it; presets as chips, Esc keeps the text, Enter sends { instruct, text }), the early plan file card
+// (box only when a session maps), and the presets textarea on /settings.
 // A real server (temp HOME) and a real browser (agent-browser). Skipped when agent-browser is not on PATH.
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -132,24 +133,54 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   });
 }
 
-gui("i opens the box, Esc closes it keeping the text, Enter sends { instruct, text } and the history reads Instructed", async () => {
+const active = () => ev<string>(`document.activeElement?.id ?? document.activeElement?.tagName ?? ""`);
+const onCard = () => ev<boolean>(`!!document.querySelector("#decision .instruct-card.cursor")`);
+
+gui("the box is there from the start (no Instruct button), the selection landing on it focuses it, Enter sends { instruct, text } and the history reads Instructed", async () => {
   const { id } = await seedPlan();
   await reopen("document.querySelector('#decision .btn')");
-  assert.equal(ev(`!!document.querySelector("#instruct")`), false);
-  assert.match(ev<string>(`document.querySelector("#foot").textContent`), /i Instruct/);
-  key("i");
-  await waitFor("box open and focused", `document.activeElement?.id === "instruct"`);
+  assert.equal(ev(`!!document.querySelector("#instruct")`), true, "the box is shown on the first render");
+  assert.equal(ev(`!!document.querySelector("#instruct-open")`), false, "no Instruct button");
+  assert.equal(ev(`[...document.querySelectorAll("#decision button")].some(b => b.textContent === "Instruct")`), false);
+  assert.equal(ev(`document.querySelectorAll("#decision .btn").length`), 3, "Send, Approve, Reject");
+  assert.notEqual(active(), "instruct", "the first render does not steal the focus");
+  assert.equal(onCard(), false);
+  assert.match(ev<string>(`document.querySelector("#foot").textContent`), /i Instruct box/);
+  assert.doesNotMatch(ev<string>(`document.querySelector("#foot").textContent`), /i Instruct ·/);
+  // ↑ from Approve (the first selection) lands on the card: focus follows
+  key("ArrowUp");
+  await waitFor("box focused", `document.activeElement?.id === "instruct"`);
+  assert.equal(onCard(), true);
   assert.equal(ev(`document.querySelector("#instruct-send").disabled`), true, "empty text cannot be sent");
   key("Enter", "#instruct");
   assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "Enter on an empty box sends nothing");
+  // ↑ ↓ in an empty box leave it and blur; ↓ goes on to Approve
+  key("ArrowDown", "#instruct");
+  assert.notEqual(active(), "instruct");
+  assert.equal(onCard(), false);
+  assert.equal(ev(`document.querySelector("#decision .btn.primary.cursor") !== null && document.querySelector("#decision .btn.primary.cursor").textContent`), "Approve");
+  key("ArrowUp");
+  await waitFor("box focused again", `document.activeElement?.id === "instruct"`);
+  // with text the arrows stay in the box
   typeInto("have Fable review it");
   assert.equal(ev(`document.querySelector("#instruct-send").disabled`), false);
+  key("ArrowDown", "#instruct");
+  key("ArrowUp", "#instruct");
+  assert.equal(active(), "instruct");
+  assert.equal(onCard(), true);
+  // Esc blurs and keeps the text; typed shortcuts are text while focused
   key("Escape", "#instruct");
-  await waitFor("box closed", `!document.querySelector("#instruct")`);
-  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
-  key("i");
-  await waitFor("box reopened", `document.querySelector("#instruct")`);
+  assert.notEqual(active(), "instruct");
   assert.equal(ev(`document.querySelector("#instruct").value`), "have Fable review it", "Esc kept the text");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
+  key("y", "#instruct");
+  assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "y typed in the box is text, not Approve");
+  // i lands on the card from anywhere and focuses it
+  key("ArrowDown");
+  assert.equal(onCard(), false);
+  key("i");
+  await waitFor("i focuses the box", `document.activeElement?.id === "instruct"`);
+  assert.equal(onCard(), true);
   key("Enter", "#instruct", ", shiftKey: true");
   assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "Shift+Enter does not send");
   key("Enter", "#instruct");
@@ -164,6 +195,26 @@ gui("i opens the box, Esc closes it keeping the text, Enter sends { instruct, te
   })();
   assert.deepEqual({ instruct: done.response.instruct, text: done.response.text, approve: done.response.approve }, { instruct: true, text: "have Fable review it", approve: undefined });
   await waitFor("toast says Instructed", `document.body.textContent.includes("Instructed: have Fable review it")`);
+});
+
+gui("a click anywhere on the card focuses the box; y / n outside the box still approve / reject", async () => {
+  const { id } = await seedPlan();
+  await reopen("document.querySelector('#decision .btn')");
+  ev(`document.querySelector("#decision .instruct-card .lab").click(), "ok"`);
+  await waitFor("box focused by a click on the label", `document.activeElement?.id === "instruct"`);
+  assert.equal(onCard(), true);
+  key("Escape", "#instruct");
+  key("n");
+  await waitFor("reject field", `document.querySelector("#reason")`);
+  key("Escape", "#reason");
+  key("y");
+  const end = Date.now() + 5000;
+  for (;;) {
+    const d = await api(`/api/decisions/${id}`);
+    if (d.status === "answer_submitted") { assert.equal(d.response.approve, true); break; }
+    assert.ok(Date.now() < end, `not answered: ${d.status}`);
+    await sleep(100);
+  }
 });
 
 gui("history: an instructed approval reads Instructed and carries no 'not delivered yet' mark", async () => {
@@ -186,8 +237,6 @@ gui("history: an instructed approval reads Instructed and carries no 'not delive
 gui("two rapid Enters send exactly one instruction request", async () => {
   const { id } = await seedPlan();
   await reopen("document.querySelector('#decision .btn')");
-  key("i");
-  await waitFor("box", `document.activeElement?.id === "instruct"`);
   typeInto("only once");
   ev(`(() => { const t = document.querySelector("#instruct"); for (let i = 0; i < 2; i++) t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); return "ok"; })()`);
   const end = Date.now() + 5000;
@@ -210,8 +259,7 @@ gui("plan file card: two rapid Enters queue the instruction once", async () => {
   const pick = () => ev<string>(`document.querySelector("#head .plan-file")?.textContent ?? ""`);
   for (let i = 0; i < 6 && pick() !== "quick-fox.md"; i++) { key("l"); await sleep(300); }
   assert.equal(pick(), "quick-fox.md");
-  key("i");
-  await waitFor("box", `document.activeElement?.id === "instruct"`);
+  await waitFor("box focused on the first render of the plan file card", `document.activeElement?.id === "instruct"`);
   typeInto("only once");
   ev(`(() => { const t = document.querySelector("#instruct"); for (let i = 0; i < 2; i++) t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); return "ok"; })()`);
   await waitFor("sent toast", `document.body.textContent.includes("Sent to the agent")`);
@@ -225,12 +273,13 @@ gui("chips: a click fills the box, the same chip again sends; the presets update
   const { id } = await seedPlan();
   await setPresets(["Review adversarially", "Add a rollback plan"]);
   await reopen("document.querySelector('#decision .btn')");
-  key("i");
   await waitFor("two chips", `document.querySelectorAll("#decision .instruct-chips .chip").length === 2`);
-  ab("screenshot", join(SHOTS, "PL1-approval.png"));
+  assert.equal(ev(`document.activeElement.id === "instruct"`), false);
   ev(`document.querySelectorAll("#decision .chip")[1].click(), "ok"`);
   assert.equal(ev(`document.querySelector("#instruct").value`), "Add a rollback plan");
   assert.equal(ev(`document.activeElement.id`), "instruct");
+  assert.equal(onCard(), true, "the chip click put the selection on the card");
+  ab("screenshot", join(SHOTS, "PL2-approval.png"));
   assert.equal((await api(`/api/decisions/${id}`)).status, "pending", "the first click only fills the box");
   // a change of the presets shows without a reload
   await setPresets(["Only this one"]);
@@ -258,11 +307,11 @@ gui("plan file card: the box shows only when a session maps, and sends to the pl
   // two new plan files: show swift-otter (has a session) first, then lonely
   const title = () => ev<string>(`document.querySelector("#head .v2-title")?.textContent ?? ""`);
   if (title() !== "Export retry") { key("l"); await waitFor("swift-otter shown", `document.querySelector("#head .v2-title")?.textContent === "Export retry"`); }
-  assert.equal(ev(`!!document.querySelector("#instruct-open")`), true);
+  assert.equal(ev(`!!document.querySelector("#instruct")`), true, "the box is shown without pressing anything");
+  assert.equal(ev(`!!document.querySelector("#instruct-open")`), false);
   assert.equal(ev(`!!document.querySelector("#plan-no-session")`), false);
-  key("i");
-  await waitFor("box", `document.activeElement?.id === "instruct"`);
-  ab("screenshot", join(SHOTS, "PL1-planfile.png"));
+  await waitFor("box focused on the first render", `document.activeElement?.id === "instruct"`);
+  ab("screenshot", join(SHOTS, "PL2-planfile.png"));
   typeInto("add a rollback section");
   key("Enter", "#instruct");
   await waitFor("sent toast", `document.body.textContent.includes("Sent to the agent")`);
@@ -272,7 +321,7 @@ gui("plan file card: the box shows only when a session maps, and sends to the pl
   // the plan without a session: no box, and the hint says why
   key("l");
   await waitFor("lonely shown", `document.querySelector("#head .v2-title")?.textContent === "Lonely"`);
-  assert.equal(ev(`!!document.querySelector("#instruct-open")`), false);
+  assert.equal(ev(`!!document.querySelector("#instruct")`), false);
   assert.equal(ev(`document.querySelector("#plan-no-session").textContent`), "The agent's session was not found");
   key("i");
   assert.equal(ev(`!!document.querySelector("#instruct")`), false);
@@ -292,6 +341,5 @@ gui("settings: the presets textarea saves on change and the chips on the main pa
   await waitFor("textarea shows the saved lines", `document.querySelector("#plan-presets").value === "First one\\nSecond one"`);
   await seedPlan();
   await reopen("document.querySelector('#decision .btn.primary')"); // the approval card (the plan file cards have no Approve button)
-  key("i");
   await waitFor("chips", `[...document.querySelectorAll("#decision .chip")].map(c => c.textContent).join("|") === "First one|Second one"`);
 });

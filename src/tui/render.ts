@@ -113,17 +113,18 @@ export interface Frame {
   secRows: number[];
 }
 
-/** The instruction box of a plan: numbered presets while typing (pick one with its digit), then the text being typed or left */
-function instructBox(v: View, w: number, lang: Lang): string[] {
-  const out: string[] = [];
-  if (v.input?.kind === "instruct") {
-    out.push("");
-    v.presets.slice(0, 9).forEach((p, i) => out.push(...wrap(`${DIM}${i + 1}${RESET} ${p}`, w)));
-    out.push(...wrap(`  ${t(lang, "instruct_label")}: ${v.input.text}▏`, w));
-  } else if (v.instruct) {
-    out.push("", ...wrap(`${DIM}  ${t(lang, "instruct_label")}: ${v.instruct}${RESET}`, w));
-  }
-  return out;
+/** The instruction card of a plan, always shown: its label, the numbered presets (pick one with its digit while the box is empty), then the box (typing, kept with Esc, or the placeholder) */
+function instructCard(v: View, w: number, lang: Lang, on: boolean): { lines: string[]; start: number } {
+  const typing = v.input?.kind === "instruct";
+  const label = `${on ? `${BOLD}▸${RESET}` : " "} ${CYAN}[i]${RESET} ${on ? BOLD : ""}${t(lang, "instruct")}${RESET}`;
+  // Nothing typed, no presets: one row, the placeholder beside the label
+  if (!typing && !v.instruct && !v.presets.length) return { lines: [`${label}  ${DIM}${t(lang, "instruct_placeholder")}${RESET}`], start: 0 };
+  const out: string[] = [label];
+  v.presets.slice(0, 9).forEach((p, i) => out.push(...wrap(`  ${DIM}${i + 1}${RESET} ${p}`, w)));
+  if (typing) out.push(...wrap(`  ${t(lang, "instruct_label")}: ${v.input!.text}▏`, w));
+  else if (v.instruct) out.push(...wrap(`${DIM}  ${t(lang, "instruct_label")}: ${v.instruct}${RESET}`, w));
+  else out.push(`${DIM}  ${t(lang, "instruct_placeholder")}${RESET}`);
+  return { lines: out, start: 0 };
 }
 
 function instructHint(v: View, lang: Lang): string {
@@ -267,7 +268,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     if (toc) {
       // The contents: a window of rows around the cursor so the buttons stay on screen (the rest is "▲ n" / "▼ n")
       const es = toc.p.outline.entries;
-      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (unread.length ? 1 : 0) - 1 - (v.input?.kind === "reason" || v.reason ? 2 : 0) - (v.input?.kind === "instruct" ? 2 + Math.min(9, v.presets.length) : v.instruct ? 2 : 0));
+      const budget = Math.max(4, ro ? rows - lines.length - 4 : rows - lines.length - 1 - 2 - 4 - 2 - (unread.length ? 1 : 0) - 1 - (v.input?.kind === "reason" || v.reason ? 2 : 0) - (v.presets.length || v.input?.kind === "instruct" || v.instruct ? 3 + Math.min(9, v.presets.length) : 0));
       const size = Math.min(es.length, budget);
       const start = Math.max(0, Math.min(toc.st.cur - Math.floor(size / 2), es.length - size));
       lines.push(`${BOLD}${t(lang, "toc_title")}${RESET}`);
@@ -289,8 +290,9 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     if (ro) {
       lines.push(`${CYAN}${t(lang, "plan_done_reading")}${RESET} ${DIM}(Esc)${RESET}`);
       if (v.canInstruct) {
-        lines.push(`${CYAN}[i]${RESET} ${t(lang, "instruct")}`);
-        lines.push(...instructBox(v, w, lang));
+        const start = lines.length;
+        lines.push("", ...instructCard(v, w, lang, true).lines);
+        focus = [start + 1, lines.length];
       } else {
         lines.push(`${DIM}${t(lang, "plan_no_session")}${RESET}`);
       }
@@ -300,11 +302,18 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     // Information, never a gate: the sections not yet opened, one dim line above the buttons
     lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
     if (unread.length) lines.push(...wrap(`${DIM}${t(lang, "plan_unread", { n: unread.length, names: unreadNames(unread) })}${RESET}`, w));
-    const buttons: [string, string][] = [["y", t(lang, "approve")], ["n", t(lang, "reject")], ["i", t(lang, "instruct")]];
+    // The instruction card first (the box is always there, and opens when the cursor lands on it), then Approve / Reject
+    const typingInstruct = v.input?.kind === "instruct";
+    const cardStart = lines.length;
+    const onCard = typingInstruct || (!toc && v.cursor === 0);
+    const card = instructCard(v, w, lang, onCard).lines;
+    lines.push(...card, ...(card.length > 1 ? [""] : []));
+    if (onCard) focus = [cardStart, cardStart + card.length];
+    const buttons: [string, string][] = [["y", t(lang, "approve")], ["n", t(lang, "reject")]];
     buttons.forEach(([k, label], i) => {
       const start = lines.length;
       // With a contents the arrows and Enter act on it, not on the buttons: no cursor mark on them
-      const on = !toc && v.cursor === i;
+      const on = !toc && !typingInstruct && v.cursor === i + 1;
       lines.push(`${on ? `${BOLD}▸${RESET}` : " "} ${CYAN}[${k}]${RESET} ${on ? BOLD : ""}${label}${RESET}`);
       if (on) focus = [start, lines.length];
     });
@@ -313,7 +322,6 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     } else if (v.reason) {
       lines.push("", ...wrap(`${DIM}  ${t(lang, "reason")}: ${v.reason}${RESET}`, w));
     }
-    lines.push(...instructBox(v, w, lang));
     return {
       lines,
       focus,

@@ -1031,22 +1031,30 @@ function renderPlanRight(pd) {
   document.body.append(toastBox);
   const right = $("decision");
   right.classList.remove("split");
+  const wasTyping = document.activeElement?.id === "instruct";
   document.activeElement?.blur?.();
   right.replaceChildren();
   const outline = planOutline(pd);
   const dr = draftOf(pd);
   const canInstruct = !!pd.session_id;
-  ui = { kind: "planview", toc: !!outline, canInstruct };
+  // The box takes the focus when the card is first shown (it is the only thing to act on; with a contents the arrows are the contents' keys) and keeps it across a live update
+  const focusBox = canInstruct && (wasTyping || (dr.cursor == null && !outline));
+  if (canInstruct) dr.cursor = 0;
+  let box = null;
+  ui = { kind: "planview", toc: !!outline, canInstruct, openInstruct: () => box?.ta.focus() };
   if (outline) right.append(el("div", { class: "qs" }, planToc(pd, outline)));
   const actions = el("div", { class: "actions" });
-  if (canInstruct && dr.instructing) actions.append(instructBox(dr, (text) => sendPlanInstruct(pd, dr, text)));
+  if (canInstruct) {
+    box = instructCard(dr, (text) => sendPlanInstruct(pd, dr, text));
+    actions.append(box.card);
+  }
   actions.append(el("div", { class: "done-reading", role: "button", tabindex: "-1", onclick: doneReading },
     el("span", { text: t("plan_done_reading") }), el("kbd", { text: "Esc" })));
-  if (canInstruct && !dr.instructing) actions.append(el("button", { class: "btn", type: "button", id: "instruct-open", onclick: () => startInstruct(pd) }, el("span", { text: t("instruct") })));
   if (!canInstruct) actions.append(el("div", { class: "plan-unread", id: "plan-no-session", text: t("plan_no_session") }));
   right.append(actions);
-  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("instruct")} · ` : ""}←→ ${t("hint_next")} · , ${t("hint_settings")}` }));
+  setHint(el("div", { class: "hint", text: `${outline ? `${t("hint_plan_toc")} · ` : ""}Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · ` : ""}←→ ${t("hint_next")} · , ${t("hint_settings")}` }));
   placeToasts();
+  if (focusBox) syncTyping(box.ta, true);
   if (outline) syncPlan(pd);
 }
 
@@ -1061,14 +1069,13 @@ function planViewKey(ev) {
   const key = logicalKey(ev);
   const pd = shownPlanPd();
   if (!pd) return;
-  if (ev.target instanceof HTMLTextAreaElement) { // typing an instruction: only Esc (closes the box, keeps the text) is ours
-    if (key === "Escape") { ev.preventDefault(); cancelInstruct(pd); }
+  if (ev.target instanceof HTMLTextAreaElement) { // typing an instruction: Esc leaves the box keeping the text, ↑ ↓ in an empty box leave it too
+    if (key === "Escape" || ((key === "ArrowUp" || key === "ArrowDown") && ev.target.value === "")) { ev.preventDefault(); ev.target.blur(); }
     return;
   }
   ev.preventDefault();
-  if (key === "Escape" && draftOf(pd).instructing) { cancelInstruct(pd); return; }
   if (key === "Escape") { doneReading(); return; }
-  if (key === "i") { if (pd.session_id) startInstruct(pd); else toast(t("plan_no_session")); return; }
+  if (key === "i") { if (pd.session_id) ui?.openInstruct?.(); else toast(t("plan_no_session")); return; }
   tocKey(pd, key, ev);
 }
 
@@ -1165,7 +1172,7 @@ function blockerShown(d, it) {
 function draftOf(d) {
   let dr = drafts.get(d.id);
   if (!dr) {
-    drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", instructing: false, instruct: "", cursor: null }));
+    drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", instruct: "", cursor: null }));
     const kept = restored[d.id]; // typed text kept across a reload for a new build
     if (kept) {
       for (const [qi, f] of Object.entries(kept.free ?? {})) dr.free.set(Number(qi), { on: !!f.on, text: String(f.text ?? "") });
@@ -1550,6 +1557,7 @@ const recBox = (v2) => v2?.recBox ? el("div", { class: "rec" }, el("div", { clas
 function renderRightBody(d) {
   const root = $("decision");
   root.classList.remove("split");
+  const wasInstruct = document.activeElement?.id === "instruct";
   if (!drawerOpen()) document.activeElement?.blur?.(); // return focus to body so keys are received on document
   root.replaceChildren();
   ui = null;
@@ -1844,10 +1852,11 @@ function renderRightBody(d) {
   // One press sends, for every plan; unread sections are only shown (the dim line above the buttons)
   const approve = el("button", { class: "btn primary", type: "button", disabled: closed, onclick: () => send(d, { approve: true, set_mode_auto: true }) }, el("span", { text: t("approve") }));
   const reject = el("button", { class: "btn danger", type: "button", disabled: closed, onclick: () => startReject(d) }, el("span", { text: t("reject") }));
-  const instruct = el("button", { class: "btn", type: "button", disabled: closed, id: "instruct-open", onclick: () => startInstruct(d) }, el("span", { text: t("instruct") }));
   const unread = el("div", { class: "plan-unread", hidden: !unreadText(d), text: unreadText(d) });
   const actions = el("div", { class: "actions" });
-  if (dr.instructing && !closed) actions.append(instructBox(dr, (text) => send(d, { instruct: true, text })));
+  // The instruction card is always there (above Approve / Reject): the cursor landing on it focuses the box
+  const box = closed ? null : instructCard(dr, (text) => send(d, { instruct: true, text }));
+  if (box) actions.append(box.card);
   if (dr.rejecting && !closed) {
     const confirm = el("button", {
       class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
@@ -1860,24 +1869,35 @@ function renderRightBody(d) {
     });
     actions.append(el("div", { class: "reject-box" }, input), confirm);
   }
-  actions.append(unread, approve, reject, instruct);
+  actions.append(unread, approve, reject);
   const keysHint = outline ? t("hint_plan_toc") : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")}`;
-  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · i ${t("instruct")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")} · , ${t("hint_settings")}`));
+  setHint(el("div", { class: "hint" }, `${keysHint} · y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` }), `←→ ${t("hint_next")} · , ${t("hint_settings")}`));
   root.append(actions);
-  const buttons = [approve, reject, instruct];
+  // Slots: 0 the instruction card (its box), 1 Approve, 2 Reject
+  const buttons = [box?.card, approve, reject];
   ui = {
-    kind: "plan", buttons, closed, approve, toc: !!outline,
-    setCursor(i) {
+    kind: "plan", buttons, closed, approve, toc: !!outline, box,
+    // focus: the cursor landed on the card by the user (↑↓, a click), so its box takes the focus; the first render does not steal it
+    setCursor(i, focus = true) {
       if (outline) return; // the arrows move the contents cursor instead (the buttons are y / n or a click)
       i = clamp(i, buttons.length);
       if (i !== dr.cursor) clearConfirm(dr);
       dr.cursor = i;
-      buttons.forEach((b, k) => b.classList.toggle("cursor", k === i));
+      buttons.forEach((b, k) => b?.classList.toggle("cursor", k === i));
+      syncTyping(box?.ta, !closed && focus && i === 0);
     },
-    get cursor() { return dr.cursor ?? 0; },
+    // `i`, a click on the card: the cursor goes to the card (also with a contents) and the box takes the focus
+    openInstruct() {
+      if (closed) return;
+      dr.cursor = 0;
+      buttons.forEach((b, k) => b?.classList.toggle("cursor", k === 0));
+      box.ta.focus();
+    },
+    get cursor() { return dr.cursor ?? 1; },
     toggleExpand: () => toggleExpand(dr),
   };
-  if (!closed) ui.setCursor(dr.cursor ?? 0, false);
+  if (!closed) ui.setCursor(dr.cursor ?? 1, false);
+  if (wasInstruct && box) syncTyping(box.ta, true); // a live update keeps the box focused
   markClamps(root, dr);
   if (outline) syncPlan(d);
 }
@@ -2024,9 +2044,10 @@ function fillChips() {
   }
 }
 
-// The box: chips above a textarea (Enter sends, Shift+Enter a new line), and a Send button. `dr.instruct` keeps the text while the box is closed
-// `onSend(text)` returns a promise; until it settles the box is busy (textarea, Send and chips disabled, a second Enter or click does nothing)
-function instructBox(dr, onSend) {
+// The card: chips above a textarea (Enter sends, Shift+Enter a new line), and a Send button; always shown, like the free-text card of a question.
+// `dr.instruct` keeps the text across a re-render. `onSend(text)` returns a promise; until it settles the box is busy (textarea, Send and chips disabled, a second Enter or click does nothing)
+// A click anywhere on the card (not on a chip / Send) focuses the box. Returns { card, ta }
+function instructCard(dr, onSend) {
   const sendText = async (text) => {
     if (dr.sending || !text) return;
     dr.sending = true;
@@ -2043,6 +2064,8 @@ function instructBox(dr, onSend) {
   const ta = el("textarea", {
     id: "instruct", rows: "3", "aria-label": t("instruct_aria"), placeholder: t("instruct_placeholder"),
     oninput: () => { dr.instruct = ta.value; go.disabled = !ta.value.trim(); },
+    // a focus by hand (a click in the box, a chip) moves the cursor onto the card
+    onfocus: () => { if (!autoFocusing && ui?.kind === "plan" && !ui.closed && ui.cursor !== 0) ui.openInstruct(); },
     onkeydown: (ev) => {
       if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); if (ta.value.trim()) send(); }
     },
@@ -2051,31 +2074,23 @@ function instructBox(dr, onSend) {
   const chips = el("div", { class: "instruct-chips" });
   chips._ctx = { ta, send: sendText };
   const box = el("div", { class: "instruct-box" }, chips, ta, go);
+  const card = el("div", { class: "opt instruct-card", "data-card": "instruct" }, el("div", { class: "grow" }, el("div", { class: "lab", text: t("instruct") }), box));
+  card.addEventListener("click", (ev) => {
+    if (ev.target === ta || ev.target.closest("button")) return;
+    ui?.openInstruct?.();
+  });
   queueMicrotask(fillChips);
-  return box;
+  return { card, ta };
 }
 
 function rerenderPlanCard(d) {
   if (isPlanId(d.id)) { const pd = shownPlanPd(); if (pd) renderPlanRight(pd); } else renderRight(d);
-}
-function startInstruct(d) {
-  const dr = draftOf(d);
-  dr.instructing = true;
-  dr.rejecting = false;
-  if (!isPlanId(d.id)) dr.cursor = 2;
-  rerenderPlanCard(d);
-  $("instruct")?.focus();
-}
-function cancelInstruct(d) {
-  draftOf(d).instructing = false;
-  rerenderPlanCard(d);
 }
 // A plan file card: no decision waits, so the text goes to the session that writes the plan
 async function sendPlanInstruct(pd, dr, text) {
   try {
     const { delivered_via } = await post(`/api/plans/${encodeURIComponent(planNameOf(pd.id))}/instruct`, { text });
     dr.instruct = "";
-    dr.instructing = false;
     toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), { kind: "ok" });
   } catch (e) {
     if (e.status === 409) toast(e.message, { kind: "lost", ms: 4000 }); // e.g. a stop is queued for the session
@@ -2086,7 +2101,6 @@ async function sendPlanInstruct(pd, dr, text) {
 
 function startReject(d) {
   const dr = draftOf(d);
-  dr.instructing = false;
   dr.rejecting = true;
   dr.cursor = 2;
   renderRight(d);
@@ -3480,7 +3494,15 @@ document.addEventListener("keydown", (ev) => {
 
   // Plan
   if (typing) {
-    if (key === "Escape") { ev.preventDefault(); if (t.id === "instruct") cancelInstruct(decisions.get(shownId)); else cancelReject(); }
+    if (t.id === "instruct") {
+      // the instruction card: Esc leaves the box keeping the text; ↑ ↓ in an empty box leave it too and move on (no contents: onto the neighbouring slot)
+      if (key === "Escape") { ev.preventDefault(); t.blur(); }
+      else if ((key === "ArrowUp" || key === "ArrowDown") && t.value === "") {
+        ev.preventDefault();
+        const next = clamp(ui.cursor + (key === "ArrowDown" ? 1 : -1), ui.buttons.length);
+        if (ui.toc || next === ui.cursor) t.blur(); else ui.setCursor(next);
+      }
+    } else if (key === "Escape") { ev.preventDefault(); cancelReject(); }
     return;
   }
   if (key === "Enter" && isBtn) return;
@@ -3489,11 +3511,14 @@ document.addEventListener("keydown", (ev) => {
   }
   if (key === ".") { ev.preventDefault(); ui.toggleExpand(); }
   else if (key === "Escape" && draftOf(decisions.get(shownId)).rejecting) { ev.preventDefault(); cancelReject(); }
-  else if (key === "Escape" && draftOf(decisions.get(shownId)).instructing) { ev.preventDefault(); cancelInstruct(decisions.get(shownId)); }
-  else if (key === "i") { ev.preventDefault(); startInstruct(decisions.get(shownId)); }
+  else if (key === "i") { ev.preventDefault(); ui.openInstruct(); }
   else if (key === "ArrowUp" || key === "k") { ev.preventDefault(); ui.setCursor(ui.cursor - 1); }
   else if (key === "ArrowDown" || key === "j") { ev.preventDefault(); ui.setCursor(ui.cursor + 1); }
-  else if (key === "Enter") { ev.preventDefault(); ui.buttons[ui.cursor].click(); }
+  else if (key === "Enter") {
+    ev.preventDefault();
+    if (ui.cursor === 0) ui.openInstruct(); // the card: the box takes the focus (sending is Enter in the box)
+    else ui.buttons[ui.cursor].click();
+  }
   else if (key === "y") { ev.preventDefault(); ui.approve.click(); }
   else if (key === "n") { ev.preventDefault(); startReject(decisions.get(shownId)); }
 });

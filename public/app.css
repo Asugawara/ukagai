@@ -171,6 +171,8 @@ button.btn.danger { color: var(--red); border-color: var(--red); }
 button.btn:disabled { opacity: .45; cursor: not-allowed; }
 input[type=text] { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; }
 .reject-box { margin-top: 4px; }
+.opt.instruct-card { cursor: text; margin-bottom: 0; }
+.opt.instruct-card .lab { margin-bottom: 4px; }
 .instruct-box { display: flex; flex-direction: column; gap: 6px; }
 .instruct-box textarea { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; resize: vertical; }
 .instruct-box button.btn.primary { width: auto; align-self: flex-end; min-height: 32px; }
