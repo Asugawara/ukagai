@@ -185,12 +185,15 @@ export function createApp(deps: AppDeps): Hono {
           "Content-Type": MIME[extname(file).toLowerCase()] ?? "application/octet-stream",
           // Force a refetch every time so the browser's heuristic cache does not keep a stale app.js / app.css
           "Cache-Control": "no-cache",
+          "X-Content-Type-Options": "nosniff",
         },
       });
     } catch {
       return c.json({ error: "not found" }, 404);
     }
   });
+  // The browser's default icon request: answer without a body so it does not 404 in the log (the pages link /public/favicon.svg)
+  app.get("/favicon.ico", (c) => c.body(null, 204));
 
   // ---- decisions ----
 

@@ -11,6 +11,10 @@ The GUI served by `ukagai serve`. Static files, no build step. `GET /` returns `
 
 Update vendor with `npm ci`, then `npm run vendor` (copies from `node_modules` to `public/vendor/`).
 
+## Tab icon
+
+`favicon.svg` (and a 32×32 `favicon.png` fallback, rendered from it with `rsvg-convert`) is the static icon: a white "u" on the accent-blue rounded square; `GET /favicon.ico` answers 204. `app.js` `updateFavicon(n, blocked)` is called from `renderHeader()` with the same pending count as the title: at 0 the static icon stays, from 1 it draws the square on a 64×64 canvas (canvas primitives, no SVG load) with the count in white bold sans, `5+` from 6 on, red instead of the accent while a blocker waits, and swaps the `link[rel=icon]` to the PNG data URL (the PNG fallback link is taken out meanwhile). It is always on (not tied to `notify.title_badge`) and redraws only when the count or blocker state changes. Without canvas support the static icon stays.
+
 ## Settings page (`/settings`)
 
 `GET /settings` serves `settings.html`; `settings.js` builds one column of fieldsets (Display / Progress checkpoints / Plans / Notifications) from `GET /api/settings` and saves each control on change with `PUT /api/settings` (the whole object; a small "Saved" status, an inline message for an invalid value, the controls re-render from the saved state). The theme applies at once (`<html data-theme>`), a language change re-renders the page in the new language, `Esc` goes back to `/`. Turning on the browser notification asks the browser for permission and stays off unless it is granted; the permission state is shown. The strings are the `set_*` keys of `i18n.js`.
