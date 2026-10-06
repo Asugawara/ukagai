@@ -267,7 +267,7 @@ gui("plans.auto_show=false keeps a new plan out of Pending (still in the drawer 
   await waitFor("idle again", IDLE);
   assert.equal(ev<boolean>(`document.getElementById("empty").hidden`), false);
   await putSettings();
-  await waitFor("the plan takes the screen once auto-show is on", `document.querySelector("#head .hd-line2 .headline")?.textContent.includes("updated") && document.querySelector("#background .md")`);
+  await waitFor("the plan takes the screen once auto-show is on", `document.querySelector("#head .hd-ctx")?.textContent.includes("updated") && document.querySelector("#background .md")`);
 });
 
 gui("title_badge=false keeps the (N) count out of the tab title", async () => {

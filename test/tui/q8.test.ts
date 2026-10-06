@@ -173,9 +173,9 @@ test("Y3 M-3: an approval's header shows the command emphasised (no raw backtick
   app.upsert(decision({ request: { questions: [{ question: q, header: "Approval", multiSelect: false, options: [{ label: "Allow" }, { label: "Deny" }] }] }, ...withExplanation(APPROVAL_MD) }), now);
   const f = renderFrame(app.view(now), { cols: 140, rows: 40 });
   const lines = f.text.split("\n");
-  assert.ok(lines[1]!.includes("\x1b[1;36mcurl -sI https://example.com") || /\x1b\[1m\x1b\[36mcurl -sI/.test(lines[1]!) || lines[1]!.includes("curl -sI https://example.com"));
-  assert.ok(!stripAnsi(lines[1]!).includes("`"), "no raw backticks in the title row");
-  assert.ok(/\x1b\[36m/.test(lines[1]!), "command in cyan");
+  assert.ok(lines[0]!.includes("\x1b[1;36mcurl -sI https://example.com") || /\x1b\[1m\x1b\[36mcurl -sI/.test(lines[0]!) || lines[0]!.includes("curl -sI https://example.com"));
+  assert.ok(!stripAnsi(lines[0]!).includes("`"), "no raw backticks in the title row (row 1)");
+  assert.ok(/\x1b\[36m/.test(lines[0]!), "command in cyan");
   const text = stripAnsi(f.text);
   assert.ok(!text.includes("None of these") && !text.includes("Can't answer") && !text.includes("n None"), text);
   const rows = text.split("\n").map((l) => l.split(" │ ").at(-1)!);

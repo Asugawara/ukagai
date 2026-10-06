@@ -161,20 +161,21 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   });
 }
 
-const GOAL = "document.querySelector('#head .hd-goal')";
+const GOAL = "document.querySelector('#background .hd-goal')";
 const PANEL = "document.querySelector('.overlay.history')";
 
-gui("the Goal row is the third header row: first instruction on one line, `· N instructions`, no extra boxes", async () => {
+gui("the Goal row is the first element of the left column (not in the header): first instruction on one line, `· N instructions`, no extra boxes", async () => {
   await seed();
   await reopen(GOAL);
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2", "hd-goal"]);
+  assert.deepEqual(rows, ["hd-title", "hd-ctx"]); // the header stays two rows
+  assert.equal(ev<string>(`document.getElementById("background").firstElementChild.className`), "hd-goal"); // fails on the old layout: the row was in #head
   // whitespace and newlines are folded to single spaces
-  assert.equal(q1("#head .goal-text"), "Goal: Add a history panel to the decision screen, please. Keep the layout calm.");
-  assert.equal(q1("#head .goal-n"), "· 3 instructions");
+  assert.equal(q1("#background .goal-text"), "Goal: Add a history panel to the decision screen, please. Keep the layout calm.");
+  assert.equal(q1("#background .goal-n"), "· 3 instructions");
   // one line, dim
-  assert.ok(ev<number>(`document.querySelector("#head .goal-text").getBoundingClientRect().height`) < 24);
-  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .goal-text")).whiteSpace`), "nowrap");
+  assert.ok(ev<number>(`document.querySelector("#background .goal-text").getBoundingClientRect().height`) < 24);
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .goal-text")).whiteSpace`), "nowrap");
   // no Session box, no History chip; boxed things on the screen stay at 2 or fewer
   assert.equal(count("[class*='session-box'], .history-chip"), 0);
   assert.ok(count(".chip, .badge, .pill") <= 2);
@@ -183,16 +184,16 @@ gui("the Goal row is the third header row: first instruction on one line, `· N 
 gui("a long first instruction is cut with … on one line", async () => {
   await seed({ transcript: writeTranscript("long", ["x".repeat(900) + " tail", "y"]) });
   await reopen(GOAL);
-  assert.ok(ev<number>(`document.querySelector("#head .goal-text").getBoundingClientRect().height`) < 24);
-  assert.equal(ev<boolean>(`(() => { const e = document.querySelector("#head .goal-text"); return e.scrollWidth > e.clientWidth; })()`), true);
-  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .goal-text")).textOverflow`), "ellipsis");
+  assert.ok(ev<number>(`document.querySelector("#background .goal-text").getBoundingClientRect().height`) < 24);
+  assert.equal(ev<boolean>(`(() => { const e = document.querySelector("#background .goal-text"); return e.scrollWidth > e.clientWidth; })()`), true);
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .goal-text")).textOverflow`), "ellipsis");
 });
 
 gui("a single instruction shows the Goal without the count", async () => {
   await seed({ transcript: writeTranscript("single", ["only one"]) });
   await reopen(GOAL);
-  assert.equal(q1("#head .goal-text"), "Goal: only one");
-  assert.equal(count("#head .goal-n"), 0);
+  assert.equal(q1("#background .goal-text"), "Goal: only one");
+  assert.equal(count("#background .goal-n"), 0);
   assert.equal(ev<boolean>(`!!document.querySelector("#foot .hint .hs:not([hidden])")`), false); // no `s` hint with one instruction
 });
 
@@ -221,7 +222,7 @@ gui("`s` opens the panel in time order; Enter shows the full text with pre-wrap;
   press("Escape", "Escape");
   assert.equal(ev<boolean>(`!!${PANEL}`), false);
   // a click on the Goal row opens it too
-  ab("click", "#head .hd-goal");
+  ab("click", "#background .hd-goal");
   assert.equal(ev<boolean>(`!!${PANEL}`), true);
   press("s");
   assert.equal(ev<boolean>(`!!${PANEL}`), false);
@@ -270,7 +271,7 @@ gui("after the panel closes the other keys work again (n opens None of these)", 
 
 gui("the Terms list and the history panel never open together", async () => {
   await seed({ rich: true });
-  await reopen("document.querySelector('#head .headline') && document.querySelector('#head .hd-goal')");
+  await reopen("document.querySelector('#background .headline') && document.querySelector('#background .hd-goal')");
   press("?");
   assert.equal(count(".overlay"), 1);
   assert.equal(count(".overlay.terms"), 1);
@@ -301,12 +302,12 @@ gui("a plan screen shows the Goal and opens the panel with `s`", async () => {
   assert.equal(count(".overlay.history .hist-row"), 3);
 });
 
-gui("no history (missing transcript) leaves the header at two rows and `s` does nothing", async () => {
+gui("no history (missing transcript) draws no Goal row and `s` does nothing", async () => {
   await seed({ transcript: join(home, ".claude", "projects", "p", "missing.jsonl") });
   await reopen();
   await sleep(500);
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2"]);
+  assert.deepEqual(rows, ["hd-title", "hd-ctx"]);
   press("s");
   assert.equal(ev<boolean>(`!!${PANEL}`), false);
   assert.ok(ev<boolean>(`!!document.querySelector("#decision .opt")`)); // the screen is intact
@@ -320,7 +321,7 @@ gui("a failed fetch (HTTP 500) is ignored, nothing breaks, and the next time the
   press("Tab"); // show the other decision: its history request fails
   await waitFor("history requested", "window.__hf >= 1");
   await sleep(300);
-  assert.equal(count("#head .hd-goal"), 0);
+  assert.equal(count("#background .hd-goal"), 0);
   press("s");
   assert.equal(ev<boolean>(`!!${PANEL}`), false);
   assert.ok(ev<boolean>(`!!document.querySelector("#decision .opt")`));
@@ -345,7 +346,7 @@ gui("the second decision of the same session does not fetch again; another sessi
   assert.equal(ev<number>(`window.__hf`), 0);
   // a decision of another session fetches once
   await seed({ transcript: writeTranscript("other", ["other session goal", "b"]) });
-  await waitFor("goal of the other session", `[...document.querySelectorAll("#head .goal-text")].some(e => e.textContent.includes("other session goal")) || (document.querySelector("#pending-btn") && document.querySelector("#pending-count").textContent === "3")`);
+  await waitFor("goal of the other session", `[...document.querySelectorAll("#background .goal-text")].some(e => e.textContent.includes("other session goal")) || (document.querySelector("#pending-btn") && document.querySelector("#pending-count").textContent === "3")`);
   press("Tab");
   press("Tab");
   await waitFor("fetched once", `window.__hf === 1`);
@@ -360,8 +361,8 @@ gui("ja: Goal label, count, panel title and hint are translated", async () => {
   await seed();
   await reopen(GOAL);
   ev(`document.documentElement.dataset.lang = "ja", "ok"`);
-  await waitFor("ja goal", `document.querySelector("#head .goal-text").textContent.startsWith("目的:")`);
-  assert.equal(q1("#head .goal-n"), "· 3 件");
+  await waitFor("ja goal", `document.querySelector("#background .goal-text").textContent.startsWith("目的:")`);
+  assert.equal(q1("#background .goal-n"), "· 3 件");
   assert.match(q1("#foot .hint-full"), /s 履歴/);
   press("s");
   assert.equal(q1(".overlay.history .overlay-title"), "このセッションの指示");

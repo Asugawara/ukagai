@@ -196,10 +196,10 @@ gui("a multi-line quiz question: the head shows only the last paragraph, un-clam
   const last = "What does parse_retry_after return\nfor the header value \"120\"?";
   await seedQuiz(`Subject: parse_retry_after\nWhy now: edited 12 times\nPremise: src/http/retry.rs reads the Retry-After header.\n\n${last}`);
   await reopen();
-  const head = ev<string>(`document.querySelector("#head .headline").innerText`);
+  const head = ev<string>(`document.querySelector("#background .headline").innerText`);
   assert.equal(head, last);
   assert.ok(!head.includes("Premise:"), "the premise lines are not in the head");
-  assert.equal(ev<boolean>(`!document.querySelector("#head .headline").classList.contains("clampable")`), true, "not clamped");
-  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .headline")).whiteSpace`), "pre-line");
+  assert.equal(ev<boolean>(`!document.querySelector("#background .headline").classList.contains("clampable")`), true, "not clamped");
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .headline")).whiteSpace`), "pre-line");
   ab("screenshot", "/tmp/scratchpad/ukagai-quiz-head.png");
 });

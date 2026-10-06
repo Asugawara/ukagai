@@ -323,7 +323,7 @@ const cwdOf = (repo: string) => `/Users/test/.herdr/worktrees/${repo}/feat-x`;
 const REPO_A = "ukagai";
 const REPO_B = ["whoknows", "awm", "dotfiles", "blog", "infra"].find((n) => slotOf(n) !== slotOf(REPO_A))!;
 const headColour = () => ev<{ hue: string; border: string; borderW: string; shadow: string; repo: string }>(
-  `JSON.stringify((() => { const h = getComputedStyle(document.querySelector("#head")); return { hue: h.getPropertyValue("--repo-hue").trim(), border: h.borderLeftColor, borderW: h.borderLeftWidth, shadow: h.boxShadow, repo: getComputedStyle(document.querySelector("#head .origin-repo")).color }; })())`,
+  `JSON.stringify((() => { const h = getComputedStyle(document.querySelector("#head")); return { hue: h.getPropertyValue("--repo-hue").trim(), border: h.borderLeftColor, borderW: h.borderLeftWidth, shadow: h.boxShadow, repo: getComputedStyle(document.querySelector("#head .hd-where .repo-dot")).backgroundColor }; })())`,
 );
 
 gui("the header colour follows the repository: different repos differ, the same repo is stable", async () => {
@@ -331,9 +331,9 @@ gui("the header colour follows the repository: different repos differ, the same 
   await reopen();
   const a1 = headColour();
   assert.equal(a1.hue, String(hueOf(REPO_A)));
-  assert.equal(a1.border, a1.repo, "the left border and the repo name share the colour");
-  assert.equal(a1.borderW, "6px");
-  assert.ok(a1.shadow.startsWith(a1.border) && /0px 3px 0px 0px/.test(a1.shadow) && a1.shadow.includes("inset"), `a 3 px top band in the repo colour: ${a1.shadow}`);
+  assert.equal(a1.border, a1.repo, "the left border and the repo dot share the colour");
+  assert.equal(a1.borderW, "3px");
+  assert.equal(a1.shadow, "none", "no top band any more");
   ab("screenshot", join(SHOTS, "G2-header-repo-a.png"));
   await cancelAll();
   await seedQuestion(cwdOf(REPO_B));
@@ -363,9 +363,9 @@ gui("a drawer row carries a dot in the repo colour; the blocker band keeps prece
   await reopen();
   assert.equal(ev<boolean>(`document.querySelector("#head").classList.contains("blocker")`), true);
   assert.equal(ev<boolean>(`!!document.querySelector("#head .blocker-band")`), true);
-  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .hd-top")).backgroundColor`) !== "rgba(0, 0, 0, 0)", true, "the orange band");
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .hd-ctx")).backgroundColor`) !== "rgba(0, 0, 0, 0)", true, "the orange band");
   const bl = headColour();
-  assert.equal(bl.borderW, "6px", "the repo colour stays as the left border");
+  assert.equal(bl.borderW, "3px", "the repo colour stays as the left border");
   const accent = ev<string>(`(() => { const e = document.createElement("div"); e.style.color = "hsl(${hueOf(REPO_B)} 70% " + getComputedStyle(document.documentElement).getPropertyValue("--repo-l").trim() + ")"; document.body.append(e); const c = getComputedStyle(e).color; e.remove(); return c; })()`);
   assert.equal(bl.border, accent, "the left border is the repo accent");
   assert.notEqual(bl.border, "rgb(249, 115, 22)", "the border is not the blocker orange");

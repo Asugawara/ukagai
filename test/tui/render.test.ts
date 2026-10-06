@@ -34,7 +34,7 @@ test("140x40: heading, chips, recommendation, cards, background, hints, status l
 
 test("colors: the repo in the origin has its own bold colour, reversibility is a background color, recommended badge", () => {
   const raw = render(viewOf(), { cols: 140, rows: 40 });
-  assert.ok(raw.includes(`\x1b[1m${repoAnsi("ukagai")}ukagai\x1b[0m \x1b[1m⎇ feat/tui\x1b[0m \x1b[1m⧉ feat-tui`));
+  assert.ok(raw.includes(`${repoAnsi("ukagai")}ukagai\x1b[0m\x1b[2m ⎇ feat/tui ⧉ feat-tui`)); // the repo in its colour, the rest dim
   assert.ok(raw.includes("\x1b[43;30m ◐ Costly to undo"));
   assert.ok(raw.includes("\x1b[42;30m Recommended "));
   const irr = viewOf(decision(withExplanation(V2_MD.replace("costly", "irreversible"))));
@@ -96,7 +96,9 @@ test("a view can be rendered from a model alone (buildModel result placed on the
 test("blocker: band on top, 'What you need to do' with code right under the heading, then the 3 options, copy hint", () => {
   const out = stripAnsi(render(viewOf(blockerDecision()), { cols: 140, rows: 40 }));
   const lines = out.split("\n");
-  assert.ok(lines[0]!.startsWith("ukagai ⎇ feat/tui") && lines[0]!.includes("Waiting for you"));
+  assert.ok(lines[0]!.includes("Whether") || !lines[0]!.startsWith("ukagai"), "the title is row 1");
+  const ctx = lines.findIndex((l) => l.startsWith(" Waiting for you ") && l.includes("ukagai ⎇ feat/tui"));
+  assert.ok(ctx === 1 || ctx === 2, `the band opens the context line (row ${ctx})`);
   for (const s of ["What you need to do", "gcloud auth login", "▸ ● Done. Continue", "○ Skip this step and continue", "○ Stop here", "c copy", "Why I stopped"]) {
     assert.ok(out.includes(s), `missing: ${s}`);
   }
@@ -132,7 +134,8 @@ test("origin: the header's first line is the origin (repo, branch, worktree) and
   const out = stripAnsi(render(viewOf(), { cols: 140, rows: 40 })).split("\n");
   const o = out.findIndex((l) => l.includes("ukagai ⎇ feat/tui ⧉ feat-tui"));
   const t = out.findIndex((l) => l.includes("Whether the GUI update channel uses SSE or WebSocket"));
-  assert.ok(o >= 0 && t === o + 1, `origin ${o}, title ${t}`);
+  assert.ok(t === 0 && o === t + 1, `title ${t}, origin ${o}`); // title first, the context line right below
+  assert.ok(/^ukagai ⎇ feat\/tui ⧉ feat-tui · \S.* · \d/.test(out[o]!), out[o]); // repo ⎇ branch ⧉ worktree · scope · age
   assert.ok(!out[o]!.includes("Whether the GUI"));
   const app = new App();
   app.upsert(decision(withExplanation(V2_MD)), NOW);
@@ -167,7 +170,7 @@ test("ja: plan buttons, empty state, blocker band", () => {
   app.lang = "ja";
   assert.ok(stripAnsi(render(app.view(NOW), { cols: 100, rows: 20 })).includes("判断待ちはありません"));
   const blocker = stripAnsi(render(viewOf(blockerDecision(), "ja"), { cols: 140, rows: 40 }));
-  assert.ok(blocker.split("\n")[0]!.startsWith("ukagai ⎇ feat/tui") && blocker.split("\n")[0]!.includes("人の作業待ち"));
+  assert.ok(blocker.split("\n").slice(0, 3).some((l) => l.includes("人の作業待ち") && l.includes("ukagai ⎇ feat/tui")));
   assert.ok(blocker.includes("c コピー"));
 });
 
@@ -214,14 +217,15 @@ test("W1: blocker fixed labels are shown in the display language (value unchange
   assert.equal(fixedLabel("Sqlite"), undefined);
 });
 
-test("G1: frame line 1 starts with repo and branch in bold, at 120x40 and 100x24, and on a plan file", () => {
+test("G1: frame line 1 is the bold title and line 2 the context line, at 120x40 and 100x24", () => {
   for (const [cols, rows] of [[120, 40], [100, 24]] as const) {
     const raw = render(viewOf(), { cols, rows });
-    assert.ok(stripAnsi(raw.split("\n")[0]!).startsWith("ukagai ⎇ feat/tui"), `${cols}x${rows}`);
-    assert.ok(raw.split("\n")[0]!.startsWith("\x1b[1m"), "bold sequence first");
+    assert.ok(raw.split("\n")[0]!.startsWith("\x1b[1mWhether"), `${cols}x${rows}: bold title first`);
+    assert.ok(stripAnsi(raw.split("\n")[1]!).startsWith("ukagai ⎇ feat/tui"), `${cols}x${rows}: context second`);
   }
-  const blk = render(viewOf(blockerDecision()), { cols: 120, rows: 40 });
-  assert.ok(stripAnsi(blk.split("\n")[0]!).startsWith("ukagai"), "blocker");
+  const blk = render(viewOf(blockerDecision()), { cols: 120, rows: 40 }).split("\n");
+  assert.ok(!stripAnsi(blk[0]!).startsWith("ukagai"), "blocker: the title first");
+  assert.ok(stripAnsi(blk.slice(1, 3).join("\n")).includes("Waiting for you"), "blocker: the band on the context line");
 });
 
 test("settings.updated: parsed from SSE; the app takes the language (unless --lang pinned it)", () => {
@@ -288,4 +292,34 @@ test("quiz: ja headings and band; the Japanese Premise alias is not read as Assu
   const out = stripAnsi(render(viewOf(quizDecision("ja"), "ja"), { cols: 140, rows: 40 }));
   for (const s of ["理解度クイズ", "なぜ今この質問か", "前提", "答え方"]) assert.ok(out.includes(s), `missing: ${s}`);
   assert.equal(buildModel(quizDecision("ja"), "ja").assumptions.length, 0);
+});
+
+// HD2: title first. Each test below fails on the old layout (row 1 was the origin, row 2 the title, `↺ Reversible` was drawn, the cwd was on the origin row)
+test("HD2: rows 1-2 are the bold title and the dim context line; costly puts the mark after the title, the cwd is not shown (fails on the old order)", () => {
+  const lines = render(viewOf(), { cols: 140, rows: 40 }).split("\n");
+  assert.ok(lines[0]!.startsWith("\x1b[1mWhether the GUI update channel uses SSE or WebSocket"), "bold title on row 1");
+  assert.ok(stripAnsi(lines[0]!).includes("◐ Costly to undo"), "the costly mark follows the title");
+  assert.ok(lines[1]!.includes(repoAnsi("ukagai") + "ukagai\x1b[0m"), "the repo in its ANSI colour on row 2");
+  assert.ok(lines[1]!.includes("\x1b[2m"), "the rest of the context line is dim");
+  const ctx = stripAnsi(lines[1]!);
+  assert.match(ctx, /^ukagai ⎇ feat\/tui ⧉ feat-tui · \S.* · \d+/);
+  assert.ok(!ctx.includes("/Users") && !ctx.includes("~/"), "no cwd on the context line");
+  assert.ok(stripAnsi(lines[2]!).startsWith("─"), "the rule closes the header");
+});
+
+test("HD2: no worktree part for a plain checkout; a reversible card shows no reversibility text in the header", () => {
+  const d = decision(withExplanation(V2_MD.replace("costly", "reversible")));
+  d.session.cwd = "/Users/a/dev/ukagai";
+  const lines = stripAnsi(render(viewOf(d), { cols: 140, rows: 40 })).split("\n");
+  assert.ok(/^ukagai ⎇ feat\/tui · \S.* · \d/.test(lines[1]!) && !lines[1]!.includes("⧉"), lines[1]);
+  assert.ok(!lines.slice(0, 2).join("\n").includes("Reversible"), "the header says nothing for reversible");
+});
+
+test("HD2: the blocker band opens the context line (title row stays plain); ja too", () => {
+  for (const lang of ["en", "ja"] as const) {
+    const raw = render(viewOf(blockerDecision(), lang), { cols: 140, rows: 40 }).split("\n");
+    assert.ok(!stripAnsi(raw[0]!).includes("ukagai ⎇"), "row 1 is the title");
+    assert.ok(raw[1]!.startsWith(`\x1b[`) && stripAnsi(raw[1]!).startsWith(lang === "en" ? " Waiting for you  " : " 人の作業待ち"), stripAnsi(raw[1]!));
+    assert.ok(stripAnsi(raw[1]!).includes("ukagai ⎇ feat/tui"));
+  }
 });

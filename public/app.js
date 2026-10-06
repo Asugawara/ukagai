@@ -747,23 +747,22 @@ function whereLine(d) {
   return el("div", { class: "where", title: tildePath(d.session.cwd) }, el("span", { class: "repo-dot", style: repoStyle(d) }), el("b", { text: repoOf(d) }), rest);
 }
 
-// The first element of the header: one text node, headline size, ellipsis from the end (the repo is the last thing to be cut)
-// The repo is a coloured span; branch / worktree keep the plain text colour. text stays one string for the ellipsis
-const originEl = (d) => el("div", { class: "origin", title: tildePath(d.session.cwd) }, el("span", { class: "origin-repo", text: repoOf(d) }), whereText(d).slice(repoOf(d).length));
-
-function metaBox(d) {
-  const box = el("div", { class: "hd-meta" });
+// Row 2 of the header: `● repo ⎇ branch ⧉ worktree · scope · age` in one muted line (the full working directory is the tooltip).
+// The dot carries the repo colour; the text stays one string so the ellipsis cuts from the end
+function ctxWhere(d, ...extra) {
+  const line = el("span", { class: "where hd-where", title: tildePath(d.session.cwd) }, el("span", { class: "repo-dot", style: repoStyle(d) }), whereText(d));
   const scope = scopeOf(d);
-  const bits = [scope ? el("span", { text: scope }) : null, el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) })].filter(Boolean);
-  const line = el("span", { class: "where" });
-  bits.forEach((b, i) => line.append(i ? " · " : "", b));
-  box.append(line);
-  // The only box in the header is the reversibility mark, and only when it is not "reversible"
+  line.append(...(scope ? [" · ", el("span", { text: scope })] : []), " · ", el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) }));
+  for (const x of extra.filter(Boolean)) line.append(" · ", x);
+  return line;
+}
+
+// The only box next to the title is the reversibility mark, and only when it is not "reversible"
+function revBadge(d) {
   const rev = reversibilityOf(d);
-  if (rev === "irreversible") box.append(el("span", { class: "badge irreversible", text: t("irreversible") }));
-  else if (rev === "costly") box.append(el("span", { class: "badge costly", text: t("costly") }));
-  else if (rev === "reversible") box.append(el("span", { class: "rev", text: t("reversible") }));
-  return box;
+  if (rev === "irreversible") return el("span", { class: "badge irreversible", text: t("irreversible") });
+  if (rev === "costly") return el("span", { class: "badge costly", text: t("costly") });
+  return null;
 }
 
 // First sentence of a recap (ends at 。！？!? or a full stop followed by a space); the whole text when there is no end mark
@@ -775,8 +774,9 @@ const firstSentence = (text) => {
 // A quiz question is several paragraphs (subject, why now, premise, then the question): the head shows only the last one
 const lastParagraph = (q) => q.split(/\n[ \t]*\n/).filter((p) => p.trim() !== "").at(-1)?.trim() ?? q;
 
-// The header (full width, above both columns). Row 1: the origin alone (+ band, reversibility, scope, pending pill). Row 2: the title. Row 3: the headline (the first
-// sentence of the recommendation, or the raw question / the plan prompt). Both rows are one / two lines and end in … (click or `.` shows all)
+// The header (full width, above both columns) is two rows. Row 1: the title (the only large text; 1-2 lines ending in …, click or `.` shows all) and the
+// reversibility mark when it is costly / irreversible. Row 2: the context line (origin · scope · age, plus the band of a blocker / quiz and the pending pill).
+// What used to sit below the title (goal row, checkpoint note, headline, condition) is the top of the left column: see renderBodyTop
 function renderHead(d) {
   const head = $("head");
   stashPending();
@@ -789,38 +789,53 @@ function renderHead(d) {
   head.style.cssText = repoStyle(d);
   const dr = draftOf(d);
   const title = titleOf(d);
-  let line2;
-  if (isCheckpoint(d)) line2 = el("div", { class: "headline plain clampable", text: firstSentence(d.request.recap) });
-  else if (d.kind === "approve_plan") line2 = el("div", { class: "headline plain clampable", text: t("plan_question") });
-  else if (d.request.questions.length === 1 && isQuiz(d)) line2 = el("div", { class: "headline plain quiz-q", text: lastParagraph(d.request.questions[0].question) });
-  else if (d.request.questions.length === 1 && modelFor(d).v2) line2 = modelFor(d).v2.headline;
-  else if (d.request.questions.length === 1 && title !== d.request.questions[0].question) line2 = el("div", { class: "headline plain clampable", text: d.request.questions[0].question });
   const blocker = isBlocker(d);
   const quiz = isQuiz(d);
   head.classList.toggle("blocker", blocker);
   head.classList.toggle("quiz", quiz);
   head.append(
-    el("div", { class: "hd-top" },
-      originEl(d),
+    el("div", { class: "hd-title" },
+      el("div", { class: "v2-title clampable", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d))),
+      revBadge(d)),
+    el("div", { class: "hd-ctx" },
       blocker ? el("span", { class: "blocker-band", text: t("blocker_band") }) : null,
       quiz ? el("span", { class: "quiz-band", text: t("quiz_band") }) : null,
-      metaBox(d)),
-    el("div", { class: "hd-sub" }, el("div", { class: "v2-title", title: plainMd(title) }, ...codeSpans(title, "approval-cmd", isApproval(d)))),
-    el("div", { class: "hd-line2" }, line2 ?? null, d.kind === "approve_plan" ? planMetaLine(d) : null, el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all"))));
+      ctxWhere(d, d.kind === "approve_plan" ? planMetaLine(d) : null),
+      el("button", { class: "more-chip", type: "button", tabindex: "-1", hidden: true, onclick: () => toggleExpand(dr) }, t("show_all")),
+      el("div", { class: "hd-meta" })));
   head.onclick = (e) => {
-    if (e.target.closest(".hd-goal")) openHistory(d);
-    else if (e.target.closest(".headline, .v2-title")) toggleExpand(dr);
+    if (e.target.closest(".v2-title")) toggleExpand(dr);
   };
-  if (isCheckpoint(d)) head.append(el("div", { class: "cp-optional", text: t("checkpoint_optional") }));
-  const cond = d.kind === "answer_question" && d.request.questions.length === 1 ? modelFor(d).v2?.cond : null;
-  if (cond) head.append(el("div", { class: "hd-cond clampable", title: cond, text: `${t("cond_prefix")} ${cond}` }));
-  renderGoal(d);
+  renderBodyTop(d);
   loadHistory(d);
   head.classList.toggle("expanded", !!dr.expanded);
   placePending();
 }
 
-// ---- Session history: the Goal row (header row 3) and the panel (`s`) ----
+// The top of the left column, in this order: the goal row, the checkpoint note, the headline (first sentence of the recommendation / the question / the plan
+// question / the quiz question; a checkpoint draws none because its recap is the body), the condition line. renderLeft has already filled the column
+function renderBodyTop(d) {
+  const root = $("background");
+  const dr = draftOf(d);
+  const title = titleOf(d);
+  let headline = null;
+  if (isCheckpoint(d)) headline = null;
+  else if (d.kind === "approve_plan") headline = el("div", { class: "headline plain clampable", text: t("plan_question") });
+  else if (d.request.questions.length === 1 && isQuiz(d)) headline = el("div", { class: "headline plain quiz-q", text: lastParagraph(d.request.questions[0].question) });
+  else if (d.request.questions.length === 1 && modelFor(d).v2) headline = modelFor(d).v2.headline ?? null;
+  else if (d.request.questions.length === 1 && title !== d.request.questions[0].question) headline = el("div", { class: "headline plain clampable", text: d.request.questions[0].question });
+  if (headline) headline.onclick = () => toggleExpand(dr);
+  const cond = d.kind === "answer_question" && d.request.questions.length === 1 ? modelFor(d).v2?.cond : null;
+  for (const e of root.querySelectorAll(":scope > .hd-goal, :scope > .cp-optional, :scope > .headline, :scope > .hd-cond")) e.remove();
+  root.prepend(...[
+    isCheckpoint(d) ? el("div", { class: "cp-optional", text: t("checkpoint_optional") }) : null,
+    headline,
+    cond ? el("div", { class: "hd-cond clampable", title: cond, text: `${t("cond_prefix")} ${cond}` }) : null,
+  ].filter(Boolean));
+  renderGoal(d);
+}
+
+// ---- Session history: the Goal row (top of the left column) and the panel (`s`) ----
 
 // session_id -> { at, data } (fresh for 5 minutes) with `pending` while a refetch runs. Stale data is still data: the Goal row, `s` and the panel
 // keep using it, and the TTL only decides whether loadHistory fetches again. A failed first fetch is not stored, so the next time the decision is shown retries
@@ -873,16 +888,16 @@ async function loadHistory(d) {
   if (overlay?.kind === "history" && overlay.sid === sid) refreshHistory(sid);
 }
 
-// Header row 3: `Goal: <first instruction>` in dim text, one line, ending in … (CSS), with `· N instructions` when there are 2 or more.
-// Without history the row is not drawn at all (the header stays two rows)
+// The goal row, first child of the left column: `Goal: <first instruction>` in dim text, one line, ending in … (CSS), with `· N instructions` when there
+// are 2 or more. Without history the row is not drawn at all. The click handler is on the row itself
 function renderGoal(d) {
-  const head = $("head");
-  head.querySelector(".hd-goal")?.remove();
+  const root = $("background");
+  root.querySelector(":scope > .hd-goal")?.remove();
   const h = historyOf(d);
   if (!d || !h?.first) return;
   const text = oneLine(h.first.text);
   if (!text) return;
-  head.append(el("div", { class: "hd-goal", role: "button", tabindex: "-1", title: t("history_title") },
+  root.prepend(el("div", { class: "hd-goal", role: "button", tabindex: "-1", title: t("history_title"), onclick: () => openHistory(d) },
     el("span", { class: "goal-text", text: `${t("goal")} ${text}` }),
     h.total >= 2 ? el("span", { class: "goal-n", text: t("history_count", { n: h.total }) }) : null));
 }
@@ -1060,13 +1075,10 @@ function renderPlanHead(pd) {
   head.onclick = null;
   const cap = t("plan_kind").replace(/^./, (c) => c.toUpperCase());
   head.append(
-    el("div", { class: "hd-top" },
-      el("div", { class: "origin dim", title: "plans/" }, el("span", { class: "origin-repo", text: "plans/" })),
-      el("div", { class: "hd-meta" })),
-    el("div", { class: "hd-sub" }, el("div", { class: "v2-title", title: pd.title, text: pd.title })),
-    el("div", { class: "hd-line2" },
-      el("div", { class: "headline plain" }, `${cap} · `, el("span", { class: "age", "data-created": pd.mtime, "data-tpl": "plan_updated_ago", text: t("plan_updated_ago", { age: ageText(pd.mtime) }) })),
-      planMetaLine(pd)));
+    el("div", { class: "hd-title" }, el("div", { class: "v2-title", title: pd.title, text: pd.title })),
+    el("div", { class: "hd-ctx" },
+      el("span", { class: "where hd-where", title: "plans/" }, el("span", { class: "repo-dot" }), "plans/", " · ", `${cap} · `, el("span", { class: "age", "data-created": pd.mtime, "data-tpl": "plan_updated_ago", text: t("plan_updated_ago", { age: ageText(pd.mtime) }) }), ...(planMetaLine(pd) ? [" · ", planMetaLine(pd)] : [])),
+      el("div", { class: "hd-meta" })));
   placePending();
 }
 
@@ -1338,7 +1350,7 @@ function revealCard(card) {
 // Folding of long text: the headline and the card bodies are 2 lines (the card under the cursor shows everything), the plan's scope section 8.
 // One text button in the header (shown only when something is folded) and `.` toggle everything; the state is per decision
 function setExpanded(dr) {
-  for (const root of [$("decision"), $("head")]) root.classList.toggle("expanded", !!dr.expanded);
+  for (const root of [$("decision"), $("head"), $("background")]) root.classList.toggle("expanded", !!dr.expanded);
   const chip = document.querySelector("#head .more-chip");
   if (chip) chip.textContent = dr.expanded ? t("collapse") : t("show_all");
 }
@@ -1353,7 +1365,7 @@ function updateMore(dr) {
   const chip = document.querySelector("#head .more-chip");
   if (!chip) return;
   if (dr?.expanded) { chip.hidden = false; return; }
-  chip.hidden = ![...document.querySelectorAll("#head .clampable, #decision .clampable")].some((c) => c.scrollHeight > c.clientHeight + 1);
+  chip.hidden = ![...document.querySelectorAll("#head .clampable, #background .clampable, #decision .clampable")].some((c) => c.scrollHeight > c.clientHeight + 1);
 }
 function markClamps(root, dr) {
   for (const c of root.querySelectorAll(".impact .clampable")) c.parentElement.classList.toggle("has-more", c.scrollHeight > c.clientHeight + 1);

@@ -66,40 +66,32 @@ body.no-hints .foot { display: none; }
 .badge.irreversible { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
 .badge.costly { background: var(--yellow-bg); border-color: var(--yellow); color: var(--fg); font-weight: 600; }
 
-/* Header (full width, above both columns): row 1 = the origin (+ reversibility / scope / pending), row 2 = the title, row 3 = the headline. 2-3 lines, folded with … */
-.hd { grid-row: 2; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; border-left: 6px solid var(--repo-accent); box-shadow: inset 0 3px 0 var(--repo-accent); }
-.hd-top { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 18px 0; }
-.hd-meta { flex: 0 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12px; color: var(--muted); }
-.where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.where b { color: var(--fg); font-weight: 700; }
-.origin { flex: 0 1 auto; min-width: 0; font-size: 18px; line-height: 1.5; font-weight: 400; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Header (full width, above both columns): row 1 = the title (+ reversibility mark when costly / irreversible), row 2 = the context line (+ band, pending pill).
+   The repo colour is the left border only */
+.hd { grid-row: 2; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; border-left: 3px solid var(--repo-accent); }
 /* --repo-hue is set inline per decision (renderHead / the drawer dot); the accent is computed where the hue is, not on :root */
 .hd, .repo-dot { --repo-accent: hsl(var(--repo-hue, 270) var(--repo-sat, 70%) var(--repo-l)); }
-.origin-repo { color: var(--repo-accent); font-weight: 700; }
-.origin.dim { color: var(--muted); }
-.origin.dim .origin-repo { color: var(--repo-accent); font-weight: 400; }
+.hd-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; padding: 10px 18px 2px; }
+.v2-title { flex: 0 1 auto; min-width: 0; font-size: 20px; font-weight: 600; color: var(--fg); line-height: 1.4; overflow-wrap: anywhere; cursor: pointer; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.expanded .v2-title { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
+.hd-title .badge { flex: none; font-weight: 600; }
+.hd-ctx { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 18px 10px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.hd-ctx .where { flex: 0 1 auto; }
+.hd-ctx .more-chip { flex: none; }
+.hd-meta { flex: none; margin-left: auto; display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12px; color: var(--muted); }
+.where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.where b { color: var(--fg); font-weight: 700; }
 .repo-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--repo-accent); vertical-align: 1px; }
-.hd.blocker .origin-repo { color: #1d1d1f; }
 .hint .hint-type { display: none; }
 .hint.on-text .hint-type { display: inline; }
 .hint.on-text .hint-full, .hint.on-text .hint-short { display: none; }
-.hd-meta { margin-left: auto; }
-.hd-sub { padding: 0 18px; min-width: 0; }
-.hd-sub .v2-title { display: block; }
-.hd.blocker .origin { color: #1d1d1f; }
-.rev { flex: none; white-space: nowrap; }
-.hd.blocker .hd-top, .hd.blocker .hd-top .hd-meta, .hd.blocker .hd-top .pending-btn { color: #1d1d1f; }
-.hd-meta .badge { flex: none; }
-.v2-title { flex: 1 1 0; min-width: 0; font-size: 14px; font-weight: 700; color: var(--muted); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.expanded .v2-title { white-space: normal; overflow-wrap: anywhere; }
-.hd-line2 { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 0 18px 8px; }
-.hd-line2 .more-chip { flex: none; margin-top: 3px; margin-left: auto; }
-.hd-line2:empty { display: none; }
-.hd.blocker .hd-top { background: var(--blocker); color: #1d1d1f; padding-bottom: 6px; }
-.hd.blocker .hd-line2 { padding-top: 6px; }
-.hd-cond { min-width: 0; padding: 0 18px 4px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The band is the context row's background; the title row stays on the panel */
+.hd.blocker .hd-ctx { background: var(--blocker); color: #1d1d1f; padding-top: 6px; }
+.hd.blocker .hd-ctx .hd-meta, .hd.blocker .hd-ctx .pending-btn, .hd.blocker .hd-ctx .more-chip { color: #1d1d1f; }
+/* Top of the left column: goal row, checkpoint note, headline, condition */
+.hd-cond { min-width: 0; margin: -6px 0 12px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expanded .hd-cond { white-space: normal; overflow-wrap: anywhere; }
-.hd-goal { display: flex; gap: 8px; min-width: 0; padding: 0 18px 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.hd-goal { display: flex; gap: 8px; min-width: 0; margin: 0 0 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .hd-goal .goal-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hd-goal .goal-n { flex: none; white-space: nowrap; }
 .hd-goal:hover .goal-text { text-decoration: underline dotted; }
@@ -275,9 +267,8 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 /* ---- Rich decision screen ---- */
 
 /* 1-second layer: headline, reversibility shape, affected chips, "You decide", option chips */
-.headline { flex: 1 1 0; min-width: 0; font-size: 18px; font-weight: 700; line-height: 1.5; color: var(--accent); overflow-wrap: anywhere; cursor: pointer; }
-.headline.plain { color: var(--muted); font-weight: 500; font-size: 13px; }
-.headline.quiz-q { white-space: pre-line; color: var(--fg, inherit); font-size: 15px; font-weight: 600; cursor: default; }
+.headline { min-width: 0; margin: 0 0 12px; font-size: 14px; font-weight: 400; line-height: 1.6; color: var(--fg); overflow-wrap: anywhere; cursor: pointer; }
+.headline.quiz-q { white-space: pre-line; font-size: 15px; font-weight: 600; cursor: default; }
 .headline strong { color: var(--accent); }
 .unknowns { margin-top: 8px; padding: 6px 10px; border-left: 4px solid var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); border-radius: 0 6px 6px 0; font-size: 13px; }
 .unknowns-cap { color: var(--yellow); font-size: 12px; }
@@ -377,7 +368,7 @@ pre code.hljs { background: none; padding: 0; }
 }
 @media (max-height: 820px) {
   .q-top { max-height: 58vh; }
-  .headline, .origin { font-size: 16px; }
+  .v2-title { font-size: 18px; }
   .q .question { font-size: 16px; }
 }
 
@@ -445,8 +436,8 @@ pre code.hljs { background: none; padding: 0; }
 .opt.reject-card .reject-box { display: flex; gap: 6px; margin-top: 6px; }
 .opt.reject-card .reject-box[hidden] { display: none; }
 .opt.reject-card .reject-box button { flex: none; }
-.plan-meta { flex: none; display: flex; gap: 10px; margin-top: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.plan-file { max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+.plan-meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.plan-meta .plan-file { margin-left: 10px; }
 /* Room below the last section so that any section can be scrolled up to the top of the left column */
 .md.plan-long { padding-bottom: 55vh; }
 
@@ -459,7 +450,7 @@ pre code.hljs { background: none; padding: 0; }
 .done-reading kbd { margin-left: 8px; font: inherit; font-size: 11px; color: var(--muted); }
 
 /* Progress checkpoint */
-.cp-optional { padding: 0 18px 8px; font-size: 12px; color: var(--muted); }
+.cp-optional { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 .cp-recap-cap { font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
 .cp-recap { white-space: pre-wrap; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 .cp-idle { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
