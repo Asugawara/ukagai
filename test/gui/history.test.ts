@@ -370,3 +370,42 @@ gui("ja: Goal label, count, panel title and hint are translated", async () => {
   press("Escape");
   ev(`document.documentElement.dataset.lang = "en", "ok"`);
 });
+
+// The cache is older than its 5 minutes: the Goal row is still on screen, so it must still open the panel (and `s` with it).
+// The page clock is moved forward instead of waiting
+const ageCache = (min = 6) => ev(`(() => { const real = Date.now; window.__realNow ??= real; Date.now = () => window.__realNow() + ${min} * 60000; return true; })()`);
+const unage = () => ev(`(() => { if (window.__realNow) Date.now = window.__realNow; return true; })()`);
+
+gui("a stale history (older than the 5 minute cache) still opens from the Goal row click and from `s`", async () => {
+  await seed();
+  await reopen(GOAL);
+  try {
+    ageCache();
+    ab("click", "#head .hd-goal");
+    assert.equal(ev<boolean>(`!!${PANEL}`), true, "click on the Goal row opens the panel"); // fails without the fix: silent return
+    assert.equal(count(".overlay.history .hist-row"), 3);
+    press("Escape");
+    assert.equal(ev<boolean>(`!!${PANEL}`), false);
+    press("s");
+    assert.equal(ev<boolean>(`!!${PANEL}`), true, "`s` opens the panel"); // fails without the fix: historyOf(sd)?.first is null
+  } finally { unage(); }
+});
+
+gui("a stale history is refreshed in the background: the row and the open panel show the new instruction", async () => {
+  const transcript = writeTranscript("refresh", INSTRUCTIONS);
+  await seed({ transcript });
+  await reopen(GOAL);
+  try {
+    assert.equal(q1("#head .goal-n"), "· 3 instructions");
+    writeFileSync(transcript, readFileSync(transcript, "utf8") + JSON.stringify({ type: "user", message: { role: "user", content: "fourth: later" }, timestamp: new Date().toISOString() }) + "\n");
+    ageCache();
+    ab("click", "#head .hd-goal");
+    assert.equal(ev<boolean>(`!!${PANEL}`), true);
+    press("ArrowDown"); // selection 1 must survive the in-place re-render
+    await waitFor("panel shows 4 rows", `document.querySelectorAll(".overlay.history .hist-row").length === 4`);
+    assert.equal(ev<boolean>(`document.querySelectorAll(".overlay.history .hist-row")[1].classList.contains("sel")`), true);
+    assert.equal(ev<boolean>(`!!${PANEL}`), true);
+    press("Escape");
+    await waitFor("row shows 4 instructions", `document.querySelector("#head .goal-n")?.textContent === "· 4 instructions"`);
+  } finally { unage(); }
+});

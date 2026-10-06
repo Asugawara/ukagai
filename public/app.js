@@ -822,15 +822,17 @@ function renderHead(d) {
 
 // ---- Session history: the Goal row (header row 3) and the panel (`s`) ----
 
-// session_id -> { at, data } (fresh for 5 minutes) or { pending }. A failed fetch is not stored, so the next time the decision is shown retries
+// session_id -> { at, data } (fresh for 5 minutes) with `pending` while a refetch runs. Stale data is still data: the Goal row, `s` and the panel
+// keep using it, and the TTL only decides whether loadHistory fetches again. A failed first fetch is not stored, so the next time the decision is shown retries
 const HISTORY_TTL_MS = 5 * 60 * 1000;
 const histories = new Map();
 const oneLine = (s) => s.replace(/\s+/g, " ").trim();
 
 function historyOf(d) {
   const h = d ? histories.get(d.session.session_id) : null;
-  return h?.data && Date.now() - h.at < HISTORY_TTL_MS ? h.data : null;
+  return h?.data ?? null;
 }
+const historyFresh = (h) => !!h?.data && Date.now() - h.at < HISTORY_TTL_MS;
 
 // Chronological list for the panel: the first instruction, then the recent ones. `recent` overlaps `first` when the session is short
 // (same rule as historyItems in src/tui/history.ts)
@@ -856,17 +858,19 @@ function historyItems(h, sid) {
 async function loadHistory(d) {
   const sid = d.session.session_id;
   const cur = histories.get(sid);
-  if (cur?.pending || (cur?.data && Date.now() - cur.at < HISTORY_TTL_MS)) return;
-  histories.set(sid, { pending: true });
+  if (cur?.pending || historyFresh(cur)) return;
+  histories.set(sid, { ...cur, pending: true });
   try {
     const data = await api(`/api/decisions/${encodeURIComponent(d.id)}/history`);
     histories.set(sid, { at: Date.now(), data });
   } catch {
-    histories.delete(sid);
+    if (cur?.data) histories.set(sid, cur); // keep the stale data; the next show retries
+    else histories.delete(sid);
     return;
   }
   const shown = decisions.get(shownId);
   if (shown?.session.session_id === sid) { renderGoal(shown); syncHistoryHint(shown); }
+  if (overlay?.kind === "history" && overlay.sid === sid) refreshHistory(sid);
 }
 
 // Header row 3: `Goal: <first instruction>` in dim text, one line, ending in … (CSS), with `· N instructions` when there are 2 or more.
@@ -889,10 +893,8 @@ function syncHistoryHint(d) {
   for (const e of document.querySelectorAll("#decision .hs")) e.hidden = !hasHistoryHint(d);
 }
 
-function openHistory(d) {
-  const items = historyItems(historyOf(d), d.session.session_id);
-  if (!items.length) return;
-  const list = el("div", { class: "hist-list" });
+function fillHistoryList(list, items) {
+  list.replaceChildren();
   items.forEach((it, i) => {
     list.append(el("div", { class: "hist-row", "data-i": String(i), onclick: () => { overlay.sel = i; overlay.full = true; syncHistory(); } },
       el("span", { class: "hist-at", text: it.at ? t("history_ago", { t: elapsed(it.at) }) : "" }),
@@ -900,9 +902,28 @@ function openHistory(d) {
       el("span", { class: "hist-text", text: oneLine(it.text) }),
       it.delivered === undefined ? null : el("span", { class: "hist-mark", text: t(it.delivered ? "history_delivered" : "history_undelivered") })));
   });
+}
+
+// The refetch of stale data returned while the panel is open: redraw the list in place, keeping the selection (and the full-text view)
+function refreshHistory(sid) {
+  const items = historyItems(histories.get(sid)?.data ?? null, sid);
+  if (!items.length) return;
+  overlay.items = items;
+  overlay.sel = Math.min(overlay.sel, items.length - 1);
+  fillHistoryList(overlay.listEl, items);
+  syncHistory();
+}
+
+function openHistory(d) {
+  const sid = d.session.session_id;
+  const items = historyItems(historyOf(d), sid);
+  loadHistory(d); // no-op while fresh; stale data is shown now and replaced when the fetch returns
+  if (!items.length) return;
+  const list = el("div", { class: "hist-list" });
+  fillHistoryList(list, items);
   const full = el("pre", { class: "hist-full", hidden: true });
   const hint = el("div", { class: "overlay-hint" });
-  openOverlay("history", t("history_title"), el("div", {}, list, full, hint), { items, sel: 0, full: false, listEl: list, fullEl: full, hintEl: hint });
+  openOverlay("history", t("history_title"), el("div", {}, list, full, hint), { sid, items, sel: 0, full: false, listEl: list, fullEl: full, hintEl: hint });
   syncHistory();
 }
 
