@@ -69,6 +69,7 @@ export type MissingCode =
   | "undo"
   | "why_long"
   | "diagram"
+  | "diagram_trivial"
   | "checked"
   | "footnote"
   | "impact"
@@ -119,7 +120,10 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
     "internal identifiers the reader cannot know (plan codes, phase / gate / worker names). Say what each is in plain words, or define it under Terms",
   undo: "each risk cell must say how to undo (or that it cannot be undone)",
   why_long: 'the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked")',
-  diagram: 'a "Diagram" section with a Mermaid diagram',
+  diagram:
+    'a "Diagram" section with a Mermaid diagram that shows a sequence of 3+ steps between 2+ actors, a state machine with 4+ states, or a data flow between 3+ components (if none does, write one line under Options: "No diagram: <why>")',
+  diagram_trivial:
+    "remove the diagram: it only branches into the options or has 4 or fewer nodes, and the Options table already says it (draw only what the table cannot: a sequence between actors, a state machine, a data flow)",
   checked: 'the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes)',
   footnote: 'a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked")',
   impact: 'the "Scope and reversibility" section',
@@ -466,6 +470,74 @@ function hasContent(lines: string[], s: Section): boolean {
 
 function sectionHasMermaid(blocks: FenceBlock[], s: Section): boolean {
   return blocks.some((b) => b.lang === "mermaid" && b.start > s.start && b.start < s.end);
+}
+
+/** A line under Options that says why no diagram is drawn ("No diagram: <reason>", "図なし: <理由>") */
+const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
+
+function hasNoDiagramNote(lines: string[], inFence: boolean[], s: Section): boolean {
+  for (let i = s.start + 1; i < s.end; i++) {
+    if (!inFence[i] && NO_DIAGRAM_NOTE.test(lines[i]!)) return true;
+  }
+  return false;
+}
+
+/** Node labels of a flowchart / graph block (null for any other diagram type) */
+export function flowchartNodes(source: string): string[] | null {
+  const raw = source.split(/\r?\n/);
+  let i = 0;
+  if (raw[0]?.trim() === "---") {
+    i = raw.findIndex((l, n) => n > 0 && l.trim() === "---") + 1;
+    if (i === 0) return null;
+  }
+  while (i < raw.length && (raw[i]!.trim() === "" || /^\s*%%/.test(raw[i]!))) i++;
+  const head = /^\s*(?:flowchart|graph)\b(.*)$/i.exec(raw[i] ?? "");
+  if (!head) return null;
+  const nodes = new Map<string, string>();
+  const NODE = /([A-Za-z0-9_]+)(?:\s*(\[\[[^\]]*\]\]|\[[^\]]*\]|\(\([^)]*\)\)|\([^)]*\)|\{[^}]*\}))?/y;
+  const ARROW = /(?:<|[ox])?(?:-{2,}|={2,}|-\.+-)[>ox-]?/y;
+  const statements = raw
+    .slice(i + 1)
+    .filter((l) => !/^\s*(?:%%|subgraph\b|end\b|classDef\b|class\b|style\b|linkStyle\b|click\b|direction\b)/.test(l))
+    .join("\n")
+    .replace(/(--|==)\s+[^\n|\[\](){}]+?\s+(-->|==>)/g, "$2")
+    .replace(/\|[^|\n]*\|/g, " ");
+  for (const stmt of statements.split(/[;\n]/)) {
+    let pos = 0;
+    while (pos < stmt.length) {
+      ARROW.lastIndex = pos;
+      if (ARROW.test(stmt)) {
+        pos = ARROW.lastIndex;
+        continue;
+      }
+      NODE.lastIndex = pos;
+      const m = NODE.exec(stmt);
+      if (m) {
+        const width = m[2] && (m[2].startsWith("[[") || m[2].startsWith("((")) ? 2 : 1;
+        const shape = m[2]?.slice(width, -width).replace(/^"|"$/g, "").trim();
+        if (shape || !nodes.has(m[1]!)) nodes.set(m[1]!, shape || m[1]!);
+        pos = NODE.lastIndex;
+      } else pos++;
+    }
+  }
+  return [...nodes.values()];
+}
+
+function labelKey(s: string): string {
+  return normalizeLabel(s.replace(/<br\s*\/?>/gi, " "));
+}
+
+/** Node count of the first trivial flowchart: 4 or fewer nodes, or at least half the labels equal an option label (null when none is trivial) */
+function trivialDiagram(blocks: FenceBlock[], lines: string[], optionLabels: string[]): number | null {
+  const options = new Set(optionLabels.map(labelKey).filter((l) => l !== ""));
+  for (const b of blocks) {
+    if (b.lang !== "mermaid") continue;
+    const nodes = flowchartNodes(lines.slice(b.start + 1, b.end).join("\n"));
+    if (!nodes) continue;
+    const same = nodes.filter((n) => options.has(labelKey(n))).length;
+    if (nodes.length <= 4 || same * 2 >= nodes.length) return nodes.length;
+  }
+  return null;
 }
 
 function hasOf(lines: string[], inFence: boolean[], blocks: FenceBlock[]): Has {
@@ -891,10 +963,13 @@ export function validateExplanation(
   const diagramRequired =
     !blocker &&
     (!scopeKnown || !revKnown || rev !== "reversible" || scope === "machine" || scope === "external");
-  if (diagramRequired) {
+  const trivial = blocker ? null : trivialDiagram(blocks, lines, okTables.flatMap((t) => t.rows.map((r) => r[0] ?? "")));
+  if (diagramRequired && trivial === null) {
     const diagram = findSection(headings, lines.length, SECTION.diagram);
-    if (!diagram || !sectionHasMermaid(blocks, diagram)) missing.push("diagram");
+    const noted = options !== null && hasNoDiagramNote(lines, inFence, options);
+    if ((!diagram || !sectionHasMermaid(blocks, diagram)) && !noted) missing.push("diagram");
   }
+  if (trivial !== null) missing.push("diagram_trivial");
 
   if (!blocker) {
     // Required unless reversible + file

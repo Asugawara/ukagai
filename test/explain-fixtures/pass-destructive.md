@@ -25,11 +25,11 @@ I recommend "Back up, then delete". It adds only one step, and you can later fix
 ## Diagram
 
 ```mermaid
-flowchart TD
-  F[decisions.jsonl] -->|back up, then delete| B[decisions.jsonl.bak]
-  F -->|delete as is| X[history is gone]
-  B --> R[startup resumes from empty]
-  X --> R
+sequenceDiagram
+  agent->>fs: copy decisions.jsonl to decisions.jsonl.bak
+  agent->>fs: delete decisions.jsonl
+  serve->>fs: startup finds no decisions.jsonl
+  serve-->>agent: resumes from an empty history
 ```
 
 ## Related diff

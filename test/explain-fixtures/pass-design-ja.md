@@ -25,11 +25,11 @@ SSE を推します。通知は server から GUI への一方向で足り、再
 ## 図
 
 ```mermaid
-flowchart LR
-  H[hook] -->|POST /api/decisions| S[serve]
-  S -->|SSE: decision.created| B[ブラウザ]
-  B -->|POST /answer| S
-  S -->|wait の 200| H
+sequenceDiagram
+  hook->>serve: POST /api/decisions
+  serve-->>ブラウザ: SSE: decision.created
+  ブラウザ->>serve: POST /answer
+  serve-->>hook: wait の 200
 ```
 
 ## 確かめたこと

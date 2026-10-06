@@ -25,11 +25,11 @@ I recommend SSE. One-way delivery is enough. Reconnection is handled by the stan
 ## Diagram
 
 ```mermaid
-flowchart LR
-  H[hook] -->|POST /api/decisions| S[serve]
-  S -->|SSE: decision.created| B[browser]
-  B -->|POST /answer| S
-  S -->|200 for wait| H
+sequenceDiagram
+  hook->>serve: POST /api/decisions
+  serve-->>browser: SSE: decision.created
+  browser->>serve: POST /answer
+  serve-->>hook: 200 for wait
 ```
 
 ## What I checked

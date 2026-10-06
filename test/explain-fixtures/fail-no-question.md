@@ -24,10 +24,10 @@ I recommend user settings. One install covers all projects. Project settings bec
 ## Diagram
 
 ```mermaid
-flowchart LR
-  I[ukagai install] -->|default| U[~/.claude/settings.json]
-  I -->|--project| P[.claude/settings.json]
-  I -->|--settings| F[any file]
+sequenceDiagram
+  user->>install: ukagai install --settings file
+  install->>file: merge the hook entries
+  install-->>user: print the written path
 ```
 
 ## What I checked

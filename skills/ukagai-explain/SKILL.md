@@ -103,7 +103,7 @@ scope: file | repo | machine | external
 | Counterargument | Optional | The strongest argument against your recommendation, in 1–2 sentences. Shown beside the recommendation as "Against this:" |
 | Affected | Optional | Concrete names (files, services, people, environments), one per bullet. Shown as chips (up to 6, then "+N") |
 | Terms | Optional | `- **term** — definition` for each word the human may not know (`- **term**: definition` and `- term — definition` also work). The GUI annotates the term wherever it appears |
-| Diagram | When reversibility is anything but reversible, or scope is machine / external (`repo` + `reversible` is optional) | Mermaid |
+| Diagram | Required when reversibility is anything but reversible, or scope is machine / external (`repo` + `reversible` is optional) **and a diagram that meets the rule below exists**; otherwise one line under Options: `No diagram: <why>` | Mermaid. **Rule: Draw a diagram only when it shows something the Options table cannot: a sequence of 3 or more steps between 2 or more actors, a state machine with 4 or more states, or a data flow between 3 or more components (a flowchart needs 5 or more nodes). Never draw the options themselves as nodes (a branch into A / B / C) and never restate the table; at most one diagram; when in doubt, none.** A flowchart / graph with 4 or fewer nodes, or with at least half of its node labels equal to option labels, is denied (`diagram_trivial`) |
 | What I checked | **Required unless `reversible` + `file`** (`checked`) | file:line, command results. Mark guesses as guesses. Put evidence in footnotes: write `[^1]` in the body and `[^1]: evidence` here. A `[^n]` in the body without a definition is denied (`footnote`) |
 | Related diff | Optional | Only the hunks that bear on the decision. At most 20 lines in a ` ```diff ` block |
 
@@ -124,7 +124,7 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
 - **Risk cells say how to undo.** Each cell of "Risks and how to undo" must contain a whole word such as undo / revert / roll back / restore / reinstall / recreate / re-run / `git checkout` / delete the … / remove the …, or say it cannot be undone (cannot be restored / irreversible / permanent / unrecoverable; Japanese 戻せ / 戻す / 元に戻 / 消せ / やり直 / 再実行 / 再作成 / 復元 / 戻せない / 元に戻らない). Without it the hook denies (`undo`). The GUI / TUI paint the cannot-be-undone phrases red and the how-to-undo words green.
 - **Evidence by footnote.** Cite what you checked from the body with `[^1]` and define it in "What I checked" (`[^1]: \`grep -rn jsonl src\` finds nothing`). The GUI shows the evidence on hover. A definition without a reference is fine; a reference without a definition is denied (`footnote`).
 - **No coined identifiers.** The hook scans the title and body (not code fences; inline code counts) for short codes such as `W-T2`, `FT4`, `TM28`, `P-GH`, and for `Phase 2` / `Gate B` / `フェーズ 2` / `第 3 段階`. Abbreviations like CI / API / JSON, versions (`v0.2.0`), `#12` and HTTP statuses are fine (one letter + one digit such as `W3` or `P1` is a hit, except M1-M4, L1-L4, Q1-Q4, H1-H2, T1-T3, V8, R2, U2, Z3), common product / hardware / spec codes (ARM64, E2E, ES6, H264, SOC2, W3C, FY25, CVE ids, regions like US-EAST-1), and so are tokens in the question or in option labels. Any other token must be defined under Terms in at least 12 characters of plain words ("the plan item" / "plan の行" alone does not count), or you get `coined_term`; rewrite in plain words instead.
-- **Order of the codes** the hook reports: … `cell_long`, `coined_term`, `undo`, … `diagram`, `checked`, `footnote`.
+- **Order of the codes** the hook reports: … `cell_long`, `coined_term`, `undo`, … `diagram`, `diagram_trivial`, `checked`, `footnote`.
 
 - Make the labels match the AskUserQuestion `options[].label` (a trailing `(Recommended)` is optional).
 - Draw only structure, flow and dependencies. Pick one type:
@@ -132,7 +132,22 @@ The hook checks them (over the limit is denied). The right column of the GUI kee
   - `sequenceDiagram`: the order of exchanges among several actors.
   - `stateDiagram-v2`: states and transitions (pending → answered, etc.).
 - Draw only structures and flows that exist. When you draw an assumption or a proposal, say "(proposal)" right before the diagram.
-- Draw the diagram so that the difference between the options shows. **Even when a diagram is required, if the difference between the options does not show in it, do not write one; make the table rows more detailed instead.**
+- Draw a diagram only when it shows something the Options table cannot: a sequence of 3 or more steps between 2 or more actors, a state machine with 4 or more states, or a data flow between 3 or more components (a flowchart needs 5 or more nodes). Never draw the options themselves as nodes (a branch into A / B / C) and never restate the table; at most one diagram; when in doubt, none. When the decision is not reversible or the scope is machine / external, a diagram that meets this rule is required; if none does, write none and say why in one line under Options ("No diagram: <why>").
+- The hook denies a trivial flowchart / graph (`diagram_trivial`): 4 or fewer distinct nodes, or at least half of the node labels equal an option label (trimmed, case-folded, `(Recommended)` / `（推奨）` stripped). Other diagram types are never trivial by this check. When a diagram is required but none meets the rule, the line `No diagram: <why, 8+ characters>` (or `図なし: <理由>`) under Options satisfies `diagram`.
+- Bad (the options as nodes; denied):
+  ```mermaid
+  flowchart TD
+    Q[Which?] --> A[Option A]
+    Q --> B[Option B]
+    Q --> C[Option C]
+  ```
+- Good (a sequence the table cannot show):
+  ```mermaid
+  sequenceDiagram
+    agent->>serve: POST /api/decisions
+    serve-->>browser: SSE decision.created
+    browser->>serve: POST /answer
+  ```
 - Write Mermaid so that it is readable in the TUI too (advice; the hook does not check): put spaces around arrows (`A --> B`, not `A-->B`), at most 10 nodes, at most 100 columns per line.
 - Do not include the whole diff (the GUI attaches `git diff` separately).
 
