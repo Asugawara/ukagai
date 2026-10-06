@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,13 +32,25 @@ export function planContextText(spec: string | null = specPath()): string {
   ].join("\n");
 }
 
+const markerPath = (dataDir: string, sessionId: string) => join(dataDir, "plan-context", sessionId.replace(/[^\w.-]/g, "_"));
+
+/** The session ended: its marker is of no use any more (best effort) */
+export function removePlanMarker(sessionId: unknown, dataDir: string): void {
+  if (typeof sessionId !== "string" || sessionId === "") return;
+  try {
+    rmSync(markerPath(dataDir, sessionId), { force: true });
+  } catch {
+    // best effort
+  }
+}
+
 /** True when this session already got the rules; marker errors mean "not yet" (fail open: inject) */
 function takeMarker(dataDir: string, sessionId: unknown): boolean {
   if (typeof sessionId !== "string" || sessionId === "") return true;
   try {
     const dir = join(dataDir, "plan-context");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, sessionId.replace(/[^\w.-]/g, "_")), "", { flag: "wx" });
+    writeFileSync(markerPath(dataDir, sessionId), "", { flag: "wx" });
     return true;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code !== "EEXIST";

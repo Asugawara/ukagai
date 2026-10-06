@@ -183,6 +183,7 @@ Sends the observation hook's stdin as is and adds `received_at` (`EventInput`). 
 
 - `observe.phase`: `start` for PreToolUse and `end` for PostToolUse under `--observe`.
 - `escaped_question: true`: when Stop's `last_assistant_message` matches the rough detection.
+- `wakeup: true`: on `UserPromptSubmit` only, when the first 400 characters of the prompt contain `<task-notification>` or start with `[SYSTEM NOTIFICATION` (a harness wake-up such as a finished background task or a monitor, not a human). Only the boolean is posted, never the prompt. The events of a wake-up turn (until the next `UserPromptSubmit` without it, or `SessionEnd`) are not activity for the progress-recap check (`no_progress`), except a `PostToolUse` of Edit / Write / MultiEdit / NotebookEdit; a registered decision always is. A wake-up prompt is not the human speaking: it does not cancel pending cards, does not lift a stop and does not drop a queued stop.
 - `blocker_detected: true`: **no longer emitted since the Stop detector was removed (explain.md section 12); counts historical events only.** The field stays in the event schema and `a.blocker_detected` in `GET /api/metrics` stays (always 0 for new data) so old `events.jsonl` lines still load. Not included in `a.total`.
 
 Response 204.

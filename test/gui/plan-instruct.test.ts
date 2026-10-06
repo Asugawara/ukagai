@@ -378,3 +378,19 @@ gui("settings: the presets textarea saves on change and the chips on the main pa
   await reopen("document.querySelector('#decision .approve-card')"); // the approval (the plan file cards have no Approve option)
   await waitFor("chips", `[...document.querySelectorAll("#decision .chip")].map(c => c.textContent).join("|") === "First one|Second one"`);
 });
+
+gui("plan file card: a queued stop answers 409 and the toast is the translated text, not the server's English message", async () => {
+  writeFileSync(join(home, ".claude", "plans", "stopped-fox.md"), PLAN.replace("Export retry", "Stopped fox"));
+  const tpath = join(home, ".claude", "projects", "p", "s-stop.jsonl");
+  writeFileSync(tpath, '{"type":"user","slug":"stopped-fox"}\n');
+  await api("/api/events", { session_id: "s-stop", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  const at = new Date().toISOString();
+  const cp = await api("/api/decisions", { tool_use_id: `checkpoint:s-stop:${at}`, kind: "checkpoint", session: { session_id: "s-stop", cwd: ROOT, transcript_path: tpath }, request: { recap: "recap", recap_at: at } });
+  await api(`/api/decisions/${cp.id}/answer`, { kind: "stop" });
+  await reopen("document.querySelector('#decision .done-reading')");
+  await waitFor("stopped fox shown", `document.querySelector("#head .v2-title")?.textContent === "Stopped fox"`);
+  typeInto("add a section");
+  key("Enter", "#instruct");
+  await waitFor("translated toast", `document.body.textContent.includes("A stop is queued for this session; answer that first")`);
+  assert.equal(ev(`document.body.textContent.includes("a stop is queued for this session")`), false, "the server's lower-case message is not shown");
+});

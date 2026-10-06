@@ -252,7 +252,7 @@ async function api(path, init) {
   }
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
-    throw new Error(j.error ?? `HTTP ${res.status}`);
+    throw Object.assign(new Error(j.error ?? `HTTP ${res.status}`), { status: res.status }); // sendPlanInstruct reads status
   }
   return res.status === 204 ? null : res.json();
 }
@@ -678,16 +678,17 @@ let faviconPng = null;
 function updateFavicon(n, blocked) {
   const key = n <= 0 ? "0" : `${Math.min(n, 6)}${blocked ? "b" : ""}`;
   if (key === faviconKey) return;
-  const link = document.querySelector('link[rel=icon][type="image/svg+xml"]');
+  const link = document.getElementById("favicon");
   let cv, g;
   try { cv = document.createElement("canvas"); g = cv.getContext && cv.getContext("2d"); } catch { return; }
   if (!g || !link) return;
   faviconKey = key;
   // The static PNG fallback link would compete with the drawn icon: take it out while a count shows, put it back at 0
-  const png = document.querySelector('link[rel=icon][type="image/png"]');
+  const png = document.querySelector('link[rel=icon][type="image/png"]:not(#favicon)');
   if (png) { faviconPng = png; png.remove(); }
   if (n <= 0) {
     link.href = "/public/favicon.svg";
+    link.type = "image/svg+xml";
     if (faviconPng) link.after(faviconPng);
     return;
   }
@@ -700,6 +701,7 @@ function updateFavicon(n, blocked) {
   g.fillText(n > 5 ? "5+" : String(n), 32, 35);
   const next = link.cloneNode();
   next.href = cv.toDataURL("image/png");
+  next.type = "image/png"; // the drawn icon is a PNG data URL, not the SVG the link started as
   link.replaceWith(next); // a replaced element makes the browser refetch the icon
 }
 
@@ -2160,7 +2162,7 @@ async function sendPlanInstruct(pd, dr, text) {
     dr.instruct = "";
     toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), { kind: "ok" });
   } catch (e) {
-    if (e.status === 409) toast(e.message, { kind: "lost", ms: 4000 }); // e.g. a stop is queued for the session
+    if (e.status === 409) toast(t("plan_instruct_stop_queued"), { kind: "lost", ms: 4000 }); // a stop is queued for the session
     else if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
   }
   if (shownId === pd.id) rerenderPlanCard(pd);

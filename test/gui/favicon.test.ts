@@ -198,3 +198,22 @@ gui("a blocker pending gives a different icon than a plain question", async () =
   assert.notEqual(blocker, plain);
   writeFileSync(join(SHOTS, "FV1-favicon-blocker.png"), png(blocker));
 });
+
+gui("the drawn icon is a PNG link found by id (type image/png); back at 0 it is the SVG link again, and the fallback PNG link is never taken for it", async () => {
+  ab("open", base + "/");
+  await waitFor("page", `document.querySelector("#pending-count")`);
+  await sleep(300);
+  assert.equal(ev(`document.getElementById("favicon").type`), "image/svg+xml");
+  await seedQuestion();
+  await iconAt(1);
+  assert.equal(ev(`document.getElementById("favicon").type`), "image/png", "a PNG data URL must not carry the SVG type hint");
+  assert.match(ev<string>(`document.getElementById("favicon").href`), /^data:image\/png;base64,/);
+  await seedQuestion();
+  const two = await iconAt(2); // drawn again: the id is kept on the replaced link and the redraw still finds it
+  assert.equal(ev(`document.querySelectorAll("link[rel=icon]").length`), 1);
+  assert.equal(ev(`document.getElementById("favicon").href`), two);
+  await cancelAll();
+  await waitFor("back to 0", `/\\/favicon\\.svg$/.test(document.getElementById("favicon").href)`);
+  assert.equal(ev(`document.getElementById("favicon").type`), "image/svg+xml");
+  assert.equal(ev(`document.querySelectorAll("link[rel=icon]").length`), 2, "the PNG fallback is back");
+});

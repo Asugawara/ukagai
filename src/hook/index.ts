@@ -54,7 +54,7 @@ export async function run(argv: string[]): Promise<number> {
     } else if (ev === "SessionStart" || ev === "SubagentStart") {
       write(await sessionContext(input, opts));
     } else {
-      await observedEvent(input, client);
+      await observedEvent(input, client, opts.dataDir);
     }
   } catch (err) {
     hookLog("hook_exception", {
@@ -84,7 +84,7 @@ async function runCodex(input: Record<string, unknown>, opts: ReturnType<typeof 
   } else if (ev === "Stop") {
     write(await codexStop(input, opts, client, startedAt));
   } else {
-    await observedEvent(input, client);
+    await observedEvent(input, client, opts.dataDir);
   }
   return 0;
 }

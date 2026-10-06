@@ -78,11 +78,18 @@ const EVENT_KEYS = [
   "agent",
   "received_at",
   "escaped_question",
+  "wakeup",
   "blocker_detected",
   "observe",
   "notification_type",
 ] as const;
 const LIVE: readonly DecisionStatus[] = ["pending", "answer_submitted"];
+
+const FILE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+/** PostToolUse of a tool that changes files: the agent did something even in a wake-up turn */
+function isFileChange(ev: EventInput): boolean {
+  return ev.hook_event_name === "PostToolUse" && FILE_TOOLS.has(String((ev as Record<string, unknown>).tool_name ?? ""));
+}
 
 function stat(values: number[]): { count: number; median_ms: number | null; mean_ms: number | null } {
   if (values.length === 0) return { count: 0, median_ms: null, mean_ms: null };
@@ -112,6 +119,8 @@ export class Store {
   private stoppedSessions = new Set<string>();
   /** When the session's agent last did something (a hook event or a decision its hook registered), as epoch ms. Insertions of checkpoints, answers and settings do not count */
   private lastActivity = new Map<string, number>();
+  /** Sessions whose last UserPromptSubmit was a harness wake-up: their events are not activity (see applyEvent) */
+  private wakeupTurns = new Set<string>();
   /** Called after each live hook event of a session (the recap watcher reads that session's transcript now) */
   onSessionEvent: ((sessionId: string, hookEvent: string) => void) | undefined;
   /** Called after a checkpoint is answered (the Codex bridge delivers its answer in-process; Claude's hook polls the instruction instead) */
@@ -434,8 +443,11 @@ export class Store {
     const queued = this.instructions.get(sessionId);
     // A queued stop must still reach the agent; a queued reply or earlier plan instruction keeps its identity (so its checkpoint is marked delivered) and the texts are joined
     if (queued?.kind === "stop") throw new HttpError(409, "a stop is queued for this session");
+    // A queued reply with no text of its own would make the hook word the plan text as a recap reply: such a join is worded as a plan instruction
     const ins: Instruction = queued
-      ? { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
+      ? queued.text.trim() === ""
+        ? { ...queued, text: text.slice(0, INSTRUCTION_MAX_CHARS), about: "plan" }
+        : { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
       : { decision_id: "", kind: "instruct", text, created_at, about: "plan" };
     this.instructions.set(sessionId, ins);
     if (this.sessions.get(sessionId)?.state !== "idle" || !this.deliverPlanInstruction) return "hook";
@@ -741,7 +753,12 @@ export class Store {
       this.panelOpens++;
       return;
     }
-    this.markActivity(ev.session_id, Date.parse(ev.received_at));
+    if (ev.hook_event_name === "UserPromptSubmit") {
+      if (ev.wakeup) this.wakeupTurns.add(ev.session_id);
+      else this.wakeupTurns.delete(ev.session_id);
+    }
+    // A wake-up turn is the harness polling the agent: only a change to files counts as progress
+    if (!this.wakeupTurns.has(ev.session_id) || isFileChange(ev)) this.markActivity(ev.session_id, Date.parse(ev.received_at));
     if (ev.escaped_question) this.escapedQuestions++;
     if (ev.blocker_detected) this.blockersDetected++;
     const at = Date.parse(ev.received_at);
@@ -770,7 +787,8 @@ export class Store {
     if (live && (ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "Stop")) {
       this.cancelRecentlyDisconnected(ev.session_id);
     }
-    if (live && ev.hook_event_name === "UserPromptSubmit") {
+    // A wake-up prompt is the harness, not the human: it neither cancels pending cards nor lifts / drops a stop
+    if (live && ev.hook_event_name === "UserPromptSubmit" && !ev.wakeup) {
       this.cancelPending(ev.session_id);
       this.stoppedSessions.delete(ev.session_id);
       this.dropQueuedStop(ev.session_id);
@@ -783,6 +801,7 @@ export class Store {
   /** The session ended: its pending checkpoints and the instruction nobody can receive any more are dropped */
   private endCheckpoints(sessionId: string, live: boolean): void {
     this.instructions.delete(sessionId);
+    this.wakeupTurns.delete(sessionId);
     this.stoppedSessions.delete(sessionId);
     this.modeSwitches.delete(sessionId);
     if (!live) return;

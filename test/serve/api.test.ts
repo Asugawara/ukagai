@@ -307,7 +307,8 @@ test("favicon: /public/favicon.svg is image/svg+xml with nosniff, /favicon.ico a
   const ico = await fetch(env.url + "/favicon.ico");
   assert.equal(ico.status, 204);
   for (const page of ["/", "/settings"]) {
-    assert.ok((await (await fetch(env.url + page)).text()).includes('<link rel="icon" href="/public/favicon.svg" type="image/svg+xml">'), `${page} links the icon`);
+    const link = page === "/" ? '<link rel="icon" id="favicon" href="/public/favicon.svg" type="image/svg+xml">' : '<link rel="icon" href="/public/favicon.svg" type="image/svg+xml">';
+    assert.ok((await (await fetch(env.url + page)).text()).includes(link), `${page} links the icon`);
   }
 });
 

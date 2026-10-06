@@ -3,6 +3,7 @@ import { EventInput, HookInputBase } from "../contract.js";
 import type { Client } from "./client.js";
 import { explainDir } from "./explain.js";
 import type { HookOptions } from "./options.js";
+import { removePlanMarker } from "./plan-context.js";
 import { readConfig, type Lang } from "../settings/config.js";
 
 type Out = Record<string, unknown>;
@@ -16,6 +17,12 @@ const SESSION_END_TIMEOUT_MS = 500;
 export function isEscapedQuestion(text: string | undefined): boolean {
   if (!text) return false;
   return /[？?][\s*_」』)）]*$/.test(text);
+}
+
+/** A prompt the harness injected to wake the agent (a background task finished / a monitor fired), not one a human typed */
+export function isWakeupPrompt(prompt: string): boolean {
+  const head = prompt.slice(0, 400);
+  return head.includes("<task-notification>") || head.startsWith("[SYSTEM NOTIFICATION");
 }
 
 /** The 5 lines of spec section 8. dir is the explanation directory itself */
@@ -85,7 +92,7 @@ async function post(raw: Record<string, unknown>, extra: Record<string, unknown>
 }
 
 /** Observed events such as Stop (with escaped_question). Does nothing for other events */
-export async function observedEvent(raw: Record<string, unknown>, client: Client): Promise<void> {
+export async function observedEvent(raw: Record<string, unknown>, client: Client, dataDir?: string): Promise<void> {
   const name = raw["hook_event_name"];
   if (typeof name !== "string" || !OBSERVED.has(name)) return;
   const extra: Record<string, unknown> = {};
@@ -93,6 +100,14 @@ export async function observedEvent(raw: Record<string, unknown>, client: Client
     const msg = raw["last_assistant_message"];
     if (isEscapedQuestion(typeof msg === "string" ? msg : undefined)) extra["escaped_question"] = true;
   }
+  if (name === "UserPromptSubmit") {
+    const p = raw["prompt"];
+    if (typeof p === "string" && isWakeupPrompt(p)) extra["wakeup"] = true;
+    // Only the boolean leaves the hook: the prompt text is the human's (or the harness's), the server has no use for it
+    const { prompt: _prompt, ...rest } = raw;
+    raw = rest;
+  }
+  if (name === "SessionEnd" && dataDir) removePlanMarker(raw["session_id"], dataDir);
   await post(
     raw,
     extra,
