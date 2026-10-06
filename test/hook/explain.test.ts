@@ -387,8 +387,49 @@ test("diagram requirement: repo + reversible is optional; costly / machine / ext
   assert.deepEqual(validateExplanation(fm("costly", "file")).missing, ["diagram"]);
   assert.deepEqual(validateExplanation(fm("irreversible", "repo")).missing, ["diagram"]);
   // a Japanese "図" section with Mermaid also satisfies it
-  const ja = fm("costly", "file") + "\n## 図\n\n```mermaid\nflowchart LR\n  A --> B\n```\n";
+  const ja = fm("costly", "file") + "\n## 図\n\n```mermaid\nsequenceDiagram\n  A->>B: x\n```\n";
   assert.equal(validateExplanation(ja).valid, true);
+});
+
+/** GOOD with a costly scope (diagram required) and the given mermaid source in the Diagram section */
+function withDiagram(src: string): string {
+  return GOOD.replace(/reversibility: .*/, "reversibility: costly") + "## Diagram\n```mermaid\n" + src + "\n```\n## What I checked\n- read the code\n";
+}
+const SIX_NODES = "flowchart LR\n  hook --> serve --> store\n  serve --> browser\n  browser --> api\n  api --> store";
+
+test("diagram_trivial: a flowchart with 4 or fewer nodes is trivial (rule: node count <= 4)", () => {
+  const v = validateExplanation(withDiagram("flowchart TD\n  Q[decision] --> X[left]\n  Q --> Y[middle]\n  Q --> Z[right]"));
+  assert.deepEqual(v.missing, ["diagram_trivial"]);
+  assert.deepEqual(validateExplanation(withDiagram("graph LR\n  a --> b --> c --> d")).missing, ["diagram_trivial"]);
+  assert.deepEqual(validateExplanation(withDiagram("flowchart LR\n  a --> b --> c --> d --> e")).missing, []);
+});
+
+test("diagram_trivial: at least half of the node labels equal option labels (rule: option-label share)", () => {
+  const src = "flowchart LR\n  s[start] --> a[A (Recommended)]\n  s --> b[b]\n  s --> x[other] --> y[more] --> z[last]";
+  // 6 nodes: A and B are option labels = 2 of 6, not trivial
+  assert.deepEqual(validateExplanation(withDiagram(src)).missing, []);
+  // 6 nodes, 3 of them option labels (case-folded, (Recommended) stripped) = trivial
+  const half = "flowchart LR\n  s[start] --> a[a (Recommended)]\n  s --> b[B]\n  s --> x[other] --> y[more] --> z[a]";
+  assert.deepEqual(validateExplanation(withDiagram(half)).missing, ["diagram_trivial"]);
+});
+
+test("diagram_trivial: a 6-node flowchart with other labels, a sequenceDiagram and a stateDiagram are not trivial (rule: flowchart / graph only)", () => {
+  assert.deepEqual(validateExplanation(withDiagram(SIX_NODES)).missing, []);
+  assert.deepEqual(validateExplanation(withDiagram("sequenceDiagram\n  agent->>serve: ask\n  serve-->>agent: answer")).missing, []);
+  assert.deepEqual(validateExplanation(withDiagram("stateDiagram-v2\n  [*] --> pending\n  pending --> answered")).missing, []);
+});
+
+test("diagram_trivial is reported even when the diagram is optional (reversible + file)", () => {
+  const md = GOOD + "## Diagram\n```mermaid\nflowchart LR\n  A --> B\n```\n";
+  assert.deepEqual(validateExplanation(md).missing, ["diagram_trivial"]);
+});
+
+test("a required diagram can be replaced by a one-line 'No diagram: <why>' note under Options (rule: note accepted)", () => {
+  const base = GOOD.replace(/reversibility: .*/, "reversibility: costly") + "## What I checked\n- read the code\n";
+  assert.deepEqual(validateExplanation(base).missing, ["diagram"]);
+  const noted = base.replace("| B | a | Revert it |\n", "| B | a | Revert it |\n\nNo diagram: both options change one file and the table says it all.\n");
+  assert.deepEqual(validateExplanation(noted).missing, []);
+  assert.deepEqual(validateExplanation(base.replace("| B | a | Revert it |\n", "| B | a | Revert it |\n\nNo diagram.\n")).missing, ["diagram"]);
 });
 
 test("length limits: Recommendation 400 characters / 5 sentences, cells 160 characters, Why 600 characters; full-width and half-width count the same", () => {

@@ -52,10 +52,10 @@ A polling loop is the simplest thing that works, and it avoids holding a connect
 ## Diagram
 
 ```mermaid
-flowchart LR
-  H[hook] -->|POST /api/decisions| S[serve]
-  S -->|SSE: decision.created| B[browser]
-  B -->|POST /answer| S
+sequenceDiagram
+  hook->>serve: POST /api/decisions
+  serve-->>browser: SSE: decision.created
+  browser->>serve: POST /answer
 ```
 
 ## What I checked
