@@ -175,22 +175,20 @@ function affectsText(m: ScreenModel): string {
   return `⌁ ${shown.join(" · ")}${rest > 0 ? ` +${rest}` : ""}`;
 }
 
-function metaLine(m: ScreenModel, now: number, cols: number, lang: Lang): string {
-  // The origin comes first: `repo ⎇ branch ⧉ worktree` in bold accent colour, whatever else is dropped
-  // (the repo in its own colour, the same repo always the same one: repoAnsi; branch / worktree stay cyan)
-  // (branch / worktree are plain bold, so they never merge with a repo colour)
-  const origin = m.chips.map((c) => `${BOLD}${c.kind === "repo" ? repoAnsi(repoName(c)) : ""}${c.text.replace(/^◈ /, "")}${RESET}`).join(" ");
-  const parts = [origin, `${DIM}${m.cwd}${RESET}`];
-  if (m.blocker) parts.splice(1, 0, `${BADGE_BLOCKER} ${t(lang, "waiting_for_you")} ${RESET}`);
-  else if (m.quiz) parts.splice(1, 0, `${BADGE_QUIZ} ${t(lang, "quiz_band")} ${RESET}`);
-  if (m.reversibility === "irreversible") parts.push(`${BADGE_IRREVERSIBLE} ${t(lang, "irreversible")} ${RESET}`);
-  else if (m.reversibility === "costly") parts.push(`${BADGE_COSTLY} ${t(lang, "costly")} ${RESET}`);
-  else if (m.reversibility === "reversible") parts.push(`${GREEN}${t(lang, "reversible")}${RESET}`);
-  if (m.scope) parts.push(`${DIM}${m.scope}${RESET}`);
-  parts.push(`${DIM}${elapsed(m.createdAt, now, lang)}${RESET}`);
-  const line = parts.join("  ");
-  // When it does not fit, drop the cwd (keep the origin and reversibility)
-  return width(line) <= cols ? line : truncate(parts.filter((_, i) => i !== (m.blocker || m.quiz ? 2 : 1)).join("  "), cols);
+/** Row 2 of the header: `repo ⎇ branch ⧉ worktree · scope · age` dim, the repo in its own colour (the same repo always the same one: repoAnsi).
+ *  The blocker / quiz band opens the line; the cwd is not shown (the origin is enough) */
+function ctxLine(m: ScreenModel, now: number, cols: number, lang: Lang): string {
+  const [repo, ...rest] = m.chips;
+  const where = [repo ? `${repoAnsi(repoName(repo))}${repoName(repo)}${RESET}${DIM}` : "", ...rest.map((c) => c.text)].filter(Boolean).join(" ");
+  const tail = [m.scope, elapsed(m.createdAt, now, lang)].filter(Boolean);
+  const band = m.blocker ? `${BADGE_BLOCKER} ${t(lang, "waiting_for_you")} ${RESET} ` : m.quiz ? `${BADGE_QUIZ} ${t(lang, "quiz_band")} ${RESET} ` : "";
+  return truncate(`${band}${DIM}${[where, ...tail].join(" · ")}${RESET}`, cols);
+}
+
+/** Row 1 of the header: the title in bold (2 rows at most), then the reversibility mark when it is costly / irreversible */
+function titleLines(m: ScreenModel, cols: number, lang: Lang): string[] {
+  const badge = m.reversibility === "irreversible" ? ` ${BADGE_IRREVERSIBLE} ${t(lang, "irreversible")} ${RESET}` : m.reversibility === "costly" ? ` ${BADGE_COSTLY} ${t(lang, "costly")} ${RESET}` : "";
+  return wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}${badge}`, cols).slice(0, 2);
 }
 
 /** Backticked spans in bold cyan (the command of an approval) */
@@ -518,7 +516,7 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
 
 function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean, rows: number): Left {
   if (m.checkpoint) {
-    const lines = [`${DIM}${t(lang, "checkpoint_kind")}${RESET}`, ...wrap(m.checkpoint.recap, w)];
+    const lines = [...wrap(`${DIM}${t(lang, "checkpoint_optional")}${RESET}`, w), "",`${DIM}${t(lang, "checkpoint_kind")}${RESET}`, ...wrap(m.checkpoint.recap, w)];
     return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
   }
   if (m.backgroundNote) {
@@ -615,13 +613,13 @@ function listBody(v: View, cols: number, rows: number): string[] {
 
 const planCount = (lang: Lang, key: "plan_sections" | "plan_lines" | "plan_files", n: number): string => t(lang, n === 1 ? `${key}_one` : key, { n });
 
-/** Row 2 of a plan file's header: `Plan  updated 5m  9 sections · 200 lines · 12 files  file.md` (the stats for a long plan only) */
+/** Row 2 of a plan file's header: `plans/ · Plan · updated 5m · 9 sections · 200 lines · 12 files · file.md` (the stats for a long plan only) */
 function planFileMeta(m: ScreenModel, now: number, lang: Lang): string {
   const o = m.plan?.outline;
   const parts = [t(lang, "kind_plan"), t(lang, "plan_updated_ago", { age: elapsed(m.createdAt, now, lang) })];
   if (o) parts.push(`${planCount(lang, "plan_sections", o.h2)} · ${planCount(lang, "plan_lines", o.lines)} · ${planCount(lang, "plan_files", o.files)}`);
   parts.push(m.readonly!.name);
-  return `${DIM}${parts.join("  ")}${RESET}`;
+  return `${DIM}${parts.join(" · ")}${RESET}`;
 }
 
 /** The `s` overlay: when · first line of each instruction, the cursor kept in view */
@@ -684,11 +682,11 @@ export function renderFrame(v: View, size: Size): Frame {
     return fin(body, []);
   }
 
-  const head = m.checkpoint
-    ? [metaLine(m, v.now, cols, v.lang), truncate(`${BOLD}${m.title}${RESET}`, cols), ...wrap(m.checkpoint.headline, cols).slice(0, 1), truncate(`${DIM}${t(v.lang, "checkpoint_optional")}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
-    : m.readonly
-    ? [truncate(`${BOLD}${PLANS_ANSI}plans/${RESET}  ${planFileMeta(m, v.now, v.lang)}`, cols), truncate(`${BOLD}${m.title}${RESET}`, cols), `${DIM}${"─".repeat(cols)}${RESET}`]
-    : [metaLine(m, v.now, cols, v.lang), ...wrap(`${BOLD}${m.question?.approval ? codeSpans(m.title, BOLD) : m.title}${RESET}`, cols).slice(0, 2), `${DIM}${"─".repeat(cols)}${RESET}`];
+  // Two rows for every kind: the title, then the context line (the checkpoint's note is the top of the left column, its headline is the recap's first sentence there)
+  const rule = `${DIM}${"─".repeat(cols)}${RESET}`;
+  const head = m.readonly
+    ? [truncate(`${BOLD}${m.title}${RESET}`, cols), truncate(`${PLANS_ANSI}plans/${RESET} ${DIM}· ${RESET}${planFileMeta(m, v.now, v.lang)}`, cols), rule]
+    : [...titleLines(m, cols, v.lang), ctxLine(m, v.now, cols, v.lang), rule];
   const bodyRows = Math.max(1, rows - head.length - 1);
 
   if (cols >= WIDE_COLS) {

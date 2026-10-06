@@ -188,7 +188,7 @@ const SEC = `document.querySelectorAll("#background details.plan-sec")`;
 const openCount = `document.querySelectorAll("#background details.plan-sec[open]").length`;
 const spyPosts = () => ev(`(() => { window.__posts = []; if (!window.__spied) { window.__spied = true; const f = window.fetch; window.fetch = (u, i) => { if (i && i.method === "POST") window.__posts.push(String(u)); return f(u, i); }; } else window.__posts = []; return "ok"; })()`);
 const posts = () => ev<string[]>(`JSON.stringify(window.__posts)`);
-const line2 = () => ev<string>(`document.querySelector("#head .hd-line2 .headline").textContent`);
+const line2 = () => ev<string>(`document.querySelector("#head .hd-ctx").textContent`);
 const marks = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background details.plan-sec > summary > .ps-mark")].map((m) => m.textContent))`);
 const planRead = async (name: string) => ((await api("/api/plans")).plans as { name: string; read: boolean }[]).find((p) => p.name === name)?.read;
 
@@ -197,7 +197,7 @@ async function arrive(name: string, text = LONG, ageMs = 0) {
   await reopen(IDLE);
   await spyPosts();
   writePlan(name, text, ageMs);
-  await waitFor("plan screen", `document.querySelector("#head .hd-line2 .headline")?.textContent.includes("updated") && document.querySelector("#background .md")`, 4000);
+  await waitFor("plan screen", `document.querySelector("#head .hd-ctx")?.textContent.includes("updated") && document.querySelector("#background .md")`, 4000);
 }
 
 async function seedPlanDecision(file: string, plan: string): Promise<{ id: string }> {
@@ -222,10 +222,10 @@ gui("a new plan shows itself within 2 s: read-only, 9 sections with only the fir
   assert.equal(ev(openCount), 1);
   assert.equal(ev(`document.querySelector("#background details.plan-sec").open`), true);
   assert.equal(ev(`document.querySelector("#head .v2-title").textContent`), "Plan: add retry to the export job");
-  assert.equal(ev(`document.querySelector("#head .hd-top .origin").textContent`), "plans/"); // the origin alone on row 1
-  assert.equal(ev(`!!document.querySelector("#head .hd-top .v2-title")`), false);
+  assert.equal(ev(`document.querySelectorAll("#head > *").length`), 2); // title row + context row
+  assert.equal(ev(`document.querySelector("#head > :first-child .v2-title").textContent`), "Plan: add retry to the export job");
   const l2 = line2();
-  assert.ok(l2.startsWith("Plan") && l2.includes("updated"), l2);
+  assert.ok(l2.startsWith("plans/ · Plan · updated"), l2); // the context row of a plan file
   assert.equal(ev(`document.querySelector("#head .plan-stats").textContent`), "9 sections · 200 lines · 12 files");
   assert.equal(ev(`document.querySelector("#head .plan-file").textContent`), "auto.md");
   assert.equal(ev(`document.querySelectorAll(".btn:not(#instruct-send), .opt:not(.instruct-card), .free-text, .none-card, .cannot-card, .escape-row").length`), 0); // a plan file with a session carries the instruction card, nothing else
@@ -374,7 +374,8 @@ gui("upgrade in place: the approval for the shown plan keeps the sections' state
   await waitFor("approval screen", `document.querySelector("#decision .approve-card")`);
   assert.deepEqual(marks(), before);
   assert.equal(ev(openCount), openBefore);
-  assert.equal(line2(), "Approve this plan?");
+  assert.equal(ev(`document.querySelector("#background > .headline").textContent`), "Approve this plan?"); // the headline is the first paragraph of the left column
+  assert.ok(line2().includes("9 sections · 200 lines · 12 files"), line2()); // the plan meta follows the age in the context row
   assert.equal(ev(`document.querySelectorAll("#decision .actions > .opt").length`), 3);
   assert.equal(ev(`document.querySelectorAll("#pending-list .row").length`), 1);
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
@@ -426,7 +427,7 @@ gui("ja words: row 2, Done reading, the drawer's plan word", async () => {
   await setLang("ja", `document.querySelector("#decision .done-reading")?.textContent.startsWith("読んだ")`);
   try {
     const l2 = line2();
-    assert.ok(l2.startsWith("計画") && l2.includes("更新") && l2.includes("3分前"), l2);
+    assert.ok(l2.startsWith("plans/ · 計画") && l2.includes("更新") && l2.includes("3分前"), l2);
     assert.equal(ev(`document.querySelector("#head .plan-stats").textContent`), "9 節 · 200 行 · 12 ファイル");
     assert.ok(ev<string>(`document.querySelector("#foot .hint").textContent`).includes("Esc 読んだ"));
     const { id } = await seedQuestion();

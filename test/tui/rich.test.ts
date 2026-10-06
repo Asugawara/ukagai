@@ -173,7 +173,7 @@ test("render: headline, reversibility symbol, You decide, Assumptions with ☐, 
 });
 
 test("render: the other two reversibility symbols", () => {
-  assert.ok(draw(appOf(RICH("reversible", "file"))).text.includes("↺ Reversible"));
+  assert.ok(!draw(appOf(RICH("reversible", "file"))).text.includes("Reversible"), "reversible draws no mark in the header");
   assert.ok(draw(appOf(RICH("irreversible"))).text.includes("■ Irreversible"));
 });
 

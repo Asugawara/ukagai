@@ -442,9 +442,12 @@ gui("blocker: the orange band and the what-you-need-to-do section are in the rig
   const { id, title, labels: blockerLabels, whyHeading: blockerWhyHeading, todoHeading: blockerTodoHeading } = await seedBlocker();
   await reopen();
   const right = (sel: string) => ev<boolean>(`!!document.querySelector("#decision ${sel}")`);
-  assert.equal(ev<boolean>(`!!document.querySelector("#head.blocker .hd-top .blocker-band")`), true); // the orange band is the background of the header's first row
-  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .hd-top")).backgroundColor`) !== "rgba(0, 0, 0, 0)", true);
+  assert.equal(ev<boolean>(`!!document.querySelector("#head.blocker .hd-ctx .blocker-band")`), true); // the orange band is the background of the header's context row
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .hd-ctx")).backgroundColor`) !== "rgba(0, 0, 0, 0)", true);
   assert.equal(ev<string>(`document.querySelector("#head .blocker-band").textContent`), "Waiting for you");
+  // HD2: the band is the context row's background and its label opens that row; the title row stays on the panel (fails on the old layout: .hd-top carried it)
+  assert.equal(ev<boolean>(`document.querySelector("#head .hd-ctx").firstElementChild.classList.contains("blocker-band")`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#head .hd-title")).backgroundColor === "rgba(0, 0, 0, 0)"`), true);
   assert.equal(ev<string>(`document.querySelector("#head .v2-title").textContent`), title);
   assert.equal(ev<string>(`document.querySelector("#decision .todo-cap").textContent`), blockerTodoHeading);
   assert.equal(ev<boolean>(`document.querySelector("#decision .todo").textContent.includes("gcloud auth login")`), true);
@@ -468,24 +471,24 @@ gui("a long headline folds at 2 lines with a Show all button, the cards and Answ
   const rect = (sel: string) => ev<{ top: number; bottom: number }>(`JSON.stringify((r => ({ top: r.top, bottom: r.bottom }))(document.querySelector("${sel}").getBoundingClientRect()))`);
   const vh = ev<number>(`window.innerHeight`);
   const inView = (sel: string) => { const r = rect(sel); return r.top >= 0 && r.bottom <= vh; };
-  const folded = `document.querySelector("#head .headline").scrollHeight > document.querySelector("#head .headline").clientHeight + 1`;
+  const folded = `document.querySelector("#background .headline").scrollHeight > document.querySelector("#background .headline").clientHeight + 1`;
   assert.equal(inView("#decision .opt:last-of-type"), true);
   assert.equal(inView("#foot .hint"), true);
   assert.equal(ev<boolean>(folded), true); // folded at 2 lines
-  assert.equal(ev<number>(`document.querySelector("#head .headline").getBoundingClientRect().height`) < 2 * 1.5 * 18 + 2, true);
+  assert.equal(ev<number>(`document.querySelector("#background .headline").getBoundingClientRect().height`) < 2 * 1.5 * 18 + 2, true);
   assert.equal(ev<boolean>(`document.querySelector("#head .more-chip").hidden`), false);
   assert.equal(q1("#head .more-chip"), "Show all");
   assert.equal(count("kbd"), 0);
   assert.equal(q1("#background .rec-body"), "The second sentence stays in the recommendation box.");
   press(".");
   assert.equal(ev<boolean>(`!(${folded})`), true); // full text visible
-  assert.equal(ev<boolean>(`document.querySelector("#head .headline").textContent.includes("and that is all.")`), true);
+  assert.equal(ev<boolean>(`document.querySelector("#background .headline").textContent.includes("and that is all.")`), true);
   assert.equal(q1("#head .more-chip"), "Collapse");
   assert.equal(inView("#foot .hint"), true);
   press(".");
   assert.equal(ev<boolean>(folded), true); // . again folds it
   assert.equal(q1("#head .more-chip"), "Show all");
-  ab("click", "#head .headline"); // a click on the headline also expands
+  ab("click", "#background .headline"); // a click on the headline also expands
   assert.equal(ev<boolean>(`!(${folded})`), true);
   ab("click", "#head .more-chip");
   assert.equal(ev<boolean>(folded), true);
@@ -680,7 +683,7 @@ gui("v2 cards still render when a label contains <b> (only options that do not m
   assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent.includes("A happens")`), true); // from the table
   assert.equal(ev<boolean>(`document.body.innerText.includes("Raw description Z")`), true); // an option that does not match stays raw
   assert.equal(ev<boolean>(`document.body.innerText.includes("Raw description A")`), false);
-  assert.equal(ev<boolean>(`!!document.querySelector("#head .headline")`), true); // the one-sentence recommendation is the headline (no box)
+  assert.equal(ev<boolean>(`!!document.querySelector("#background .headline")`), true); // the one-sentence recommendation is the headline (no box)
 });
 
 gui("1000x700 with two pending: →, answering and cancel do not blank the screen or throw", async () => {
@@ -692,7 +695,7 @@ gui("1000x700 with two pending: →, answering and cancel do not blank the scree
     ev(`window.__errs = [], window.addEventListener("error", (e) => window.__errs.push(String(e.message))), window.addEventListener("unhandledrejection", (e) => window.__errs.push(String(e.reason))), "ok"`);
     const title = () => ev<string>(`document.querySelector("#head .v2-title")?.textContent ?? ""`);
     assert.equal(title(), a.title);
-    assert.equal(ev<boolean>(`!!document.querySelector("#head .hd-top #pending-btn")`), true); // the pending pill is in the first row of the header
+    assert.equal(ev<boolean>(`!!document.querySelector("#head .hd-ctx #pending-btn")`), true); // the pending pill is in the context row of the header
     press("ArrowRight");
     assert.equal(title(), b.title); // the next decision shows instead of an empty view
     assert.equal(ev<boolean>(`!!document.getElementById("pending-btn")`), true);
@@ -837,7 +840,7 @@ gui("a Japanese-headed explanation renders the same card as an English one", asy
   // Same structure as the English seed: 3 option cards + free text, B preselected, recommendation box present
   assert.deepEqual(view(), { cursor: 1, checked: 1 });
   assert.equal(ev<number>(`document.querySelectorAll("#decision .opt").length`), 4);
-  assert.equal(ev<string>(`document.querySelector("#head .headline").textContent.length > 0`), true);
+  assert.equal(ev<string>(`document.querySelector("#background .headline").textContent.length > 0`), true);
   assert.equal(ev<boolean>(`document.querySelector("#decision .opt .desc").textContent === "A が選ばれる"`), true);
   // the Why heading follows the display language (English here), not the file's own heading
   assert.equal(ev<boolean>(`document.querySelector("#background .why h2").textContent === "Why this decision is needed now"`), true);
@@ -868,24 +871,23 @@ async function seedRich(s: Seed = {}) {
 // textContent of the first match ("" when there is none). Prefixed so that ev() does not turn "3" into a number
 const q1 = (sel: string) => ev<string>(`"t:" + ((document.querySelector(${JSON.stringify(sel)}) ?? {}).textContent ?? "")`).slice(2);
 const count = (sel: string) => ev<number>(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
-const RICH_READY = "document.querySelector('#head .headline') && document.querySelector('#background .mermaid-ok svg')";
+const RICH_READY = "document.querySelector('#background .headline') && document.querySelector('#background .mermaid-ok svg')";
 
 gui("layers: the header has the title, the headline and the chips; the right column is the options only", async () => {
   await seedRich();
   await reopen(RICH_READY);
-  assert.equal(q1("#head .headline"), "I recommend Sqlite because it keeps reads fast without a server.");
+  assert.equal(q1("#background .headline"), "I recommend Sqlite because it keeps reads fast without a server.");
   assert.equal(q1("#head .v2-title").startsWith("Rich check"), true);
-  // header: row 1 = origin + meta (reversibility, scope), row 2 = the title, row 3 = the headline
+  // header: exactly two rows, the title then the context line; the headline and the condition are the top of the left column
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2", "hd-cond"]); // X1: the condition sentence is row 3
-  const top = ev<string[]>(`JSON.stringify([...document.querySelector("#head .hd-top").children].map(e => e.className.split(" ")[0]))`);
-  assert.deepEqual(top.slice(0, 2), ["origin", "hd-meta"]); // the first row holds no title
-  assert.equal(count("#head .hd-top .v2-title"), 0);
-  assert.equal(count("#head .hd-sub > .v2-title"), 1); // the title is its own row right below
-  assert.equal(q1("#head .hd-meta .where").length > 0, true); // one line of dim text: scope · age
+  assert.deepEqual(rows, ["hd-title", "hd-ctx"]); // fails on the old layout (hd-top, hd-sub, hd-line2, hd-cond)
+  assert.equal(count("#head > .hd-title > .v2-title"), 1);
+  assert.equal(q1("#head .hd-where").length > 0, true); // one line of dim text: origin · scope · age
   assert.equal(count("#head .chip, #head .pill"), 0);
-  assert.equal(count("#head .hd-line2 .headline"), 1);
-  assert.equal(ev<boolean>(`document.querySelector("#head").getBoundingClientRect().height < 4 * 30 + 24`), true); // 2-4 lines (title, headline, condition, goal)
+  assert.equal(count("#head .headline, #head .hd-cond, #head .hd-goal"), 0);
+  const top = ev<string[]>(`JSON.stringify([...document.getElementById("background").children].slice(0, 2).map(e => e.className.split(" ")[0]))`);
+  assert.deepEqual(top, ["headline", "hd-cond"]); // the headline is the first paragraph of the left column, the condition right under it
+  assert.equal(ev<boolean>(`document.querySelector("#head").getBoundingClientRect().height < 2 * 30 + 24`), true);
   // the right column holds the cards and nothing of the old top panel
   for (const sel of [".rec", ".unknowns", ".assumptions", ".against", ".affects", ".headline", ".optrow", ".keys", ".meta-line", ".v2-title"]) assert.equal(count(`#decision ${sel}`), 0, sel);
   assert.equal(count("#decision .opt"), 4);
@@ -893,7 +895,7 @@ gui("layers: the header has the title, the headline and the chips; the right col
   assert.equal(q1("#background .rec-body").startsWith("It also fits"), true);
   const lead = ev<string[]>(`JSON.stringify([...document.querySelector("#background .lead").children].map(e => e.className.split(" ")[0]))`);
   assert.deepEqual(lead, ["why", "rec", "unknowns", "against", "assumptions"]); // X1: Why, recommendation, You decide, Against, Assumptions
-  assert.equal(ev<boolean>(`document.querySelector("#background").firstElementChild.classList.contains("lead")`), true);
+  assert.equal(ev<boolean>(`document.querySelector("#background .lead").previousElementSibling.classList.contains("hd-cond")`), true);
   assert.equal(q1("#background .unknowns").startsWith("You decide:"), true);
   assert.equal(count("#background .unknowns li"), 2);
   assert.equal(q1("#background").includes("What I checked"), true);
@@ -908,7 +910,7 @@ gui("fewer boxes: no label chips, no Affected chips, at most 2 boxed items, ever
   assert.equal(count("#head .chip, #head .badge, #head .pill, #decision .chip, #decision .badge, #decision .pill, #background .chip, #background .badge, #background .pill"), 1); // costly mark; the card's ★ Recommended is text
   assert.equal(count("#decision .rec-badge"), 1);
   for (const label of ["Sqlite", "Postgres", "Flat files"]) assert.equal(ev<number>(`document.getElementById("decision").textContent.split(${JSON.stringify(label)}).length - 1`), 1, label);
-  assert.equal(count("#head .hd-meta .age"), 1);
+  assert.equal(count("#head .hd-ctx .age"), 1);
   // the pending button and the Show all button are plain underlined text
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .more-chip")).borderTopWidth`), "0px");
   press("v");
@@ -925,14 +927,15 @@ gui("fewer boxes: no label chips, no Affected chips, at most 2 boxed items, ever
 gui("reversibility shape: ↺ / ◐ / ■ in the badge, with the scope next to it", async () => {
   await seedQuestion();
   await reopen();
-  assert.equal(q1("#head .rev"), "↺ Reversible");
-  assert.equal(count("#head .badge"), 0); // reversible is dim text, not a box
+  assert.equal(count("#head .rev"), 0); // reversible draws nothing (fails on the old layout: "↺ Reversible" was in the header)
+  assert.equal(count("#head .badge"), 0);
+  assert.equal(q1("#head").includes("Reversible"), false);
   await cancelAll();
   await seedRich();
   await reopen(RICH_READY);
   assert.equal(q1("#head .badge.costly"), "◐ Costly to undo");
-  assert.equal(count("#head .hd-meta .badge"), 1);
-  assert.equal(q1("#head .hd-meta .where").includes("repo"), true); // the scope is in the dim line
+  assert.equal(count("#head > .hd-title .badge"), 1); // the mark sits after the title
+  assert.equal(q1("#head .hd-where").includes("repo"), true); // the scope is in the dim line
   await cancelAll();
   await seedRich({ reversibility: "irreversible", scope: "machine" });
   await reopen(RICH_READY);
@@ -1052,7 +1055,7 @@ gui("option colors: card labels, label mentions in the text and Mermaid nodes sh
   const cardColors = ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt.colored")].map(e => e.style.getPropertyValue("--oc")))`);
   assert.deepEqual(cardColors, ["var(--accent)", "var(--opt-1)", "var(--opt-2)"]);
   assert.equal(ev<string>(`[...document.querySelectorAll("#background .optref")].find(e => e.textContent === "Postgres").style.getPropertyValue("--oc")`), "var(--opt-1)");
-  assert.equal(ev<string>(`document.querySelector("#head .headline .optref").style.getPropertyValue("--oc")`), "var(--accent)");
+  assert.equal(ev<string>(`document.querySelector("#background .headline .optref").style.getPropertyValue("--oc")`), "var(--accent)");
   // Mermaid: the Postgres node's shape stroke and label color
   const node = ev<{ n: number; stroke: string }>(`(() => {
     const labels = [...document.querySelectorAll("#background .mermaid-ok .optcolored")];
@@ -1229,7 +1232,7 @@ gui("Q5-01: the cursor card and the hint line are in the viewport at 1440x900, 1
 gui("Q5-05: the headline is moved out of the Recommendation box (once on the screen); a one-sentence recommendation has no box", async () => {
   await seedRich();
   await reopen(RICH_READY);
-  const head = q1("#head .headline");
+  const head = q1("#background .headline");
   assert.equal(head, "I recommend Sqlite because it keeps reads fast without a server.");
   assert.equal(q1("#background .rec-body").includes("I recommend Sqlite"), false);
   assert.equal(q1("#background .rec-body").startsWith("It also fits"), true);
@@ -1237,7 +1240,7 @@ gui("Q5-05: the headline is moved out of the Recommendation box (once on the scr
   await cancelAll();
   await seedQuestion(); // "I recommend B because this is only a check."
   await reopen();
-  assert.equal(q1("#head .headline"), "I recommend B because this is only a check.");
+  assert.equal(q1("#background .headline"), "I recommend B because this is only a check.");
   assert.equal(count("#background .rec-cap"), 0);
   assert.equal(ev<number>(`document.body.textContent.split("only a check").length - 1`), 1);
 });
@@ -1564,7 +1567,7 @@ gui("V4 G-6: the plan header shows the reversibility mark and scope (from the ex
   assert.ok(d.id);
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(q1("#head .badge.costly"), "◐ Costly to undo");
-  assert.match(q1("#head .where"), /repo/);
+  assert.match(q1("#head .hd-where"), /repo/);
   ab("screenshot", join(SHOTS, "V4-plan-header.png"));
 });
 
@@ -1650,19 +1653,21 @@ gui("X1: the left column is Why, recommendation, You decide, Against, Assumption
   assert.deepEqual(order, ["why", "rec", "unknowns", "against", "assumptions", "checked", "diagram", "diff", "affects"]);
 });
 
-gui("X1: the condition sentence is header row 3 (dim, `Otherwise: …`), the Goal row is under it; no condition, no row; the cards stay visible at 1000x700", async () => {
+gui("X1: the condition sentence is the second paragraph of the left column (dim, `Otherwise: …`), right under the headline; no condition, no row; the cards stay visible at 1000x700", async () => {
   await seedRich();
   await reopen(RICH_READY);
-  const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]).filter((c) => c !== "hd-goal"))`);
-  assert.deepEqual(rows, ["hd-top", "hd-sub", "hd-line2", "hd-cond"]);
-  assert.equal(q1("#head .hd-cond"), "Otherwise: Another option is right if the team already runs a database server.");
-  // the headline is one step larger than the title, the title is dimmer
-  assert.ok(ev<number>(`parseFloat(getComputedStyle(document.querySelector("#head .headline")).fontSize)`) > ev<number>(`parseFloat(getComputedStyle(document.querySelector("#head .v2-title")).fontSize)`));
-  assert.notEqual(ev<string>(`getComputedStyle(document.querySelector("#head .v2-title")).color`), ev<string>(`getComputedStyle(document.querySelector("#head .headline")).color`));
+  const rows = ev<string[]>(`JSON.stringify([...document.getElementById("background").children].map(e => e.className.split(" ")[0]).filter((c) => c !== "hd-goal").slice(0, 2))`);
+  assert.deepEqual(rows, ["headline", "hd-cond"]);
+  assert.equal(q1("#background .hd-cond"), "Otherwise: Another option is right if the team already runs a database server.");
+  // the title is the only large text: 20 px / 600; the headline is 14 px / normal weight
+  assert.equal(fontPx("#head .v2-title"), "20px");
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .v2-title")).fontWeight`), 600 as unknown as string);
+  assert.equal(fontPx("#background .headline"), "14px");
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .headline")).fontWeight`), 400 as unknown as string);
   try {
     ab("set", "viewport", "1000", "700");
     await reopen(RICH_READY);
-    assert.equal(visible("#head .hd-cond"), true);
+    assert.equal(visible("#background .hd-cond"), true);
     assert.equal(visible("#decision .opt.cursor"), true, "cursor card at 1000x700");
     assert.equal(visible("#foot .hint"), true);
   } finally { ab("set", "viewport", "1440", "900"); }
@@ -1672,7 +1677,7 @@ gui("X1: the condition sentence is header row 3 (dim, `Otherwise: …`), the Goa
   const title = `Rich check nocond ${seq + 1}`;
   await seedQuestion({ options: RICH_OPTIONS, reversibility: "costly", scope: "repo", title, markdown: md.replace("__QUESTION__", `Rich question nocond ${seq + 1}: which store?`).replace("__TITLE__", title) });
   await reopen(RICH_READY);
-  assert.equal(count("#head .hd-cond"), 0);
+  assert.equal(count("#background .hd-cond"), 0);
 });
 
 gui("X1 (a): a question with no options is free text only: no None of these / Can't answer, and n / x do nothing", async () => {
@@ -1734,7 +1739,7 @@ gui("Y3 M-3: an approval has its command in monospace in the header, keeps the b
   await cancelAll();
 });
 
-gui("Y3 M-4: the Why / Why I stopped headings follow the display language, and the blocker band's origin is dark", async () => {
+gui("Y3 M-4: the Why / Why I stopped headings follow the display language, and the blocker band's text is dark", async () => {
   await seedRich();
   await reopen(RICH_READY);
   try {
@@ -1745,7 +1750,7 @@ gui("Y3 M-4: the Why / Why I stopped headings follow the display language, and t
     await reopen();
     await setLang("ja", `document.querySelector("#background .why h2")?.textContent === "なぜ止まったか"`);
     assert.equal(b.whyHeading, "Why I stopped");
-    assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .origin")).color`), "rgb(29, 29, 31)"); // the band holds the origin; the title is on its own row below
+    assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .hd-where")).color`), "rgb(29, 29, 31)"); // the band row holds the context text; the title row stays on the panel
   } finally {
     ev(`document.documentElement.dataset.lang = "en", "ok"`);
   }
@@ -1768,26 +1773,30 @@ gui("Y3 M-5: at 1000x700 (ja) three cards, the one-row free-text card and the hi
   }
 });
 
-// ---- G1: where the question comes from — repo and branch first, big, top-left ----
+// ---- G1 / HD2: where the question comes from — the title first, the origin on one small muted line below ----
 
-const firstText = () => ev<string>(`"t:" + document.querySelector("#head .hd-top").firstChild.textContent`).slice(2);
+const ctxText = () => ev<string>(`"t:" + document.querySelector("#head .hd-where").textContent`).slice(2);
 const fontPx = (sel: string) => ev<string>(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).fontSize`);
 
-gui("G1: row 1 of the header holds the origin alone at the headline size; the title is its own row below, at any length", async () => {
+gui("HD2: the header is two rows: the title (20 px) first, then the muted context line `repo ⎇ branch ⧉ worktree · scope · age`, at any length", async () => {
   ab("set", "viewport", "1440", "900");
   try {
-    await seedRich({ cwd: "/Users/dev/.herdr/worktrees/ukagai/fix-header-rows" });
+    // a real repository on branch main inside a herdr worktree path, so the server collects the branch
+    const wt = join(home, ".herdr", "worktrees", "ukagai", "wt");
+    mkdirSync(wt, { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main", wt]);
+    execFileSync("git", ["-C", wt, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"]);
+    await seedRich({ cwd: wt });
     await reopen(RICH_READY);
-    const origin = ev<string>(`"t:" + document.querySelector("#head .origin").textContent`).slice(2);
-    assert.match(origin, /^\S+( ⎇ \S+)?( ⧉ \S+)?$/);
-    assert.match(origin, /⧉ fix-header-rows$/); // the worktree is in the header
-    assert.equal(firstText(), origin); // the first text node of row 1
-    assert.equal(ev<boolean>(`document.querySelector("#head .hd-top").firstElementChild.classList.contains("origin")`), true);
-    assert.equal(fontPx("#head .origin"), fontPx("#head .headline"));
-    assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .origin")).fontWeight`), 400 as unknown as string);
-    assert.equal(count("#head .hd-top .v2-title"), 0);
-    assert.equal(count("#head .hd-sub .v2-title"), 1);
-    assert.equal(ev<boolean>(`(() => { const o = document.querySelector("#head .origin").getBoundingClientRect(), t = document.querySelector("#head .v2-title").getBoundingClientRect(); return t.top >= o.bottom - 1 && t.left < o.left + 40; })()`), true); // below the origin, not beside it
+    // fails on the old layout: row 1 was the origin (18 px), the title its own row below, three or four rows in all
+    assert.equal(count("#head > *"), 2);
+    assert.equal(ev<string>(`document.querySelector("#head").firstElementChild.className`), "hd-title");
+    assert.match(ctxText(), /^ukagai ⎇ main ⧉ wt · repo · .+/); // repo ⎇ branch ⧉ worktree · scope · age
+    assert.equal(fontPx("#head .hd-ctx"), "12px");
+    assert.equal(fontPx("#head .v2-title"), "20px");
+    assert.equal(ev<boolean>(`document.querySelector("#head .hd-where .repo-dot") !== null && getComputedStyle(document.querySelector("#head .hd-where")).color === getComputedStyle(document.querySelector("#head .hd-ctx")).color`), true, "dot in the repo colour, text muted like the row");
+    assert.equal(ev<string>(`document.querySelector("#head .hd-where").title`).endsWith("/worktrees/ukagai/wt") || ev<string>(`document.querySelector("#head .hd-where").title`).endsWith("/ukagai/wt"), true, "the cwd is the tooltip");
+    assert.equal(ev<boolean>(`(() => { const t = document.querySelector("#head .v2-title").getBoundingClientRect(), c = document.querySelector("#head .hd-ctx").getBoundingClientRect(); return c.top >= t.bottom - 1; })()`), true); // below the title
     ab("screenshot", join(SHOTS, "G1-header-origin.png"));
 
     await cancelAll();
@@ -1795,17 +1804,45 @@ gui("G1: row 1 of the header holds the origin alone at the headline size; the ti
     const long = "A title that is deliberately sixty characters long, yes!!!!";
     await seedRich({ title: long.padEnd(60, "!"), cwd: "/Users/dev/.herdr/worktrees/a-repository-with-a-long-name/fix-a-very-long-worktree-name-for-the-header" });
     await reopen(RICH_READY);
-    assert.equal(ev<boolean>(`(() => { const o = document.querySelector("#head .origin"); return o.scrollHeight <= o.clientHeight + 1 && o.getBoundingClientRect().height < 40; })()`), true); // one line
-    assert.equal(count("#head .hd-top .v2-title"), 0);
-    assert.equal(count("#head .hd-sub .v2-title"), 1);
-    assert.equal(fontPx("#head .origin"), fontPx("#head .headline"));
+    assert.equal(count("#head > *"), 2);
+    assert.equal(ev<boolean>(`(() => { const o = document.querySelector("#head .hd-where"); return o.getBoundingClientRect().height < 24; })()`), true); // one line, cut with … when long
     ab("screenshot", join(SHOTS, "G1-header-origin-1000.png"));
   } finally {
     ab("set", "viewport", "1440", "900");
   }
 });
 
-gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval screens have the origin too", async () => {
+gui("HD2: no worktree part for a plain checkout; the reversibility badge only for costly / irreversible; the age is the last part", async () => {
+  await seedQuestion({ cwd: "/Users/dev/projects/plain-repo" });
+  await reopen();
+  assert.match(ctxText(), /^plain-repo( ⎇ \S+)?( · \S.*)? · .+$/);
+  assert.equal(ctxText().includes("⧉"), false);
+  assert.equal(count("#head .badge"), 0); // reversible: nothing
+  assert.equal(ev<boolean>(`document.querySelector("#head .hd-ctx .hd-where .age") === document.querySelector("#head .hd-where").lastElementChild`), true);
+  await cancelAll();
+  await seedRich();
+  await reopen(RICH_READY);
+  assert.equal(count("#head .hd-title .badge.costly"), 1);
+  assert.equal(count("#head .hd-ctx .badge"), 0);
+});
+
+gui("HD2: clicking the title and `.` expand it; clicking the headline expands too (the headline is in the body)", async () => {
+  ab("set", "viewport", "1000", "700");
+  try {
+    const long = "A very long title that goes on and on so that it needs more than two lines at this width, ".repeat(4).trim();
+    await seedRich({ title: long });
+    await reopen(RICH_READY);
+    assert.equal(ev<boolean>(`document.querySelector("#head .v2-title").scrollHeight > document.querySelector("#head .v2-title").clientHeight + 1`), true, "folded to two lines");
+    ab("click", "#head .v2-title");
+    assert.equal(ev<boolean>(`document.querySelector("#head").classList.contains("expanded") && document.querySelector("#background").classList.contains("expanded")`), true);
+    ab("click", "#background .headline");
+    assert.equal(ev<boolean>(`document.querySelector("#head").classList.contains("expanded")`), false);
+    press(".");
+    assert.equal(ev<boolean>(`document.querySelector("#head").classList.contains("expanded")`), true);
+  } finally { ab("set", "viewport", "1440", "900"); }
+});
+
+gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval screens have the context line too", async () => {
   await cancelAll();
   await seedQuestion({ cwd: "/Users/dev/.herdr/worktrees/ukagai/fix-header-rows" });
   await seedQuestion({ cwd: "/Users/dev/.herdr/worktrees/ukagai/fix-header-rows" });
@@ -1818,8 +1855,9 @@ gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval 
   await cancelAll();
   await seedBlocker();
   await reopen();
-  assert.equal(ev<boolean>(`document.querySelector("#head .hd-top").firstElementChild.classList.contains("origin")`), true);
-  assert.equal(firstText(), q1("#head .origin"));
+  assert.equal(ev<string>(`document.querySelector("#head").lastElementChild.className.split(" ")[0]`), "hd-ctx");
+  assert.equal(ev<boolean>(`document.querySelector("#head .hd-ctx").firstElementChild.classList.contains("blocker-band")`), true); // the band opens the context row
+  assert.equal(ev<boolean>(`document.querySelector("#head .hd-where") !== null`), true);
   await cancelAll();
   const n = ++seq;
   const d = await api("/api/decisions", {
@@ -1829,7 +1867,7 @@ gui("G1: the drawer row starts with the repo in bold; blocker and plan-approval 
   });
   assert.ok(d.id);
   await reopen("document.querySelector('#decision .btn')");
-  assert.equal(firstText(), q1("#head .origin"));
+  assert.equal(ev<boolean>(`document.querySelector("#head .hd-where") !== null`), true);
 });
 
 // ---- UX1: modern-web audit ----

@@ -211,7 +211,7 @@ const SEC = `document.querySelectorAll("#background details.plan-sec")`;
 const openCount = `document.querySelectorAll("#background details.plan-sec[open]").length`;
 const spyPosts = () => ev(`(() => { window.__posts = []; if (!window.__spied) { window.__spied = true; const f = window.fetch; window.fetch = (u, i) => { if (i && i.method === "POST") window.__posts.push(String(u)); return f(u, i); }; } else window.__posts = []; return "ok"; })()`);
 const posts = () => ev<string[]>(`JSON.stringify(window.__posts)`);
-const line2 = () => ev<string>(`document.querySelector("#head .hd-line2 .headline").textContent`);
+const line2 = () => ev<string>(`document.querySelector("#head .hd-ctx").textContent`);
 const marks = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background details.plan-sec > summary > .ps-mark")].map((m) => m.textContent))`);
 const planRead = async (name: string) => ((await api("/api/plans")).plans as { name: string; read: boolean }[]).find((p) => p.name === name)?.read;
 
@@ -220,7 +220,7 @@ async function arrive(name: string, text = LONG, ageMs = 0) {
   await reopen(IDLE);
   await spyPosts();
   writePlan(name, text, ageMs);
-  await waitFor("plan screen", `document.querySelector("#head .hd-line2 .headline")?.textContent.includes("updated") && document.querySelector("#background .md")`, 4000);
+  await waitFor("plan screen", `document.querySelector("#head .hd-ctx")?.textContent.includes("updated") && document.querySelector("#background .md")`, 4000);
 }
 
 async function seedPlanDecision(file: string, plan: string): Promise<{ id: string }> {
@@ -254,8 +254,9 @@ gui("the card: title, row 2 first sentence, optional line, the recap, three card
   const c = await seedCheckpoint();
   await show(c.id);
   assert.match(text("#head .v2-title"), /^Progress check · ukagai-ck-demo$/);
-  assert.equal(text("#head .hd-line2 .headline"), "Added the retry to the uploader and the tests pass.");
-  assert.equal(text("#head .cp-optional"), "The agent keeps working if you do not answer");
+  assert.equal(ev(`document.querySelectorAll("#head > *").length`), 2);
+  assert.equal(ev(`!!document.querySelector("#background .headline")`), false, "no headline: the recap shows the sentence"); // fails on the old layout (hd-line2 .headline)
+  assert.equal(text("#background .cp-optional"), "The agent keeps working if you do not answer");
   assert.equal(text("#background .cp-recap"), RECAP);
   assert.deepEqual(await cards(), ["continue", "instruct", "stop"]);
   assert.match(text("#decision .opt[data-card=continue]"), /Continue.*Recommended/);
@@ -263,8 +264,10 @@ gui("the card: title, row 2 first sentence, optional line, the recap, three card
   assert.equal(text("#decision .opt[data-card=stop]"), "3Stop here");
   assert.equal(ev(`!!document.querySelector("#decision .none-card, #decision .cannot-card, #decision .opt.free")`), false);
   assert.equal(ev(`document.querySelector("#decision .cp-idle").hidden`), true);
-  // The origin still comes first on row 1
-  assert.equal(ev(`document.querySelector("#head .hd-top").firstElementChild.className`), "origin");
+  // The title is row 1, the context line row 2; the note sits under the goal row at the top of the left column
+  assert.equal(ev(`document.querySelector("#head").firstElementChild.className`), "hd-title");
+  assert.equal(ev(`document.querySelector("#head").lastElementChild.className`), "hd-ctx");
+  assert.equal(ev(`!!document.querySelector("#background > .cp-optional")`), true);
   ab("screenshot", join(SHOTS, "CK-U-checkpoint.png"));
 });
 
@@ -319,7 +322,7 @@ gui("precedence: a question outranks a checkpoint, a checkpoint outranks a plan 
   const q = await seedQuestion();
   ab("open", base + "/");
   await waitFor("first screen", `document.querySelector("#decision .opt")`);
-  assert.match(text("#head .v2-title") + text("#head .hd-line2"), /Checkpoint order/);
+  assert.match(text("#head .v2-title") + text("#head .hd-ctx"), /Checkpoint order/);
   assert.equal(text("#pending-count"), "3"); // question + checkpoint + the new plan file
   const rows = await rowTexts();
   assert.equal(rows.length, 3);
@@ -388,7 +391,7 @@ gui("history drawer: an answered checkpoint is marked not delivered yet, then de
   await waitFor("idle again", IDLE);
   await seedCheckpoint(sid, "recap Y", transcript);
   await waitFor("last card", CARD);
-  await waitFor("history loaded", `document.querySelector("#head .hd-goal")`);
+  await waitFor("history loaded", `document.querySelector("#background .hd-goal")`);
   key("s");
   await waitFor("drawer", `document.querySelector(".hist-row")`);
   const rows = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll(".hist-row")].map((r) => r.textContent))`);
@@ -408,7 +411,7 @@ gui("Japanese: every word of the card, and English again", async () => {
   await show(c.id);
   await stopEvent(sid);
   ev(`document.documentElement.dataset.lang = "ja", "ok"`);
-  await waitFor("ja applied", `document.querySelector("#head .cp-optional")?.textContent === "答えなくてもエージェントは進みます"`);
+  await waitFor("ja applied", `document.querySelector("#background .cp-optional")?.textContent === "答えなくてもエージェントは進みます"`);
   assert.match(text("#head .v2-title"), /^進捗確認 · ukagai-ck-demo$/);
   assert.match(text("#decision .opt[data-card=continue]"), /このまま続ける/);
   assert.equal(text("#decision .opt[data-card=instruct] .lab"), "指示を出す…");
@@ -417,7 +420,7 @@ gui("Japanese: every word of the card, and English again", async () => {
   ev(`document.querySelector("#pending-btn").hidden = false, document.querySelector("#pending-btn").click(), "ok"`);
   assert.match((await rowTexts())[0]!, /進捗/);
   ev(`document.documentElement.dataset.lang = "en", "ok"`);
-  await waitFor("en applied", `document.querySelector("#head .cp-optional")?.textContent === "The agent keeps working if you do not answer"`);
+  await waitFor("en applied", `document.querySelector("#background .cp-optional")?.textContent === "The agent keeps working if you do not answer"`);
 });
 
 gui("a cancelled update removes the card silently (no toast)", async () => {

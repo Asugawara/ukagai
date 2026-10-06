@@ -70,8 +70,8 @@ test("a new plan arriving on the idle screen comes up by itself: header, folded 
   await arrive(app);
   assert.equal(app.shownPlan, "b.md");
   const { text, lines } = draw(app, 140, 400);
-  assert.ok(lines[1]!.includes("Export retry"), lines[1]);
-  assert.ok(lines[0]!.includes("Plan") && lines[0]!.includes("updated 1h") && lines[0]!.includes("9 sections · 200 lines · 12 files") && lines[0]!.includes("b.md"), lines[0]);
+  assert.ok(lines[0]!.includes("Export retry"), lines[0]);
+  assert.ok(lines[1]!.startsWith("plans/") && lines[1]!.includes("Plan") && lines[1]!.includes("updated 1h") && lines[1]!.includes("9 sections · 200 lines · 12 files") && lines[1]!.includes("b.md"), lines[1]);
   assert.ok(!/read only/i.test(text));
   const heads = foldedRows(text);
   assert.equal(heads.length, 9, "the H3 rows of folded sections are hidden");
@@ -90,7 +90,7 @@ test("a new plan arriving on the idle screen comes up by itself: header, folded 
   ja.app.lang = "ja";
   await arrive(ja.app);
   const jd = draw(ja.app, 140, 400);
-  assert.ok(jd.lines[0]!.includes("計画") && jd.lines[0]!.includes("更新 1") && jd.lines[0]!.includes("9 節 · 200 行 · 12 ファイル"), jd.lines[1]);
+  assert.ok(jd.lines[1]!.includes("計画") && jd.lines[1]!.includes("更新 1") && jd.lines[1]!.includes("9 節 · 200 行 · 12 ファイル"), jd.lines[1]);
   assert.ok(jd.text.includes("読んだ (Esc)"));
 });
 
@@ -257,7 +257,7 @@ test("works at 100x24 stacked: the plan screen and the idle screen", async () =>
   await arrive(app);
   const { text, lines } = draw(app, 100, 24);
   assert.ok(!text.includes(" │ "), "one column");
-  assert.ok(lines[0]!.startsWith("plans/") && lines[0]!.includes("Plan") && lines[1]!.includes("Export retry"));
+  assert.ok(lines[1]!.startsWith("plans/") && lines[1]!.includes("Plan") && lines[0]!.includes("Export retry"));
   // The plan has a session, so the instruction card takes the last rows and the Contents label scrolls out: the folded rows are the contents here
   assert.ok(/[▸▾] ☑ Context/.test(text) && text.includes("Done reading (Esc)"));
   assert.ok(!text.includes("Approve"));
@@ -270,7 +270,7 @@ test("a short plan shows the whole document with no contents", async () => {
   const { app } = setup();
   await arrive(app, "c.md");
   const { text, lines } = draw(app);
-  assert.ok(lines[0]!.includes("Plan") && lines[0]!.includes("c.md") && !lines[0]!.includes("sections"), lines[0]);
+  assert.ok(lines[1]!.includes("Plan") && lines[1]!.includes("c.md") && !lines[1]!.includes("sections"), lines[1]);
   assert.ok(text.includes("More.") && !text.includes("Contents") && text.includes("Done reading (Esc)"));
   assert.ok(!/[☐☑]/.test(text));
 });

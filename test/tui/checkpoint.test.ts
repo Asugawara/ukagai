@@ -52,11 +52,11 @@ function setup(...ds: Decision[]): App {
 test("TUI checkpoint: title, first sentence, optional line, the recap, three cards, no None / Can't answer", () => {
   const app = setup(checkpoint());
   const { lines, text } = draw(app);
-  assert.match(lines[0]!, /^feat-ck|^ukagai ⎇|^ukagai/); // the origin still comes first
-  assert.ok(lines[1]!.includes("Progress check · feat-ck"), lines[1]);
-  assert.ok(lines[2]!.includes("Added the retry to the uploader and the tests pass."), lines[2]);
-  assert.ok(!lines[2]!.includes("Next I would"), "row 2 is the first sentence only");
-  assert.ok(lines[3]!.includes("The agent keeps working if you do not answer"), lines[3]);
+  assert.ok(lines[0]!.includes("Progress check · feat-ck"), lines[0]); // the title comes first
+  assert.match(lines[1]!, /^(feat-ck|ukagai)/); // then the context line
+  assert.ok(!lines[0]!.includes("Added the retry") && !lines[1]!.includes("Added the retry") && !lines[2]!.includes("Added the retry"), "no headline in the header (the recap is the body)");
+  const optional = lines.findIndex((l) => l.includes("The agent keeps working if you do not answer"));
+  assert.ok(optional > 2, "the note is in the body, not the header");
   assert.ok(text.includes(RECAP.slice(0, 40)), "the recap in the background column");
   assert.ok(lines.some((l) => /1\s+▸\s+Continue\s+Recommended/.test(l)), "card 1");
   assert.ok(lines.some((l) => /2\s+Give an instruction…/.test(l)), "card 2");
@@ -121,7 +121,7 @@ test("TUI checkpoint: Japanese words", () => {
   app.lang = "ja";
   app.setSessions([sess("idle")]);
   const { text, lines } = draw(app, 100);
-  assert.ok(lines[1]!.includes("進捗確認 · feat-ck"), lines[1]);
+  assert.ok(lines[0]!.includes("進捗確認 · feat-ck"), lines[0]);
   assert.ok(text.includes("答えなくてもエージェントは進みます"));
   assert.ok(text.includes("このまま続ける"));
   assert.ok(text.includes("指示を出す…"));

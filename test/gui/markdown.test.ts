@@ -359,7 +359,8 @@ gui("raw HTML: scripts, iframes, forms, event attributes and unknown tags are dr
   await openRich();
   assert.equal(ev<boolean>(`window.__pwn === undefined`), true);
   assert.equal(count(`${BG} script, ${BG} iframe, ${BG} form, ${BG} object, ${BG} embed, ${BG} kbd, ${BG} button.evil`), 0);
-  assert.equal(ev<boolean>(`[...document.querySelectorAll("${BG} *")].filter((e) => !e.closest("svg")).every((e) => ![...e.attributes].some((a) => a.name.startsWith("on") || a.name === "style" || a.name === "srcdoc"))`), true);
+  // .optref carries the app's own --oc style (the headline, now in this column, holds such marks)
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("${BG} *")].filter((e) => !e.closest("svg") && !e.classList.contains("optref")).every((e) => ![...e.attributes].some((a) => a.name.startsWith("on") || a.name === "style" || a.name === "srcdoc"))`), true);
   assert.equal(ev<boolean>(`document.querySelector("${BG}").textContent.includes("visible text of an unknown tag")`), true);
   assert.equal(count(`${BG} a[href^="javascript:"]`), 0);
   // The review payloads: entity / whitespace tricks all lose their href; a click runs nothing
