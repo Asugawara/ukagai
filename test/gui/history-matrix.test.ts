@@ -144,7 +144,7 @@ after(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-const GOAL = "document.querySelector('#head .hd-goal')";
+const GOAL = "document.querySelector('#background .hd-goal')";
 const PANEL = "document.querySelector('.overlay.history')";
 const BLOCKER_MD = readFileSync(new URL("../explain-fixtures/pass-blocker.md", import.meta.url), "utf8");
 const QUIZ_MD = RICH_MD;
@@ -219,7 +219,7 @@ for (const kind of KINDS) {
       await reopen();
       if (age) ageCache();
       assert.equal(panelOpen(), false);
-      ab("click", "#head .hd-goal");
+      ab("click", "#background .hd-goal");
       assert.equal(panelOpen(), true, "click opens");
       assert.equal(count(".overlay.history .hist-row") >= 3, true);
       press("Escape");
@@ -238,8 +238,8 @@ for (const kind of KINDS) {
 gui("a card whose session has one instruction: the row has no count, click and the panel work", async () => {
   await seedKind("single", ["only one"]);
   await reopen();
-  assert.equal(count("#head .goal-n"), 0);
-  ab("click", "#head .hd-goal");
+  assert.equal(count("#background .goal-n"), 0);
+  ab("click", "#background .hd-goal");
   assert.equal(panelOpen(), true);
   assert.equal(count(".overlay.history .hist-row"), 1);
   noPageErrors();
@@ -249,9 +249,9 @@ gui("zero history: no row, `s` and a click on the header do nothing, no error", 
   await seedKind("single", null);
   await reopen("document.querySelector('#decision .opt, #decision .btn')");
   await sleep(500);
-  assert.equal(count("#head .hd-goal"), 0);
+  assert.equal(count("#background .hd-goal"), 0);
   press("s");
-  ab("click", "#head .hd-sub");
+  ab("click", "#head .hd-title");
   assert.equal(panelOpen(), false);
   noPageErrors();
 });
@@ -260,7 +260,7 @@ gui("with the free-text box focused a click on the Goal row opens the panel", as
   await seedKind("single");
   await reopen();
   assert.equal(ev<boolean>(SELECT_TEXT_FOCUS), true);
-  ab("click", "#head .hd-goal");
+  ab("click", "#background .hd-goal");
   assert.equal(panelOpen(), true);
   noPageErrors();
 });
@@ -282,13 +282,13 @@ gui("an SSE re-render of the same card (another decision arrives, the card is up
   await reopen();
   await seedKind("single", INSTRUCTIONS); // decision.created -> list / header re-render
   await sleep(500);
-  ab("click", "#head .hd-goal");
+  ab("click", "#background .hd-goal");
   assert.equal(panelOpen(), true);
   press("Escape");
   // a draft save on the same decision emits decision.updated
   await api(`/api/decisions/${id}/draft`, { text: "x" }).catch(() => {});
   await sleep(300);
-  ab("click", "#head .hd-goal");
+  ab("click", "#background .hd-goal");
   assert.equal(panelOpen(), true);
   noPageErrors();
 });
@@ -297,16 +297,16 @@ gui("switching between two sessions and back: each card opens its own session's 
   const a = await seedKind("single", ["alpha one", "alpha two"]);
   const b = await seedKind("single", ["beta one", "beta two", "beta three"]);
   await reopen();
-  const goalText = () => q1("#head .goal-text");
+  const goalText = () => q1("#background .goal-text");
   const first = goalText();
   press("Tab");
-  await waitFor("other card", `document.querySelector("#head .goal-text")?.textContent !== ${JSON.stringify(first)}`);
-  ab("click", "#head .hd-goal");
+  await waitFor("other card", `document.querySelector("#background .goal-text")?.textContent !== ${JSON.stringify(first)}`);
+  ab("click", "#background .hd-goal");
   assert.equal(panelOpen(), true);
   const rowsB = count(".overlay.history .hist-row");
   press("Escape", "Tab");
-  await waitFor("back", `document.querySelector("#head .goal-text")?.textContent === ${JSON.stringify(first)}`);
-  ab("click", "#head .hd-goal");
+  await waitFor("back", `document.querySelector("#background .goal-text")?.textContent === ${JSON.stringify(first)}`);
+  ab("click", "#background .hd-goal");
   assert.equal(panelOpen(), true);
   assert.notEqual(count(".overlay.history .hist-row"), 0);
   assert.notEqual(rowsB, 0);

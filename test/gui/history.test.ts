@@ -382,7 +382,7 @@ gui("a stale history (older than the 5 minute cache) still opens from the Goal r
   await reopen(GOAL);
   try {
     ageCache();
-    ab("click", "#head .hd-goal");
+    ab("click", "#background .hd-goal");
     assert.equal(ev<boolean>(`!!${PANEL}`), true, "click on the Goal row opens the panel"); // fails without the fix: silent return
     assert.equal(count(".overlay.history .hist-row"), 3);
     press("Escape");
@@ -397,16 +397,16 @@ gui("a stale history is refreshed in the background: the row and the open panel 
   await seed({ transcript });
   await reopen(GOAL);
   try {
-    assert.equal(q1("#head .goal-n"), "· 3 instructions");
+    assert.equal(q1("#background .goal-n"), "· 3 instructions");
     writeFileSync(transcript, readFileSync(transcript, "utf8") + JSON.stringify({ type: "user", message: { role: "user", content: "fourth: later" }, timestamp: new Date().toISOString() }) + "\n");
     ageCache();
-    ab("click", "#head .hd-goal");
+    ab("click", "#background .hd-goal");
     assert.equal(ev<boolean>(`!!${PANEL}`), true);
     press("ArrowDown"); // selection 1 must survive the in-place re-render
     await waitFor("panel shows 4 rows", `document.querySelectorAll(".overlay.history .hist-row").length === 4`);
     assert.equal(ev<boolean>(`document.querySelectorAll(".overlay.history .hist-row")[1].classList.contains("sel")`), true);
     assert.equal(ev<boolean>(`!!${PANEL}`), true);
     press("Escape");
-    await waitFor("row shows 4 instructions", `document.querySelector("#head .goal-n")?.textContent === "· 4 instructions"`);
+    await waitFor("row shows 4 instructions", `document.querySelector("#background .goal-n")?.textContent === "· 4 instructions"`);
   } finally { unage(); }
 });
