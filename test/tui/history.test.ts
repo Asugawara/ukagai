@@ -6,7 +6,8 @@ import { MESSAGES } from "../../src/tui/i18n.js";
 import type { Key } from "../../src/tui/keys.js";
 import { renderFrame } from "../../src/tui/render.js";
 import { stripAnsi } from "../../src/tui/width.js";
-import { Q, V2_MD, decision, withExplanation } from "./helpers.js";
+import { BLOCKER_MD, Q, V2_MD, blockerDecision, decision, withExplanation } from "./helpers.js";
+import type { Decision } from "../../src/contract.js";
 
 const ch = (c: string): Key => ({ name: "char", ch: c });
 const enter: Key = { name: "enter" };
@@ -248,3 +249,32 @@ test("narrow (stacked) layout also shows Goal:", async () => {
   await tick();
   assert.ok(draw(app, "en", 90).includes("Goal:"));
 });
+
+// `s` on every kind of card, right after the fetch and long after it (the TUI cache has no TTL: it must keep working, never go stale-silent)
+const KINDS: Record<string, () => Decision> = {
+  "single question": () => decision({ ...withExplanation(V2_MD) }),
+  "question without explanation": () => decision(),
+  "multi-question": () => decision({ request: { questions: [
+    { question: "First?", header: "H1", multiSelect: false, options: [{ label: "A", description: "a" }, { label: "B", description: "b" }] },
+    { question: "Second?", header: "H2", multiSelect: true, options: [{ label: "C", description: "c" }, { label: "D", description: "d" }] }] } }),
+  quiz: () => decision({ ...withExplanation(V2_MD, { type: "quiz" }) }),
+  blocker: () => blockerDecision(),
+  "approve plan": () => decision({ kind: "approve_plan", request: { plan: "# Plan\n\nStep 1", planFilePath: "/tmp/p.md" } }),
+  checkpoint: () => decision({ kind: "checkpoint", tool_use_id: "checkpoint:s1:2026-10-02T00:00:00.000Z", request: { recap: "Did a thing. Next another.", recap_at: "2026-10-02T00:00:00.000Z" } }),
+};
+for (const [name, make] of Object.entries(KINDS)) {
+  for (const later of [false, true]) {
+    test(`s opens the history on a ${name} card${later ? " an hour later" : ""} (Goal row shown, footer / list unchanged)`, async () => {
+      const app = new App();
+      app.fetchHistory = async () => HIST;
+      app.upsert(make(), now);
+      await tick();
+      if (later) now += 3600_000;
+      assert.match(draw(app), /Goal:/);
+      press(app, ch("s"));
+      assert.match(draw(app), /second instruction/);
+      press(app, esc);
+      assert.doesNotMatch(draw(app), /second instruction/);
+    });
+  }
+}
