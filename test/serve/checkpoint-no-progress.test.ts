@@ -32,6 +32,21 @@ function open(dir = mkdtempSync(join(tmpdir(), "ukagai-np-"))) {
 const hookEvent = (store: Store, name: string, sid = SID) =>
   store.addEvent({ session_id: sid, transcript_path: session.transcript_path, cwd: "/w/proj", hook_event_name: name, received_at: new Date().toISOString() });
 
+/** An event with extra fields (wakeup, tool_name) */
+const evt = (store: Store, name: string, extra: Record<string, unknown> = {}) =>
+  store.addEvent({ session_id: SID, transcript_path: session.transcript_path, cwd: "/w/proj", hook_event_name: name, received_at: new Date().toISOString(), ...extra });
+
+/** A wake-up turn as a monitoring session shows it: the harness prompt, then Stop / Notification / SubagentStop */
+async function wakeupTurn(store: Store, middle: () => Promise<void> | void = () => {}) {
+  evt(store, "UserPromptSubmit", { wakeup: true });
+  await tick();
+  await middle();
+  for (const n of ["Stop", "Notification", "SubagentStop"]) {
+    evt(store, n);
+    await tick();
+  }
+}
+
 const question = (id: string) => ({
   tool_use_id: id,
   kind: "answer_question" as const,
@@ -162,4 +177,154 @@ test("a Codex session is not subject to the rule", async () => {
   store.createCheckpoint({ ...session, agent: "codex" }, "first", "2026-10-05T01:00:00.000Z");
   await tick();
   assert.equal(store.createCheckpoint({ ...session, agent: "codex" }, "second", "2026-10-05T01:30:00.000Z").created, true);
+});
+
+// ---- wake-up turns ----
+
+test("a wake-up turn (UserPromptSubmit wakeup, Stop, Notification, SubagentStop) between two recaps creates no card", async () => {
+  const { store } = open();
+  store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  await wakeupTurn(store);
+  const second = store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z");
+  assert.deepEqual({ created: second.created, skipped: second.skipped }, { created: false, skipped: "no_progress" });
+  assert.equal(cps(store).length, 1);
+  // and again, 30 minutes later: still nothing
+  await wakeupTurn(store);
+  assert.equal(store.createCheckpoint(session, "third", "2026-10-05T02:00:00.000Z").skipped, "no_progress");
+});
+
+test("the same wake-up turn with a PostToolUse of a file tool creates a card (Edit, Write, MultiEdit, NotebookEdit); Bash / Read do not", async () => {
+  for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
+    const { store } = open();
+    store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+    await tick();
+    await wakeupTurn(store, async () => {
+      evt(store, "PostToolUse", { tool_name: tool });
+      await tick();
+    });
+    assert.equal(store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").created, true, tool);
+  }
+  for (const tool of ["Bash", "Read", "Monitor"]) {
+    const { store } = open();
+    store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+    await tick();
+    await wakeupTurn(store, async () => {
+      evt(store, "PostToolUse", { tool_name: tool });
+      await tick();
+    });
+    assert.equal(store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").skipped, "no_progress", tool);
+  }
+});
+
+test("a decision registered in a wake-up turn counts as activity", async () => {
+  const { store } = open();
+  store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  await wakeupTurn(store, async () => {
+    store.create(question("toolu_w"), {});
+    await tick();
+  });
+  assert.equal(store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").created, true);
+});
+
+test("a human prompt after a wake-up turn counts as activity again", async () => {
+  const { store } = open();
+  store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  await wakeupTurn(store);
+  evt(store, "UserPromptSubmit"); // typed by a human: no wakeup
+  await tick();
+  assert.equal(store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").created, true);
+});
+
+test("the wake-up flag is per session", async () => {
+  const { store } = open();
+  store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  store.addEvent({ session_id: "other", transcript_path: "/o", cwd: "/o", hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString(), wakeup: true });
+  await tick();
+  hookEvent(store, "PostToolUse");
+  await tick();
+  assert.equal(store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").created, true);
+});
+
+test("the wake-up flag survives a store reload (replayed events), and the wake-up turn is still not activity", async () => {
+  const a = open();
+  a.store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  evt(a.store, "UserPromptSubmit", { wakeup: true });
+  await tick();
+  const b = open(a.dir);
+  evt(b.store, "Stop"); // arrives after the reload, still inside the wake-up turn
+  await tick();
+  assert.equal(b.store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").skipped, "no_progress");
+  const c = open(a.dir);
+  assert.equal(c.store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").skipped, "no_progress");
+  // a Write after the reload still counts
+  evt(c.store, "PostToolUse", { tool_name: "Write" });
+  await tick();
+  assert.equal(c.store.createCheckpoint(session, "third", "2026-10-05T02:00:00.000Z").created, true);
+});
+
+test("SessionEnd clears the wake-up flag: events of a resumed session count again", async () => {
+  const { store } = open();
+  store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  evt(store, "UserPromptSubmit", { wakeup: true });
+  await tick();
+  evt(store, "SessionEnd");
+  await tick();
+  evt(store, "SessionStart"); // resumed: no UserPromptSubmit in between
+  await tick();
+  assert.equal(store.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").created, true);
+});
+
+// ---- a wake-up prompt is not the human speaking ----
+
+test("a pending card survives a wake-up turn (same id, no new decision, no_progress); a human prompt still cancels it with new_prompt", async () => {
+  const { store } = open();
+  const first = store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  evt(store, "UserPromptSubmit", { wakeup: true });
+  evt(store, "Stop");
+  await tick();
+  assert.equal(store.get(first.decision!.id)!.status, "pending"); // fails if the wake-up prompt runs cancelPending
+  const again = store.createCheckpoint(session, "first", "2026-10-05T01:30:00.000Z");
+  assert.deepEqual({ created: again.created, skipped: again.skipped }, { created: false, skipped: "no_progress" });
+  assert.equal(cps(store).length, 1);
+  assert.equal(cps(store)[0]!.id, first.decision!.id);
+  evt(store, "UserPromptSubmit"); // the human
+  const d = store.get(first.decision!.id)!;
+  assert.deepEqual({ status: d.status, reason: d.status_reason }, { status: "cancelled", reason: "new_prompt" });
+});
+
+test("a delivered stop holds through a wake-up turn (after_stop); a human prompt lifts it", async () => {
+  const { store } = open();
+  const first = store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  store.submitAnswer(first.decision!.id, { kind: "checkpoint", answer: "stop" });
+  assert.equal(store.consumeInstruction(SID, "terminal")?.kind, "stop");
+  await tick();
+  evt(store, "UserPromptSubmit", { wakeup: true });
+  evt(store, "PostToolUse", { tool_name: "Write" }); // activity, so only the stop can skip
+  await tick();
+  assert.equal(store.createCheckpoint(session, "second", "2026-10-05T02:00:00.000Z").skipped, "after_stop"); // fails if the wake-up prompt runs stoppedSessions.delete
+  evt(store, "UserPromptSubmit"); // the human
+  await tick();
+  assert.equal(store.createCheckpoint(session, "third", "2026-10-05T02:30:00.000Z").created, true);
+});
+
+test("a queued stop survives a wake-up prompt and is delivered; a human prompt drops it", async () => {
+  for (const wakeup of [true, false]) {
+    const { store } = open();
+    hookEvent(store, "UserPromptSubmit"); // working: a stop is queued, not a no-op
+    await tick();
+    const cp = store.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+    store.submitAnswer(cp.decision!.id, { kind: "checkpoint", answer: "stop" });
+    evt(store, "UserPromptSubmit", wakeup ? { wakeup: true } : {});
+    const ins = store.consumeInstruction(SID, "hook");
+    if (wakeup) assert.equal(ins?.kind, "stop"); // fails if the wake-up prompt runs dropQueuedStop
+    else assert.equal(ins, undefined);
+  }
 });

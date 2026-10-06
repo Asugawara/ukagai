@@ -372,6 +372,8 @@ export type WaitResponse = z.infer<typeof WaitResponse>;
 export const EventInput = HookInputBase.extend({
   received_at: z.string(),
   escaped_question: z.boolean().optional(),
+  /** UserPromptSubmit only: the prompt was a harness wake-up (task-notification), not typed by a human */
+  wakeup: z.boolean().optional(),
   blocker_detected: z.boolean().optional(),
   observe: z.object({ phase: z.enum(["start", "end"]) }).optional(),
 });

@@ -294,3 +294,16 @@ test("slugOfHead takes the top-level slug of a line, not a nested one", () => {
   assert.equal(slugOfHead(`${nested}\n${real}\n`), "swift-otter");
   assert.equal(slugOfHead(`${nested}\n{"slug":"cut`), undefined);
 });
+
+test("a plan instruction joined onto a queued reply with no text of its own is worded as a plan instruction, and keeps the checkpoint's identity", async () => {
+  const env = await boot();
+  plan(env, "swift-otter.md");
+  await event(env, "s-live", transcript(env, "s-live", "swift-otter"), "UserPromptSubmit");
+  // A reply without text cannot be made through the API (instruct needs text, stop is 409): queue it the way a restart restores one
+  (env.h.store as any).instructions.set("s-live", { decision_id: "d-cp", kind: "instruct", text: "", created_at: new Date().toISOString() });
+  assert.equal((await api(env, "/api/plans/swift-otter.md/instruct", { text: "add a section" })).status, 200);
+  const got = (await (await api(env, "/api/sessions/s-live/instruction")).json()) as { instruction: { text: string; about?: string; decision_id: string } };
+  assert.equal(got.instruction.text, "add a section");
+  assert.equal(got.instruction.about, "plan");
+  assert.equal(got.instruction.decision_id, "d-cp");
+});

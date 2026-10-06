@@ -130,3 +130,23 @@ test("buildHookEntries: the plan-context group is sync, 3 s, and omitted with --
   assert.equal(o["PreToolUse"]!.some((x) => x.matcher === "EnterPlanMode"), false);
   assert.equal(o["UserPromptSubmit"]!.length, 1);
 });
+
+test("SessionEnd removes the session's marker (and only that one); a missing marker is fine", async () => {
+  const d = tmpDir();
+  assert.ok(planContext({ hook_event_name: "PreToolUse", tool_name: "EnterPlanMode", session_id: "s-end" }, d));
+  assert.ok(planContext({ hook_event_name: "PreToolUse", tool_name: "EnterPlanMode", session_id: "s-keep" }, d));
+  assert.deepEqual(readdirSync(join(d, "plan-context")).sort(), ["s-end", "s-keep"]);
+  const f = await fakeServer();
+  try {
+    const { Client } = await import("../../src/hook/client.js");
+    const { observedEvent } = await import("../../src/hook/context-hooks.js");
+    const client = new Client(f.url, d);
+    await observedEvent({ session_id: "s-end", hook_event_name: "SessionEnd", cwd: "/w" }, client, d);
+    assert.deepEqual(readdirSync(join(d, "plan-context")), ["s-keep"]);
+    await observedEvent({ session_id: "s-gone", hook_event_name: "SessionEnd", cwd: "/w" }, client, d); // no marker: no error
+    // after the end a resumed session gets the rules again
+    assert.ok(planContext({ hook_event_name: "PreToolUse", tool_name: "EnterPlanMode", session_id: "s-end" }, d));
+  } finally {
+    await f.close();
+  }
+});
