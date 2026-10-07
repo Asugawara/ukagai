@@ -154,6 +154,7 @@ gui("two versions: tabs, the summary line, badges, the struck old line and the h
   assert.equal(ev(`document.querySelector("#background .ver-old").textContent.replace(/^−/, "")`), "Retry the export on failure.");
   assert.equal(ev(`document.querySelector("#background details.ver-changed").open && document.querySelector("#background details.ver-added").open`), true, "new and changed sections start open");
   assert.equal(ev(`!!document.querySelector("#background details.plan-sec:not(.ver-added):not(.ver-changed) .ver-chg")`), false, "unchanged sections carry no marker");
+  assert.equal(ev(`[...document.querySelectorAll("#background details.ver-added, #background details.ver-changed")].every((d) => parseFloat(getComputedStyle(d).borderLeftWidth) === 0 && !!d.querySelector(".ver-badge"))`), true, "new / changed sections have no left bar and keep their badge");
   assert.equal(ev(`document.querySelector("#foot .vh:not([hidden])")?.textContent`), "< > Version · ");
   key("<");
   await waitFor("v1 shown", `document.querySelector("#background .ver-tab.sel")?.dataset.n === "1"`);
@@ -176,6 +177,9 @@ gui("two versions: tabs, the summary line, badges, the struck old line and the h
   await waitFor("v2 in ja", `document.querySelector("#background .ver-sum")?.textContent.startsWith("v1 → v2")`);
   assert.equal(sum(), "v1 → v2: 1 節追加 · 1 節変更 · 1 節削除 · 指示: cap the retries");
   ev(`document.documentElement.dataset.lang = "en", "ok"`);
+  key(">");
+  await waitFor("v2 in en", `document.querySelector("#background .ver-tab.sel")?.dataset.n === "2"`);
+  if (process.env.UKAGAI_SHOTS_DIR) { ev(`document.documentElement.dataset.theme = "light", "ok"`); ab("set", "viewport", "1100", "800"); ab("screenshot", join(SHOTS, "sections.png")); }
 });
 
 gui("the selected version tab is inverted (background --fg, text --panel, weight 600) in light and dark; the other tab is outlined", async () => {
