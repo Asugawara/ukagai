@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Decision, PlanRemovedEvent, PlanSummary, SessionHistory, SessionSummary, Settings, type PlanContent } from "../contract.js";
+import { Decision, PlanRemovedEvent, PlanSummary, PlanVersionsResponse, SessionHistory, SessionSummary, Settings, type PlanContent } from "../contract.js";
 
 // Thin fetch wrapper for the server. Auth is the Bearer token in <data-dir>/token (same as the hook client).
 
@@ -120,6 +120,13 @@ export class TuiApi {
     const res = await this.fetch(`/api/plans/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
     return (await res.json()) as PlanContent;
+  }
+
+  /** The versions of a session's plan and the diffs between them (`current`: `decision:<id>` or `plan:<name>`). Throws on any failure */
+  async planVersions(sessionId: string, current: string): Promise<PlanVersionsResponse> {
+    const res = await this.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/plan-versions?current=${encodeURIComponent(current)}`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    return PlanVersionsResponse.parse(await res.json());
   }
 
   /** Mark a plan read at the `mtime` the human actually read. Throws on any failure; callers ignore it */

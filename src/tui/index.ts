@@ -63,6 +63,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   app.fetchHistory = (id) => api.history(id);
   app.fetchPlan = (name) => api.plan(name);
+  app.fetchVersions = (sid, current) => api.planVersions(sid, current);
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
     app.replacePending(await api.listPending(), Date.now());

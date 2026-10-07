@@ -1007,6 +1007,9 @@ const isNewName = (name) => queuedPlans().some((x) => x.name === name);
 const queuedPlans = () => (settings.plans.auto_show ? newPlans().filter((p) => p.session_id) : []);
 const itemIds = () => [...pendingList().map((d) => d.id), ...queuedPlans().map((p) => PLAN_ID + p.name)];
 const drawerIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
+const verOf = (d) => !!verView(d);
+// The `< > Version` hint: always in the hint line, shown only when the plan has versions (they may arrive after the hint was drawn)
+const verHint = (d) => el("span", { class: "vh", hidden: !verOf(d), text: `< > ${t("hint_versions")} · ` });
 const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name }, session_id: data.session_id });
 const shownPlanPd = () => (isPlanId(shownId) && planData.has(planNameOf(shownId)) ? planPd(planData.get(planNameOf(shownId))) : null);
 const ageText = (iso) => t("history_ago", { t: elapsed(iso) });
@@ -1084,6 +1087,7 @@ async function refreshPlanData(name) {
   const old = planData.get(name);
   planData.set(name, data);
   if (shownId !== PLAN_ID + name) return;
+  refreshShownVersions();
   if (old?.markdown === data.markdown && old?.session_id === data.session_id) return; // only the mtime moved: nothing to redraw (the age text keeps ticking)
   const keep = $("background").scrollTop;
   const keepRight = $("decision").scrollTop;
@@ -1165,7 +1169,7 @@ function renderPlanRight(pd) {
 
 function planViewHint(pd, outline, canInstruct) {
   const zone = outline ? `${t(!canInstruct ? "hint_zone_plan_only" : planZone(pd) === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : "";
-  return el("div", { class: "hint", text: `${zone}Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · ` : ""}Tab ${t("hint_next")} · , ${t("hint_settings")}` });
+  return el("div", { class: "hint" }, zone, verHint(pd), `Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · ` : ""}Tab ${t("hint_next")} · , ${t("hint_settings")}`);
 }
 
 // Esc / the text: mark the plan read (unless it already is), then the next item or the idle screen
@@ -1996,7 +2000,7 @@ function renderRightBody(d) {
   if (box) actions.append(box.card);
   actions.append(reject);
   const hist = el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` });
-  const hintFor = () => el("div", { class: "hint" }, `${outline ? `${t(zoneNow() === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · `}y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, hist, `Tab ${t("hint_next")} · , ${t("hint_settings")}`);
+  const hintFor = () => el("div", { class: "hint" }, `${outline ? `${t(zoneNow() === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · `}`, verHint(d), `y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, hist, `Tab ${t("hint_next")} · , ${t("hint_settings")}`);
   setHint(hintFor());
   root.append(actions);
   // Slots: 0 Approve, 1 the instruction card (its box), 2 Reject (its reason box)
@@ -2232,6 +2236,7 @@ async function sendPlanInstruct(pd, dr, text) {
     else if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
   }
   if (shownId === pd.id) rerenderPlanCard(pd);
+  refreshShownVersions(); // the instruction took a snapshot of the plan
 }
 
 function startReject() {
@@ -2972,13 +2977,14 @@ function pathBadges(container) {
 }
 
 // The plan body into the left column: long plans fold into sections, short ones stay one document
-async function renderPlanMarkdown(container, d) {
+async function renderPlanMarkdown(container, d, view) {
   setMarkdown(container, d.request.plan, d);
   const o = planOutline(d);
   if (o && foldPlanSections(container, o, d)) container.classList.add("plan-long");
   pathBadges(container);
   await enhance(container);
   pathBadges(container);
+  if (view && view.v.plan === d.request.plan) markVersion(container, view, o);
 }
 
 // The line next to "Approve this plan?": 9 sections · 219 lines · 14 files, and the plan file's name (full path on hover)
@@ -3156,6 +3162,161 @@ function parseOptionsTable(table, options, fm) {
   return { cards, extras, hasExtra: cards.some((c) => c.hasExtra) };
 }
 
+// ---- Plan versions (GET /api/sessions/:id/plan-versions) ----
+// With 2 or more versions the plan zone gets tabs (v1 ｜ v2 ★), a summary line and markers on the sections / lines that changed since the version
+// before the selected one. The server computes versions and diffs; this only renders them. State per `current` ref: { sig, data, sel (null = the last), opened }
+const planVers = new Map();
+const verInflight = new Set();
+function verRef(d) {
+  if (d?.kind !== "approve_plan") return null;
+  const sid = d.readonly ? d.session_id : d.session?.session_id;
+  if (!sid) return null;
+  return { sid, current: d.readonly ? `plan:${planNameOf(d.id)}` : `decision:${d.id}` };
+}
+const shownPlanItem = () => (isPlanId(shownId) ? shownPlanPd() : decisions.get(shownId));
+function verView(d) {
+  const r = verRef(d);
+  const rec = r && planVers.get(r.current);
+  if (!rec || rec.data.versions.length < 2) return null;
+  const last = rec.data.versions.length - 1;
+  const idx = rec.sel == null || rec.sel > last ? last : rec.sel;
+  return { rec, idx, last, v: rec.data.versions[idx], diff: rec.data.diffs[idx] };
+}
+async function loadVersions(d) {
+  const r = verRef(d);
+  if (!r || verInflight.has(r.current)) return;
+  verInflight.add(r.current);
+  let data;
+  try { data = await api(`/api/sessions/${encodeURIComponent(r.sid)}/plan-versions?current=${encodeURIComponent(r.current)}`); } catch { return; } finally { verInflight.delete(r.current); }
+  if (!Array.isArray(data?.versions) || !Array.isArray(data?.diffs)) return;
+  const old = planVers.get(r.current);
+  const sig = JSON.stringify(data.versions.map((v) => [v.n, v.at, v.plan.length, v.instruction?.text ?? null]));
+  if (old?.sig === sig) return;
+  planVers.set(r.current, { sig, data, sel: old && old.sel != null && old.sel < data.versions.length ? old.sel : null, opened: false });
+  const sd = shownPlanItem();
+  if (sd && verRef(sd)?.current === r.current && (data.versions.length >= 2 || (old?.data.versions.length ?? 0) >= 2)) refreshLeft(true);
+}
+const refreshShownVersions = () => { const sd = shownPlanItem(); if (sd) loadVersions(sd); };
+// Redraw the left column in place (a new version arrived, or another tab was picked)
+function refreshLeft(keepScroll) {
+  const d = shownPlanItem();
+  if (d?.kind !== "approve_plan") return;
+  const root = $("background");
+  const keep = root.scrollTop;
+  const p = renderLeft(d);
+  if (keepScroll) root.scrollTop = keep;
+  syncPlan(d);
+  for (const h of document.querySelectorAll("#foot .vh")) h.hidden = !verOf(d);
+  p?.then?.(refreshWide);
+}
+// `<` / `>`: the previous / next version. true when the plan has versions (the key is consumed)
+function verStep(d, step) {
+  const view = verView(d);
+  if (!view) return false;
+  const next = Math.max(0, Math.min(view.last, view.idx + step));
+  if (next !== view.idx) { view.rec.sel = next === view.last ? null : next; refreshLeft(false); }
+  return true;
+}
+function verCounts(diff) {
+  const { added, changed, removed } = diff.summary;
+  return [added ? count("ver_added", added) : "", changed ? count("ver_changed", changed) : "", removed ? count("ver_removed", removed) : ""].filter(Boolean).join(" · ");
+}
+function verBar(d, view) {
+  const { rec, idx, last } = view;
+  const vs = rec.data.versions;
+  const tabs = el("div", { class: "ver-tabs", role: "tablist" });
+  vs.forEach((v, i) => {
+    const label = i === last ? t("ver_now", { n: v.n }) : v.instruction ? t("ver_before", { n: v.n }) : `v${v.n}`;
+    tabs.append(el("button", { type: "button", class: `ver-tab${i === idx ? " sel" : ""}`, role: "tab", tabindex: "-1", "aria-selected": String(i === idx), "data-n": String(v.n), onclick: () => { rec.sel = i === last ? null : i; refreshLeft(false); } }, label));
+  });
+  const sum = el("div", { class: "ver-sum" });
+  if (idx === 0) sum.append(el("b", { text: `v${vs[0].n}:` }), ` ${t("ver_first")}`);
+  else {
+    sum.append(el("b", { text: `v${vs[idx - 1].n} → v${vs[idx].n}:` }), ` ${verCounts(view.diff) || t("ver_nochange")}`);
+    const ins = vs[idx - 1].instruction;
+    if (ins) sum.append(" · ", el("b", { text: t(ins.kind === "reject" ? "ver_rejection" : "ver_instruction") }), " ", el("span", { class: "ver-ins", title: ins.text, text: ins.text }));
+  }
+  const bar = el("div", { class: "ver-bar" }, tabs, sum);
+  if (idx !== last) bar.append(el("div", { class: "ver-note", text: t("ver_showing", { n: vs[idx].n, last: vs[last].n }) }));
+  return bar;
+}
+// New / changed sections start open (once per set of versions)
+function openChanged(d, view) {
+  if (view.rec.opened || !view.diff || view.idx === 0) return;
+  const o = planOutline(d);
+  if (!o) return;
+  view.rec.opened = true;
+  const st = planState(d, o);
+  const used = new Set();
+  for (const sec of view.diff.sections) {
+    if (!sec.heading || sec.status === "removed") continue;
+    const e = o.entries.find((x) => x.level === 2 && !used.has(x.i) && x.plain === plainMd(sec.heading));
+    if (!e) continue;
+    used.add(e.i);
+    if (sec.status === "added" || sec.status === "changed") st.open.add(e.i);
+  }
+}
+const VER_LIST_MARK = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/;
+// Highlight the changed lines of one section: the new line gets a tint, the line it replaced is shown struck through above it
+function markLines(root, lines) {
+  const own = (e) => { const c = e.cloneNode(true); c.querySelectorAll("ul, ol, .ver-old").forEach((x) => x.remove()); return plainMd(c.textContent ?? ""); };
+  const els = [...root.querySelectorAll("li, p, h3, h4, h5, h6, td, th")].map((e) => ({ e, text: own(e) }));
+  let p = 0;
+  let dels = [];
+  for (const ln of lines) {
+    const n = plainMd(ln.text.replace(VER_LIST_MARK, ""));
+    if (!n) continue;
+    if (ln.kind === "del") { dels.push(n); continue; }
+    let k = -1;
+    for (let j = p; j < els.length; j++) if (els[j].text === n) { k = j; break; }
+    if (k < 0) { if (ln.kind === "add") dels = []; continue; }
+    const target = els[k].e;
+    if (ln.kind === "add") target.classList.add("ver-chg");
+    for (const old of dels) {
+      const row = el("div", { class: "ver-old" }, el("s", { text: old }));
+      if (target.tagName === "LI") target.prepend(row); else target.before(row);
+    }
+    dels = [];
+    p = k + 1;
+  }
+}
+// Mark the added / changed sections of the rendered plan (folded <details>, or a flat document that is wrapped per H2 here)
+function markVersion(container, view, o) {
+  if (!view.diff || view.idx === 0) return; // the first version has nothing before it to differ from
+  let secs = [];
+  const dets = [...container.querySelectorAll(":scope > details.plan-sec")];
+  if (dets.length && o) secs = dets.map((det) => ({ el: det, title: o.entries[Number(det.dataset.i)].plain, head: det.firstElementChild }));
+  else {
+    for (const h of [...container.children].filter((k) => k.tagName === "H2")) {
+      const wrap = el("div", { class: "ver-sec" });
+      const nodes = [h];
+      for (let n = h.nextElementSibling; n && n.tagName !== "H2"; n = n.nextElementSibling) nodes.push(n);
+      h.before(wrap);
+      wrap.append(...nodes);
+      secs.push({ el: wrap, title: plainMd(h.textContent ?? ""), head: h });
+    }
+  }
+  const used = new Set();
+  for (const sec of view.diff.sections) {
+    if (!sec.heading || sec.status === "removed" || sec.status === "same") continue;
+    const hit = secs.find((x) => !used.has(x) && x.title === plainMd(sec.heading));
+    if (!hit) continue;
+    used.add(hit);
+    hit.el.classList.add(sec.status === "added" ? "ver-added" : "ver-changed");
+    const badge = el("span", { class: "ver-badge", text: t(sec.status === "added" ? "ver_new" : "ver_chg") });
+    const meta = hit.head.querySelector?.(":scope > .ps-meta");
+    if (meta) meta.before(badge); else hit.head.append(" ", badge);
+    if (sec.status === "changed" && sec.lines) markLines(hit.el, sec.lines);
+  }
+}
+// An earlier version: a flat read-only document (the section state belongs to the version being decided)
+async function renderOldPlan(container, d, view) {
+  setMarkdown(container, view.v.plan, d);
+  pathBadges(container);
+  await enhance(container);
+  markVersion(container, view, null);
+}
+
 // ---- Left column: background ----
 
 function renderLeft(d) {
@@ -3171,8 +3332,14 @@ function renderLeft(d) {
   }
   if (d.kind === "approve_plan") {
     const plan = el("div", { class: "md" });
+    const ref = verRef(d);
+    if (ref && !planVers.has(ref.current)) loadVersions(d);
+    const view = verView(d);
+    const earlier = !!view && view.idx !== view.last;
+    if (view) root.append(verBar(d, view));
     root.append(plan);
-    const jobs = [renderPlanMarkdown(plan, d)];
+    if (view && !earlier) openChanged(d, view);
+    const jobs = [earlier ? renderOldPlan(plan, d, view) : renderPlanMarkdown(plan, d, view)];
     // The hook puts the plan body into explanation.markdown, so continue only when it differs from the plan
     if (hasExplanation(d) && ex.markdown.trim() !== (d.request.plan ?? "").trim()) {
       const md = el("div", { class: "md" });
@@ -3284,6 +3451,7 @@ function notifyArrival(d) {
 function upsert(d) {
   const prev = decisions.get(d.id);
   decisions.set(d.id, d);
+  if (d.kind === "approve_plan") queueMicrotask(refreshShownVersions);
   if (!prev && d.status === "pending" && loaded) notifyArrival(d);
   if (isCheckpoint(d) && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) toast(t("checkpoint_delivered"), { kind: "ok" });
   if (d.id !== shownId) notifyBackground(prev, d);
@@ -3402,6 +3570,8 @@ function logicalKey(ev) {
   const k = CODE_KEYS[ev.code];
   if (k === undefined) return ev.key;
   if (k === "/" && ev.shiftKey) return "?";
+  if (k === "," && ev.shiftKey) return "<";
+  if (k === "." && ev.shiftKey) return ">";
   return k === "g" && ev.shiftKey ? "G" : k;
 }
 
@@ -3461,6 +3631,8 @@ document.addEventListener("keydown", (ev) => {
   if (!typing && key === "b" && drawerIds().length) { ev.preventDefault(); setDrawer(true); return; }
   // [ ] cycle through the items
   if (!typing && (key === "[" || key === "]")) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }
+  // < / > : the previous / next version of a plan that was rewritten after an instruction
+  if (!typing && (key === "<" || key === ">") && verStep(shownPlanItem(), key === ">" ? 1 : -1)) { ev.preventDefault(); return; }
   if (isPlanId(shownId)) { planViewKey(ev); return; }
   if (shownId == null) return;
   if (!typing && key === "s") {

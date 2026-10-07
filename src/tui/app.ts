@@ -1,7 +1,7 @@
-import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type SessionHistory, type SessionSummary, type Settings } from "../contract.js";
+import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type PlanVersionsResponse, type SessionHistory, type SessionSummary, type Settings } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
 import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
-import type { Frame, ListItem, View } from "./render.js";
+import type { Frame, ListItem, View, VersionView } from "./render.js";
 import { parseFrontMatterFields } from "./util.js";
 import type { Lang } from "../settings/config.js";
 import { t, type MessageKey } from "./i18n.js";
@@ -97,6 +97,13 @@ export class App {
   /** Fetches one plan file (set by index.ts; absent in tests that do not need it) and is told when a screen should be redrawn */
   fetchPlan: ((name: string) => Promise<PlanContent>) | null = null;
   onPlans: () => void = () => {};
+  /** Fetches the versions of a session's plan (set by index.ts; absent in tests that do not need it) */
+  fetchVersions: ((sessionId: string, current: string) => Promise<PlanVersionsResponse>) | null = null;
+  /** Plan versions by `current` ref: the data, the tab picked (null = the last), whether to refetch, and the screens built for the earlier versions */
+  private versions = new Map<string, { data: PlanVersionsResponse; sig: string; sel: number | null; stale: boolean; base: ScreenModel | null; models: Map<number, ScreenModel> }>();
+  private verLoading = new Set<string>();
+  /** Refs whose fetch failed: not retried on every paint, only once something arrives that may add a version */
+  private verFailed = new Set<string>();
   private models = new Map<string, ScreenModel>();
   private drafts = new Map<string, Draft>();
   private input: { kind: "free" | "reason" | "note" | "instruct"; text: string } | null = null;
@@ -190,6 +197,7 @@ export class App {
   upsert(d: Decision, now: number): void {
     const prev = this.decisions.get(d.id);
     this.decisions.set(d.id, d);
+    if (d.kind === "approve_plan") this.staleVersions();
     if (d.status !== "pending" && this.sent.has(d.id)) {
       const key = d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[d.status];
       if (key) this.showToast(t(this.lang, key), now);
@@ -259,6 +267,7 @@ export class App {
   /** `plan.updated`: a file was written or its read mark changed */
   planUpdated(p: PlanSummary, now: number): void {
     this.plans.set(p.name, p);
+    this.staleVersions();
     if (p.name === this.shownPlan) {
       const have = this.files.get(p.name);
       if (!have || have.mtime !== p.mtime || have.session_id !== p.session_id) this.refreshShown(p.name);
@@ -316,6 +325,7 @@ export class App {
         if (this.shownPlan !== name) return;
         this.files.set(name, file);
         this.planModels.delete(name);
+        this.staleVersions();
         this.onPlans();
       },
       () => {},
@@ -426,7 +436,22 @@ export class App {
 
   // ---- Accessors ----
 
+  /** The screen model of what is shown: the earlier version picked on a plan with versions, else the item itself */
   model(): ScreenModel | null {
+    const m = this.baseModel();
+    const vs = m ? this.verState(m) : null;
+    if (!m || !vs || vs.idx === vs.last) return m;
+    if (vs.rec.base !== m) {
+      vs.rec.base = m;
+      vs.rec.models.clear();
+    }
+    let old = vs.rec.models.get(vs.idx);
+    // An earlier version is a flat read-only document (the folding state belongs to the version being decided); the id stays so the typed text does too
+    if (!old) vs.rec.models.set(vs.idx, (old = { ...m, background: vs.rec.data.versions[vs.idx]!.plan, plan: null, impact: null }));
+    return old;
+  }
+
+  private baseModel(): ScreenModel | null {
     if (this.shownPlan) {
       let pm = this.planModels.get(this.shownPlan);
       const file = this.files.get(this.shownPlan);
@@ -438,6 +463,98 @@ export class App {
     let m = this.models.get(d.id);
     if (!m) this.models.set(d.id, (m = buildModel(d, this.lang, this.histories.get(d.session.session_id) ?? null)));
     return m;
+  }
+
+  /** Where the versions of a plan item are fetched from: its session and the `current` ref the server appends */
+  private verRef(m: ScreenModel): { sid: string; current: string } | null {
+    if (m.kind !== "plan") return null;
+    if (m.readonly) {
+      const sid = this.files.get(m.readonly.name)?.session_id;
+      return sid ? { sid, current: `plan:${m.readonly.name}` } : null;
+    }
+    const d = this.decisions.get(m.id);
+    return d?.kind === "approve_plan" ? { sid: d.session.session_id, current: `decision:${d.id}` } : null;
+  }
+
+  /** The versions of the shown plan (2 or more), and the one on screen */
+  private verState(m: ScreenModel): { rec: App["versions"] extends Map<string, infer R> ? R : never; idx: number; last: number } | null {
+    const ref = this.verRef(m);
+    const rec = ref && this.versions.get(ref.current);
+    if (!rec || rec.data.versions.length < 2) return null;
+    const last = rec.data.versions.length - 1;
+    return { rec, idx: rec.sel == null || rec.sel > last ? last : rec.sel, last };
+  }
+
+  /** Fetch the versions of the shown plan when they are not here yet or went stale (a decision or plan arrived). Failures are ignored */
+  private ensureVersions(m: ScreenModel | null): void {
+    const ref = m ? this.verRef(m) : null;
+    if (!ref || !this.fetchVersions) return;
+    const have = this.versions.get(ref.current);
+    if ((have && !have.stale) || this.verLoading.has(ref.current) || this.verFailed.has(ref.current)) return;
+    this.verLoading.add(ref.current);
+    this.fetchVersions(ref.sid, ref.current).then(
+      (data) => {
+        this.verLoading.delete(ref.current);
+        const sig = JSON.stringify(data.versions.map((v) => [v.n, v.at, v.plan.length, v.instruction?.text ?? null]));
+        const old = this.versions.get(ref.current);
+        if (old && old.sig === sig) old.stale = false;
+        else {
+          this.versions.set(ref.current, { data, sig, sel: old && old.sel != null && old.sel < data.versions.length ? old.sel : null, stale: false, base: null, models: new Map() });
+          this.onPlans();
+        }
+      },
+      () => {
+        this.verLoading.delete(ref.current);
+        this.verFailed.add(ref.current);
+        if (have) have.stale = false;
+      },
+    );
+  }
+
+  /** Something arrived that may add a version: refetch them the next time the plan is painted */
+  private staleVersions(): void {
+    this.verFailed.clear();
+    for (const r of this.versions.values()) r.stale = true;
+  }
+
+  /** `< >`: the previous / next version */
+  private verStep(delta: number): void {
+    const m = this.baseModel();
+    const vs = m ? this.verState(m) : null;
+    if (!vs) return;
+    const next = Math.max(0, Math.min(vs.last, vs.idx + delta));
+    if (next === vs.idx) return;
+    vs.rec.sel = next === vs.last ? null : next;
+    this.scroll = 0;
+    this.reveal = null;
+  }
+
+  /** The version line, summary and note of the shown plan (null with fewer than 2 versions) */
+  private verView(m: ScreenModel | null): VersionView | null {
+    const vs = m ? this.verState(m) : null;
+    if (!m || !vs) return null;
+    const { rec, idx, last } = vs;
+    const vers = rec.data.versions;
+    const lang = this.lang;
+    const tabs = vers.map((v, i) => (i === last ? t(lang, "ver_now", { n: v.n }) : v.instruction ? t(lang, "ver_before", { n: v.n }) : `v${v.n}`));
+    const diff = rec.data.diffs[idx] ?? null;
+    const count = (key: "ver_added" | "ver_changed" | "ver_removed", n: number): string => (n ? t(lang, n === 1 ? (`${key}_one` as MessageKey) : key, { n }) : "");
+    let head: string;
+    let body: string;
+    let ins: { label: string; text: string } | null = null;
+    if (idx === 0 || !diff) {
+      head = `v${vers[idx]!.n}:`;
+      body = t(lang, "ver_first");
+    } else {
+      head = `v${vers[idx - 1]!.n} → v${vers[idx]!.n}:`;
+      body = [count("ver_added", diff.summary.added), count("ver_changed", diff.summary.changed), count("ver_removed", diff.summary.removed)].filter(Boolean).join(" · ") || t(lang, "ver_nochange");
+      const i = vers[idx - 1]!.instruction;
+      if (i) ins = { label: t(lang, i.kind === "reject" ? "ver_rejection" : "ver_instruction"), text: i.text };
+    }
+    // Markers only when the diff is of the text on screen
+    const shownText = m.plan?.text ?? m.background ?? "";
+    const marks = idx > 0 && !!diff && (idx !== last || vers[idx]!.plan === shownText);
+    return { tabs, idx, head, body, ins, note: idx !== last ? t(lang, "ver_showing", { n: vers[idx]!.n, last: vers[last]!.n }) : null, diff: marks ? diff : null };
   }
 
   private draft(m: ScreenModel): Draft {
@@ -454,6 +571,7 @@ export class App {
 
   view(now: number): View {
     const m = this.model();
+    this.ensureVersions(this.baseModel());
     const dr = m ? this.draft(m) : null;
     const count = this.count(now);
     const list: View["list"] =
@@ -503,6 +621,7 @@ export class App {
       copy: this.copySupported,
       recFull: this.shownId !== null && this.recFull.has(this.shownId),
       plan: m?.plan ? this.planState(m) : null,
+      ver: this.verView(m),
       scroll: this.scroll,
       rscroll: this.rscroll,
       focus: this.effectiveFocus(m),
@@ -672,6 +791,7 @@ export class App {
         return [];
       case "history-close": this.mode = "normal"; return [];
       case "plan-done": return this.planDone(now);
+      case "ver": this.verStep(a.delta); return [];
       case "history-back": {
         this.histDetail = null;
         this.focus = "decision";
@@ -1166,6 +1286,7 @@ export class App {
 
   /** The server's answer to an instruction sent from a plan file */
   planInstructed(name: string, via: string, now: number): void {
+    this.staleVersions(); // the instruction took a snapshot of the plan
     const key = planKeyOf(name);
     this.sending.delete(key);
     const dr = this.drafts.get(key);

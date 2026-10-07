@@ -181,7 +181,9 @@ export type Action =
   | { type: "history-close" }
   | { type: "history-back" }
   /** A plan file on its own (no decision): Esc = Done reading */
-  | { type: "plan-done" };
+  | { type: "plan-done" }
+  /** `<` / `>` on a plan: the previous / next version (a plan that was rewritten after an instruction) */
+  | { type: "ver"; delta: -1 | 1 };
 
 export interface KeyContext {
   mode: Mode;
@@ -278,6 +280,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ch === "q") return done({ type: "quit" });
   if (ch === "s") return done({ type: "history" });
   if (ctx.histDetail && key.name === "esc") return done({ type: "history-back" });
+  if (ctx.kind === "plan" && !ctx.full && (ch === "<" || ch === ">")) return done({ type: "ver", delta: ch === ">" ? 1 : -1 });
   if (ctx.planOnly && !ctx.full && key.name === "esc") return done({ type: "plan-done" });
   const goLeft = key.name === "left" || ch === "h";
   const goRight = key.name === "right" || ch === "l";
