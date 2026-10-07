@@ -135,6 +135,8 @@ export class Store {
 
   // Aggregates rebuilt from events
   private escapedQuestions = 0;
+  /** Sessions whose last Stop was an escaped question (the agent asked in the terminal and waits there); cleared by the next UserPromptSubmit or the end of the session */
+  private askedInTerminal = new Set<string>();
   private blockersDetected = 0;
   private panelOpens = 0;
   private observeStarts = new Map<string, number>();
@@ -735,6 +737,11 @@ export class Store {
     if (live) this.emit("session.updated", next);
   }
 
+  /** The session's last Stop ended with a question put in the terminal: the human is being asked there */
+  isAskedInTerminal(sessionId: string): boolean {
+    return this.askedInTerminal.has(sessionId);
+  }
+
   listSessions(): SessionSummary[] {
     return [...this.sessions.values()].sort((a, b) => b.last_event_at.localeCompare(a.last_event_at));
   }
@@ -760,6 +767,8 @@ export class Store {
     // A wake-up turn is the harness polling the agent: only a change to files counts as progress
     if (!this.wakeupTurns.has(ev.session_id) || isFileChange(ev)) this.markActivity(ev.session_id, Date.parse(ev.received_at));
     if (ev.escaped_question) this.escapedQuestions++;
+    if (ev.hook_event_name === "Stop" && ev.escaped_question) this.askedInTerminal.add(ev.session_id);
+    else if (ev.hook_event_name === "Stop" || ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "SessionEnd") this.askedInTerminal.delete(ev.session_id);
     if (ev.blocker_detected) this.blockersDetected++;
     const at = Date.parse(ev.received_at);
     if (ev.observe && Number.isFinite(at)) {

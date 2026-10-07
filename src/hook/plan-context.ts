@@ -34,7 +34,7 @@ export function planContextText(spec: string | null = specPath()): string {
   ].join("\n");
 }
 
-const markerPath = (dataDir: string, sessionId: string) => join(dataDir, "plan-context", sessionId.replace(/[^\w.-]/g, "_"));
+export const markerPath = (dataDir: string, sessionId: string) => join(dataDir, "plan-context", sessionId.replace(/[^\w.-]/g, "_"));
 
 /** The session ended: its marker is of no use any more (best effort) */
 export function removePlanMarker(sessionId: unknown, dataDir: string): void {

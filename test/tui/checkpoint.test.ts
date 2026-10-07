@@ -139,7 +139,7 @@ test("TUI checkpoint: order — a blocker, then a question, then the checkpoint,
   assert.equal(app.count(clock), 3);
   assert.ok(BLOCKER_Q);
   // A plan file comes after the checkpoint
-  const plan: PlanSummary = { name: "p.md", title: "A plan file", mtime: new Date(clock - 60_000).toISOString(), bytes: 10, sections: 1, lines: 3, read: false };
+  const plan: PlanSummary = { name: "p.md", title: "A plan file", mtime: new Date(clock - 60_000).toISOString(), bytes: 10, sections: 1, lines: 3, read: false, format_ok: true, ready: true, session_id: "s-plan" };
   app.replacePlans([plan], clock);
   press(app, ch("b"));
   const rows = draw(app).lines.filter((l) => /^ ?[▸ ] /.test(l) && !l.startsWith("      ") && !l.startsWith("    "));

@@ -1015,17 +1015,27 @@ const newPlans = () => {
 // Every item in order: pending decisions (oldest first), then new plans (newest first)
 const isNewName = (name) => queuedPlans().some((x) => x.name === name);
 // Settings `plans.auto_show = false`: new plan files stay out of the queue (shown, counted, cycled); the drawer still lists them
-// A plan file whose agent session is unknown has no actions and is never queued whatever the setting says; it is listed in the drawer until the session is found (plan.updated with session_id)
-const queuedPlans = () => (settings.plans.auto_show ? newPlans().filter((p) => p.session_id) : []);
+// Only a `ready` plan (the server: complete, session known, not working, no decision pending) is queued, shown automatically or counted; a plan still being
+// written is listed in the drawer (labelled "Writing") and turns up in the queue when plan.updated says it is ready
+const queuedPlans = () => (settings.plans.auto_show ? newPlans().filter((p) => p.ready) : []);
 const itemIds = () => [...pendingList().map((d) => d.id), ...queuedPlans().map((p) => PLAN_ID + p.name)];
 const drawerIds = () => [...pendingList().map((d) => d.id), ...newPlans().map((p) => PLAN_ID + p.name)];
 const planPd = (data) => ({ id: PLAN_ID + data.name, kind: "approve_plan", readonly: true, status: "pending", title: data.title, mtime: data.mtime, request: { plan: data.markdown, planFilePath: data.name }, session_id: data.session_id });
 const shownPlanPd = () => (isPlanId(shownId) && planData.has(planNameOf(shownId)) ? planPd(planData.get(planNameOf(shownId))) : null);
 const ageText = (iso) => t("history_ago", { t: elapsed(iso) });
+// The Instruct card needs a session that is known and not working (the agent could not take the text between prompt and stop)
+const planCanInstruct = (pd) => !!pd.session_id && sessions.get(pd.session_id)?.state !== "working";
+let shownCanInstruct = false;
 const planStatsText = (p) => [count("plan_sections", p.sections), count("plan_lines", p.lines)].join(" · ");
 
 async function fetchPlan(name) {
   return api(`/api/plans/${encodeURIComponent(name)}`);
+}
+
+// The shown plan's session started or stopped working: the Instruct card appears or goes away
+function syncPlanInstruct(sid) {
+  const pd = shownPlanPd();
+  if (pd && pd.session_id === sid && planCanInstruct(pd) !== shownCanInstruct) renderAll();
 }
 
 // Fetch the body of a plan into planData. true when it is there
@@ -1139,7 +1149,8 @@ function renderPlanRight(pd) {
   right.replaceChildren();
   const outline = planOutline(pd);
   const dr = draftOf(pd);
-  const canInstruct = !!pd.session_id;
+  const canInstruct = planCanInstruct(pd);
+  shownCanInstruct = canInstruct;
   const zoneNow = () => (outline ? planState(pd, outline).zone : "opts");
   if (outline && !canInstruct) planState(pd, outline).zone = "plan"; // nothing to the right
   // The box takes the focus when the card is first shown on a short plan (it is the only thing to act on) and keeps it across a live update
@@ -1164,7 +1175,7 @@ function renderPlanRight(pd) {
   }
   actions.append(el("div", { class: "done-reading", role: "button", tabindex: "-1", onclick: doneReading },
     el("span", { text: t("plan_done_reading") }), el("kbd", { text: "Esc" })));
-  if (!canInstruct) actions.append(el("div", { class: "plan-unread", id: "plan-no-session", text: t("plan_no_session") }));
+  if (!canInstruct) actions.append(el("div", { class: "plan-unread", id: "plan-no-session", text: t(pd.session_id ? "plan_agent_working" : "plan_no_session") }));
   right.append(actions);
   setHint(planViewHint(pd, outline, canInstruct));
   placeToasts();
@@ -1198,7 +1209,7 @@ function planViewKey(ev) {
   }
   ev.preventDefault();
   if (key === "Escape") { doneReading(); return; }
-  if (key === "i") { if (pd.session_id) ui?.openInstruct?.(); else toast(t("plan_no_session")); return; }
+  if (key === "i") { if (planCanInstruct(pd)) ui?.openInstruct?.(); else toast(t(pd.session_id ? "plan_agent_working" : "plan_no_session")); return; }
   if (zoneKey(pd, key, ev)) return;
   if (key === "Enter" && ui?.canInstruct && planZone(pd) === "opts") ui.openInstruct();
 }
@@ -1283,7 +1294,9 @@ function renderList() {
       el("span", { text: t("plan_kind") }),
       el("span", { class: "age", "data-created": p.mtime, "data-tpl": "plan_row_age", text: ageText(p.mtime) }),
       el("span", { text: planStatsText(p) }),
-      el("span", { class: "mark", title: id === shownId ? t("badge_shown") : "", text: id === shownId ? "▸" : "●" }));
+      p.ready
+        ? el("span", { class: "mark", title: id === shownId ? t("badge_shown") : "", text: id === shownId ? "▸" : "●" })
+        : el("span", { class: "mark writing", text: t("plan_writing") }));
     list.append(el("li", {}, el("button", { class: "row plan-row" + (id === shownId ? " current" : ""), type: "button", "data-name": p.name, onclick: () => { show(id); setDrawer(false); } },
       el("div", { class: "title", text: p.title }), meta)));
   }
@@ -3375,7 +3388,7 @@ function connect() {
   es = new EventSource("/api/stream");
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
-  es.addEventListener("session.updated", (e) => { const x = JSON.parse(e.data); sessions.set(x.session_id, x); syncIdleNote(x.session_id); });
+  es.addEventListener("session.updated", (e) => { const x = JSON.parse(e.data); sessions.set(x.session_id, x); syncIdleNote(x.session_id); syncPlanInstruct(x.session_id); });
   es.addEventListener("settings.updated", (e) => applySettings(JSON.parse(e.data)));
   es.addEventListener("plan.updated", (e) => onPlanUpdated(JSON.parse(e.data)));
   es.addEventListener("plan.removed", (e) => onPlanRemoved(JSON.parse(e.data).name));

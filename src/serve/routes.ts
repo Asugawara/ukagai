@@ -31,6 +31,7 @@ import { FILE_TYPES, HTML_CSP, validFileTag, documentDir, isHtmlFile, resolveDoc
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanSummary } from "../contract.js";
 import { PlanSessions } from "./plan-session.js";
+import { PlanReady } from "./plan-ready.js";
 import { PlanVersionStore, buildPlanVersions } from "./plan-versions.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
@@ -61,6 +62,8 @@ export type AppDeps = {
   collect: (session: DecisionSession) => Promise<DecisionContext>;
   /** Finds the session of a plan file; the server owns it so it can announce a session found later. Defaults to a fresh one */
   planSessions?: PlanSessions;
+  /** Computes `ready` of every plan summary; the server owns it so it can re-announce a flip. Defaults to one that broadcasts on `hub` */
+  planReady?: PlanReady;
 };
 
 const MIME: Record<string, string> = {
@@ -303,18 +306,15 @@ export function createApp(deps: AppDeps): Hono {
 
   // ~/.claude/plans: read-only files, plus a per-plan read mark kept by ukagai (plan.updated / plan.removed come over SSE)
   const { isRead } = deps.planRead;
-  const withSession = (p: PlanSummary): PlanSummary => {
-    const session_id = planSessions.cached(p.name);
-    return session_id ? { ...p, session_id } : p;
-  };
   const planSessions = deps.planSessions ?? new PlanSessions(() => store.listSessions(), deps.home);
+  const planReady = deps.planReady ?? new PlanReady(store, planSessions, (event, data) => hub.broadcast(event, data), deps.dataDir ?? "");
   app.get("/api/plans", auth("any"), async (c) => {
     const plans = await listPlans(deps.home, isRead);
     return c.json({
       plans: await Promise.all(
         plans.map(async (p) => {
           const session_id = await planSessions.find(p.name);
-          return session_id ? { ...p, session_id } : p;
+          return planReady.decorate(session_id ? { ...p, session_id } : p);
         }),
       ),
     });
@@ -324,7 +324,7 @@ export function createApp(deps: AppDeps): Hono {
     try {
       const plan = await readPlan(deps.home, c.req.param("name"), isRead);
       const session_id = await planSessions.find(plan.name);
-      return c.json(session_id ? { ...plan, session_id } : plan);
+      return c.json({ ...plan, ready: planReady.readyOf(plan, session_id), ...(session_id ? { session_id } : {}) });
     } catch (e) {
       if (e instanceof PlanError) return c.json({ error: e.message }, e.status);
       throw e;
@@ -395,7 +395,7 @@ export function createApp(deps: AppDeps): Hono {
     if (mtime !== undefined) deps.planRead.mark(name, mtime);
     else deps.planRead.unmark(name);
     const summary = await planSummary(dir, name, isRead);
-    if (summary) hub.broadcast("plan.updated", withSession(summary));
+    if (summary) planReady.announce(summary);
     return c.json({ name, read });
   };
   app.post("/api/plans/:name/read", auth("any"), (c) => setPlanRead(c, true));

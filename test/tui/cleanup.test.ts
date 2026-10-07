@@ -28,7 +28,7 @@ test("parseSse: heartbeats are dropped without JSON.parse; session and plan even
   assert.equal(parseSse("event: session.updated\ndata: {\"id\":\"s\"}"), null);
   const sess = { session_id: "s", state: "idle", last_event_at: "2026-10-03T00:00:00.000Z", cwd: "/w" };
   assert.deepEqual(parseSse(`event: session.updated\ndata: ${JSON.stringify(sess)}`), { event: "session.updated", session: sess });
-  const plan = { name: "a.md", title: "A", mtime: "2026-10-03T00:00:00.000Z", bytes: 1, sections: 0, lines: 1, read: true };
+  const plan = { name: "a.md", title: "A", mtime: "2026-10-03T00:00:00.000Z", bytes: 1, sections: 0, lines: 1, read: true, format_ok: true, ready: false };
   assert.deepEqual(parseSse(`event: plan.updated\ndata: ${JSON.stringify(plan)}`), { event: "plan.updated", plan });
   assert.equal(parseSse(`event: plan.updated\ndata: ${JSON.stringify({ name: "a.md" })}`), null, "a payload that is not a PlanSummary");
   assert.deepEqual(parseSse('event: plan.removed\ndata: {"name":"a.md"}'), { event: "plan.removed", name: "a.md" });
@@ -57,9 +57,9 @@ test("refetch: plans are fetched on connect, and the safety poll skips them whil
 
 test("a repaint of an open long plan renders nothing again; a new width or language does", async () => {
   const app = new App();
-  const file: PlanContent = { name: "b.md", title: "Export retry", mtime: new Date(NOW - 3600_000).toISOString(), markdown: LONG, read: false, session_id: "s-plan" } as PlanContent;
+  const file: PlanContent = { name: "b.md", title: "Export retry", mtime: new Date(NOW - 3600_000).toISOString(), markdown: LONG, read: false, format_ok: true, ready: true, session_id: "s-plan" } as PlanContent;
   app.fetchPlan = async () => file;
-  app.planUpdated({ name: "b.md", title: file.title, mtime: file.mtime, bytes: LONG.length, sections: 9, lines: 200, read: false, session_id: "s-plan" }, NOW);
+  app.planUpdated({ name: "b.md", title: file.title, mtime: file.mtime, bytes: LONG.length, sections: 9, lines: 200, read: false, format_ok: true, ready: true, session_id: "s-plan" }, NOW);
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(app.shownPlan, "b.md");
   const paint = (cols: number) => renderFrame(app.view(NOW), { cols, rows: 50 }).text;

@@ -638,6 +638,10 @@ export const PlanSummary = z.object({
   lines: z.number().int().nonnegative(),
   /** The stored read mark equals the current `mtime` (see POST /api/plans/:name/read) */
   read: z.boolean(),
+  /** The file has the `Steps` (a list item) and `Verification` (a task item) sections ukagai's plan-writing rules ask for; `ready` needs it only for a session that was handed those rules */
+  format_ok: z.boolean(),
+  /** Worth showing to the human now: its session known, not working, not asking in the terminal, with no decision pending and (when the session got ukagai's plan rules) format_ok. Computed by the server */
+  ready: z.boolean(),
   /** The live Claude Code session writing this plan (the plan file is named after its slug); absent when none is found */
   session_id: z.string().optional(),
 });
@@ -649,6 +653,8 @@ export const PlanContent = z.object({
   mtime: z.string(),
   markdown: z.string(),
   read: z.boolean(),
+  format_ok: z.boolean(),
+  ready: z.boolean(),
   session_id: z.string().optional(),
 });
 export type PlanContent = z.infer<typeof PlanContent>;
