@@ -215,6 +215,15 @@ gui("a rejection reason is labelled Rejection; one version shows no tabs", async
   await reopen("document.querySelector('#background .ver-tab')");
   assert.match(sum(), /Rejection: narrow it$/);
   await cancelAll();
+  // A rejection without a reason still reads as a rejection: the label alone, no text span
+  const r1 = await seed("s-rej0", "1", V1);
+  await api(`/api/decisions/${r1.id}/answer`, { approve: false });
+  await sleep(20);
+  await seed("s-rej0", "2", V2);
+  await reopen("document.querySelector('#background .ver-tab')");
+  assert.match(sum(), /Rejection:$/);
+  assert.equal(ev(`!!document.querySelector("#background .ver-sum .ver-ins")`), false);
+  await cancelAll();
   await seed("s-one", "1", V1);
   await reopen("document.querySelector('#decision .btn')");
   await sleep(500);

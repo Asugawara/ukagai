@@ -18,20 +18,24 @@ export function splitSections(markdown: string): Section[] {
 const norm = (l: string): string => l.replace(/\s+$/, "");
 const body = (lines: string[]): string => lines.map(norm).join("\n").replace(/\n+$/, "");
 
+/** The largest LCS table (cells) a section pair may need; a bigger pair is reported as changed without line marks */
+export const MAX_DIFF_CELLS = 4_000_000;
+
 /** Line diff by LCS; lines are compared without trailing whitespace, the new text is kept for `same` / `add` */
 export function diffLines(prev: string[], next: string[]): DiffLine[] {
   const a = prev.map(norm);
   const b = next.map(norm);
   const n = a.length;
   const m = b.length;
-  const t: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) t[i]![j] = a[i] === b[j] ? t[i + 1]![j + 1]! + 1 : Math.max(t[i + 1]![j]!, t[i]![j + 1]!);
+  const w = m + 1;
+  const t = new Uint32Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) t[i * w + j] = a[i] === b[j] ? t[(i + 1) * w + j + 1]! + 1 : Math.max(t[(i + 1) * w + j]!, t[i * w + j + 1]!);
   const out: DiffLine[] = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
     if (a[i] === b[j]) out.push({ kind: "same", text: next[j]! }), i++, j++;
-    else if (t[i + 1]![j]! >= t[i]![j + 1]!) out.push({ kind: "del", text: prev[i++]! });
+    else if (t[(i + 1) * w + j]! >= t[i * w + j + 1]!) out.push({ kind: "del", text: prev[i++]! });
     else out.push({ kind: "add", text: next[j++]! });
   }
   while (i < n) out.push({ kind: "del", text: prev[i++]! });
@@ -53,6 +57,7 @@ export function diffPlans(prev: string, next: string): PlanDiff {
     taken.add(at);
     const o = old[at]!;
     if (body(o.lines) === body(s.lines)) sections.push({ heading: s.heading, status: "same" });
+    else if ((o.lines.length + 1) * (s.lines.length + 1) > MAX_DIFF_CELLS) sections.push({ heading: s.heading, status: "changed" });
     else sections.push({ heading: s.heading, status: "changed", lines: diffLines(o.lines, s.lines) });
   }
   old.forEach((o, i) => {

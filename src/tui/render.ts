@@ -534,7 +534,7 @@ function renderDiff(lines: DiffLine[], width: number, opts: { fullHint: boolean;
 /** The version line (the shown one in reverse video), the summary line and the note, under the context line of a plan */
 function verHeader(ver: VersionView, cols: number): string[] {
   const tabs = ver.tabs.map((x, i) => (i === ver.idx ? `${BOLD}\x1b[7m ${x} ${RESET}` : ` ${x} `)).join(" ");
-  const sum = `${BOLD}${ver.head}${RESET} ${ver.body}${ver.ins ? ` · ${BOLD}${ver.ins.label}${RESET} ${ver.ins.text.replace(/\s+/g, " ")}` : ""}`;
+  const sum = `${BOLD}${ver.head}${RESET} ${ver.body}${ver.ins ? ` · ${BOLD}${ver.ins.label}${RESET}${ver.ins.text.trim() ? ` ${ver.ins.text.replace(/\s+/g, " ")}` : ""}` : ""}`;
   return [truncate(tabs, cols), truncate(sum, cols), ...(ver.note ? [truncate(`${BOLD}${ver.note}${RESET}`, cols)] : [])];
 }
 

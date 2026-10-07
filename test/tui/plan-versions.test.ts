@@ -104,6 +104,11 @@ test("a rejection reason is labelled Rejection", async () => {
   assert.match(draw(app).text.split("\n")[3]!, /Rejection: narrow it/);
 });
 
+test("a rejection without a reason shows the Rejection label alone", async () => {
+  const { app } = await setup(V2, versions([V1, V2], [{ text: "", kind: "reject" }, null]));
+  assert.match(draw(app).text.split("\n")[3]!, /Rejection:\s*$/);
+});
+
 test("a short plan (no folding) is marked too", async () => {
   const { app } = await setup(SHORT2, versions([SHORT1, SHORT2], [{ text: "go" }, null]));
   const { text, raw } = draw(app);

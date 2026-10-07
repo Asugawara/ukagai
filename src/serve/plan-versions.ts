@@ -56,24 +56,26 @@ export class PlanVersionStore {
   }
 }
 
-/** What the human sent after an approve_plan decision: an `instruct` answer, or a rejection that carried text */
+/** What the human sent after an approve_plan decision: an `instruct` answer, or a rejection (its text may be empty) */
 function approvalInstruction(d: Decision): PlanInstruction | undefined {
   const r = d.response;
   if (!r) return undefined;
   if (r.instruct && r.text) return { text: r.text, kind: "instruct", at: r.decided_at };
-  if (r.approve === false && r.reason?.trim()) return { text: r.reason, kind: "reject", at: r.decided_at };
+  if (r.approve === false) return { text: r.reason?.trim() ? r.reason : "", kind: "reject", at: r.decided_at };
   return undefined;
 }
 
 /** The versions of a session (approve_plan decisions + stored file snapshots, by `at`), `current` appended when it differs from the last, and the diffs */
 export function buildPlanVersions(decisions: Decision[], stored: Omit<PlanVersion, "n">[], current: string | undefined, now = new Date().toISOString()): PlanVersionsResponse {
+  // The versions begin after the latest approval: what was approved is done, a later plan is a new one
+  const approvedAt = decisions.filter((d) => d.kind === "approve_plan" && d.response?.approve === true).reduce((m, d) => (d.created_at > m ? d.created_at : m), "");
   const fromDecisions: Omit<PlanVersion, "n">[] = decisions
-    .filter((d) => d.kind === "approve_plan" && "plan" in d.request)
+    .filter((d) => d.kind === "approve_plan" && "plan" in d.request && d.created_at > approvedAt)
     .map((d) => {
       const instruction = approvalInstruction(d);
       return { at: d.created_at, source: "approval" as const, decision_id: d.id, plan: (d.request as { plan: string }).plan, ...(instruction ? { instruction } : {}) };
     });
-  const merged = [...fromDecisions, ...stored].sort((a, b) => a.at.localeCompare(b.at));
+  const merged = [...fromDecisions, ...stored.filter((v) => v.at > approvedAt)].sort((a, b) => a.at.localeCompare(b.at));
   if (current !== undefined && merged[merged.length - 1]?.plan !== current) merged.push({ at: now, source: "file", plan: current });
   const versions: PlanVersion[] = merged.map((v, i) => ({ n: i + 1, ...v }));
   const last = versions[versions.length - 1];
