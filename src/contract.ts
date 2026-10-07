@@ -355,7 +355,7 @@ export const AnswerRequest = z.union([
     .refine((b) => b.kind !== "instruct" || (b.text ?? "").trim() !== "", { message: "text is required for instruct", path: ["text"] }),
   z.strictObject({ answers: z.record(z.string(), z.string()) }),
   z.strictObject({ approve: z.literal(true), set_mode_auto: z.boolean().optional() }),
-  z.strictObject({ approve: z.literal(false), reason: z.string().min(1) }),
+  z.strictObject({ approve: z.literal(false), reason: z.string().optional() }),
   // approve_plan only (the route rejects it for other kinds): do `text` first, the plan stays unapproved
   z.strictObject({ instruct: z.literal(true), text: z.string().trim().min(1).max(INSTRUCTION_MAX_CHARS) }),
   z.strictObject({ fallback: z.literal(true) }),

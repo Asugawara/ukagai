@@ -143,7 +143,7 @@ gui("two versions: tabs, the summary line, badges, the struck old line and the h
   await sleep(20);
   await seed("s-v", "2", V2);
   await reopen("document.querySelector('#background .ver-tab')");
-  assert.deepEqual(await tabs(), ["v1 (before your instruction)", "v2 (now) ★"]);
+  assert.deepEqual(await tabs(), ["v1", "v2"]);
   assert.equal(sel(), "2", "the current version is selected on show");
   assert.equal(sum(), "v1 → v2: 1 section added · 1 changed · 1 removed · Instruction: cap the retries");
   assert.deepEqual(await badges(), ["changed:Changed", "added:New"]);
@@ -171,11 +171,36 @@ gui("two versions: tabs, the summary line, badges, the struck old line and the h
   ev(`document.documentElement.dataset.lang = "ja", "ok"`);
   await waitFor("ja", `document.querySelector("#background .ver-note")?.textContent.includes("を表示中")`);
   assert.equal(note(), "v1 を表示中（承認対象は v2）");
-  assert.deepEqual(await tabs(), ["v1（指示前）", "v2（今回）★"]);
+  assert.deepEqual(await tabs(), ["v1", "v2"]);
   key(">");
   await waitFor("v2 in ja", `document.querySelector("#background .ver-sum")?.textContent.startsWith("v1 → v2")`);
   assert.equal(sum(), "v1 → v2: 1 節追加 · 1 節変更 · 1 節削除 · 指示: cap the retries");
   ev(`document.documentElement.dataset.lang = "en", "ok"`);
+});
+
+gui("the selected version tab is inverted (background --fg, text --panel, weight 600) in light and dark; the other tab is outlined", async () => {
+  const d1 = await seed("s-inv", "1", V1);
+  await api(`/api/decisions/${d1.id}/answer`, { instruct: true, text: "cap the retries" });
+  await sleep(20);
+  await seed("s-inv", "2", V2);
+  await reopen("document.querySelector('#background .ver-tab')");
+  const probe = (theme: string, n: string) => ev<{ bg: string; fg: string; w: string; fgVar: string; panelVar: string; otherBg: string }>(`(() => {
+    document.documentElement.dataset.theme = ${JSON.stringify(theme)};
+    const col = (v) => { const p = document.createElement("i"); p.style.background = "var(" + v + ")"; document.body.append(p); const c = getComputedStyle(p).backgroundColor; p.remove(); return c; };
+    const t = document.querySelector('#background .ver-tab[data-n="${n}"]');
+    const o = document.querySelector('#background .ver-tab:not(.sel)');
+    const cs = getComputedStyle(t);
+    return JSON.stringify({ bg: cs.backgroundColor, fg: cs.color, w: cs.fontWeight, fgVar: col("--fg"), panelVar: col("--panel"), otherBg: getComputedStyle(o).backgroundColor });
+  })()`);
+  for (const theme of ["light", "dark"]) {
+    const c = probe(theme, "2");
+    assert.equal(c.bg, c.fgVar, `${theme}: selected background is --fg`);
+    assert.equal(c.fg, c.panelVar, `${theme}: selected text is --panel`);
+    assert.equal(c.w, "600");
+    assert.notEqual(c.otherBg, c.bg, `${theme}: the unselected tab is not filled like the selected one`);
+    ab("screenshot", join(SHOTS, `tabs-${theme}.png`));
+  }
+  ev(`delete document.documentElement.dataset.theme, "ok"`);
 });
 
 gui("a rejection reason is labelled Rejection; one version shows no tabs", async () => {
@@ -208,7 +233,7 @@ gui("a plan file card: the snapshot taken by Instruct becomes v1, the file now i
   for (let i = 0; i < 6 && pick() !== "pv-fox.md"; i++) { key("l"); await sleep(300); }
   assert.equal(pick(), "pv-fox.md");
   await waitFor("tabs", `document.querySelector("#background .ver-tab")`);
-  assert.deepEqual(await tabs(), ["v1 (before your instruction)", "v2 (now) ★"]);
+  assert.deepEqual(await tabs(), ["v1", "v2"]);
   assert.equal(sum(), "v1 → v2: 1 section added · 1 changed · 1 removed · Instruction: add a cap");
   assert.equal(ev(`document.querySelectorAll("#background .ver-chg").length`), 1);
   rmSync(join(home, ".claude", "plans", "pv-fox.md"), { force: true });

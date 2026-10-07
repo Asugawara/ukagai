@@ -73,8 +73,10 @@ test("plan: y approves once with auto, a does nothing, n asks for a reason then 
   assert.deepEqual(press(app, ch("a")), []);
   app = new App();
   app.upsert(plan, t);
-  assert.deepEqual(press(app, ch("n"), enter), []); // empty reason
-  assert.deepEqual(press(app, ch("n"), ch("o"), enter), [{ type: "answer", id: "d1", body: { approve: false, reason: "no" } }]);
+  assert.deepEqual(press(app, ch("n"), enter), [{ type: "answer", id: "d1", body: { approve: false } }]); // empty reason: rejected without one
+  app = new App();
+  app.upsert(plan, t);
+  assert.deepEqual(press(app, ch("n"), ch("n"), ch("o"), enter), [{ type: "answer", id: "d1", body: { approve: false, reason: "no" } }]);
 });
 
 test("h/l switch pending, pick from the b list, move on to the next pending after answering", () => {

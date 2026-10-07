@@ -206,6 +206,22 @@ test("plan (long): Enter on Approve in the options zone sends { approve, set_mod
   assert.equal(n.view(clock).input?.kind, "reason");
 });
 
+test("plan (long): n then Enter with an empty reason box sends { approve: false } (no reason)", () => {
+  const n = open();
+  press(n, ch("n"));
+  assert.equal(n.view(clock).input?.kind, "reason");
+  assert.deepEqual(press(n, enter), [{ type: "answer", id: "d1", body: { approve: false } }]);
+  const w = open();
+  press(w, ch("n"), ch("x"));
+  assert.deepEqual(press(w, enter), [{ type: "answer", id: "d1", body: { approve: false, reason: "x" } }]);
+});
+
+test("plan (long): the empty reason box shows the optional placeholder", () => {
+  const n = open();
+  press(n, ch("n"));
+  assert.match(stripAnsi(renderFrame(n.view(clock), { cols: 120, rows: 40 }).text), /Reason: ▏ optional; Enter sends, Esc cancels/);
+});
+
 test("plan (long): the live selection and zone are kept when the plan text changes", () => {
   const app = open();
   press(app, ch("j"), ch("j"), right);

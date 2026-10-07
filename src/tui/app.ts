@@ -542,7 +542,7 @@ export class App {
     const { rec, idx, last } = vs;
     const vers = rec.data.versions;
     const lang = this.lang;
-    const tabs = vers.map((v, i) => (i === last ? t(lang, "ver_now", { n: v.n }) : v.instruction ? t(lang, "ver_before", { n: v.n }) : `v${v.n}`));
+    const tabs = vers.map((v) => `v${v.n}`);
     const diff = rec.data.diffs[idx] ?? null;
     const count = (key: "ver_added" | "ver_changed" | "ver_removed", n: number): string => (n ? t(lang, n === 1 ? (`${key}_one` as MessageKey) : key, { n }) : "");
     let head: string;
@@ -1221,10 +1221,9 @@ export class App {
     if (inp.kind === "reason") {
       dr.reason = inp.text;
       const reason = inp.text.trim();
-      if (!reason) return [];
       this.input = null;
       this.mode = "normal";
-      return this.emit(m.id, { approve: false, reason });
+      return this.emit(m.id, reason ? { approve: false, reason } : { approve: false });
     }
     dr.free.text = inp.text;
     if (m.checkpoint) {

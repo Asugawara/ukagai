@@ -314,7 +314,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     if (at(1)) focus = [cardStart, cardStart + card.length];
     const rejectStart = lines.length;
     lines.push(`${mark(at(2))} ${CYAN}[3]${RESET} ${at(2) ? BOLD : ""}${t(lang, "reject")}${RESET}`);
-    if (typingReason) lines.push(...wrap(`  ${t(lang, "reason")}: ${v.input!.text}▏`, w));
+    if (typingReason) lines.push(...wrap(`  ${t(lang, "reason")}: ${v.input!.text}▏${v.input!.text ? "" : ` ${DIM}${t(lang, "reason_placeholder")}${RESET}`}`, w));
     else if (v.reason) lines.push(...wrap(`  ${t(lang, "reason")}: ${v.reason}`, w));
     if (at(2)) focus = [rejectStart, lines.length];
     return {
@@ -535,7 +535,7 @@ function renderDiff(lines: DiffLine[], width: number, opts: { fullHint: boolean;
 
 /** The version line (the shown one in reverse video), the summary line and the note, under the context line of a plan */
 function verHeader(ver: VersionView, cols: number): string[] {
-  const tabs = ver.tabs.map((x, i) => (i === ver.idx ? `\x1b[7m ${x} ${RESET}` : ` ${x} `)).join(" ");
+  const tabs = ver.tabs.map((x, i) => (i === ver.idx ? `${BOLD}\x1b[7m ${x} ${RESET}` : ` ${x} `)).join(" ");
   const sum = `${BOLD}${ver.head}${RESET} ${ver.body}${ver.ins ? ` · ${BOLD}${ver.ins.label}${RESET} ${ver.ins.text.replace(/\s+/g, " ")}` : ""}`;
   return [truncate(tabs, cols), truncate(sum, cols), ...(ver.note ? [truncate(`${BOLD}${ver.note}${RESET}`, cols)] : [])];
 }

@@ -152,6 +152,7 @@ The request is one of the following 5 shapes (`AnswerRequest`. Mixed keys give 4
 { "answers": { "Which do you choose, A or B?": "B" } }
 { "approve": true, "set_mode_auto": true }
 { "approve": false, "reason": "Narrow the scope first, then resubmit" }
+{ "approve": false }
 { "instruct": true, "text": "Have a second model review this plan adversarially and fold the critical findings in" }
 { "fallback": true }
 ```
@@ -159,7 +160,7 @@ The request is one of the following 5 shapes (`AnswerRequest`. Mixed keys give 4
 A progress checkpoint (`kind: "checkpoint"`) takes a sixth shape, `{ "kind": "continue" | "instruct" | "stop", "text"?: string }` (`text` is required and non-blank for `instruct`; `via` / `decided_at` may be sent and are ignored). It answers only checkpoints and the 5 shapes above never fit one (400).
 
 - The values of `answers` are strings only. For `multiSelect`, it is one string of the labels joined with `MULTI_SELECT_SEPARATOR` (tentatively `", "`).
-- `approve: false` requires `reason` as a non-empty string.
+- `approve: false` takes an optional `reason` (missing, empty or blank all mean "rejected without a reason": the stored response has no `reason`; with a reason it is trimmed text). `{ "approve": false }` is a valid body. The hook then denies with `[ukagai] The human rejected the plan without giving a reason. Revise the plan (look for what a reader would object to) or ask one question about what to change, then call ExitPlanMode again.`; the Codex bridge starts no turn (the no-feedback path). A reasonless rejection is not a version instruction.
 - `set_mode_auto` is allowed only with `approve: true`.
 - `{ "instruct": true, "text": "…" }` is for `approve_plan` only (400 for any other kind): "do this before I approve". `text` is trimmed, 1 to 4000 characters. It is stored like a reject (`answer_submitted`, same events, same history) with the response `{ "via": "gui", "instruct": true, "text": "…", "decided_at": … }` (`approve` and `reason` are absent). The hook answers ExitPlanMode with a deny whose reason is `[ukagai] The human has not approved the plan yet and asks you to do this first: <text>` followed by `You are still in plan mode: do it (research, subagents and reviews are fine; do not edit project files), update the plan file, then call ExitPlanMode again.`; the agent's next ExitPlanMode is a new decision. The Codex bridge starts a Plan-mode turn with the same text (like a reject with feedback).
 - `{fallback:true}` transitions `pending` → `fallback` (the GUI does not send it; the button was removed). Anything else transitions `pending` → `answer_submitted`.

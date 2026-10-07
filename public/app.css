@@ -546,7 +546,7 @@ body.settings-page { display: block; height: auto; min-height: 100dvh; overflow:
 .ver-bar { margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .ver-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ver-tab { font: inherit; font-size: 13px; line-height: 22px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
-.ver-tab.sel { font-weight: 700; border-color: var(--fg); box-shadow: inset 0 -2px 0 var(--fg); }
+.ver-tab.sel { font-weight: 600; border-color: var(--fg); background: var(--fg); color: var(--panel); }
 .ver-sum { margin-top: 6px; font-size: 13px; color: var(--fg); display: flex; flex-wrap: wrap; gap: 0 4px; align-items: baseline; }
 .ver-sum .ver-ins { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .ver-note { margin-top: 4px; font-size: 13px; font-weight: 600; color: var(--fg); }

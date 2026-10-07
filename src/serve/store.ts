@@ -57,7 +57,7 @@ export type StoreOptions = {
 export type AnswerPatch =
   | { kind: "answers"; answers: Record<string, string> }
   | { kind: "approve"; set_mode_auto?: boolean }
-  | { kind: "reject"; reason: string }
+  | { kind: "reject"; reason?: string }
   | { kind: "instruct_plan"; text: string }
   | { kind: "fallback" }
   | { kind: "checkpoint"; answer: "continue" | "instruct" | "stop"; text?: string };
@@ -559,7 +559,8 @@ export class Store {
         if (patch.set_mode_auto) response.set_mode_auto = true;
         break;
       case "reject":
-        response = { via: "gui", approve: false, reason: patch.reason, decided_at };
+        response = { via: "gui", approve: false, decided_at };
+        if (patch.reason) response.reason = patch.reason;
         break;
       case "instruct_plan":
         response = { via: "gui", instruct: true, text: patch.text, decided_at };

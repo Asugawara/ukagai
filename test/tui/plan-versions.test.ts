@@ -60,9 +60,9 @@ test("two versions: the version line, the summary, the tags with a gutter bar, t
   assert.deepEqual(calls, ["s1|decision:ap"], "fetched once for the shown approval");
   const { text, raw } = draw(app);
   const rows = text.split("\n");
-  assert.match(rows[2]!, /v1 \(before your instruction\)\s+v2 \(now\) ★/);
+  assert.match(rows[2]!, /^\s*v1\s+v2\s*$/, "the version line has no labels and no star");
   assert.match(rows[3]!, /^v1 → v2: 1 section added · 1 changed · 1 removed · Instruction: cap the retries/);
-  assert.match(raw, /\x1b\[7m v2 \(now\) ★ \x1b\[0m/, "the shown version is in reverse video");
+  assert.match(raw, /\x1b\[1m\x1b\[7m v2 \x1b\[0m/, "the shown version is bold and in reverse video");
   const body = left(text);
   assert.ok(body.some((l) => /▎ ▾ [☐☑] Goal \(\d+ lines\) \[Changed\]/.test(l)), body.join("\n"));
   assert.ok(body.some((l) => /▎ ▸ ☐ Risks \(\d+ lines\) \[New\]/.test(l)));
@@ -84,7 +84,7 @@ test("< shows v1 with the note and no tags (the removed section is visible), > c
   assert.ok(d.text.includes("Showing v1 (the decision is on v2)"));
   assert.ok(d.text.includes("gone soon"), "the removed section is in the earlier version");
   assert.ok(!/\[(New|Changed)\]/.test(d.text));
-  assert.match(d.raw, /\x1b\[7m v1 \(before your instruction\) \x1b\[0m/);
+  assert.match(d.raw, /\x1b\[1m\x1b\[7m v1 \x1b\[0m/);
   press(app, ch("<")); // at the first one: stays
   assert.match(draw(app).text, /Showing v1/);
   press(app, ch(">"));
@@ -93,7 +93,7 @@ test("< shows v1 with the note and no tags (the removed section is visible), > c
   assert.match(d.text.split("\n")[3]!, /^v1 → v2:/);
   app.lang = "ja";
   d = draw(app);
-  assert.match(d.text.split("\n")[2]!, /v1（指示前）\s+v2（今回）★/);
+  assert.match(d.text.split("\n")[2]!, /^\s*v1\s+v2\s*$/);
   assert.match(d.text.split("\n")[3]!, /^v1 → v2: 1 節追加 · 1 節変更 · 1 節削除 · 指示: cap the retries/);
   assert.ok(d.text.includes("[変更]") && d.text.includes("[新規]"));
   press(app, ch("<"));
