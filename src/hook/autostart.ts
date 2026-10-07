@@ -1,20 +1,20 @@
 import { spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "./client.js";
 import type { HookOptions } from "./options.js";
 
 const HEALTHZ_TIMEOUT_MS = 300;
 const START_WAIT_MS = 2000;
 const POLL_INTERVAL_MS = 100;
+const GUI_OPEN_TIMEOUT_MS = 300;
 
 export type SpawnFn = (cmd: string, args: string[], opts: SpawnOptions) => { unref(): void };
 
 export interface AutostartDeps {
   fetch: typeof fetch;
   spawn: SpawnFn;
-  now: () => Date;
-  platform: NodeJS.Platform;
   cliPath: string;
   sleep: (ms: number) => Promise<void>;
 }
@@ -22,16 +22,9 @@ export interface AutostartDeps {
 export const defaultDeps: AutostartDeps = {
   fetch: (...a) => fetch(...a),
   spawn: (cmd, args, o) => nodeSpawn(cmd, args, o),
-  now: () => new Date(),
-  platform: process.platform,
   cliPath: fileURLToPath(new URL("../cli.js", import.meta.url)),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };
-
-export function localDate(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
 
 async function healthy(server: string, deps: AutostartDeps): Promise<boolean> {
   try {
@@ -42,8 +35,8 @@ async function healthy(server: string, deps: AutostartDeps): Promise<boolean> {
   }
 }
 
-/** SessionStart: start the server and open the GUI on the first session of the day. Never throws */
-export async function autostart(opts: HookOptions, deps: AutostartDeps = defaultDeps): Promise<void> {
+/** SessionStart: start the server and ask it to open the GUI (the server decides, once a day). Never throws */
+export async function autostart(opts: HookOptions, deps: AutostartDeps = defaultDeps, client: Client = new Client(opts.server, opts.dataDir)): Promise<void> {
   if (opts.noAutostart) return;
   try {
     let up = await healthy(opts.server, deps);
@@ -64,20 +57,8 @@ export async function autostart(opts: HookOptions, deps: AutostartDeps = default
       }
       if (!up) return;
     }
-    const today = localDate(deps.now());
-    const marker = join(opts.dataDir, "gui-opened");
-    let last = "";
-    try {
-      last = readFileSync(marker, "utf8").trim();
-    } catch {
-      // no marker: first time
-    }
-    if (last === today) return;
-    const opener = deps.platform === "darwin" ? "open" : deps.platform === "linux" ? "xdg-open" : undefined;
-    if (!opener) return;
-    mkdirSync(opts.dataDir, { recursive: true, mode: 0o700 });
-    writeFileSync(marker, today + "\n");
-    deps.spawn(opener, [`${opts.server}/`], { detached: true, stdio: "ignore" }).unref();
+    // The server decides whether a GUI tab is already there; the answer is ignored
+    await client.requestGuiOpen(GUI_OPEN_TIMEOUT_MS);
   } catch {
     // fail open
   }

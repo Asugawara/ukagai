@@ -3901,5 +3901,23 @@ renderDrawerKeys();
 renderEmptyText();
 new MutationObserver(applyLang).observe(document.documentElement, { attributes: true, attributeFilter: ["data-lang"] });
 
+// Tabs: a tab the server opened (`?autostart=1`) closes itself when another ukagai tab answers within AUTO_CLOSE_WINDOW_MS.
+const AUTO_CLOSE_WINDOW_MS = 5000;
+const AUTO = new URLSearchParams(location.search).get("autostart") === "1";
+if (AUTO) history.replaceState(null, "", location.pathname);
+try {
+  const tabs = new BroadcastChannel("ukagai-tabs");
+  const loadedAt = Date.now();
+  tabs.onmessage = (e) => {
+    const type = e.data?.type;
+    if (type === "anyone") tabs.postMessage({ type: "here" });
+    else if (AUTO && (type === "here" || type === "hello") && Date.now() - loadedAt <= AUTO_CLOSE_WINDOW_MS) window.close();
+  };
+  tabs.postMessage({ type: "hello" });
+  if (AUTO) tabs.postMessage({ type: "anyone" });
+} catch {
+  // no BroadcastChannel: tabs do not talk
+}
+
 settingsReq().finally(() => { loadAll().catch(() => {}); });
 connect();

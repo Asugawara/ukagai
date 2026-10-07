@@ -413,7 +413,7 @@ The Codex context (`codexContextText`) carries a shorter sentence on its format 
 ### 8.1 SessionStart autostart (the hook's behavior)
 
 - Before returning additionalContext, the SessionStart hook checks the server with `GET /healthz` (300 ms). When it is unreachable and the server URL is `127.0.0.1` / `localhost`, it starts `cli.js serve` detached (log in `<data-dir>/serve.log`) and waits up to 2 seconds for healthz. At most 2.5 seconds overall.
-- When the server is reachable and the date (local `YYYY-MM-DD`) in `<data-dir>/gui-opened` is not today, it opens the GUI with `open` (darwin) / `xdg-open` (linux) and writes today's date.
+- Once the server is reachable, the hook only asks: `POST /api/gui/open` (Bearer, 300 ms; the answer is ignored). The server decides and owns the `<data-dir>/gui-opened` marker (local `YYYY-MM-DD`): when the marker is not today and no GUI tab (an `/api/stream` client with the cookie; the TUI uses the Bearer and does not count) is connected within 8 s (a pinned tab reconnects every 5 s at most), it opens `http://127.0.0.1:<port>/?autostart=1` with `open` (darwin) / `xdg-open` (linux) and writes today's date. A connected tab only moves the marker. A tab opened this way closes itself when another ukagai tab answers on a `BroadcastChannel` (see `public/README.md`).
 - With `--no-autostart` it does nothing (`install --no-autostart` puts it in the SessionStart args). SubagentStart does nothing. Failures are swallowed (fail open).
 
 ## 9. ExitPlanMode

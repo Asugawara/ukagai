@@ -2,7 +2,7 @@ const HEARTBEAT_MS = 15000;
 
 export type SseEventName = "decision.created" | "decision.updated" | "session.updated" | "plan.updated" | "plan.removed" | "settings.updated";
 
-type Client = { controller: ReadableStreamDefaultController<Uint8Array> };
+type Client = { controller: ReadableStreamDefaultController<Uint8Array>; browser: boolean };
 
 /** SSE connection management and broadcast */
 export class SseHub {
@@ -14,8 +14,15 @@ export class SseHub {
     return this.clients.size;
   }
 
-  /** Return a Response for a new connection */
-  connect(signal?: AbortSignal): Response {
+  /** Clients that identified as a browser GUI (cookie), not the TUI (bearer) */
+  get browsers(): number {
+    let n = 0;
+    for (const c of this.clients) if (c.browser) n++;
+    return n;
+  }
+
+  /** Return a Response for a new connection. `browser` marks a GUI tab (counted by `browsers`) */
+  connect(signal?: AbortSignal, browser = false): Response {
     let client: Client | undefined;
     const remove = () => {
       if (client) this.clients.delete(client);
@@ -26,7 +33,7 @@ export class SseHub {
     };
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
-        client = { controller };
+        client = { controller, browser };
         this.clients.add(client);
         controller.enqueue(this.encoder.encode(": connected\n\n"));
         if (!this.heartbeat) {

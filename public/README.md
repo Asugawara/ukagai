@@ -11,6 +11,10 @@ The GUI served by `ukagai serve`. Static files, no build step. `GET /` returns `
 
 Update vendor with `npm ci`, then `npm run vendor` (copies from `node_modules` to `public/vendor/`).
 
+## Tabs
+
+- A tab the server opened (`/?autostart=1`, see `POST /api/gui/open`) strips the query at startup (`history.replaceState`) so a tab pinned later is clean. Every tab talks on `BroadcastChannel("ukagai-tabs")`: it posts `hello` on load and answers `anyone` with `here`. The auto tab posts `anyone` and calls `window.close()` on the first `here` / `hello` from another tab within `AUTO_CLOSE_WINDOW_MS` (5 s) of its load; after that, and in a tab without the flag, nothing closes. Without `BroadcastChannel` nothing changes. `/settings` is untouched.
+
 ## Tab icon
 
 `favicon.svg` (and a 32×32 `favicon.png` fallback, rendered from it with `rsvg-convert`) is the static icon: a white "u" on the accent-blue rounded square; `GET /favicon.ico` answers 204. `app.js` `updateFavicon(n, blocked)` is called from `renderHeader()` with the same pending count as the title: at 0 the static icon stays, from 1 it draws the square on a 64×64 canvas (canvas primitives, no SVG load) with the count in white bold sans, `5+` from 6 on, red instead of the accent while a blocker waits, and swaps the `link[rel=icon]` to the PNG data URL (the PNG fallback link is taken out meanwhile). It is always on (not tied to `notify.title_badge`) and redraws only when the count or blocker state changes. Without canvas support the static icon stays.
