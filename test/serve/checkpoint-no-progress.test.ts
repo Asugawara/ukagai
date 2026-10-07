@@ -328,3 +328,22 @@ test("a queued stop survives a wake-up prompt and is delivered; a human prompt d
     else assert.equal(ins, undefined);
   }
 });
+
+test("a SubagentStart in a wake-up turn is not activity; in a human turn it is", async () => {
+  const w = open().store;
+  w.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  await wakeupTurn(w, async () => {
+    evt(w, "SubagentStart", { agent_id: "a1" });
+    await tick();
+  });
+  assert.equal(w.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").skipped, "no_progress");
+  const h = open().store;
+  h.createCheckpoint(session, "first", "2026-10-05T01:00:00.000Z");
+  await tick();
+  evt(h, "UserPromptSubmit");
+  await tick();
+  evt(h, "SubagentStart", { agent_id: "a1" });
+  await tick();
+  assert.equal(h.createCheckpoint(session, "second", "2026-10-05T01:30:00.000Z").created, true);
+});

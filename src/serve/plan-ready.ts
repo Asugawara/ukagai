@@ -9,7 +9,8 @@ type Send = (event: "plan.updated", data: PlanSummary) => void;
 /**
  * Whether a plan is worth showing the human now: its session is known, that session is not working
  * (the file is in flux between UserPromptSubmit and Stop), its last Stop was not a question put in the terminal (the agent waits for the human
- * there; the plan is not finished), no decision of it is pending (the human is asked that first) and, only when ukagai handed its plan format to the
+ * there; the plan is not finished), the agent's Stop is not final while its background subagents run, nor until the wake-up turn they trigger
+ * has started, no decision of it is pending (the human is asked that first) and, only when ukagai handed its plan format to the
  * session (the plan-context marker), the file has the `Steps` / `Verification` sections. There is no size threshold: a small plan shows.
  * Computed here, once; the GUI and the TUI only read `ready`.
  */
@@ -18,7 +19,7 @@ export class PlanReady {
   private last = new Map<string, { summary: PlanSummary; ready: boolean }>();
 
   constructor(
-    private store: Pick<Store, "listSessions" | "list" | "isAskedInTerminal">,
+    private store: Pick<Store, "listSessions" | "list" | "isAskedInTerminal" | "isWaitingOnSubagents">,
     private planSessions: Pick<PlanSessions, "cached" | "plansOf">,
     private send: Send,
     /** Where the plan-context markers are (`<dataDir>/plan-context/<session>`): a session with one was handed ukagai's plan format */
@@ -33,6 +34,7 @@ export class PlanReady {
     const session = this.store.listSessions().find((s) => s.session_id === sessionId);
     if (!session || session.state === "working" || session.state === "ended") return false;
     if (this.store.isAskedInTerminal(sessionId)) return false; // the agent ended its turn with a question: the plan is not finished
+    if (this.store.isWaitingOnSubagents(sessionId)) return false;
     return !this.store.list("pending").some((d) => d.session.session_id === sessionId);
   }
 
