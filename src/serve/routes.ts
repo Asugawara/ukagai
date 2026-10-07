@@ -355,6 +355,7 @@ export function createApp(deps: AppDeps): Hono {
     const id = c.req.param("id");
     const cur = c.req.query("current");
     let current: string | undefined;
+    let currentAt: string | undefined;
     if (cur !== undefined) {
       const m = /^(decision|plan):(.+)$/.exec(cur);
       if (!m) return c.json({ error: "invalid current" }, 400);
@@ -371,14 +372,16 @@ export function createApp(deps: AppDeps): Hono {
         current = String(d.request.plan);
       } else {
         try {
-          current = (await readPlan(deps.home, m[2]!)).markdown;
+          const plan = await readPlan(deps.home, m[2]!);
+          current = plan.markdown;
+          currentAt = plan.mtime;
         } catch (e) {
           if (e instanceof PlanError) return c.json({ error: e.message }, e.status);
           throw e;
         }
       }
     }
-    return c.json(buildPlanVersions(decisions, stored, current));
+    return c.json(buildPlanVersions(decisions, stored, current, currentAt));
   });
 
   const setPlanRead = async (c: Context, read: boolean) => {

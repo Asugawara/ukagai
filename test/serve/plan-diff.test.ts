@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { diffPlans } from "../../src/serve/plan-diff.js";
+import { MAX_DIFF_CELLS, diffPlans } from "../../src/serve/plan-diff.js";
 
 const st = (d: ReturnType<typeof diffPlans>) => d.sections.map((s) => `${s.heading}:${s.status}`);
 
@@ -64,4 +64,17 @@ test("trailing whitespace and trailing blank lines are ignored", () => {
 test("a heading inside a code fence does not start a section", () => {
   const d = diffPlans("## A\n\n```\n## not\n```\n", "## A\n\n```\n## not\n```\n");
   assert.deepEqual(st(d), ["A:same"]);
+});
+
+const big = (n: number, tag: string) => `## A\n\n${Array.from({ length: n }, (_, i) => `${tag} ${i}`).join("\n")}\n`;
+
+test("a section pair over MAX_DIFF_CELLS is changed without lines; a smaller pair keeps them", () => {
+  assert.equal(MAX_DIFF_CELLS, 4_000_000);
+  const huge = diffPlans(big(3000, "old"), big(3000, "new"));
+  assert.equal(huge.sections[0]!.status, "changed");
+  assert.equal(huge.sections[0]!.lines, undefined);
+  assert.deepEqual(huge.summary, { added: 0, changed: 1, removed: 0, same: 0 });
+  const ok = diffPlans(big(1000, "old"), big(1000, "new"));
+  assert.equal(ok.sections[0]!.status, "changed");
+  assert.ok(ok.sections[0]!.lines && ok.sections[0]!.lines.length > 0);
 });

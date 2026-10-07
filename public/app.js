@@ -3268,7 +3268,10 @@ function verBar(d, view) {
   else {
     sum.append(el("b", { text: `v${vs[idx - 1].n} → v${vs[idx].n}:` }), ` ${verCounts(view.diff) || t("ver_nochange")}`);
     const ins = vs[idx - 1].instruction;
-    if (ins) sum.append(" · ", el("b", { text: t(ins.kind === "reject" ? "ver_rejection" : "ver_instruction") }), " ", el("span", { class: "ver-ins", title: ins.text, text: ins.text }));
+    if (ins) {
+      sum.append(" · ", el("b", { text: t(ins.kind === "reject" ? "ver_rejection" : "ver_instruction") }));
+      if (ins.text.trim()) sum.append(" ", el("span", { class: "ver-ins", title: ins.text, text: ins.text }));
+    }
   }
   const bar = el("div", { class: "ver-bar" }, tabs, sum);
   if (idx !== last) bar.append(el("div", { class: "ver-note", text: t("ver_showing", { n: vs[idx].n, last: vs[last].n }) }));

@@ -78,7 +78,7 @@ test("two approve_plan decisions with an instruct answer between them: 2 version
   assert.deepEqual(body.diffs[1]!.summary, { added: 1, changed: 1, removed: 0, same: 2 });
 });
 
-test("POST answer { approve: false } (no reason) is 200, the response carries no reason and the next version has no instruction", async () => {
+test("POST answer { approve: false } (no reason) is 200, the response carries no reason and the next version carries a reject instruction with empty text", async () => {
   const env = await boot();
   const d1 = await planDecision(env, "s1", "t1", V1);
   const r = await api(env, `/api/decisions/${d1.id}/answer`, { approve: false });
@@ -88,15 +88,14 @@ test("POST answer { approve: false } (no reason) is 200, the response carries no
   assert.equal("reason" in got.response!, false);
   await planDecision(env, "s1", "t2", V2);
   const { body } = await versions(env, "s1");
-  assert.equal(body.versions[0]!.instruction, undefined);
+  assert.deepEqual(body.versions[0]!.instruction && { kind: body.versions[0]!.instruction.kind, text: body.versions[0]!.instruction.text }, { kind: "reject", text: "" });
 });
 
-test("a rejection with a reason is a reject instruction; an approval carries none", async () => {
+test("a rejection with a reason is a reject instruction; the next, still pending version carries none", async () => {
   const env = await boot();
   const d1 = await planDecision(env, "s1", "t1", V1);
   await api(env, `/api/decisions/${d1.id}/answer`, { approve: false, reason: "narrow it" });
-  const d2 = await planDecision(env, "s1", "t2", V2);
-  await api(env, `/api/decisions/${d2.id}/answer`, { approve: true });
+  await planDecision(env, "s1", "t2", V2);
   const { body } = await versions(env, "s1");
   assert.deepEqual(body.versions[0]!.instruction && { kind: body.versions[0]!.instruction.kind, text: body.versions[0]!.instruction.text }, { kind: "reject", text: "narrow it" });
   assert.equal(body.versions[1]!.instruction, undefined);
@@ -199,4 +198,72 @@ test("auth: no token and no cookie is 401", async () => {
   await planDecision(env, "s1", "t1", V1);
   const r = await fetch(`${env.url}/api/sessions/s1/plan-versions`);
   assert.equal(r.status, 401);
+});
+
+const approve = (env: Env, id: string) => api(env, `/api/decisions/${id}/answer`, { approve: true });
+const pause = () => new Promise((r) => setTimeout(r, 5));
+
+test("after an approval, a changed current file starts a new list of one version", async () => {
+  const env = await boot();
+  const d1 = await planDecision(env, "s1", "t1", V1);
+  await approve(env, d1.id);
+  await pause();
+  writePlan(env, "x.md", V2);
+  const { body } = await versions(env, "s1", "?current=plan:x.md");
+  assert.equal(body.versions.length, 1);
+  assert.equal(body.versions[0]!.plan, V2);
+  assert.equal(body.versions[0]!.current, true);
+  assert.equal(body.diffs.length, 1);
+});
+
+test("versions begin after the last approval: an instruct decision, an approval, then a snapshot and a changed current", async () => {
+  const env = await boot();
+  writePlan(env, "swift-otter.md", V1);
+  await liveSession(env, "s1", "swift-otter");
+  const d1 = await planDecision(env, "s1", "t1", V1);
+  await api(env, `/api/decisions/${d1.id}/answer`, { instruct: true, text: "again" });
+  await pause();
+  const d2 = await planDecision(env, "s1", "t2", V2);
+  await approve(env, d2.id);
+  await pause();
+  const V3 = V2 + "\n## More\n\nx\n";
+  writePlan(env, "swift-otter.md", V3);
+  assert.equal((await api(env, "/api/plans/swift-otter.md/instruct", { text: "next" })).status, 200);
+  await pause();
+  const V4 = V3 + "\n## Even more\n\ny\n";
+  writePlan(env, "swift-otter.md", V4);
+  const { body } = await versions(env, "s1", "?current=plan:swift-otter.md");
+  assert.deepEqual(body.versions.map((v) => [v.n, v.source, v.plan]), [[1, "file", V3], [2, "file", V4]]);
+  assert.equal(body.versions[0]!.instruction?.text, "next");
+});
+
+test("a rejected decision before the approval is dropped with it", async () => {
+  const env = await boot();
+  writePlan(env, "swift-otter.md", V1);
+  await liveSession(env, "s1", "swift-otter");
+  const d1 = await planDecision(env, "s1", "t1", V1);
+  await api(env, `/api/decisions/${d1.id}/answer`, { approve: false, reason: "no" });
+  await pause();
+  const d2 = await planDecision(env, "s1", "t2", V2);
+  await approve(env, d2.id);
+  await pause();
+  assert.equal((await api(env, "/api/plans/swift-otter.md/instruct", { text: "later" })).status, 200);
+  await pause();
+  writePlan(env, "swift-otter.md", V1 + "\n## Z\n\nz\n");
+  const { body } = await versions(env, "s1", "?current=plan:swift-otter.md");
+  assert.equal(body.versions.length, 2);
+  assert.deepEqual(body.versions.map((v) => v.source), ["file", "file"]);
+  assert.equal(body.versions[0]!.instruction?.text, "later");
+  assert.equal(body.versions[1]!.current, true);
+});
+
+test("two fetches of an unchanged plan file are byte-identical (the current version's at is the file's mtime)", async () => {
+  const env = await boot();
+  writePlan(env, "x.md", V2);
+  await planDecision(env, "s1", "t1", V1);
+  const get = async () => (await api(env, "/api/sessions/s1/plan-versions?current=plan:x.md")).text();
+  const a = await get();
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal(await get(), a);
+  assert.equal((JSON.parse(a) as PlanVersionsResponse).versions.length, 2);
 });
