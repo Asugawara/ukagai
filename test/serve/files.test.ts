@@ -1,8 +1,9 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileTag } from "../../src/serve/files.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const roots: string[] = [];
@@ -170,4 +171,61 @@ test("look-alike roots are not roots: scratchpad2/, plans-evil/, ~/.claude/ outs
   }
   const plan = await e.get(`plan=p.md&path=${encodeURIComponent(join(e.home, ".claude", "plans-evil", "a.png"))}`);
   assert.equal(plan.status, 404);
+});
+
+test("html: served with the CSP sandbox and nosniff; scripts stay; relative src / href / url() are rewritten, absolute / data: / # are not", async () => {
+  const e = await env();
+  const page = [
+    '<img src="shots/a.png"> <img src=\'b.png\'> <a href="other.html#top">x</a> <link href="a.css">',
+    '<div style="background:url(bg.png)"></div><style>.x{background:url("../up.png")}</style>',
+    '<img src="data:image/png;base64,AAAA"><a href="https://example.com/x">e</a><a href="#frag">f</a><img src="/abs.png"><a href="mailto:a@b.c">m</a><img src="//cdn.example/x.png">',
+    "<script>document.title = 'x'</script>",
+  ].join("\n");
+  put(join(e.scratch, "ukagai", "cmp.html"), page);
+  put(join(e.scratch, "ukagai", "shots", "a.png"));
+  const r = await e.file("cmp.html");
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.equal(r.headers.get("content-security-policy"), "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:");
+  assert.equal(r.headers.get("x-content-type-options"), "nosniff");
+  const body = await r.text();
+  const dir = realpathSync(join(e.scratch, "ukagai"));
+  const u = (rel: string, amp = "&amp;") => {
+    const abs = join(dir, rel);
+    return `/api/files?decision=${e.id}${amp}path=${encodeURIComponent(abs)}${amp}tag=${fileTag(`decision=${e.id}`, abs)}`;
+  };
+  assert.ok(body.includes(`<img src="${u("shots/a.png")}">`), body);
+  assert.ok(body.includes(`<img src="${u("b.png")}">`));
+  assert.ok(body.includes(`href="${u("other.html")}"`)); // the fragment is dropped: the file is what is asked for
+  assert.ok(body.includes(`href="${u("a.css")}"`));
+  assert.ok(body.includes(`url("${u("bg.png", "&")}")`));
+  assert.ok(body.includes(`url("${u("../up.png", "&").replace(encodeURIComponent(join(dir, "../up.png")), encodeURIComponent(join(dir, "..", "up.png")))}")`));
+  for (const keep of ['src="data:image/png;base64,AAAA"', 'href="https://example.com/x"', 'href="#frag"', 'src="/abs.png"', 'href="mailto:a@b.c"', 'src="//cdn.example/x.png"', "<script>document.title = 'x'</script>"]) {
+    assert.ok(body.includes(keep), keep);
+  }
+  // a rewritten URL resolves through the same route
+  const q = u("shots/a.png").slice("/api/files?".length).replace(/&amp;/g, "&");
+  assert.equal((await e.get(q, false)).status, 200); // no cookie, no bearer: the tag authorises this one file (a sandboxed frame sends no cookie)
+  assert.equal((await e.get(q.replace(/tag=.*/, "tag=bad"), false)).status, 401);
+  assert.equal((await e.get(q.replace("a.png", "b.png"), false)).status, 401); // the tag is bound to the path
+  assert.equal((await e.get(q.replace(`decision=${e.id}`, "decision=other"), false)).status, 401); // and to the document
+  const img = await e.get(q);
+  assert.equal(img.status, 200);
+  assert.equal(img.headers.get("content-security-policy"), null); // only pages carry the CSP
+});
+
+test("html: 2 MB cap, .htm too, roots still enforced, a plan's page works through plan=", async () => {
+  const e = await env();
+  put(join(e.scratch, "ukagai", "ok.htm"), "<p>hi</p>");
+  put(join(e.scratch, "ukagai", "big.html"), "x".repeat(2 * 1024 * 1024 + 1));
+  put(join(e.scratch, "ukagai", "edge.html"), "x".repeat(2 * 1024 * 1024));
+  const outside = put(join(tmp(), "evil.html"), "<p>no</p>");
+  put(join(e.home, "home.html"), "<p>no</p>");
+  put(join(e.home, ".claude", "plans", "page.html"), '<img src="img/d.gif">');
+  assert.equal((await e.file("ok.htm")).status, 200);
+  assert.equal((await e.file("edge.html")).status, 200);
+  for (const p of ["big.html", outside, join(e.home, "home.html"), "../../../../../../etc/hosts.html"]) assert.equal((await e.file(p)).status, 404, p);
+  const plan = await e.get(`plan=p.md&path=${encodeURIComponent("page.html")}`);
+  assert.equal(plan.status, 200);
+  assert.match(await plan.text(), /src="\/api\/files\?plan=p\.md&amp;path=/);
 });

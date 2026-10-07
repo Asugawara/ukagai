@@ -343,6 +343,18 @@ function documentImages(container, doc) {
     const src = imageUrl((img.getAttribute("src") ?? "").trim(), doc);
     if (!src) { img.remove(); continue; }
     const alt = img.getAttribute("alt") ?? "";
+    if (/\.html?$/i.test((img.getAttribute("src") ?? "").trim().split(/[?#]/)[0])) { // an HTML page: a sandboxed frame (docs/spec/markdown.md 2.13)
+      const name = (img.getAttribute("src") ?? "").trim().split(/[?#]/)[0].split("/").pop();
+      const frame = el("figure", { class: "doc-frame" },
+        el("div", { class: "doc-frame-bar" },
+          el("span", { class: "doc-frame-alt", text: alt || name }), el("span", { class: "chip", text: name }),
+          el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, text: t("frame_full") })),
+        el("iframe", { class: "doc-frame-view", sandbox: "", src, loading: "lazy", title: alt || name }));
+      img.replaceWith(frame);
+      const fp = frame.parentElement;
+      if (fp?.tagName === "P" && fp.childNodes.length === 1) fp.replaceWith(frame);
+      continue;
+    }
     img.setAttribute("src", src);
     img.setAttribute("loading", "lazy");
     const fig = el("figure", { class: "doc-img" });
@@ -1558,9 +1570,18 @@ function openLightbox(button) {
   const full = el("img", { class: "lightbox-img", src: thumb.getAttribute("src"), alt, onclick: closeOverlay });
   openOverlay("lightbox", alt || t("image"), full);
 }
+// An embedded HTML page at full size: the same overlay, Esc / a click on the backdrop closes it
+function openFrame(button) {
+  const title = button.getAttribute("data-title") ?? "";
+  button.focus({ preventScroll: true });
+  openOverlay("frame", title, el("iframe", { class: "frame-full", sandbox: "", src: button.getAttribute("data-src"), title }));
+}
 document.addEventListener("click", (e) => {
-  const b = e.target instanceof Element ? e.target.closest("button.doc-img-open") : null;
-  if (b) openLightbox(b);
+  const tgt = e.target instanceof Element ? e.target : null;
+  const b = tgt?.closest("button.doc-img-open");
+  if (b) return openLightbox(b);
+  const f = tgt?.closest("button.doc-frame-full");
+  if (f) openFrame(f);
 });
 
 function openTerms(v2) {
