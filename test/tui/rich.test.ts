@@ -434,10 +434,10 @@ test("X1 render: background starts with Why, then the recommendation box, then W
   assert.ok(left("The server stays small") > left("Recommendation"), "the box holds what follows the headline");
   const right = (s: string) => lines.findIndex((l) => l.split(" │ ").at(-1)!.includes(s));
   assert.ok(!lines.some((l) => l.split(" │ ").at(-1)!.includes("The server stays small")), "the box is no longer in the right column");
-  assert.ok(right("Use SSE because") >= 0 && right("Otherwise: If you need two-way") === right("Use SSE because") + 1, "condition is the line right under the headline");
+  assert.ok(right("Use SSE because") >= 0 && right("Condition If you need two-way") === right("Use SSE because") + 1, "condition is the line right under the headline");
   // ja
   const ja = draw(appOf(NOFN()), "ja").text;
-  assert.ok(ja.includes("ただし:"));
+  assert.ok(ja.includes("条件"));
   // no condition: no line
   assert.ok(!draw(appOf(RICH().replace(" If you need two-way messages, choose WebSocket.", ""))).text.includes("Otherwise:"));
 });

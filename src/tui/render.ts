@@ -20,7 +20,7 @@ export interface ListItem {
   createdAt: string;
   noExplanation: boolean;
   current: boolean;
-  /** A plan file (its row says `plan`, `N sections · M lines`; new ones carry the dot, the others are dim) */
+  /** A plan file (its row says `plan`, `N sections · M lines`; new ones carry the dot, the others are plain) */
   plan?: { sections: number; lines: number; isNew: boolean };
 }
 
@@ -42,7 +42,7 @@ export interface View {
   free: { on: boolean; text: string };
   /** Text being typed (free text / rejection reason); null when not typing */
   input: { kind: "free" | "reason" | "note" | "instruct"; text: string } | null;
-  /** The instruction typed and left with Esc (shown dim); the presets; whether the plan file has a session to instruct */
+  /** The instruction typed and left with Esc (shown plain); the presets; whether the plan file has a session to instruct */
   instruct: string;
   presets: readonly string[];
   canInstruct: boolean;
@@ -118,12 +118,12 @@ function instructCard(v: View, w: number, lang: Lang, on: boolean, key = "i"): {
   const typing = v.input?.kind === "instruct";
   const label = `${on ? `${BOLD}▸${RESET}` : " "} ${CYAN}[${key}]${RESET} ${on ? BOLD : ""}${t(lang, "instruct")}${RESET}`;
   // Nothing typed, no presets: one row, the placeholder beside the label
-  if (!typing && !v.instruct && !v.presets.length) return { lines: [`${label}  ${DIM}${t(lang, "instruct_placeholder")}${RESET}`], start: 0 };
+  if (!typing && !v.instruct && !v.presets.length) return { lines: [`${label}  ${t(lang, "instruct_placeholder")}`], start: 0 };
   const out: string[] = [label];
-  v.presets.slice(0, 9).forEach((p, i) => out.push(...wrap(`  ${DIM}${i + 1}${RESET} ${p}`, w)));
+  v.presets.slice(0, 9).forEach((p, i) => out.push(...wrap(`  ${i + 1} ${p}`, w)));
   if (typing) out.push(...wrap(`  ${t(lang, "instruct_label")}: ${v.input!.text}▏`, w));
-  else if (v.instruct) out.push(...wrap(`${DIM}  ${t(lang, "instruct_label")}: ${v.instruct}${RESET}`, w));
-  else out.push(`${DIM}  ${t(lang, "instruct_placeholder")}${RESET}`);
+  else if (v.instruct) out.push(...wrap(`  ${t(lang, "instruct_label")}: ${v.instruct}`, w));
+  else out.push(`  ${t(lang, "instruct_placeholder")}`);
   return { lines: out, start: 0 };
 }
 
@@ -175,14 +175,15 @@ function affectsText(m: ScreenModel): string {
   return `⌁ ${shown.join(" · ")}${rest > 0 ? ` +${rest}` : ""}`;
 }
 
-/** Row 2 of the header: `repo ⎇ branch ⧉ worktree · scope · age` dim, the repo in its own colour (the same repo always the same one: repoAnsi).
+/** Row 2 of the header: bracket chips `[● repo] [⎇ branch] [⧉ worktree] [scope] [age]`, the repo in bold and its own colour (the same repo always the same one: repoAnsi).
  *  The blocker / quiz band opens the line; the cwd is not shown (the origin is enough) */
 function ctxLine(m: ScreenModel, now: number, cols: number, lang: Lang): string {
   const [repo, ...rest] = m.chips;
-  const where = [repo ? `${repoAnsi(repoName(repo))}${repoName(repo)}${RESET}${DIM}` : "", ...rest.map((c) => c.text)].filter(Boolean).join(" ");
-  const tail = [m.scope, elapsed(m.createdAt, now, lang)].filter(Boolean);
+  const chip = (text: string) => `[${text}]`;
+  const where = [repo ? chip(`${repoAnsi(repoName(repo))}●${RESET} ${repoAnsi(repoName(repo))}${BOLD}${repoName(repo)}${RESET}`) : "", ...rest.map((c) => chip(c.text))].filter(Boolean);
+  const tail = [m.scope, elapsed(m.createdAt, now, lang)].filter((x): x is string => !!x).map(chip);
   const band = m.blocker ? `${BADGE_BLOCKER} ${t(lang, "waiting_for_you")} ${RESET} ` : m.quiz ? `${BADGE_QUIZ} ${t(lang, "quiz_band")} ${RESET} ` : "";
-  return truncate(`${band}${DIM}${[where, ...tail].join(" · ")}${RESET}`, cols);
+  return truncate(`${band}${[...where, ...tail].join(" ")}`, cols);
 }
 
 /** Row 1 of the header: the title in bold (2 rows at most), then the reversibility mark when it is costly / irreversible */
@@ -206,7 +207,7 @@ interface Column {
 
 function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; selected: boolean; multi: boolean; index: number; marks: Mark[] }): string[] {
   const mark = o.multi ? (o.selected ? "[x]" : "[ ]") : o.selected ? "●" : "○";
-  const num = !o.multi && o.index < 9 ? `${DIM}${o.index + 1}${RESET} ` : "";
+  const num = !o.multi && o.index < 9 ? `${o.index + 1} ` : "";
   const lead = `${num}${o.cursor ? `${BOLD}▸${RESET}` : " "} ${o.selected ? CYAN : ""}${mark}${RESET} `;
   const label = `${o.cursor ? BOLD : ""}${OPT_COLORS[o.index % 4]}${card.fixed ? t(lang, `fixed_${card.fixed}`) : card.label}${RESET}`;
   const head = `${label}${card.recommended ? `  ${BADGE_REC} ${t(lang, "recommended_badge")} ${RESET}` : ""}`;
@@ -214,9 +215,9 @@ function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; sele
   const out = wrap(head, Math.max(8, w - width(lead))).map((l, k) => (k === 0 ? lead : pad) + l);
   for (const l of card.lines) {
     const body = l.risk
-      ? `${DIM}${inline(l.text, { strong: STRONG_RISK, base: DIM, marks: [...riskMarks(), ...o.marks] })}${RESET}`
+      ? `${inline(l.text, { strong: STRONG_RISK, marks: [...riskMarks(), ...o.marks] })}`
       : l.name
-        ? `${DIM}${l.name}:${RESET} ${inline(l.text, { marks: o.marks })}`
+        ? `${BOLD}${l.name}:${RESET} ${inline(l.text, { marks: o.marks })}`
         : l.md
           ? inline(l.text, { marks: o.marks })
           : l.text;
@@ -234,8 +235,8 @@ function recBox(text: string, w: number, o: { rows: number; full: boolean; lang:
   let body = renderMarkdown(text, inner, { lang: o.lang, ...(o.marks ? { marks: o.marks } : {}) });
   if (body.length > REC_CUT_ROWS && (o.always || body.length + 2 > o.rows / 2)) {
     body = o.full
-      ? [...body, `${DIM}${t(o.lang, "rec_collapse")}${RESET}`]
-      : [...body.slice(0, REC_CUT_ROWS), `${DIM}${t(o.lang, "rec_expand")}${RESET}`];
+      ? [...body, `${t(o.lang, "rec_collapse")}`]
+      : [...body.slice(0, REC_CUT_ROWS), `${t(o.lang, "rec_expand")}`];
   }
   const top = `${DIM}┌─${RESET} ${BOLD}${title}${RESET} ${DIM}${"─".repeat(Math.max(0, w - 5 - width(title)))}┐${RESET}`;
   const bottom = `${DIM}└${"─".repeat(Math.max(0, w - 2))}┘${RESET}`;
@@ -267,28 +268,28 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     const unread = !ro && long ? unreadSections(long.p.outline, long.st) : [];
     // A plan file on its own: the one action Done reading, and the Instruct card when the session is known
     if (ro) {
-      lines.push(`${CYAN}${t(lang, "plan_done_reading")}${RESET} ${DIM}(Esc)${RESET}`);
+      lines.push(`${CYAN}${t(lang, "plan_done_reading")}${RESET} (Esc)`);
       if (v.canInstruct) {
         const start = lines.length;
         lines.push("", ...instructCard(v, w, lang, optsOn).lines);
         if (optsOn) focus = [start + 1, lines.length];
       } else {
-        lines.push(`${DIM}${t(lang, "plan_no_session")}${RESET}`);
+        lines.push(`${t(lang, "plan_no_session")}`);
       }
       const zoneHint = !long ? "" : !v.canInstruct ? t(lang, "hint_planview_zone_only") : t(lang, optsOn ? "hint_planview_zone_opts" : "hint_planview_zone_plan");
       const hint = [zoneHint, !long && v.canInstruct && !v.input ? t(lang, "hint_planview_instruct") : ""].filter(Boolean).join(" · ");
       return { lines, focus, hint: v.input?.kind === "instruct" ? instructHint(v, lang) : hint };
     }
-    // Information, never a gate: the sections not yet opened, one dim line above the options
+    // Information, never a gate: the sections not yet opened, one plain line above the options
     lines.push(`${BOLD}${t(lang, "approve_question")}${RESET}`, "");
-    if (unread.length) lines.push(...wrap(`${DIM}${t(lang, "plan_unread", { n: unread.length, names: unreadNames(unread) })}${RESET}`, w));
+    if (unread.length) lines.push(...wrap(`${t(lang, "plan_unread", { n: unread.length, names: unreadNames(unread) })}`, w));
     // One option list like a question: 1 Approve (auto), 2 Instruct (its box opens when the cursor lands on it), 3 Reject (so does its reason box)
     const typingInstruct = v.input?.kind === "instruct";
     const typingReason = v.input?.kind === "reason";
     const at = (i: number) => optsOn && (v.cursor === i || (i === 1 && typingInstruct) || (i === 2 && typingReason));
     const mark = (on: boolean) => (on ? `${BOLD}▸${RESET}` : " ");
     const approveStart = lines.length;
-    lines.push(`${mark(at(0))} ${CYAN}[1]${RESET} ${at(0) ? BOLD : ""}${GREEN}${t(lang, "approve_auto")}${RESET} ${DIM}★ ${t(lang, "recommended_badge")}${RESET}`);
+    lines.push(`${mark(at(0))} ${CYAN}[1]${RESET} ${at(0) ? BOLD : ""}${GREEN}${t(lang, "approve_auto")}${RESET} ★ ${t(lang, "recommended_badge")}`);
     if (at(0)) focus = [approveStart, lines.length];
     const cardStart = lines.length;
     const card = instructCard(v, w, lang, at(1), "2").lines;
@@ -297,7 +298,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     const rejectStart = lines.length;
     lines.push(`${mark(at(2))} ${CYAN}[3]${RESET} ${at(2) ? BOLD : ""}${t(lang, "reject")}${RESET}`);
     if (typingReason) lines.push(...wrap(`  ${t(lang, "reason")}: ${v.input!.text}▏`, w));
-    else if (v.reason) lines.push(...wrap(`${DIM}  ${t(lang, "reason")}: ${v.reason}${RESET}`, w));
+    else if (v.reason) lines.push(...wrap(`  ${t(lang, "reason")}: ${v.reason}`, w));
     if (at(2)) focus = [rejectStart, lines.length];
     return {
       lines,
@@ -307,18 +308,18 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   }
 
   if (m.checkpoint) {
-    if (v.idle) lines.push(...wrap(`${DIM}${t(lang, v.terminal ? "checkpoint_idle_terminal" : "checkpoint_idle")}${RESET}`, w), "");
+    if (v.idle) lines.push(...wrap(`${t(lang, v.terminal ? "checkpoint_idle_terminal" : "checkpoint_idle")}`, w), "");
     (["continue", "instruct", "stop"] as const).forEach((k, i) => {
       const start = lines.length;
       const on = v.cursor === i;
-      const lead = `${DIM}${i + 1}${RESET} ${on ? `${BOLD}▸${RESET}` : " "} `;
+      const lead = `${i + 1} ${on ? `${BOLD}▸${RESET}` : " "} `;
       lines.push(`${lead}${on ? BOLD : ""}${OPT_COLORS[i]}${t(lang, `checkpoint_${k}`)}${RESET}${i === 0 ? `  ${BADGE_REC} ${t(lang, "recommended_badge")} ${RESET}` : ""}`);
       if (i === 1) {
         const typing = v.input?.kind === "free";
         const typed = typing ? `${v.input!.text}▏` : v.free.text;
         const pad = " ".repeat(width(lead));
         if (typed) for (const x of wrap(typed, Math.max(8, w - width(lead)))) lines.push(pad + x);
-        else if (on) lines.push(`${pad}${DIM}${t(lang, "checkpoint_placeholder")}${RESET}`);
+        else if (on) lines.push(`${pad}${t(lang, "checkpoint_placeholder")}`);
       }
       if (on) focus = [start, lines.length];
       lines.push("");
@@ -332,7 +333,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     lines.push(...wrap(codeSpans(q.text), w), "");
   } else if (!q.v2) {
     if (m.title !== q.text || !m.hasExplanation) {
-      lines.push(...wrap(`${DIM}${q.header}${RESET}`, w));
+      lines.push(...wrap(`${q.header}`, w));
       if (m.title !== q.text) lines.push(...wrap(`${BOLD}${q.text}${RESET}`, w));
       lines.push("");
     }
@@ -342,8 +343,8 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   if (m.todo) lines.push(`${BOLD}${YELLOW}${t(lang, "todo_title")}${RESET}`, ...renderMarkdown(m.todo, w, { lang, marks: tm }), "");
   // The decision column: the conclusion, its condition, the cards, free text and the hint (the reading material is in the background column)
   if (m.headline) lines.push(...wrap(`${BOLD}${inline(m.headline, { base: BOLD, marks: textMarks })}${RESET}`, w));
-  // The condition under which another option is right: one dim line right under the headline
-  if (m.cond) lines.push(...wrap(`${DIM}${t(lang, "cond_prefix")} ${inline(m.cond, { base: DIM, marks: textMarks })}${RESET}`, w));
+  // The condition under which another option is right: one plain line right under the headline
+  if (m.cond) lines.push(...wrap(`${BOLD}${t(lang, "cond_label")}${RESET} ${inline(m.cond, { marks: textMarks })}`, w));
   if (m.headline) lines.push("");
   const cardMarks = tm;
   q.cards.forEach((c, i) => {
@@ -362,7 +363,7 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
     if (v.none) {
       NONE_TYPES.forEach((nt, k) => lines.push(`    ${k === v.none!.index ? `${BOLD}▸${RESET} ${BOLD}` : "  "}${t(lang, nt.label)}${RESET}`));
       const note = v.input?.kind === "note" ? `${v.input.text}▏` : v.none.text;
-      if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
+      if (note) lines.push(...wrap(`    ${t(lang, "note")}: ${note}`, w));
     }
     if (non || v.none) focus = [nstart, lines.length];
     if (v.none) lines.push("");
@@ -380,11 +381,11 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
           return;
         }
         const here = row.index === c.index;
-        lines.push(`    ${cur}${here ? BOLD : DIM}${t(lang, CANNOT_REASONS[row.index]!.label)}${RESET}`);
-        if (here) for (const x of wrap(`${DIM}${t(lang, row.index === CANNOT_TERMS ? "cannot_terms_hint" : "cannot_detail_hint")}${RESET}`, Math.max(8, w - 8))) lines.push(`        ${x}`);
+        lines.push(`    ${cur}${here ? BOLD : ""}${t(lang, CANNOT_REASONS[row.index]!.label)}${RESET}`);
+        if (here) for (const x of wrap(`${t(lang, row.index === CANNOT_TERMS ? "cannot_terms_hint" : "cannot_detail_hint")}`, Math.max(8, w - 8))) lines.push(`        ${x}`);
       });
       const note = v.input?.kind === "note" ? `${v.input.text}▏` : c.text;
-      if (note) lines.push(...wrap(`    ${DIM}${t(lang, "note")}:${RESET} ${note}`, w));
+      if (note) lines.push(...wrap(`    ${t(lang, "note")}: ${note}`, w));
     }
     if (con || v.cannot) focus = [cstart, lines.length];
     lines.push("");
@@ -420,20 +421,21 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
 
 // ---- Left: background ----
 
-/** `Goal:` + the session's first instruction, cut at two rows with … */
+/** `Goal` (bold) + the session's first instruction, cut at two rows with … */
 function goalLines(m: ScreenModel, w: number, lang: Lang): string[] {
   const first = m.history?.first;
   if (!first) return [];
-  const rows = wrap(`${BOLD}${CYAN}${t(lang, "goal_label")}${RESET} ${oneLine(first.text)}`, w);
-  if (rows.length <= 2) return [...rows, ""];
-  return [rows[0]!, `${truncate(rows.slice(1).map(stripAnsi).join(" "), Math.max(1, w - 1))}…`, ""];
+  const rows = wrap(`${BOLD}${t(lang, "goal_label").replace(/[:：]$/, "")}${RESET} ${oneLine(first.text)}`, w);
+  const rule = `${DIM}${"─".repeat(w)}${RESET}`;
+  if (rows.length <= 2) return [...rows, rule, ""];
+  return [rows[0]!, `${truncate(rows.slice(1).map(stripAnsi).join(" "), Math.max(1, w - 1))}…`, rule, ""];
 }
 
 function leftColumn(v: View, m: ScreenModel, w: number, fullHint = true, rows = 24): Left {
   const lang = v.lang;
   if (v.histDetail) {
     const e = v.histDetail;
-    const head = `${BOLD}${t(lang, "history_detail_title")}${RESET} ${DIM}${e.at ? elapsed(e.at, v.now, lang) : ""}${e.first ? ` · ${t(lang, "history_first")}` : ""}${RESET}`;
+    const head = `${BOLD}${t(lang, "history_detail_title")}${RESET} ${e.at ? elapsed(e.at, v.now, lang) : ""}${e.first ? ` · ${t(lang, "history_first")}` : ""}`;
     // Shown as typed: line breaks and spacing kept
     const lines = [head, "", ...e.text.split("\n").flatMap((l) => (l === "" ? [""] : wrap(l, w)))];
     return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
@@ -500,7 +502,7 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     const ind = e.level === 3 ? "  " : "";
     // The selected section: inverted while the plan zone has the arrows, bold cyan otherwise
     const title = st.cur === e.i ? (st.zone === "plan" ? `\x1b[7m${e.plain}${RESET}` : `${BOLD}${CYAN}${e.plain}${RESET}`) : `${BOLD}${e.plain}${RESET}`;
-    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${title} ${DIM}(${planCount(lang, "plan_lines", e.lines)})${RESET}${st.updated.has(e.i) ? ` ${DIM}${t(lang, "plan_section_updated")}${RESET}` : ""}`;
+    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${title} (${planCount(lang, "plan_lines", e.lines)})${st.updated.has(e.i) ? ` ${t(lang, "plan_section_updated")}` : ""}`;
     for (const l of wrap(head, w)) {
       out.lines.push(l);
       out.wide.push(null);
@@ -516,11 +518,11 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
 
 function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean, rows: number): Left {
   if (m.checkpoint) {
-    const lines = [...wrap(`${DIM}${t(lang, "checkpoint_optional")}${RESET}`, w), "",`${DIM}${t(lang, "checkpoint_kind")}${RESET}`, ...wrap(m.checkpoint.recap, w)];
+    const lines = [...wrap(`${t(lang, "checkpoint_optional")}`, w), "",`${t(lang, "checkpoint_kind")}`, ...wrap(m.checkpoint.recap, w)];
     return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
   }
   if (m.backgroundNote) {
-    const lines = wrap(`${DIM}${m.backgroundNote}${RESET}`, w);
+    const lines = wrap(`${m.backgroundNote}`, w);
     return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
   }
   if (m.plan && v.plan) return planLeft(v, m, w, lang, fullHint);
@@ -533,17 +535,17 @@ function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
   if (recText) front.push(...recBox(recText, w, { rows, full: v.recFull, lang, marks: textMarks }), "");
   if (m.unknowns.length) front.push(...wrap(`${BOLD}${YELLOW}${t(lang, "you_decide")}${RESET} ${inline(m.unknowns.join(" · "), { marks: tm })}`, w), "");
   if (m.against) {
-    front.push(`${BOLD}${DIM}${t(lang, "against_title")}${RESET}`);
+    front.push(`${BOLD}${t(lang, "against_title")}${RESET}`);
     for (const l of wrap(inline(m.against, { marks: textMarks }), Math.max(8, w - 2))) front.push(`${DIM}▏${RESET} ${l}`);
     front.push("");
   }
   if (m.assumptions.length) {
     front.push(`${BOLD}${t(lang, "assumptions_title")}${RESET}`);
     for (const a of m.assumptions) wrap(inline(a, { marks: textMarks }), Math.max(8, w - 2)).forEach((l, k) => front.push((k === 0 ? `${GREEN}☐${RESET} ` : "  ") + l));
-    front.push(`${DIM}${t(lang, "assumptions_note")}${RESET}`, "");
+    front.push(`${t(lang, "assumptions_note")}`, "");
   }
   const rest: Left = { secRows: [], ...(m.background ? renderMarkdownRich(m.background, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] }) };
-  const back = m.affects.length ? wrap(`${DIM}${t(lang, "affects_title")}${RESET} ${affectsText(m).slice(2)}`, w) : [];
+  const back = m.affects.length ? wrap(`${t(lang, "affects_title")} ${affectsText(m).slice(2)}`, w) : [];
   const tailLines = back.length ? ["", ...back] : [];
   if (!front.length && !tailLines.length) return rest;
   return {
@@ -575,12 +577,12 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   const lang = v.lang;
   let left: string;
   if (v.notice) return truncate(`${BOLD}${YELLOW}${v.notice}${RESET}`, cols);
-  if (v.list) left = `${DIM}${t(lang, "footer_list")}${RESET}`;
-  else if (v.history) left = `${DIM}${t(lang, "footer_history_list")}${RESET}`;
-  else if (v.histDetail) left = `${DIM}${t(lang, "footer_history_detail")}${RESET}`;
-  else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, "footer_full")}${RESET}`;
+  if (v.list) left = `${t(lang, "footer_list")}`;
+  else if (v.history) left = `${t(lang, "footer_history_list")}`;
+  else if (v.histDetail) left = `${t(lang, "footer_history_detail")}`;
+  else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, "footer_full")}`;
   else {
-    left = `${t(lang, "pending_n", { n: v.pending })}  ${DIM}${t(lang, v.model?.plan ? "footer_switch_plan" : "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}${RESET}`;
+    left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, v.model?.plan ? "footer_switch_plan" : "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}`;
   }
   if (v.conn?.state === "down") left = `${BOLD}${RED}${t(lang, "cannot_connect", { server: v.conn.server })}${RESET}  ${left}`;
   else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}${t(lang, "reconnected")}${RESET}  ${left}`;
@@ -597,8 +599,8 @@ function listBody(v: View, cols: number, rows: number): string[] {
     if (it.plan) {
       // A plan file: title, then `plan · age · N sections · M lines`; new ones carry the dot, the others are dim
       const meta = [it.kindLabel, elapsed(it.createdAt, v.now, v.lang), `${planCount(v.lang, "plan_sections", it.plan.sections)} · ${planCount(v.lang, "plan_lines", it.plan.lines)}`, it.current ? t(v.lang, "current") : ""].filter(Boolean).join(" · ");
-      out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${it.plan.isNew ? `${CYAN}●${RESET}` : " "} ${it.plan.isNew ? (on ? BOLD : "") : DIM}${it.title}${RESET}`, cols));
-      out.push(truncate(`      ${DIM}${meta}${RESET}`, cols));
+      out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${it.plan.isNew ? `${CYAN}●${RESET}` : " "} ${it.plan.isNew ? (on ? BOLD : "") : ""}${it.title}${RESET}`, cols));
+      out.push(truncate(`      ${meta}`, cols));
       return;
     }
     const meta = [it.kindLabel, elapsed(it.createdAt, v.now, v.lang), it.noExplanation ? t(v.lang, "no_explanation") : "", it.current ? t(v.lang, "current") : ""]
@@ -606,7 +608,7 @@ function listBody(v: View, cols: number, rows: number): string[] {
       .join(" · ");
     const mark = it.blocker ? `${BADGE_BLOCKER} ${t(v.lang, "task_badge")} ${RESET} ` : "";
     out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${mark}${on ? BOLD : ""}${it.title}${RESET}`, cols));
-    out.push(truncate(`    ${chipsText(it.chips)}  ${DIM}${meta}${RESET}`, cols));
+    out.push(truncate(`    ${chipsText(it.chips)}  ${meta}`, cols));
   });
   return window(out, rows, 0);
 }
@@ -616,10 +618,10 @@ const planCount = (lang: Lang, key: "plan_sections" | "plan_lines" | "plan_files
 /** Row 2 of a plan file's header: `plans/ · Plan · updated 5m · 9 sections · 200 lines · 12 files · file.md` (the stats for a long plan only) */
 function planFileMeta(m: ScreenModel, now: number, lang: Lang): string {
   const o = m.plan?.outline;
-  const parts = [t(lang, "kind_plan"), t(lang, "plan_updated_ago", { age: elapsed(m.createdAt, now, lang) })];
-  if (o) parts.push(`${planCount(lang, "plan_sections", o.h2)} · ${planCount(lang, "plan_lines", o.lines)} · ${planCount(lang, "plan_files", o.files)}`);
+  const parts = [`[${t(lang, "kind_plan")}]`, `[${t(lang, "plan_updated_ago", { age: elapsed(m.createdAt, now, lang) })}]`];
+  if (o) parts.push(`[${planCount(lang, "plan_sections", o.h2)} · ${planCount(lang, "plan_lines", o.lines)} · ${planCount(lang, "plan_files", o.files)}]`);
   parts.push(m.readonly!.name);
-  return `${DIM}${parts.join(" · ")}${RESET}`;
+  return parts.join(" ");
 }
 
 /** The `s` overlay: when · first line of each instruction, the cursor kept in view */
@@ -630,9 +632,9 @@ function historyBody(v: View, cols: number, rows: number): string[] {
   const off = Math.max(0, Math.min(h.index - Math.floor(size / 2), h.items.length - size));
   const body = h.items.slice(off, off + size).map((it, k) => {
     const on = off + k === h.index;
-    const when = padEnd(`${DIM}${it.at ? elapsed(it.at, v.now, v.lang) : ""}${RESET}`, 6);
+    const when = padEnd(`${it.at ? elapsed(it.at, v.now, v.lang) : ""}`, 6);
     const mark = it.first ? `${YELLOW}${t(v.lang, "history_first")}${RESET} ` : "";
-    const delivery = it.delivered === undefined ? "" : ` ${DIM}${t(v.lang, it.delivered ? "history_delivered" : "history_undelivered")}${RESET}`;
+    const delivery = it.delivered === undefined ? "" : ` ${t(v.lang, it.delivered ? "history_delivered" : "history_undelivered")}`;
     return truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${when} ${mark}${on ? BOLD : ""}${oneLine(it.text)}${RESET}${delivery}`, cols);
   });
   return window([...head, ...body], rows, 0);
@@ -648,7 +650,7 @@ function scrollbar(size: number, total: number, off: number, max: number): strin
 /** The `▲▼ 1-20/58` indicator on the last row */
 function position(off: number, max: number, size: number, total: number, h?: { off: number; figW: number }): string {
   const hs = h && h.off > 0 ? ` ◀▶ ${h.off}/${h.figW}` : "";
-  return `${DIM}${off > 0 ? "▲" : " "}${off < max ? "▼" : " "} ${off + 1}-${Math.min(total, off + size)}/${total}${hs}${RESET}`;
+  return `${off > 0 ? "▲" : " "}${off < max ? "▼" : " "} ${off + 1}-${Math.min(total, off + size)}/${total}${hs}`;
 }
 
 /** Overlay a window, scrollbar and position indicator on an overflowing column. w is the column width including the bar */
@@ -657,7 +659,7 @@ function scrolled(all: string[], size: number, off: number, w: number, tail: str
   // When it fits vertically, show neither the bar nor the ▲▼ position (keep only ◀▶ when shifted sideways)
   const bar = max > 0 ? scrollbar(size, all.length, off, max) : new Array<string>(size).fill(" ");
   const body = window(all, size, off).map((l, i) => `${padEnd(truncate(l, w - 1), w - 1)}${bar[i]}`);
-  const pos = max > 0 ? position(off, max, size, all.length, h) : h && h.off > 0 ? `${DIM}◀▶ ${h.off}/${h.figW}${RESET}` : "";
+  const pos = max > 0 ? position(off, max, size, all.length, h) : h && h.off > 0 ? `◀▶ ${h.off}/${h.figW}` : "";
   return [...body, truncate(pos, w), ...tail];
 }
 
@@ -678,14 +680,14 @@ export function renderFrame(v: View, size: Size): Frame {
     const body = new Array<string>(Math.max(0, rows - 1)).fill("");
     const msg = t(v.lang, "empty");
     const row = Math.floor((rows - 1) / 2);
-    body[row] = " ".repeat(Math.max(0, Math.floor((cols - width(msg)) / 2))) + `${DIM}${msg}${RESET}`;
+    body[row] = " ".repeat(Math.max(0, Math.floor((cols - width(msg)) / 2))) + `${msg}`;
     return fin(body, []);
   }
 
   // Two rows for every kind: the title, then the context line (the checkpoint's note is the top of the left column, its headline is the recap's first sentence there)
   const rule = `${DIM}${"─".repeat(cols)}${RESET}`;
   const head = m.readonly
-    ? [truncate(`${BOLD}${m.title}${RESET}`, cols), truncate(`${PLANS_ANSI}plans/${RESET} ${DIM}· ${RESET}${planFileMeta(m, v.now, v.lang)}`, cols), rule]
+    ? [truncate(`${BOLD}${m.title}${RESET}`, cols), truncate(`[${PLANS_ANSI}●${RESET} ${PLANS_ANSI}${BOLD}plans/${RESET}] ${planFileMeta(m, v.now, v.lang)}`, cols), rule]
     : [...titleLines(m, cols, v.lang), ctxLine(m, v.now, cols, v.lang), rule];
   const bodyRows = Math.max(1, rows - head.length - 1);
 
@@ -696,8 +698,8 @@ export function renderFrame(v: View, size: Size): Frame {
     const leftW = full ? cols : cols - SEP.length - rightW;
     // Take one row for the heading (the focused column inverted); the rest is the column window
     const winRows = Math.max(1, bodyRows - 1);
-    // The focused heading is inverted with a ▶ on the left (visible even in monochrome); the other is dim
-    const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ▶ ${label} ${RESET}` : `${DIM}   ${label}${RESET}`, w);
+    // The focused heading is inverted with a ▶ on the left (visible even in monochrome); the other is plain
+    const heading = (label: string, w: number, on: boolean) => padEnd(on ? `\x1b[7m ▶ ${label} ${RESET}` : `   ${label}`, w);
 
     // Left: when it overflows (tall, or has a diagram that can shift sideways) put a bar on the right edge and the position on the last row; otherwise leave it as is
     let leftR = leftColumn(v, m, leftW, true, winRows);
@@ -730,7 +732,7 @@ export function renderFrame(v: View, size: Size): Frame {
     // Right: when it overflows, scroll so the card under the cursor is visible (or to the manually scrolled position). The hint stays on the bottom row
     let right = rightColumn(v, m, rightW, winRows);
     // The hint is one row (cut at the column width)
-    const hintRows = (r: Column, w: number): string[] => [truncate(`${DIM}${r.hint}${RESET}`, w)];
+    const hintRows = (r: Column, w: number): string[] => [truncate(`${r.hint}`, w)];
     const rightOver = right.lines.length + 1 + hintRows(right, rightW).length > winRows;
     let rcol: string[];
     let rightMax = 0;
@@ -758,7 +760,7 @@ export function renderFrame(v: View, size: Size): Frame {
   const leftR = leftColumn(v, m, cols - 1, false, bodyRows);
   const sh = shifted(leftR, cols - 1, v.hscroll);
   const leftAll = sh.lines;
-  const all = [...right.lines, "", `${DIM}${right.hint}${RESET}`, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];
+  const all = [...right.lines, "", right.hint, ...(leftAll.length ? ["", `${DIM}${"─".repeat(cols - 1)}${RESET}`, ...leftAll] : [])];
   const hOff = Math.min(v.hscroll, sh.hMax);
   const footRows = leftR.footnotes.map((x) => x.row + right.lines.length + 4);
   const secRows = leftR.secRows.map((x) => x + right.lines.length + 4);

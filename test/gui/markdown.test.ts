@@ -202,7 +202,7 @@ gui("every construct renders (callouts, tasks, details, code, badges, mark, colu
   assert.deepEqual(texts(`${BG} li.task .task-box`).sort(), ["☐", "☐", "☑", "☑", "☑"]);
   assert.equal(count(`${BG} li.task.done`), 3);
   assert.equal(count(`${BG} input`), 0);
-  assert.equal(ev<boolean>(`Number(getComputedStyle(document.querySelector("${BG} li.task.done")).opacity) < 1`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("${BG} li.task.done")).textDecorationLine === "line-through"`), true);
 
   // Details: closed unless `open`; the Markdown inside renders; <br> / <sub> / <sup> survive, <kbd> does not
   assert.deepEqual(ev<boolean[]>(`JSON.stringify([...document.querySelectorAll("${AUTHOR}")].map((d) => d.open))`), [false, true, true]);
@@ -345,7 +345,7 @@ gui("images: src rewritten to /api/files, caption, lightbox with focus restore, 
   ev(`document.querySelector(".overlay.lightbox").click(), "ok"`);
   await waitFor("lightbox closed by click", `!document.querySelector(".overlay.lightbox")`);
 
-  // a missing file shows the alt text and the dim note
+  // a missing file shows the alt text and the note
   // lazy images load near the viewport: scroll to it on every poll
   await waitFor("missing image text", `(document.querySelector('${BG} img[src*="gone.png"], ${BG} .img-alt')?.scrollIntoView(), true) && [...document.querySelectorAll("${BG} figure.doc-img")].some((f) => f.querySelector(".img-missing") && f.textContent.includes("Gone screenshot"))`, 10000);
   assert.equal(text(`${BG} .img-missing`), "image not found");

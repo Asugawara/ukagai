@@ -11,10 +11,10 @@ test("headings are bold; stripping color leaves only the text", () => {
   assert.deepEqual(raw.map(stripAnsi), ["Why now", "", "The body."]);
 });
 
-test("**strong** is bold cyan, `code` is dim", () => {
+test("**strong** is bold cyan, `code` is cyan", () => {
   const [line] = renderMarkdown("**Key** and `code`", 40);
   assert.ok(line!.includes("\x1b[1;36mKey"));
-  assert.ok(line!.includes("\x1b[2mcode"));
+  assert.ok(line!.includes("\x1b[36mcode"));
   assert.equal(stripAnsi(line!), "Key and code");
 });
 
@@ -59,7 +59,7 @@ test("mermaid: drawn even when too narrow (truncated to the column, with a note,
   const lines = r.lines.map(stripAnsi);
   const top = lines.findIndex((l) => l.includes("┌"));
   assert.match(lines.slice(0, top).join("").replace(/ /g, ""), /^\(Diagram:\d+columnswide\.←→\/horizontalwheeltoscroll·fforfullwidth\)$/);
-  assert.ok(r.lines[0]!.includes("\x1b[2m"));
+  assert.ok(!r.lines[0]!.includes("\x1b[2m"));
   assert.ok(lines.some((l) => l.includes("┌")));
   assert.ok(!lines.some((l) => l.includes("could not render")));
   for (const l of r.lines) assert.ok(width(l) <= 20, l);

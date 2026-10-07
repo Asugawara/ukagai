@@ -78,7 +78,7 @@ export interface InlineOpts {
   imageLabel?: string;
 }
 
-const BADGES: Record<string, string> = { done: GREEN, todo: "", doing: CYAN, blocked: RED, risk: RED, skip: DIM };
+const BADGES: Record<string, string> = { done: GREEN, todo: "", doing: CYAN, blocked: RED, risk: RED, skip: "" };
 const BADGE_RE = /^((?:\*\*[^*]+\*\*\s*)?)\[(done|todo|doing|blocked|risk|skip)\]/;
 const IMAGE_DEST = String.raw`((?:[^()\s]|\([^()\s]*\))+)`;
 const IMAGE_RE = new RegExp(String.raw`!\[([^\]]*)\]\(${IMAGE_DEST}(?:\s+"[^"]*")?\)`, "g");
@@ -109,12 +109,12 @@ export function inline(text: string, opts: InlineOpts = {}): string {
     })
     .join("");
   return marked
-    .replace(/\x00([^\x01]*)\x01/g, (_, c: string) => `${DIM}${opts.imageLabel ?? "[image]"} ${c}${close}`)
-    .replace(/\[\^([^\]\s]+)\](?!:)/g, (_, id: string) => `${DIM}[${id}]${close}`)
-    .replace(/`([^`]+)`/g, (_, c: string) => `${DIM}${c}${close}`)
+    .replace(/\x00([^\x01]*)\x01/g, (_, c: string) => `${opts.imageLabel ?? "[image]"} ${c}`)
+    .replace(/\[\^([^\]\s]+)\](?!:)/g, (_, id: string) => `${CYAN}[${id}]${close}`)
+    .replace(/`([^`]+)`/g, (_, c: string) => `${CYAN}${c}${close}`)
     .replace(/\*\*([^*]+)\*\*/g, (_, c: string) => `${strong}${c}${close}`)
     .replace(/(?<![*\w])\*([^*\s][^*]*)\*(?![*\w])/g, (_, c: string) => `\x1b[3m${c}${close}`)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t: string, u: string) => `${t} ${DIM}(${u})${close}`)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t: string, u: string) => `${t} (${u})`)
     // Last, so a reset inside the mark (nested bold, code) re-opens the inverse
     .replace(/\x02([^\x03]*)\x03/g, (_, c: string) => INVERSE + c.replaceAll(close, close + INVERSE) + INVERSE_OFF);
 }
@@ -362,28 +362,28 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       const kind = block.lang === "mermaid" ? diagramType(body.join("\n")) : "";
       if (block.lang === "mermaid" && !isAsciiType(kind)) {
         const label = ` ${t(lang, "diagram_type", { type: kind || "?" })} `;
-        out.push(...wrap(`${DIM}┌${"─".repeat(width(label))}┐${RESET}`, w), ...wrap(`${DIM}│${label}│${RESET}`, w), ...wrap(`${DIM}└${"─".repeat(width(label))}┘${RESET}`, w));
-        for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
+        out.push(...wrap(`${DIM}┌${"─".repeat(width(label))}┐${RESET}`, w), ...wrap(`${DIM}│${RESET}${label}${DIM}│${RESET}`, w), ...wrap(`${DIM}└${"─".repeat(width(label))}┘${RESET}`, w));
+        for (const l of body) out.push(...wrap(`  ${l}`, w));
       } else if (block.lang === "mermaid") {
         const fig = renderMermaid(body.join("\n"));
         if (fig.ok) {
           if (fig.width > w) {
-            out.push(...wrap(`${DIM}${t(lang, opts.fullHint === false ? "figure_note" : "figure_note_full", { width: fig.width })}${RESET}`, w));
+            out.push(...wrap(t(lang, opts.fullHint === false ? "figure_note" : "figure_note_full", { width: fig.width }), w));
             for (const l of fig.lines) {
               if (width(l) > w) wideRows.set(out.length, l);
               out.push(sliceCols(l, 0, w));
             }
           } else out.push(...fig.lines);
         } else {
-          out.push(`${DIM}${t(lang, "figure_failed")}${RESET}`);
-          for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
+          out.push(t(lang, "figure_failed"));
+          for (const l of body) out.push(...wrap(`  ${l}`, w));
         }
       } else if (block.lang === "diff") {
-        if (title && (title[1] ?? title[2])) out.push(...wrap(`${DIM}${title[1] ?? title[2]}${RESET}`, w));
+        if (title && (title[1] ?? title[2])) out.push(...wrap(`${title[1] ?? title[2]}`, w));
         for (const l of body) out.push(...wrap(`  ${diffLine(l)}`, w));
       } else {
-        if (title && (title[1] ?? title[2])) out.push(...wrap(`${DIM}${title[1] ?? title[2]}${RESET}`, w));
-        for (const l of body) out.push(...wrap(`${DIM}  ${l}${RESET}`, w));
+        if (title && (title[1] ?? title[2])) out.push(...wrap(`${title[1] ?? title[2]}`, w));
+        for (const l of body) out.push(...wrap(`  ${l}`, w));
       }
       out.push("");
       i = block.end + 1;
@@ -399,7 +399,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       const head = /^\x01H(\d+)\x01(.*)$/.exec(line);
       if (head) {
         const n = Number(head[1]);
-        out.push(...wrap(`${DIM}▸ ${inline(head[2]!, { base: DIM })} (${t(lang, n === 1 ? "plan_lines_one" : "plan_lines", { n })})${RESET}`, w));
+        out.push(...wrap(`▸ ${inline(head[2]!)} (${t(lang, n === 1 ? "plan_lines_one" : "plan_lines", { n })})`, w));
       } else out.push(`${DIM}${"─".repeat(w)}${RESET}`);
       i++;
       continue;
@@ -472,7 +472,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       }
       const lead = " ".repeat(indent) + mark + " ";
       const pad = " ".repeat(width(lead));
-      const body = !text ? "" : done ? `${DIM}${inl(text, { badge: true, base: DIM })}${RESET}` : inl(text, { badge: true });
+      const body = !text ? "" : done ? inl(text, { badge: true }) : inl(text, { badge: true });
       wrap(body, Math.max(8, w - width(lead))).forEach((l, k) => out.push(((k === 0 ? lead : pad) + l).trimEnd()));
       continue;
     }
@@ -481,7 +481,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
       const item: string[] = [fn[2]!];
       i++;
       while (i < lines.length && /^\s{2,}\S/.test(lines[i]!) && !inFence[i]) item.push(lines[i++]!);
-      const lead = `${DIM}[${fn[1]}]${RESET} `;
+      const lead = `${CYAN}[${fn[1]}]${RESET} `;
       const pad = " ".repeat(width(lead));
       footnotes.push({ id: fn[1]!, row: out.length });
       wrap(inl(joinSoft(item)), Math.max(8, w - width(lead))).forEach((l, k) => out.push((k === 0 ? lead : pad) + l));
@@ -490,7 +490,7 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
     const img = IMAGE_LINE.exec(line);
     if (img) {
       const [, alt, src] = img;
-      out.push(...wrap(`${DIM}${imageLabel} ${alt ? `${alt} — ` : ""}${src}${imageSize(src!, opts.baseDir)}${RESET}`, w));
+      out.push(...wrap(`${imageLabel} ${alt ? `${alt} — ` : ""}${src}${imageSize(src!, opts.baseDir)}`, w));
       i++;
       continue;
     }
