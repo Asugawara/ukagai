@@ -31,6 +31,7 @@ import { FILE_TYPES, documentDir, resolveDocumentFile, type DocumentScope } from
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanSummary } from "../contract.js";
 import { PlanSessions } from "./plan-session.js";
+import { PlanVersionStore, buildPlanVersions } from "./plan-versions.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
@@ -325,9 +326,48 @@ export function createApp(deps: AppDeps): Hono {
     const body = await parse(c, PlanInstructRequest);
     const sessionId = isPlanFile(name) ? await planSessions.find(name) : undefined;
     if (!sessionId) return c.json({ error: "no session found for this plan" }, 404);
+    // Snapshot the plan as the human saw it: the agent rewrites the file after this (plan versions)
+    if (planVersions) {
+      try {
+        const plan = await readPlan(deps.home, name);
+        planVersions.add(sessionId, plan.markdown, { text: body.text, kind: "instruct", at: new Date().toISOString() });
+      } catch {}
+    }
     const delivered_via = await store.queuePlanInstruction(sessionId, body.text);
     deps.log?.("plan_instructed", { plan: name, session: sessionId, via: delivered_via });
     return c.json({ delivered_via });
+  });
+
+  const planVersions = deps.dataDir ? new PlanVersionStore(deps.dataDir) : undefined;
+  // The plan versions of a session; `current` names what the client shows (decision:<id> or plan:<name>) so it is the last version
+  app.get("/api/sessions/:id/plan-versions", auth("any"), async (c) => {
+    const id = c.req.param("id");
+    const cur = c.req.query("current");
+    let current: string | undefined;
+    if (cur !== undefined) {
+      const m = /^(decision|plan):(.+)$/.exec(cur);
+      if (!m) return c.json({ error: "invalid current" }, 400);
+      if (m[1] === "plan" && !isPlanFile(m[2]!)) return c.json({ error: "invalid current" }, 400);
+    }
+    const decisions = store.list().filter((d) => d.session.session_id === id && d.kind === "approve_plan");
+    const stored = planVersions?.list(id) ?? [];
+    if (decisions.length === 0 && stored.length === 0 && !store.listSessions().some((x) => x.session_id === id)) return c.json({ error: "session not found" }, 404);
+    if (cur !== undefined) {
+      const m = /^(decision|plan):(.+)$/.exec(cur)!;
+      if (m[1] === "decision") {
+        const d = store.get(m[2]!);
+        if (!d || d.session.session_id !== id || d.kind !== "approve_plan" || !("plan" in d.request)) return c.json({ error: "decision not found" }, 404);
+        current = String(d.request.plan);
+      } else {
+        try {
+          current = (await readPlan(deps.home, m[2]!)).markdown;
+        } catch (e) {
+          if (e instanceof PlanError) return c.json({ error: e.message }, e.status);
+          throw e;
+        }
+      }
+    }
+    return c.json(buildPlanVersions(decisions, stored, current));
   });
 
   const setPlanRead = async (c: Context, read: boolean) => {

@@ -743,3 +743,57 @@ export const DEFAULT_SETTINGS: Settings = {
   plans: { auto_show: true, instruction_presets: [] },
   notify: { sound: false, browser: false, title_badge: true },
 };
+
+// ---- plan versions (GET /api/sessions/:id/plan-versions) ----
+
+export const PlanInstruction = z.object({
+  text: z.string(),
+  kind: z.enum(["instruct", "reject"]),
+  at: z.string(),
+});
+export type PlanInstruction = z.infer<typeof PlanInstruction>;
+
+/** One version of a session's plan; `instruction` is what the human sent after this version (what led to the next one) */
+export const PlanVersion = z.object({
+  /** 1-based, in `at` order */
+  n: z.number().int().positive(),
+  at: z.string(),
+  source: z.enum(["approval", "file"]),
+  decision_id: z.string().optional(),
+  plan: z.string(),
+  instruction: PlanInstruction.optional(),
+  /** The version the client shows (not stored: appended by the server) */
+  current: z.literal(true).optional(),
+});
+export type PlanVersion = z.infer<typeof PlanVersion>;
+
+export const DiffLine = z.object({ kind: z.enum(["same", "add", "del"]), text: z.string() });
+export type DiffLine = z.infer<typeof DiffLine>;
+export const SectionStatus = z.enum(["same", "added", "removed", "changed"]);
+export type SectionStatus = z.infer<typeof SectionStatus>;
+export const SectionDiff = z.object({
+  /** "" for the text before the first H2 */
+  heading: z.string(),
+  status: SectionStatus,
+  /** changed: the line diff */
+  lines: z.array(DiffLine).optional(),
+  /** removed: the old lines */
+  old_lines: z.array(z.string()).optional(),
+  /** added: the new lines */
+  new_lines: z.array(z.string()).optional(),
+});
+export type SectionDiff = z.infer<typeof SectionDiff>;
+export const PlanDiff = z.object({
+  sections: z.array(SectionDiff),
+  summary: z.object({
+    added: z.number().int().nonnegative(),
+    changed: z.number().int().nonnegative(),
+    removed: z.number().int().nonnegative(),
+    same: z.number().int().nonnegative(),
+  }),
+});
+export type PlanDiff = z.infer<typeof PlanDiff>;
+
+/** `diffs[i]` is the diff from `versions[i-1]` to `versions[i]` (`diffs[0]` against an empty plan) */
+export const PlanVersionsResponse = z.object({ versions: z.array(PlanVersion), diffs: z.array(PlanDiff) });
+export type PlanVersionsResponse = z.infer<typeof PlanVersionsResponse>;

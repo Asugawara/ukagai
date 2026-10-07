@@ -1,0 +1,63 @@
+import type { DiffLine, PlanDiff, SectionDiff, SectionStatus } from "../contract.js";
+import { scanFences, scanHeadings, toLines } from "../hook/explain.js";
+
+type Section = { heading: string; lines: string[] };
+
+/** H2 sections (fences respected). The text before the first H2 is a section with heading "" (dropped when blank) */
+export function splitSections(markdown: string): Section[] {
+  const lines = markdown === "" ? [] : toLines(markdown.replace(/\r?\n$/, ""));
+  const h2 = scanHeadings(lines, scanFences(lines).inFence).filter((h) => h.level === 2);
+  const out: Section[] = [];
+  const first = h2[0]?.line ?? lines.length;
+  const pre = lines.slice(0, first);
+  if (pre.some((l) => l.trim() !== "")) out.push({ heading: "", lines: pre });
+  h2.forEach((h, i) => out.push({ heading: h.title.trim(), lines: lines.slice(h.line, h2[i + 1]?.line ?? lines.length) }));
+  return out;
+}
+
+const norm = (l: string): string => l.replace(/\s+$/, "");
+const body = (lines: string[]): string => lines.map(norm).join("\n").replace(/\n+$/, "");
+
+/** Line diff by LCS; lines are compared without trailing whitespace, the new text is kept for `same` / `add` */
+export function diffLines(prev: string[], next: string[]): DiffLine[] {
+  const a = prev.map(norm);
+  const b = next.map(norm);
+  const n = a.length;
+  const m = b.length;
+  const t: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) t[i]![j] = a[i] === b[j] ? t[i + 1]![j + 1]! + 1 : Math.max(t[i + 1]![j]!, t[i]![j + 1]!);
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) out.push({ kind: "same", text: next[j]! }), i++, j++;
+    else if (t[i + 1]![j]! >= t[i]![j + 1]!) out.push({ kind: "del", text: prev[i++]! });
+    else out.push({ kind: "add", text: next[j++]! });
+  }
+  while (i < n) out.push({ kind: "del", text: prev[i++]! });
+  while (j < m) out.push({ kind: "add", text: next[j++]! });
+  return out;
+}
+
+/** Section-level diff of two plans, in the order of `next` (removed sections last) */
+export function diffPlans(prev: string, next: string): PlanDiff {
+  const old = splitSections(prev);
+  const taken = new Set<number>();
+  const sections: SectionDiff[] = [];
+  for (const s of splitSections(next)) {
+    const at = old.findIndex((o, i) => !taken.has(i) && o.heading === s.heading);
+    if (at < 0) {
+      sections.push({ heading: s.heading, status: "added", new_lines: s.lines });
+      continue;
+    }
+    taken.add(at);
+    const o = old[at]!;
+    if (body(o.lines) === body(s.lines)) sections.push({ heading: s.heading, status: "same" });
+    else sections.push({ heading: s.heading, status: "changed", lines: diffLines(o.lines, s.lines) });
+  }
+  old.forEach((o, i) => {
+    if (!taken.has(i)) sections.push({ heading: o.heading, status: "removed", old_lines: o.lines });
+  });
+  const count = (st: SectionStatus) => sections.filter((s) => s.status === st).length;
+  return { sections, summary: { added: count("added"), changed: count("changed"), removed: count("removed"), same: count("same") } };
+}
