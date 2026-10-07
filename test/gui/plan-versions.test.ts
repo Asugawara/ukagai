@@ -199,7 +199,7 @@ gui("a plan file card: the snapshot taken by Instruct becomes v1, the file now i
   writeFileSync(join(home, ".claude", "plans", "pv-fox.md"), V1);
   const tpath = join(home, ".claude", "projects", "p", "s-pv.jsonl");
   writeFileSync(tpath, '{"type":"user","slug":"pv-fox"}\n');
-  await api("/api/events", { session_id: "s-pv", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await api("/api/events", { session_id: "s-pv", transcript_path: tpath, cwd: ROOT, hook_event_name: "Stop", received_at: new Date().toISOString() });
   const r = await api("/api/plans/pv-fox.md/instruct", { text: "add a cap" });
   assert.ok(r.delivered_via, JSON.stringify(r));
   writeFileSync(join(home, ".claude", "plans", "pv-fox.md"), V2);
