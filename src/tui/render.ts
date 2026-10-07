@@ -6,7 +6,8 @@ import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
 import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 import { oneLine, type HistoryItem } from "./history.js";
-import { unreadNames, unreadSections, type PlanState } from "./plan.js";
+import { planOutline, unreadNames, unreadSections, type PlanState } from "./plan.js";
+import type { DiffLine, PlanDiff, SectionDiff } from "../contract.js";
 import { padEnd, sliceCols, stripAnsi, truncate, width, wrap } from "./width.js";
 
 // ScreenModel + interaction state to screen (strings). No I/O.
@@ -22,6 +23,20 @@ export interface ListItem {
   current: boolean;
   /** A plan file (its row says `plan`, `N sections · M lines`; new ones carry the dot, the others are plain) */
   plan?: { sections: number; lines: number; isNew: boolean; writing: boolean };
+}
+
+/** The versions of the shown plan (2 or more): the version line, the summary line, the note while an earlier one is shown, and the diff that marks the body */
+export interface VersionView {
+  tabs: string[];
+  idx: number;
+  /** `v1 → v2:` and what follows it (counts, or "first version") */
+  head: string;
+  body: string;
+  /** What the human sent after the version before this one */
+  ins: { label: string; text: string } | null;
+  note: string | null;
+  /** The diff to mark the body with; null when there is nothing to mark (first version, or the text on screen is not that version) */
+  diff: PlanDiff | null;
 }
 
 export interface View {
@@ -63,6 +78,8 @@ export interface View {
   recFull: boolean;
   /** A long plan's open / read sections and contents cursor; null for any other decision */
   plan: PlanState | null;
+  /** The versions of the plan on screen; null with fewer than 2 */
+  ver: VersionView | null;
   /** When the list is open */
   list: { items: ListItem[]; index: number } | null;
   /** First row of the background (the whole screen in the stacked layout) */
@@ -456,6 +473,73 @@ export const richStats = { renders: 0 };
 /** Rendered sections of a plan: per screen model, by section (-1 the text before the first, -2 the extra), width, hint and language. A repaint without changes renders nothing */
 const richCache = new WeakMap<ScreenModel, Map<string, Rendered>>();
 
+
+/** The gutter of a section that changed since the version before: a green bar for a new one, a yellow bar for a changed one, blank otherwise (2 columns) */
+const verGutter = (sec: SectionDiff | undefined): string => (sec?.status === "added" ? `${GREEN}▎${RESET} ` : sec?.status === "changed" ? `${YELLOW}▎${RESET} ` : "  ");
+const verTag = (sec: SectionDiff | undefined, lang: Lang): string =>
+  sec?.status === "added" ? ` ${GREEN}[${t(lang, "ver_new")}]${RESET}` : sec?.status === "changed" ? ` ${YELLOW}[${t(lang, "ver_chg")}]${RESET}` : "";
+
+/** The added / changed sections of the diff, matched to the H2 headings of the text on screen (same rule as the server: by trimmed heading, duplicates in order) */
+function verSections(diff: PlanDiff, headings: { key: number; title: string }[]): Map<number, SectionDiff> {
+  const used = new Set<number>();
+  const out = new Map<number, SectionDiff>();
+  for (const h of headings) {
+    const k = diff.sections.findIndex((s, j) => !used.has(j) && s.status !== "removed" && s.heading !== "" && s.heading === h.title.trim());
+    if (k < 0) continue;
+    used.add(k);
+    const s = diff.sections[k]!;
+    if (s.status === "added" || s.status === "changed") out.set(h.key, s);
+  }
+  return out;
+}
+
+/** The first `newCount` lines (new side) of a changed section's body, after the heading line: what a section shows when it has subsections of its own */
+function ownDiff(lines: DiffLine[], newCount: number): DiffLine[] {
+  const out: DiffLine[] = [];
+  let n = 0;
+  for (let i = lines[0]?.kind === "same" ? 1 : 0; i < lines.length && n < newCount; i++) {
+    out.push(lines[i]!);
+    if (lines[i]!.kind !== "del") n++;
+  }
+  return out;
+}
+
+/** A changed section's body: the unchanged lines as Markdown, the old line as `- text` in red, the new line as `+ text` in green */
+function renderDiff(lines: DiffLine[], width: number, opts: { fullHint: boolean; lang: Lang; marks: Mark[] }): Rendered {
+  const out: Rendered = { lines: [], footnotes: [], wide: [] };
+  let buf: string[] = [];
+  const flush = () => {
+    if (buf.join("").trim()) {
+      const r = renderMarkdownRich(buf.join("\n"), width, { ...opts, termsHeadings: TERMS_HEADINGS });
+      out.footnotes.push(...r.footnotes.map((x) => ({ ...x, row: x.row + out.lines.length })));
+      out.lines.push(...r.lines);
+      out.wide.push(...r.wide);
+    }
+    buf = [];
+  };
+  for (const l of lines) {
+    if (l.kind === "same") {
+      buf.push(l.text);
+      continue;
+    }
+    if (!l.text.trim()) continue;
+    flush();
+    for (const x of wrap(l.kind === "del" ? `${RED}- ${l.text}${RESET}` : `${GREEN}+ ${l.text}${RESET}`, width)) {
+      out.lines.push(x);
+      out.wide.push(null);
+    }
+  }
+  flush();
+  return out;
+}
+
+/** The version line (the shown one in reverse video), the summary line and the note, under the context line of a plan */
+function verHeader(ver: VersionView, cols: number): string[] {
+  const tabs = ver.tabs.map((x, i) => (i === ver.idx ? `\x1b[7m ${x} ${RESET}` : ` ${x} `)).join(" ");
+  const sum = `${BOLD}${ver.head}${RESET} ${ver.body}${ver.ins ? ` · ${BOLD}${ver.ins.label}${RESET} ${ver.ins.text.replace(/\s+/g, " ")}` : ""}`;
+  return [truncate(tabs, cols), truncate(sum, cols), ...(ver.note ? [truncate(`${BOLD}${ver.note}${RESET}`, cols)] : [])];
+}
+
 /** A long plan: the text before the first section, then one `▸ ☐ Heading (n lines)` row per H2 / H3 with its body under it while open */
 function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean): Left {
   const { outline: o, text, extra } = m.plan!;
@@ -463,6 +547,11 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
   const src = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
   const tm = termMarks(m);
   const out: Left = { lines: [], wide: [], footnotes: [], secRows: [] };
+  // The sections that are new / changed since the version before: a 2-column gutter on every section (a bar or blank) and a tag on the heading
+  const ver = v.ver?.diff ?? null;
+  const gut = ver ? 2 : 0;
+  const secs = ver ? verSections(ver, o.entries.filter((e) => e.level === 2).map((e) => ({ key: e.i, title: e.title }))) : new Map<number, SectionDiff>();
+  let bar = "";
   let cache = richCache.get(m);
   if (!cache) richCache.set(m, (cache = new Map()));
   const popBlank = () => {
@@ -471,13 +560,13 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
       out.wide.pop();
     }
   };
-  const add = (sec: number, md: string, width: number, indent: string) => {
+  const add = (sec: number, md: string, width: number, indent: string, diff?: DiffLine[]) => {
     if (!md.trim()) return;
-    const key = `${sec}:${width}:${fullHint}:${lang}`;
+    const key = `${diff ? "d" : ""}${sec}:${width}:${fullHint}:${lang}`;
     let r = cache.get(key);
     if (!r) {
       richStats.renders++;
-      cache.set(key, (r = renderMarkdownRich(md, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS })));
+      cache.set(key, (r = diff ? renderDiff(diff, width, { fullHint, lang, marks: tm }) : renderMarkdownRich(md, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS })));
     }
     out.footnotes.push(...r.footnotes.map((x) => ({ ...x, row: x.row + out.lines.length })));
     out.lines.push(...r.lines.map((l, i) => (r.wide[i] ? l : indent + l)));
@@ -490,7 +579,10 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
   let parentRow = 0;
   let parentOpen = true;
   o.entries.forEach((e, k) => {
-    if (e.level === 2) parentOpen = st.open.has(e.i);
+    if (e.level === 2) {
+      parentOpen = st.open.has(e.i);
+      bar = ver ? verGutter(secs.get(e.i)) : "";
+    }
     else if (!parentOpen) {
       out.secRows[e.i] = parentRow;
       return;
@@ -502,17 +594,61 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     const ind = e.level === 3 ? "  " : "";
     // The selected section: inverted while the plan zone has the arrows, bold cyan otherwise
     const title = st.cur === e.i ? (st.zone === "plan" ? `\x1b[7m${e.plain}${RESET}` : `${BOLD}${CYAN}${e.plain}${RESET}`) : `${BOLD}${e.plain}${RESET}`;
-    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${title} (${planCount(lang, "plan_lines", e.lines)})${st.updated.has(e.i) ? ` ${t(lang, "plan_section_updated")}` : ""}`;
-    for (const l of wrap(head, w)) {
-      out.lines.push(l);
+    const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${title} (${planCount(lang, "plan_lines", e.lines)})${st.updated.has(e.i) ? ` ${t(lang, "plan_section_updated")}` : ""}${e.level === 2 ? verTag(secs.get(e.i), lang) : ""}`;
+    for (const l of wrap(head, w - gut)) {
+      out.lines.push(bar + l);
       out.wide.push(null);
     }
     if (!open) return;
     const next = o.entries[k + 1]?.at ?? src.length;
-    add(e.i, src.slice(e.at + 1, next).join("\n"), Math.max(8, w - ind.length - 2), `${ind}  `);
+    const sec = e.level === 2 ? secs.get(e.i) : undefined;
+    const diff = sec?.status === "changed" && sec.lines ? ownDiff(sec.lines, next - (e.at + 1)) : undefined;
+    add(e.i, src.slice(e.at + 1, next).join("\n"), Math.max(8, w - ind.length - 2 - gut), `${bar}${ind}  `, diff);
   });
   add(-2, extra, w, "");
   popBlank();
+  return out;
+}
+
+/** A plan that is not folded (short, or an earlier version) with the sections that changed since the version before marked the same way as a long one */
+function planFlatMarked(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean): Left {
+  const diff = v.ver!.diff!;
+  const text = m.background!;
+  const src = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
+  const h2 = planOutline(text).entries.filter((e) => e.level === 2);
+  const secs = verSections(diff, h2.map((e) => ({ key: e.i, title: e.title })));
+  const tm = termMarks(m);
+  const out: Left = { lines: [], wide: [], footnotes: [], secRows: [] };
+  const push = (r: Rendered, indent: string) => {
+    out.footnotes.push(...r.footnotes.map((x) => ({ ...x, row: x.row + out.lines.length })));
+    out.lines.push(...r.lines.map((l, i) => (r.wide[i] ? l : indent + l)));
+    out.wide.push(...r.wide);
+    while (out.lines.length && out.lines.at(-1) === "") {
+      out.lines.pop();
+      out.wide.pop();
+    }
+    out.lines.push("");
+    out.wide.push(null);
+  };
+  const md = (s: string, width: number) => renderMarkdownRich(s, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS });
+  const pre = src.slice(0, h2[0]?.at ?? src.length).join("\n");
+  if (pre.trim()) push(md(pre, w), "  ");
+  h2.forEach((e, k) => {
+    const sec = secs.get(e.i);
+    const bar = verGutter(sec);
+    const end = h2[k + 1]?.at ?? src.length;
+    for (const l of wrap(`${BOLD}${e.plain}${RESET}${verTag(sec, lang)}`, w - 2)) {
+      out.lines.push(bar + l);
+      out.wide.push(null);
+    }
+    const body = src.slice(e.at + 1, end);
+    if (sec?.status === "changed" && sec.lines) push(renderDiff(sec.lines.slice(sec.lines[0]?.kind === "same" ? 1 : 0), w - 2, { fullHint, lang, marks: tm }), bar);
+    else if (body.join("").trim()) push(md(body.join("\n"), w - 2), bar);
+  });
+  while (out.lines.length && out.lines.at(-1) === "") {
+    out.lines.pop();
+    out.wide.pop();
+  }
   return out;
 }
 
@@ -526,6 +662,7 @@ function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     return { lines, wide: lines.map(() => null), footnotes: [], secRows: [] };
   }
   if (m.plan && v.plan) return planLeft(v, m, w, lang, fullHint);
+  if (m.kind === "plan" && v.ver?.diff && m.background) return planFlatMarked(v, m, w, lang, fullHint);
   // Order (the same as the GUI): Why, the recommendation (what follows its headline), You decide, Against, Assumptions, then the rest of the background, then Affected
   const tm = termMarks(m);
   const textMarks = [...labelMarks(m), ...tm];
@@ -582,7 +719,7 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   else if (v.histDetail) left = `${t(lang, "footer_history_detail")}`;
   else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, "footer_full")}`;
   else {
-    left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, v.model?.plan ? "footer_switch_plan" : "footer_switch")}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}`;
+    left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, v.model?.plan ? "footer_switch_plan" : "footer_switch")}${v.ver ? `  ${t(lang, "footer_versions")}` : ""}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}`;
   }
   if (v.conn?.state === "down") left = `${BOLD}${RED}${t(lang, "cannot_connect", { server: v.conn.server })}${RESET}  ${left}`;
   else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}${t(lang, "reconnected")}${RESET}  ${left}`;
@@ -689,6 +826,7 @@ export function renderFrame(v: View, size: Size): Frame {
   const head = m.readonly
     ? [truncate(`${BOLD}${m.title}${RESET}`, cols), truncate(`[${PLANS_ANSI}●${RESET} ${PLANS_ANSI}${BOLD}plans/${RESET}] ${planFileMeta(m, v.now, v.lang)}`, cols), rule]
     : [...titleLines(m, cols, v.lang), ctxLine(m, v.now, cols, v.lang), rule];
+  if (m.kind === "plan" && v.ver) head.splice(head.length - 1, 0, ...verHeader(v.ver, cols)); // under the context line, above the rule
   const bodyRows = Math.max(1, rows - head.length - 1);
 
   if (cols >= WIDE_COLS) {
