@@ -446,7 +446,7 @@ export function createApp(deps: AppDeps): Hono {
       if (store.get(id)!.kind !== "approve_plan") return c.json({ error: "instruct is only for approve_plan" }, 400);
       patch = { kind: "instruct_plan", text: body.text };
     } else if (body.approve) patch = { kind: "approve", ...(body.set_mode_auto ? { set_mode_auto: true } : {}) };
-    else patch = { kind: "reject", reason: body.reason };
+    else patch = { kind: "reject", ...(body.reason?.trim() ? { reason: body.reason } : {}) };
     return c.json(store.submitAnswer(id, patch));
   });
 

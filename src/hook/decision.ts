@@ -85,6 +85,11 @@ function firstQuestion(d: Decision): string | undefined {
   return qs?.[0]?.question;
 }
 
+/** The deny reason of an ExitPlanMode the human rejected without writing a reason */
+export function planRejectedNoReason(): string {
+  return "[ukagai] The human rejected the plan without giving a reason. Revise the plan (look for what a reader would object to) or ask one question about what to change, then call ExitPlanMode again.";
+}
+
 /** The deny reason of an ExitPlanMode the human answered with an instruction: Claude Code keeps the agent in plan mode and shows it this */
 export function planInstructReason(text: string): string {
   return `[ukagai] The human has not approved the plan yet and asks you to do this first: ${text}\nYou are still in plan mode: do it (research, subagents and reviews are fine; do not edit project files), update the plan file, then call ExitPlanMode again.`;
@@ -102,7 +107,7 @@ export function buildOutput(
   }
   if (response.instruct === true) return deny(planInstructReason(response.text ?? ""));
   if (response.approve === true) return allow(toolInput);
-  if (response.approve === false) return deny(response.reason ?? "Rejected.");
+  if (response.approve === false) return deny(response.reason?.trim() ? response.reason : planRejectedNoReason());
   return null;
 }
 

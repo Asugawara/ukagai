@@ -253,12 +253,22 @@ test("Instruct sends turn/start in plan mode with the text and acks the decision
   assert.ok(env.h.store.get(d.id)?.response?.delivered_at);
 });
 
-test("Reject without feedback (whitespace only) sends nothing", async () => {
+test("Reject without feedback (no reason, or whitespace only) sends nothing", async () => {
   const env = await setup();
   await ready(env);
   env.fake.planTurn("turn-r0");
   const d = await until(() => plans(env)[0], "decision");
   await call(env, `/api/decisions/${d.id}/answer`, { approve: false, reason: " " });
+  await until(() => env.h.store.get(d.id)?.status === "answered", "answered");
+  assert.equal(env.fake.methods("turn/start").length, 0);
+});
+
+test("Reject without a reason ({ approve: false }) takes the no-feedback ack: answered, no turn", async () => {
+  const env = await setup();
+  await ready(env);
+  env.fake.planTurn("turn-r00");
+  const d = await until(() => plans(env)[0], "decision");
+  await call(env, `/api/decisions/${d.id}/answer`, { approve: false });
   await until(() => env.h.store.get(d.id)?.status === "answered", "answered");
   assert.equal(env.fake.methods("turn/start").length, 0);
 });

@@ -96,12 +96,12 @@ test("AnswerRequest: accepts the 4 shapes and rejects invalid ones", () => {
   assert.ok(AnswerRequest.safeParse({ approve: true }).success);
   assert.ok(AnswerRequest.safeParse({ approve: true, set_mode_auto: true }).success);
   assert.ok(AnswerRequest.safeParse({ approve: false, reason: "too broad" }).success);
+  assert.ok(AnswerRequest.safeParse({ approve: false }).success, "a rejection needs no reason");
+  assert.ok(AnswerRequest.safeParse({ approve: false, reason: "" }).success);
   assert.ok(AnswerRequest.safeParse({ fallback: true }).success);
 
   assert.ok(!AnswerRequest.safeParse({ answers: { q: 1 } }).success);
   assert.ok(!AnswerRequest.safeParse({ answers: { q: ["a", "b"] } }).success);
-  assert.ok(!AnswerRequest.safeParse({ approve: false }).success);
-  assert.ok(!AnswerRequest.safeParse({ approve: false, reason: "" }).success);
   assert.ok(!AnswerRequest.safeParse({ fallback: false }).success);
   assert.ok(!AnswerRequest.safeParse({}).success);
 });

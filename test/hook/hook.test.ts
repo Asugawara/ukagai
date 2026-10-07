@@ -551,6 +551,17 @@ test("ExitPlanMode rejection → deny + reason; approval with set_mode_auto is a
     assert.equal(out.permissionDecision, "deny");
     assert.equal(out.permissionDecisionReason, "x");
   });
+  for (const response of [{ approve: false }, { approve: false, reason: "  " }]) {
+    await withServer(h(response), async (f, d) => {
+      const r = await runHook(args(f, d), JSON.stringify(planWith(GOOD_PLAN)));
+      const out = JSON.parse(r.stdout).hookSpecificOutput;
+      assert.equal(out.permissionDecision, "deny");
+      assert.equal(
+        out.permissionDecisionReason,
+        "[ukagai] The human rejected the plan without giving a reason. Revise the plan (look for what a reader would object to) or ask one question about what to change, then call ExitPlanMode again.",
+      );
+    });
+  }
   await withServer(h({ approve: true, set_mode_auto: true }), async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(planWith(GOOD_PLAN)));
     assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");

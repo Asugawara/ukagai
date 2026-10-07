@@ -78,6 +78,19 @@ test("two approve_plan decisions with an instruct answer between them: 2 version
   assert.deepEqual(body.diffs[1]!.summary, { added: 1, changed: 1, removed: 0, same: 2 });
 });
 
+test("POST answer { approve: false } (no reason) is 200, the response carries no reason and the next version has no instruction", async () => {
+  const env = await boot();
+  const d1 = await planDecision(env, "s1", "t1", V1);
+  const r = await api(env, `/api/decisions/${d1.id}/answer`, { approve: false });
+  assert.equal(r.status, 200);
+  const got = (await (await api(env, `/api/decisions/${d1.id}`)).json()) as Decision;
+  assert.equal(got.response?.approve, false);
+  assert.equal("reason" in got.response!, false);
+  await planDecision(env, "s1", "t2", V2);
+  const { body } = await versions(env, "s1");
+  assert.equal(body.versions[0]!.instruction, undefined);
+});
+
 test("a rejection with a reason is a reject instruction; an approval carries none", async () => {
   const env = await boot();
   const d1 = await planDecision(env, "s1", "t1", V1);

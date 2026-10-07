@@ -434,15 +434,25 @@ gui("Reject: landing on it opens the reason box focused; Enter with a reason sen
   assert.equal(reasonShown(), false, "nothing typed: the box closes");
   key("ArrowDown");
   assert.equal(focusedReason(), true);
-  // Enter with an empty reason sends nothing
-  ev(`document.getElementById("reason").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })), "ok"`);
-  await sleep(200);
-  assert.equal((await api(`/api/decisions/${id}`)).status, "pending");
   // with a reason, Enter in the box sends the rejection
   ev(`(() => { const t = document.getElementById("reason"); t.value = "wrong approach"; t.dispatchEvent(new Event("input", { bubbles: true })); t.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); return "ok"; })()`);
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(d.response.approve, false);
   assert.equal(d.response.reason, "wrong approach");
+});
+
+gui("Reject without a reason: Enter in the empty box sends { approve: false } and the response has no reason; the button is enabled while empty", async () => {
+  const { id } = await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  key("n");
+  assert.equal(ev(`document.activeElement === document.getElementById("reason")`), true);
+  assert.equal(ev(`document.getElementById("reason").value`), "");
+  assert.equal(ev(`document.getElementById("reason").placeholder`), "Reason (optional; Enter sends, Esc cancels)");
+  assert.equal(ev(`document.querySelector("#decision .reject-box .btn").disabled`), false, "Send rejection is enabled with an empty box");
+  ev(`document.getElementById("reason").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })), "ok"`);
+  const d = await waitStatus(id, "answer_submitted");
+  assert.equal(d.response.approve, false);
+  assert.equal("reason" in d.response, false);
 });
 
 gui("y approves, n opens the reason box, i the instruction box, 2 / 3 select Instruct / Reject, from either zone", async () => {

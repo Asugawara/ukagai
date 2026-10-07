@@ -2018,14 +2018,14 @@ function renderRightBody(d) {
   const box = closed ? null : instructCard(dr, (text) => send(d, { instruct: true, text }));
   if (box) box.card.prepend(el("span", { class: "cardkey", text: "2" }));
   const confirm = el("button", {
-    class: "btn danger", type: "button", disabled: !dr.reason.trim(), text: t("send_rejection"),
-    onclick: () => send(d, { approve: false, reason: dr.reason.trim() }),
+    class: "btn danger", type: "button", text: t("send_rejection"),
+    onclick: () => send(d, dr.reason.trim() ? { approve: false, reason: dr.reason.trim() } : { approve: false }),
   });
   const input = el("input", {
     type: "text", id: "reason", placeholder: t("reject_placeholder"), value: dr.reason,
-    oninput: (ev) => { dr.reason = ev.target.value; confirm.disabled = !dr.reason.trim(); },
+    oninput: (ev) => { dr.reason = ev.target.value; },
     onfocus: () => { if (!autoFocusing && !closed && (ui?.cursor !== 2 || zoneNow() !== "opts")) { dr.rejecting = true; ui?.setCursor(2, false, true); } },
-    onkeydown: (ev) => { if (ev.key === "Enter" && dr.reason.trim()) confirm.click(); },
+    onkeydown: (ev) => { if (ev.key === "Enter" && !ev.isComposing) confirm.click(); },
   });
   const rejectBox = el("div", { class: "reject-box", hidden: closed || !dr.rejecting }, input, confirm);
   const reject = el("div", { class: "opt reject-card" + (closed ? " off" : ""), role: "button", "data-card": "reject", onclick: (ev) => { if (!closed && !ev.target.closest(".reject-box")) ui.startReject(); } },
@@ -3260,7 +3260,7 @@ function verBar(d, view) {
   const vs = rec.data.versions;
   const tabs = el("div", { class: "ver-tabs", role: "tablist" });
   vs.forEach((v, i) => {
-    const label = i === last ? t("ver_now", { n: v.n }) : v.instruction ? t("ver_before", { n: v.n }) : `v${v.n}`;
+    const label = `v${v.n}`;
     tabs.append(el("button", { type: "button", class: `ver-tab${i === idx ? " sel" : ""}`, role: "tab", tabindex: "-1", "aria-selected": String(i === idx), "data-n": String(v.n), onclick: () => { rec.sel = i === last ? null : i; refreshLeft(false); } }, label));
   });
   const sum = el("div", { class: "ver-sum" });

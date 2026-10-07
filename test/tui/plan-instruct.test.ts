@@ -203,7 +203,6 @@ test("approval: Reject opens the reason box; Enter with a reason sends the rejec
   const app = approval();
   press(app, down, down); // Instruct (box opens), then the empty box leaves to Reject
   assert.equal(app.view(clock).input?.kind, "reason");
-  assert.deepEqual(press(app, enter), [], "an empty reason sends nothing");
   type(app, "wrong approach");
   press(app, esc);
   assert.equal(app.mode, "normal");
@@ -214,6 +213,9 @@ test("approval: Reject opens the reason box; Enter with a reason sends the rejec
   press(again, ch("n"));
   type(again, "no");
   assert.deepEqual(press(again, enter), [{ type: "answer", id: "d1", body: { approve: false, reason: "no" } }]);
+  const empty = approval();
+  press(empty, down, down);
+  assert.deepEqual(press(empty, enter), [{ type: "answer", id: "d1", body: { approve: false } }], "an empty reason box sends the rejection without a reason");
 });
 
 test("approval: digits 1 / 2 / 3 act on Approve / Instruct / Reject at once", () => {
