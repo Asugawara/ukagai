@@ -171,14 +171,15 @@ gui("the Goal row is the first element of the left column (not in the header): f
   assert.deepEqual(rows, ["hd-title", "hd-ctx"]); // the header stays two rows
   assert.equal(ev<string>(`document.getElementById("background").firstElementChild.className`), "hd-goal"); // fails on the old layout: the row was in #head
   // whitespace and newlines are folded to single spaces
-  assert.equal(q1("#background .goal-text"), "Goal: Add a history panel to the decision screen, please. Keep the layout calm.");
+  assert.equal(q1("#background .goal-text"), "Goal Add a history panel to the decision screen, please. Keep the layout calm.");
   assert.equal(q1("#background .goal-n"), "· 3 instructions");
-  // one line, dim
+  // one line
   assert.ok(ev<number>(`document.querySelector("#background .goal-text").getBoundingClientRect().height`) < 24);
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .goal-text")).whiteSpace`), "nowrap");
   // no Session box, no History chip; boxed things on the screen stay at 2 or fewer
   assert.equal(count("[class*='session-box'], .history-chip"), 0);
-  assert.ok(count(".chip, .badge, .pill") <= 2);
+  assert.ok(count(".chip:not(.hd-ctx .chip), .badge, .pill") <= 2); // the context row's chips are the header's structure, not extra boxes
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .hd-goal")).borderBottomWidth`), "1px"); // the rule under the Goal row
 });
 
 gui("a long first instruction is cut with … on one line", async () => {
@@ -192,7 +193,7 @@ gui("a long first instruction is cut with … on one line", async () => {
 gui("a single instruction shows the Goal without the count", async () => {
   await seed({ transcript: writeTranscript("single", ["only one"]) });
   await reopen(GOAL);
-  assert.equal(q1("#background .goal-text"), "Goal: only one");
+  assert.equal(q1("#background .goal-text"), "Goal only one");
   assert.equal(count("#background .goal-n"), 0);
   assert.equal(ev<boolean>(`!!document.querySelector("#foot .hint .hs:not([hidden])")`), false); // no `s` hint with one instruction
 });
@@ -361,7 +362,7 @@ gui("ja: Goal label, count, panel title and hint are translated", async () => {
   await seed();
   await reopen(GOAL);
   ev(`document.documentElement.dataset.lang = "ja", "ok"`);
-  await waitFor("ja goal", `document.querySelector("#background .goal-text").textContent.startsWith("目的:")`);
+  await waitFor("ja goal", `document.querySelector("#background .goal-text").textContent.startsWith("目的")`);
   assert.equal(q1("#background .goal-n"), "· 3 件");
   assert.match(q1("#foot .hint-full"), /s 履歴/);
   press("s");

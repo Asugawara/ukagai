@@ -188,7 +188,8 @@ const SEC = `document.querySelectorAll("#background details.plan-sec")`;
 const openCount = `document.querySelectorAll("#background details.plan-sec[open]").length`;
 const spyPosts = () => ev(`(() => { window.__posts = []; if (!window.__spied) { window.__spied = true; const f = window.fetch; window.fetch = (u, i) => { if (i && i.method === "POST") window.__posts.push(String(u)); return f(u, i); }; } else window.__posts = []; return "ok"; })()`);
 const posts = () => ev<string[]>(`JSON.stringify(window.__posts)`);
-const line2 = () => ev<string>(`document.querySelector("#head .hd-ctx").textContent`);
+// The context row's chips joined with " · " (plans/ · Plan · updated … · 9 sections …), then the file name
+const line2 = () => ev<string>(`[...document.querySelectorAll("#head .hd-ctx .chip, #head .hd-ctx .plan-file")].map((c) => c.textContent).join(" · ")`);
 const marks = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#background details.plan-sec > summary > .ps-mark")].map((m) => m.textContent))`);
 const planRead = async (name: string) => ((await api("/api/plans")).plans as { name: string; read: boolean }[]).find((p) => p.name === name)?.read;
 

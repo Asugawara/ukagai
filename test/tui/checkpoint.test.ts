@@ -53,7 +53,7 @@ test("TUI checkpoint: title, first sentence, optional line, the recap, three car
   const app = setup(checkpoint());
   const { lines, text } = draw(app);
   assert.ok(lines[0]!.includes("Progress check · feat-ck"), lines[0]); // the title comes first
-  assert.match(lines[1]!, /^(feat-ck|ukagai)/); // then the context line
+  assert.match(lines[1]!, /^\[● (feat-ck|ukagai)\]/); // then the context line
   assert.ok(!lines[0]!.includes("Added the retry") && !lines[1]!.includes("Added the retry") && !lines[2]!.includes("Added the retry"), "no headline in the header (the recap is the body)");
   const optional = lines.findIndex((l) => l.includes("The agent keeps working if you do not answer"));
   assert.ok(optional > 2, "the note is in the body, not the header");

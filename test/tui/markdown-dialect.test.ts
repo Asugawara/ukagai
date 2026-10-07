@@ -147,10 +147,10 @@ for (const w of [100, 160]) {
     assert.ok(!text.some((l) => l.includes(":::")));
     // The script tag is text, not dropped or executed
     assert.ok(text.includes("<script>alert(1)</script>"));
-    // Image: one dim line
+    // Image: one plain line
     const img = raw.find((l) => stripAnsi(l).startsWith("[image]"))!;
     assert.equal(stripAnsi(img), "[image] Settings page, dark theme — shots/settings-dark.png");
-    assert.ok(img.startsWith(DIM));
+    assert.ok(!img.includes(DIM));
   });
 }
 
@@ -172,7 +172,7 @@ test("callouts: [!KIND] Title in the kind's colour; without a title the localise
   assert.ok(ja.includes("▌ [!CAUTION] 戻せない"));
 });
 
-test("task lists use ☑ / ☐ and done items are dim; nesting and step numbers survive", () => {
+test("task lists use ☑ / ☐ and done items are plain; nesting and step numbers survive", () => {
   const raw = renderMarkdown(DOC, 100);
   const text = raw.map(stripAnsi);
   assert.ok(text.includes("1. Add the schema [done] — src/contract.ts:12"));
@@ -181,7 +181,7 @@ test("task lists use ☑ / ☐ and done items are dim; nesting and step numbers 
   assert.ok(text.includes("2. Wire the route [todo]"));
   assert.ok(text.includes("3. Ship [blocked]"));
   const done = raw.find((l) => stripAnsi(l).includes("☑ zod type"))!;
-  assert.ok(done.includes(`${DIM}zod type`));
+  assert.ok(done.includes("zod type") && !done.includes(DIM));
   const open = raw.find((l) => stripAnsi(l).includes("☐ docs"))!;
   assert.ok(!open.includes(DIM));
 });
@@ -191,7 +191,7 @@ test("badges colour the word at the start of an item / cell (or after a leading 
   const find = (s: string) => raw.find((l) => stripAnsi(l).includes(s))!;
   assert.ok(find("working on it").includes(`[${CYAN}doing`));
   assert.ok(find("might break").includes(`[${RED}risk`));
-  assert.ok(find("not now").includes(`[${DIM}skip`));
+  assert.ok(find("not now").includes("[skip]") && !find("not now").includes(DIM));
   assert.ok(find("Add the schema").includes(`[${GREEN}done`));
   assert.ok(find("Parser").includes(`[${GREEN}done`));
   assert.ok(find("Docs").includes(`[${RED}blocked`));
@@ -215,12 +215,12 @@ test("==mark== is inverse video, removed from the width, and not applied inside 
   assert.equal(stripAnsi(cell[1]!), "hi  x");
 });
 
-test("<details> becomes a dim header with the line count; the body is Markdown; <br> breaks, sub / sup keep text", () => {
+test("<details> becomes a plain header with the line count; the body is Markdown; <br> breaks, sub / sup keep text", () => {
   const raw = renderMarkdown(DOC, 100);
   const text = raw.map(stripAnsi);
   const at = text.indexOf("▸ Full log (6 lines)");
   assert.ok(at >= 0, text.join("\n"));
-  assert.ok(raw[at]!.startsWith(DIM));
+  assert.ok(!raw[at]!.includes(DIM));
   assert.ok(text.includes("  line one"));
   assert.ok(!text.some((l) => /<\/?(details|summary)>/.test(l)));
   assert.ok(text.includes("Some body text"));
@@ -248,11 +248,11 @@ test("Mermaid: ASCII for flowchart and sequence diagrams, a `diagram: pie` box p
   assert.ok(renderMarkdown("```mermaid\n%% note\ntimeline\n  2020 : x\n```", 60).map(stripAnsi).some((l) => l.includes("diagram: timeline")));
 });
 
-test("code: title= is a dim line above the block; diff colours + green, - red, @@ cyan inside the block only", () => {
+test("code: title= is a plain line above the block; diff colours + green, - red, @@ cyan inside the block only", () => {
   const raw = renderMarkdown(DOC, 100);
   const text = raw.map(stripAnsi);
   const t = text.indexOf("src/serve/store.ts");
-  assert.ok(t >= 0 && raw[t]!.startsWith(DIM));
+  assert.ok(t >= 0 && !raw[t]!.includes(DIM));
   assert.equal(text[t + 1], "  const x = 1;");
   const find = (s: string) => raw.find((l) => stripAnsi(l).includes(s))!;
   assert.ok(find("new line").includes(`${GREEN}+new line`));

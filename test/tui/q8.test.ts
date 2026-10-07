@@ -82,7 +82,7 @@ test("Y3 I-3: at 140x40 and 120x32 the first screen shows all 3 cards and the ri
     const joined = right.join("\n");
     for (const c of ["Sqlite", "Postgres", "Flat files", "自由記述"]) assert.ok(joined.includes(c), `${cols}x${rows}: ${c}\n${text}`);
     assert.ok(right.some((l) => l.includes("j/k") && l.includes("Enter")), `${cols}x${rows}: hint`);
-    assert.ok(joined.includes("ただし:"), "condition");
+    assert.ok(joined.includes("条件"), "condition");
     assert.ok(joined.indexOf("Sqlite を勧めます") >= 0 && joined.indexOf("Sqlite を勧めます") < joined.indexOf("1 ▸"), "headline above the cards");
     // no reading material in the decision column
     for (const s of ["あなたが決めること", "反論:", "前提"]) assert.ok(!joined.includes(s), `${cols}x${rows}: ${s} is not in the decision column`);
@@ -102,7 +102,7 @@ test("Y3 I-3: the background column is in the GUI order (Why, Recommendation, Yo
 test("Y3 I-3: the single column (100x28) still shows the decision first and then the background in order", () => {
   const text = draw(jaApp(), 100, 28);
   assert.ok(!text.includes(" │ "), "one column");
-  assert.ok(text.includes("Sqlite") && text.includes("ただし:"));
+  assert.ok(text.includes("Sqlite") && text.includes("条件"));
 });
 
 test("Y3: TUI and GUI use the same words for the same things", async () => {

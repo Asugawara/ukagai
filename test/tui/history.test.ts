@@ -60,24 +60,25 @@ test("the fetched first instruction lands in the model", async () => {
   assert.equal(app.model()?.history?.total, 3);
 });
 
-test("Goal: is cut at two rows with …, the rest of the background follows", async () => {
+test("Goal is cut at two rows with …, the rest of the background follows", async () => {
   const { app } = setup();
   await tick();
   const text = draw(app, "en", 160).split("\n");
-  const i = text.findIndex((l) => l.includes("Goal:"));
+  const i = text.findIndex((l) => l.includes("Goal "));
   assert.ok(i >= 0);
   const left = (l: string) => l.split(" │ ")[0]!;
-  assert.match(left(text[i]!), /^Goal: Implement the history view\./);
+  assert.match(left(text[i]!), /^Goal Implement the history view\./);
   assert.ok(left(text[i + 1]!).trimEnd().endsWith("…"), left(text[i + 1]!));
-  assert.equal(left(text[i + 2]!).trim(), "");
-  assert.ok(text.slice(i + 3).some((l) => left(l).includes("Why this decision")));
-  assert.ok(draw(app, "ja").includes("目的:"));
+  assert.match(left(text[i + 2]!).trim(), /^─+$/, "a rule under the goal");
+  assert.equal(left(text[i + 3]!).trim(), "");
+  assert.ok(text.slice(i + 4).some((l) => left(l).includes("Why this decision")));
+  assert.ok(draw(app, "ja").includes("目的 "));
 });
 
 test("a short instruction is not cut", async () => {
   const { app } = setup({ ...HIST, first: { at: at(1), text: "fix the bug" } });
   await tick();
-  assert.ok(draw(app).includes("Goal: fix the bug"));
+  assert.ok(draw(app).includes("Goal fix the bug"));
   assert.ok(!draw(app).includes("fix the bug…"));
 });
 
@@ -103,7 +104,7 @@ test("j/k move; Enter shows the full text in the background column; Esc goes bac
   assert.equal(app.mode, "normal");
   let text = draw(app);
   assert.match(text, /Instruction 30h · first/);
-  assert.ok(!text.includes("Goal:"));
+  assert.ok(!text.includes("Goal "));
   assert.ok(text.includes("Implement the history view. Implement the history view."));
   assert.doesNotMatch(text, /…\s*│/);
   press(app, esc);
@@ -112,7 +113,7 @@ test("j/k move; Enter shows the full text in the background column; Esc goes bac
   press(app, esc);
   assert.equal(app.mode, "normal");
   text = draw(app);
-  assert.ok(text.includes("Goal:"));
+  assert.ok(text.includes("Goal "));
 });
 
 test("a long entry keeps its line breaks in the full view", async () => {
@@ -128,7 +129,7 @@ test("a failed fetch shows nothing and s does nothing; the next show retries", a
   const { app, calls } = setup(new Error("boom"));
   await tick();
   assert.equal(app.model()?.history, null);
-  assert.ok(!draw(app).includes("Goal:"));
+  assert.ok(!draw(app).includes("Goal "));
   press(app, ch("s"));
   assert.equal(app.mode, "normal");
   assert.equal(calls.length, 1);
@@ -140,7 +141,7 @@ test("a failed fetch shows nothing and s does nothing; the next show retries", a
 test("an empty history (unreadable transcript) shows nothing", async () => {
   const { app } = setup({ session_id: "s1", total: 0, first: null, recent: [] });
   await tick();
-  assert.ok(!draw(app).includes("Goal:"));
+  assert.ok(!draw(app).includes("Goal "));
   press(app, ch("s"));
   assert.equal(app.mode, "normal");
 });
@@ -173,7 +174,7 @@ test("two shows before the answer arrives still fetch once", async () => {
 test("without a fetcher nothing is asked and nothing is shown", () => {
   const app = new App();
   app.upsert(decision({ ...withExplanation(V2_MD) }), now);
-  assert.ok(!draw(app).includes("Goal:"));
+  assert.ok(!draw(app).includes("Goal "));
 });
 
 // ---- no clash with 1-9 / x / n / typing ----
@@ -247,7 +248,7 @@ test("footer mentions s only when there are 2+ instructions; i18n keys match", a
 test("narrow (stacked) layout also shows Goal:", async () => {
   const { app } = setup();
   await tick();
-  assert.ok(draw(app, "en", 90).includes("Goal:"));
+  assert.ok(draw(app, "en", 90).includes("Goal "));
 });
 
 // `s` on every kind of card, right after the fetch and long after it (the TUI cache has no TTL: it must keep working, never go stale-silent)
@@ -270,7 +271,7 @@ for (const [name, make] of Object.entries(KINDS)) {
       app.upsert(make(), now);
       await tick();
       if (later) now += 3600_000;
-      assert.match(draw(app), /Goal:/);
+      assert.match(draw(app), /Goal /);
       press(app, ch("s"));
       assert.match(draw(app), /second instruction/);
       press(app, esc);

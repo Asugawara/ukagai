@@ -882,8 +882,8 @@ gui("layers: the header has the title, the headline and the chips; the right col
   const rows = ev<string[]>(`JSON.stringify([...document.querySelector("#head").children].map(e => e.className.split(" ")[0]))`);
   assert.deepEqual(rows, ["hd-title", "hd-ctx"]); // fails on the old layout (hd-top, hd-sub, hd-line2, hd-cond)
   assert.equal(count("#head > .hd-title > .v2-title"), 1);
-  assert.equal(q1("#head .hd-where").length > 0, true); // one line of dim text: origin · scope · age
-  assert.equal(count("#head .chip, #head .pill"), 0);
+  assert.equal(q1("#head .hd-where").length > 0, true); // one row of chips: origin · scope · age
+  assert.equal(count("#head > .hd-title .chip, #head .pill"), 0); // the only chips are the context row's
   assert.equal(count("#head .headline, #head .hd-cond, #head .hd-goal"), 0);
   const top = ev<string[]>(`JSON.stringify([...document.getElementById("background").children].slice(0, 2).map(e => e.className.split(" ")[0]))`);
   assert.deepEqual(top, ["headline", "hd-cond"]); // the headline is the first paragraph of the left column, the condition right under it
@@ -907,7 +907,7 @@ gui("fewer boxes: no label chips, no Affected chips, at most 2 boxed items, ever
   await reopen(RICH_READY);
   assert.equal(count(".opt-chip"), 0);
   assert.equal(count(".chip.aff"), 0);
-  assert.equal(count("#head .chip, #head .badge, #head .pill, #decision .chip, #decision .badge, #decision .pill, #background .chip, #background .badge, #background .pill"), 1); // costly mark; the card's ★ Recommended is text
+  assert.equal(count("#head > .hd-title .badge, #head .pill, #decision .chip, #decision .badge, #decision .pill, #background .chip, #background .badge, #background .pill"), 1); // the costly mark; the card's ★ Recommended is text
   assert.equal(count("#decision .rec-badge"), 1);
   for (const label of ["Sqlite", "Postgres", "Flat files"]) assert.equal(ev<number>(`document.getElementById("decision").textContent.split(${JSON.stringify(label)}).length - 1`), 1, label);
   assert.equal(count("#head .hd-ctx .age"), 1);
@@ -935,7 +935,7 @@ gui("reversibility shape: ↺ / ◐ / ■ in the badge, with the scope next to i
   await reopen(RICH_READY);
   assert.equal(q1("#head .badge.costly"), "◐ Costly to undo");
   assert.equal(count("#head > .hd-title .badge"), 1); // the mark sits after the title
-  assert.equal(q1("#head .hd-where").includes("repo"), true); // the scope is in the dim line
+  assert.equal(q1("#head .hd-where").includes("repo"), true); // the scope is one of the context chips
   await cancelAll();
   await seedRich({ reversibility: "irreversible", scope: "machine" });
   await reopen(RICH_READY);
@@ -1653,12 +1653,12 @@ gui("X1: the left column is Why, recommendation, You decide, Against, Assumption
   assert.deepEqual(order, ["why", "rec", "unknowns", "against", "assumptions", "checked", "diagram", "diff", "affects"]);
 });
 
-gui("X1: the condition sentence is the second paragraph of the left column (dim, `Otherwise: …`), right under the headline; no condition, no row; the cards stay visible at 1000x700", async () => {
+gui("X1: the condition sentence is the second paragraph of the left column (a 600 `Condition` label then the text), right under the headline; no condition, no row; the cards stay visible at 1000x700", async () => {
   await seedRich();
   await reopen(RICH_READY);
   const rows = ev<string[]>(`JSON.stringify([...document.getElementById("background").children].map(e => e.className.split(" ")[0]).filter((c) => c !== "hd-goal").slice(0, 2))`);
   assert.deepEqual(rows, ["headline", "hd-cond"]);
-  assert.equal(q1("#background .hd-cond"), "Otherwise: Another option is right if the team already runs a database server.");
+  assert.equal(q1("#background .hd-cond"), "Condition Another option is right if the team already runs a database server.");
   // the title is the only large text: 20 px / 600; the headline is 14 px / normal weight
   assert.equal(fontPx("#head .v2-title"), "20px");
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .v2-title")).fontWeight`), 600 as unknown as string);
@@ -1773,12 +1773,13 @@ gui("Y3 M-5: at 1000x700 (ja) three cards, the one-row free-text card and the hi
   }
 });
 
-// ---- G1 / HD2: where the question comes from — the title first, the origin on one small muted line below ----
+// ---- G1 / HD2: where the question comes from — the title first, the origin on one row of chips below ----
 
-const ctxText = () => ev<string>(`"t:" + document.querySelector("#head .hd-where").textContent`).slice(2);
+// The chips of the context row, in order, joined with " · " (repo · ⎇ branch · ⧉ worktree · scope · age)
+const ctxText = () => ev<string>(`"t:" + [...document.querySelectorAll("#head .hd-where .chip")].map((c) => c.textContent).join(" · ")`).slice(2);
 const fontPx = (sel: string) => ev<string>(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).fontSize`);
 
-gui("HD2: the header is two rows: the title (20 px) first, then the muted context line `repo ⎇ branch ⧉ worktree · scope · age`, at any length", async () => {
+gui("HD2: the header is two rows: the title (20 px) first, then the context row of chips `repo ⎇ branch ⧉ worktree · scope · age`, at any length", async () => {
   ab("set", "viewport", "1440", "900");
   try {
     // a real repository on branch main inside a herdr worktree path, so the server collects the branch
@@ -1791,11 +1792,11 @@ gui("HD2: the header is two rows: the title (20 px) first, then the muted contex
     // fails on the old layout: row 1 was the origin (18 px), the title its own row below, three or four rows in all
     assert.equal(count("#head > *"), 2);
     assert.equal(ev<string>(`document.querySelector("#head").firstElementChild.className`), "hd-title");
-    assert.match(ctxText(), /^ukagai ⎇ main ⧉ wt · repo · .+/); // repo ⎇ branch ⧉ worktree · scope · age
+    assert.match(ctxText(), /^ukagai · ⎇ main · ⧉ wt · repo · .+/); // chips: repo, branch, worktree, scope, age
     assert.equal(fontPx("#head .hd-ctx"), "12px");
     assert.equal(fontPx("#head .v2-title"), "20px");
-    assert.equal(ev<boolean>(`document.querySelector("#head .hd-where .repo-dot") !== null && getComputedStyle(document.querySelector("#head .hd-where")).color === getComputedStyle(document.querySelector("#head .hd-ctx")).color`), true, "dot in the repo colour, text muted like the row");
-    assert.equal(ev<string>(`document.querySelector("#head .hd-where").title`).endsWith("/worktrees/ukagai/wt") || ev<string>(`document.querySelector("#head .hd-where").title`).endsWith("/ukagai/wt"), true, "the cwd is the tooltip");
+    assert.equal(ev<boolean>(`document.querySelector("#head .hd-where .repo-dot") !== null && getComputedStyle(document.querySelector("#head .hd-where")).color === getComputedStyle(document.querySelector("#head .hd-ctx")).color`), true, "dot in the repo colour, text in --fg like the row");
+    assert.equal(ev<string>(`document.querySelector("#head .hd-where .chip.repo").title`).endsWith("/worktrees/ukagai/wt") || ev<string>(`document.querySelector("#head .hd-where .chip.repo").title`).endsWith("/ukagai/wt"), true, "the cwd is the tooltip");
     assert.equal(ev<boolean>(`(() => { const t = document.querySelector("#head .v2-title").getBoundingClientRect(), c = document.querySelector("#head .hd-ctx").getBoundingClientRect(); return c.top >= t.bottom - 1; })()`), true); // below the title
     ab("screenshot", join(SHOTS, "G1-header-origin.png"));
 
@@ -1815,7 +1816,7 @@ gui("HD2: the header is two rows: the title (20 px) first, then the muted contex
 gui("HD2: no worktree part for a plain checkout; the reversibility badge only for costly / irreversible; the age is the last part", async () => {
   await seedQuestion({ cwd: "/Users/dev/projects/plain-repo" });
   await reopen();
-  assert.match(ctxText(), /^plain-repo( ⎇ \S+)?( · \S.*)? · .+$/);
+  assert.match(ctxText(), /^plain-repo( · ⎇ \S+)?( · \S.*)? · .+$/);
   assert.equal(ctxText().includes("⧉"), false);
   assert.equal(count("#head .badge"), 0); // reversible: nothing
   assert.equal(ev<boolean>(`document.querySelector("#head .hd-ctx .hd-where .age") === document.querySelector("#head .hd-where").lastElementChild`), true);

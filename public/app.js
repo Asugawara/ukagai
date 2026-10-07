@@ -165,8 +165,32 @@ const openSettings = () => { stashDrafts(); location.href = "/settings"; };
 // Show which build of app.js is running (index.html appends ?v=<version>)
 const BUILD = (() => { try { return new URL(import.meta.url).searchParams.get("v") ?? "?"; } catch { return "?"; } })();
 // The key hint lives in the footer row (full width, one line); the build stamp is fixed at the bottom right
+// Key names in a hint (`↑↓ Move · Enter Send`) are bold: the first word of a " · " segment when it is a key (↑↓, Enter…, Esc, Tab, one character)
+const KEY_WORD = /^(?:↑↓|←→|[←→↑↓]|Enter\S*|Esc|Tab|Space|[0-9][0-9\-\/]*|[A-Za-z,.?\/])$/;
+function boldKeys(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+  for (const node of nodes) {
+    if (node.parentElement?.closest("b")) continue;
+    const prev = node.previousSibling;
+    const leads = !prev || prev.nodeType === 1 || /· $/.test(prev.data);
+    const frag = document.createDocumentFragment();
+    let changed = false;
+    node.data.split(/( · )/).forEach((part, i) => {
+      const m = i % 2 === 0 && (i > 0 || leads) ? /^(\s*)(\S+)(\s.+)$/s.exec(part) : null;
+      if (m && KEY_WORD.test(m[2])) {
+        frag.append(m[1], el("b", { text: m[2] }), m[3]);
+        changed = true;
+      } else frag.append(part);
+    });
+    if (changed) node.replaceWith(frag);
+  }
+  return root;
+}
 function setHint(node) {
   const foot = $("foot");
+  if (node) boldKeys(node);
   foot.replaceChildren(...(node ? [node] : []));
   foot.hidden = !node;
 }
@@ -750,10 +774,15 @@ function whereLine(d) {
 // Row 2 of the header: `● repo ⎇ branch ⧉ worktree · scope · age` in one muted line (the full working directory is the tooltip).
 // The dot carries the repo colour; the text stays one string so the ellipsis cuts from the end
 function ctxWhere(d, ...extra) {
-  const line = el("span", { class: "where hd-where", title: tildePath(d.session.cwd) }, el("span", { class: "repo-dot", style: repoStyle(d) }), whereText(d));
+  const chip = (cls, ...kids) => el("span", { class: "chip " + cls }, ...kids);
   const scope = scopeOf(d);
-  line.append(...(scope ? [" · ", el("span", { text: scope })] : []), " · ", el("span", { class: "age", "data-created": d.created_at, text: elapsed(d.created_at) }));
-  for (const x of extra.filter(Boolean)) line.append(" · ", x);
+  const line = el("span", { class: "chips hd-where" },
+    el("span", { class: "chip repo", title: tildePath(d.session.cwd) }, el("span", { class: "repo-dot", style: repoStyle(d) }), repoOf(d)),
+    d.context?.branch ? chip("branch", `⎇ ${d.context.branch}`) : null,
+    worktreeOf(d) ? chip("worktree", `⧉ ${worktreeOf(d)}`) : null,
+    scope ? chip("scope", scope) : null,
+    el("span", { class: "chip age", "data-created": d.created_at, text: elapsed(d.created_at) }));
+  for (const x of extra.filter(Boolean)) line.append(x);
   return line;
 }
 
@@ -830,7 +859,7 @@ function renderBodyTop(d) {
   root.prepend(...[
     isCheckpoint(d) ? el("div", { class: "cp-optional", text: t("checkpoint_optional") }) : null,
     headline,
-    cond ? el("div", { class: "hd-cond clampable", title: cond, text: `${t("cond_prefix")} ${cond}` }) : null,
+    cond ? el("div", { class: "hd-cond clampable", title: cond }, el("span", { class: "cond-label", text: t("cond_label") }), " ", cond) : null,
   ].filter(Boolean));
   renderGoal(d);
 }
@@ -898,7 +927,7 @@ function renderGoal(d) {
   const text = oneLine(h.first.text);
   if (!text) return;
   root.prepend(el("div", { class: "hd-goal", role: "button", tabindex: "-1", title: t("history_title"), onclick: () => openHistory(d) },
-    el("span", { class: "goal-text", text: `${t("goal")} ${text}` }),
+    el("span", { class: "goal-text" }, el("span", { class: "goal-label", text: t("goal").replace(/[:：]$/, "") }), ` ${text}`),
     h.total >= 2 ? el("span", { class: "goal-n", text: t("history_count", { n: h.total }) }) : null));
 }
 
@@ -1077,7 +1106,11 @@ function renderPlanHead(pd) {
   head.append(
     el("div", { class: "hd-title" }, el("div", { class: "v2-title", title: pd.title, text: pd.title })),
     el("div", { class: "hd-ctx" },
-      el("span", { class: "where hd-where", title: "plans/" }, el("span", { class: "repo-dot" }), "plans/", " · ", `${cap} · `, el("span", { class: "age", "data-created": pd.mtime, "data-tpl": "plan_updated_ago", text: t("plan_updated_ago", { age: ageText(pd.mtime) }) }), ...(planMetaLine(pd) ? [" · ", planMetaLine(pd)] : [])),
+      el("span", { class: "chips hd-where" },
+        el("span", { class: "chip repo", title: "plans/" }, el("span", { class: "repo-dot" }), "plans/"),
+        el("span", { class: "chip" }, cap),
+        el("span", { class: "chip age", "data-created": pd.mtime, "data-tpl": "plan_updated_ago", text: t("plan_updated_ago", { age: ageText(pd.mtime) }) }),
+        planMetaLine(pd)),
       el("div", { class: "hd-meta" })));
   placePending();
 }
@@ -2954,7 +2987,7 @@ function planMetaLine(d) {
   const file = String(d.request?.planFilePath ?? "");
   if (!o && !file) return null;
   const meta = el("span", { class: "plan-meta" });
-  if (o) meta.append(el("span", { class: "plan-stats", text: [count("plan_sections", o.h2), count("plan_lines", o.lines), count("plan_files", o.files)].join(" · ") }));
+  if (o) meta.append(el("span", { class: "chip plan-stats", text: [count("plan_sections", o.h2), count("plan_lines", o.lines), count("plan_files", o.files)].join(" · ") }));
   if (file) meta.append(el("span", { class: "plan-file", title: file, text: baseName(file) || file }));
   return meta;
 }
@@ -3644,7 +3677,7 @@ $("build").textContent = `build ${BUILD}`;
 // Apply the display language: static text in index.html, then everything rendered from decisions.
 // The language is read from <html data-lang>; changing it later (tests do) re-renders in place.
 function renderDrawerKeys() {
-  $("drawer-keys").textContent = `↑↓ ${t("key_move")} · Enter ${t("key_show")} · Esc ← ${t("key_close")}`;
+  $("drawer-keys").replaceChildren(boldKeys(el("span", { text: `↑↓ ${t("key_move")} · Enter ${t("key_show")} · Esc ← ${t("key_close")}` })));
 }
 function applyLang() {
   applyStatic();

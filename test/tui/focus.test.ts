@@ -37,8 +37,8 @@ test("origin colour: the same repo always gets the same colour, different repos 
   const other = names.find((n) => repoAnsi(n) !== repoAnsi("ukagai"))!;
   const a = rawOf(inRepo("ukagai"));
   const b = rawOf(inRepo(other));
-  assert.ok(a.includes(`${repoAnsi("ukagai")}ukagai\x1b[0m`));
-  assert.ok(b.includes(`${repoAnsi(other)}${other}\x1b[0m`));
+  assert.ok(a.includes(`${repoAnsi("ukagai")}\x1b[1mukagai\x1b[0m`));
+  assert.ok(b.includes(`${repoAnsi(other)}\x1b[1m${other}\x1b[0m`));
   assert.notEqual(repoAnsi("ukagai"), repoAnsi(other));
   assert.equal(rawOf(inRepo("ukagai")), a, "stable between renders");
 });

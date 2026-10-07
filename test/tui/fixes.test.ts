@@ -204,7 +204,7 @@ test("switching decisions returns focus to the decision column (h / l / list / a
   assert.equal(app.focus, "decision");
 });
 
-test("headings: the focused column is ▶ + inverted, the other is dim without ▶ (readable without color)", () => {
+test("headings: the focused column is ▶ + inverted, the other is plain without ▶ (readable without color)", () => {
   const app = new App();
   app.upsert(decision(withExplanation(LONG)), t);
   const head = (focus: "background" | "decision") => {
@@ -215,7 +215,7 @@ test("headings: the focused column is ▶ + inverted, the other is dim without �
   assert.match(stripAnsi(d), /Background.*▶ Decision/);
   assert.ok(!stripAnsi(d).includes("▶ Background"));
   assert.ok(d.includes("\x1b[7m ▶ Decision"));
-  assert.ok(d.includes("\x1b[2m   Background"));
+  assert.ok(d.includes("   Background") && !d.includes("\x1b[2m   Background"));
   const b = head("background");
   assert.match(stripAnsi(b), /▶ Background.*Decision/);
   assert.ok(!stripAnsi(b).includes("▶ Decision"));
