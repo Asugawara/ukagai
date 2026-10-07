@@ -474,8 +474,6 @@ export const richStats = { renders: 0 };
 const richCache = new WeakMap<ScreenModel, Map<string, Rendered>>();
 
 
-/** The gutter of a section that changed since the version before: a green bar for a new one, a yellow bar for a changed one, blank otherwise (2 columns) */
-const verGutter = (sec: SectionDiff | undefined): string => (sec?.status === "added" ? `${GREEN}▎${RESET} ` : sec?.status === "changed" ? `${YELLOW}▎${RESET} ` : "  ");
 const verTag = (sec: SectionDiff | undefined, lang: Lang): string =>
   sec?.status === "added" ? ` ${GREEN}[${t(lang, "ver_new")}]${RESET}` : sec?.status === "changed" ? ` ${YELLOW}[${t(lang, "ver_chg")}]${RESET}` : "";
 
@@ -547,11 +545,9 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
   const src = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
   const tm = termMarks(m);
   const out: Left = { lines: [], wide: [], footnotes: [], secRows: [] };
-  // The sections that are new / changed since the version before: a 2-column gutter on every section (a bar or blank) and a tag on the heading
+  // The sections that are new / changed since the version before: a tag on the heading
   const ver = v.ver?.diff ?? null;
-  const gut = ver ? 2 : 0;
   const secs = ver ? verSections(ver, o.entries.filter((e) => e.level === 2).map((e) => ({ key: e.i, title: e.title }))) : new Map<number, SectionDiff>();
-  let bar = "";
   let cache = richCache.get(m);
   if (!cache) richCache.set(m, (cache = new Map()));
   const popBlank = () => {
@@ -581,7 +577,6 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
   o.entries.forEach((e, k) => {
     if (e.level === 2) {
       parentOpen = st.open.has(e.i);
-      bar = ver ? verGutter(secs.get(e.i)) : "";
     }
     else if (!parentOpen) {
       out.secRows[e.i] = parentRow;
@@ -595,15 +590,15 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     // The selected section: inverted while the plan zone has the arrows, bold cyan otherwise
     const title = st.cur === e.i ? (st.zone === "plan" ? `\x1b[7m${e.plain}${RESET}` : `${BOLD}${CYAN}${e.plain}${RESET}`) : `${BOLD}${e.plain}${RESET}`;
     const head = `${ind}${open ? "▾" : "▸"} ${st.read.has(e.i) ? `${GREEN}☑${RESET}` : "☐"} ${title} (${planCount(lang, "plan_lines", e.lines)})${st.updated.has(e.i) ? ` ${t(lang, "plan_section_updated")}` : ""}${e.level === 2 ? verTag(secs.get(e.i), lang) : ""}`;
-    for (const l of wrap(head, w - gut)) {
-      out.lines.push(bar + l);
+    for (const l of wrap(head, w)) {
+      out.lines.push(l);
       out.wide.push(null);
     }
     if (!open) return;
     const next = o.entries[k + 1]?.at ?? src.length;
     const sec = e.level === 2 ? secs.get(e.i) : undefined;
     const diff = sec?.status === "changed" && sec.lines ? ownDiff(sec.lines, next - (e.at + 1)) : undefined;
-    add(e.i, src.slice(e.at + 1, next).join("\n"), Math.max(8, w - ind.length - 2 - gut), `${bar}${ind}  `, diff);
+    add(e.i, src.slice(e.at + 1, next).join("\n"), Math.max(8, w - ind.length - 2), `${ind}  `, diff);
   });
   add(-2, extra, w, "");
   popBlank();
@@ -635,15 +630,14 @@ function planFlatMarked(v: View, m: ScreenModel, w: number, lang: Lang, fullHint
   if (pre.trim()) push(md(pre, w), "  ");
   h2.forEach((e, k) => {
     const sec = secs.get(e.i);
-    const bar = verGutter(sec);
     const end = h2[k + 1]?.at ?? src.length;
-    for (const l of wrap(`${BOLD}${e.plain}${RESET}${verTag(sec, lang)}`, w - 2)) {
-      out.lines.push(bar + l);
+    for (const l of wrap(`${BOLD}${e.plain}${RESET}${verTag(sec, lang)}`, w)) {
+      out.lines.push(l);
       out.wide.push(null);
     }
     const body = src.slice(e.at + 1, end);
-    if (sec?.status === "changed" && sec.lines) push(renderDiff(sec.lines.slice(sec.lines[0]?.kind === "same" ? 1 : 0), w - 2, { fullHint, lang, marks: tm }), bar);
-    else if (body.join("").trim()) push(md(body.join("\n"), w - 2), bar);
+    if (sec?.status === "changed" && sec.lines) push(renderDiff(sec.lines.slice(sec.lines[0]?.kind === "same" ? 1 : 0), w, { fullHint, lang, marks: tm }), "");
+    else if (body.join("").trim()) push(md(body.join("\n"), w), "");
   });
   while (out.lines.length && out.lines.at(-1) === "") {
     out.lines.pop();

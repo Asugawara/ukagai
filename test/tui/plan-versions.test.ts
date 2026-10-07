@@ -1,4 +1,4 @@
-// Plan versions on the TUI screen: the version line, the summary, the [New] / [Changed] tags with a gutter bar, the - / + lines, < > between versions.
+// Plan versions on the TUI screen: the version line, the summary, the [New] / [Changed] tags (no gutter bar), the - / + lines, < > between versions.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App } from "../../src/tui/app.js";
@@ -55,7 +55,7 @@ function draw(app: App, cols = 140, rows = 50) {
 }
 const left = (text: string) => text.split("\n").map((l) => l.split(" │ ")[0]!);
 
-test("two versions: the version line, the summary, the tags with a gutter bar, the old line with - and the new one with +", async () => {
+test("two versions: the version line, the summary, the tags without a gutter bar, the old line with - and the new one with +", async () => {
   const { app, calls } = await setup(V2, versions([V1, V2], [{ text: "cap the retries" }, null]));
   assert.deepEqual(calls, ["s1|decision:ap"], "fetched once for the shown approval");
   const { text, raw } = draw(app);
@@ -64,15 +64,14 @@ test("two versions: the version line, the summary, the tags with a gutter bar, t
   assert.match(rows[3]!, /^v1 → v2: 1 section added · 1 changed · 1 removed · Instruction: cap the retries/);
   assert.match(raw, /\x1b\[1m\x1b\[7m v2 \x1b\[0m/, "the shown version is bold and in reverse video");
   const body = left(text);
-  assert.ok(body.some((l) => /▎ ▾ [☐☑] Goal \(\d+ lines\) \[Changed\]/.test(l)), body.join("\n"));
-  assert.ok(body.some((l) => /▎ ▸ ☐ Risks \(\d+ lines\) \[New\]/.test(l)));
-  assert.ok(body.some((l) => /^\s*▎?\s*- Retry the export on failure\.\s*$/.test(l)), "the old line");
+  assert.ok(body.some((l) => /^▾ [☐☑] Goal \(\d+ lines\) \[Changed\]/.test(l)), body.join("\n"));
+  assert.ok(body.some((l) => /^▸ ☐ Risks \(\d+ lines\) \[New\]/.test(l)));
+  assert.ok(body.some((l) => /^\s*- Retry the export on failure\.\s*$/.test(l)), "the old line");
   assert.ok(body.some((l) => /\+ Retry the export on failure, with a cap\./.test(l)), "the new line");
   assert.ok(!body.some((l) => /\[(New|Changed)\]/.test(l) && /Steps|Notes/.test(l)), "unchanged sections carry no tag");
   assert.match(raw, /\x1b\[31m- Retry the export on failure\./, "the old line is red");
   assert.match(raw, /\x1b\[32m\+ Retry the export on failure, with a cap\./, "the new line is green");
-  assert.match(raw, /\x1b\[32m▎/, "the gutter bar of a new section is green");
-  assert.match(raw, /\x1b\[33m▎/, "the gutter bar of a changed section is yellow");
+  assert.ok(!raw.includes("▎"), "no gutter bar in the frame");
   assert.match(text.split("\n").at(-1)!, /< > version/);
 });
 
@@ -109,8 +108,8 @@ test("a short plan (no folding) is marked too", async () => {
   const { app } = await setup(SHORT2, versions([SHORT1, SHORT2], [{ text: "go" }, null]));
   const { text, raw } = draw(app);
   const body = left(text);
-  assert.ok(body.some((l) => /▎ A \[Changed\]/.test(l)), body.join("\n"));
-  assert.ok(body.some((l) => /▎ C \[New\]/.test(l)));
+  assert.ok(body.some((l) => /^A \[Changed\]/.test(l)), body.join("\n"));
+  assert.ok(body.some((l) => /^C \[New\]/.test(l)));
   assert.ok(body.some((l) => /- old line/.test(l)) && body.some((l) => /\+ new line/.test(l)));
   assert.match(raw, /\x1b\[31m- old line/);
 });
