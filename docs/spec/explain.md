@@ -308,7 +308,7 @@ Both are sync, `timeout: 3`, no statusMessage, omitted with `install --observe`.
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"<text>"}}
 ```
 
-`<text>` is 12 lines, English (`planContextText`, `src/hook/plan-context.ts`; `test/hook/plan-context.test.ts` pins this block to it); `<repo>` is the checkout the installed `dist/` sits in, and the last line names the spec file only when it exists there:
+`<text>` is 13 lines, English (`planContextText`, `src/hook/plan-context.ts`; `test/hook/plan-context.test.ts` pins this block to it); `<repo>` is the checkout the installed `dist/` sits in, and the last line names the spec file only when it exists there:
 
 ```
 [ukagai] Write the plan in ukagai Markdown; a human reads it in a GUI / TUI and decides on it. Plan sections, in this order:
@@ -323,6 +323,7 @@ Palette (use what makes the decision easier to read, nothing more):
 - Mermaid of any type (flowchart, sequenceDiagram, stateDiagram-v2, gantt, pie, quadrantChart, ...), code blocks with a title (```ts title="src/x.ts") and ```diff for proposed changes;
 - Draw a diagram only when it shows something the Options table cannot: a sequence of 3 or more steps between 2 or more actors, a state machine with 4 or more states, or a data flow between 3 or more components (a flowchart needs 5 or more nodes). Never draw the options themselves as nodes (a branch into A / B / C) and never restate the table; at most one diagram; when in doubt, none. When the decision is not reversible or the scope is machine / external, a diagram that meets this rule is required; if none does, write none and say why in one line under Options ("No diagram: <why>").
 - `==mark==` for the one phrase not to miss, `::: columns` (columns split by `---`, closed by `:::`) for before / after (the Options section stays a table), images `![meaningful alt](shots/x.png)` only for a file that already exists next to the plan file (the plan file is the only file you may write).
+Never open a file or a URL for the human (`open`, `xdg-open`, a browser): put it in the explanation — images `![alt](x.png)`, HTML pages `![alt](x.html)` (the GUI renders them in a sandboxed frame); files next to the explanation file or under the session's scratchpad.
 Full spec: skill ukagai-explain, section "Rich Markdown (ukagai dialect)", or <repo>/docs/spec/markdown.md.
 ```
 

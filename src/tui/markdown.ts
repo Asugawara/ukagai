@@ -490,6 +490,11 @@ export function renderMarkdownRich(markdown: string, w: number, opts: MarkdownOp
     const img = IMAGE_LINE.exec(line);
     if (img) {
       const [, alt, src] = img;
+      if (/\.html?$/i.test(src!.split(/[?#]/)[0]!)) {
+        out.push(...wrap(`[HTML] ${alt ? `${alt} — ` : ""}${src!.split(/[?#]/)[0]!.split("/").pop()} ${t(lang, "html_embed")}`, w));
+        i++;
+        continue;
+      }
       out.push(...wrap(`${imageLabel} ${alt ? `${alt} — ` : ""}${src}${imageSize(src!, opts.baseDir)}`, w));
       i++;
       continue;

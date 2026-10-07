@@ -134,3 +134,14 @@ test("a footnote definition right after a bullet stays its own line (not folded 
   assert.ok(text.includes("[1] grep -rn x (no hits)") && text.includes("[2] second"), text.join("|"));
   assert.deepEqual(footnotes.map((f) => f.id), ["1", "2"]);
 });
+
+test("an HTML embed is one line pointing at the GUI, in both languages; a png is still an image line", async () => {
+  const { renderMarkdownRich } = await import("../../src/tui/markdown.js");
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const en = renderMarkdownRich("![Header variants](shots/compare.html)\n", 80).lines.map(strip).filter((l) => l.trim());
+  assert.deepEqual(en, ["[HTML] Header variants — compare.html (shown in the GUI)"]);
+  const ja = renderMarkdownRich("![比較](compare.htm)\n", 80, { lang: "ja" }).lines.map(strip).filter((l) => l.trim());
+  assert.deepEqual(ja, ["[HTML] 比較 — compare.htm (GUI で表示)"]);
+  const png = renderMarkdownRich("![shot](a.png)\n", 80).lines.map(strip).filter((l) => l.trim());
+  assert.ok(png[0]!.startsWith("[image] shot — a.png"));
+});

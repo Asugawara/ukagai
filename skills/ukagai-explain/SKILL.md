@@ -306,6 +306,10 @@ agent-browser close
 
 Only `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` up to 10 MB, under the document's folder, `~/.claude/plans/` or the scratchpad, are shown; external `http(s)` images never are.
 
+A comparison page you built (HTML with screenshots, up to 2 MB, in the document's folder or the scratchpad) goes in the same way: `![Header variants A-D](compare.html)`. The GUI shows it in a sandboxed frame (no scripts run; relative `src` / `url()` work, so keep screenshots next to it) with a full-screen button; the TUI shows one line saying it is in the GUI.
+
+Never open a file or a URL for the human (`open`, `xdg-open`, a browser): put it in the explanation — images `![alt](x.png)`, HTML pages `![alt](x.html)` (the GUI renders them in a sandboxed frame); files next to the explanation file or under the session's scratchpad. A Bash `open` / `xdg-open` on such a file is denied by the hook.
+
 ## When stopped by human work (blocker)
 
 Use this when you cannot proceed because of **work only a human can do**: authentication, login, granting permissions, two-factor authentication, placing a key, a physical operation. **Ending the turn with prose such as "please authenticate" is forbidden.** Ending that way shows nothing in the ukagai GUI, and work stays stopped until the human notices and types "continue".

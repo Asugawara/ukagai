@@ -529,6 +529,15 @@ body.settings-page { display: block; height: auto; min-height: 100dvh; overflow:
 .md .doc-img-open img { display: block; max-width: 100%; max-height: 480px; margin: 0 auto; }
 .md figure.doc-img figcaption { font-size: 12px; color: var(--fg); margin-top: 4px; }
 .md .img-missing { color: var(--fg); font-size: 12px; }
+.md figure.doc-frame { margin: 10px 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--code); }
+.doc-frame-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--fg); }
+.doc-frame-alt { font-weight: 700; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.doc-frame-bar .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.doc-frame-full { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+.doc-frame-full:hover { border-color: var(--accent); }
+.doc-frame-view { display: block; width: 100%; height: 480px; border: 0; background: #fff; }
+.overlay-card.frame { padding: 8px; background: var(--panel); }
+.frame-full { display: block; width: min(96vw, 1600px); height: 84vh; border: 0; background: #fff; }
 .overlay-card.lightbox { padding: 8px; background: var(--panel); }
 .lightbox-img { display: block; max-width: min(94vw, 1600px); max-height: 82vh; cursor: zoom-out; }
 @media (prefers-reduced-motion: no-preference) { .md .doc-img-open { transition: border-color .12s; } .md .doc-img-open:hover { border-color: var(--accent); } }

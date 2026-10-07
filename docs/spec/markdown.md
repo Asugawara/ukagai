@@ -122,6 +122,14 @@ GUI: rendered as a chip; clicking copies the path (the same copy affordance as t
 
 GFM tables with alignment markers. The explanation-file **Options** table keeps its contract (first column = option label; see `explain.md` §3.3) and the GUI turns it into cards. Other tables render as tables; a cell may hold a badge (§2.6), inline code, a short callout-free sentence. No nested lists in cells.
 
+### 2.13 HTML pages
+
+```markdown
+![Header variants A-D](compare.html)
+```
+
+An image whose target ends in `.html` / `.htm` embeds the page. The file rules are those of 2.12 (same roots, ≤ 2 MB); the server adds a CSP sandbox and rewrites the page's relative URLs (`docs/spec/api.md`, `GET /api/files`). GUI: a block with a caption row (alt text, file name chip, a **Full screen** / **全画面** button) and a 480 px high `<iframe sandbox>` (empty `sandbox`: no script, no same-origin); the button opens the page in the shared overlay (Esc closes). TUI: one line `[HTML] alt — x.html (shown in the GUI)`. Agents never `open` such a file for the human (the hook denies it): they reference it here.
+
 ### 2.12 Images (screenshots)
 
 ```markdown

@@ -3,6 +3,7 @@ import { Client } from "./client.js";
 import { observeDecisionTool, observedEvent, permissionRequest, sessionContext } from "./context-hooks.js";
 import { planContext } from "./plan-context.js";
 import { checkpointInstruction } from "./checkpoint.js";
+import { openGuard } from "./open-guard.js";
 import { codexInput, codexPermissionRequest, codexPreToolUse, codexStop } from "./codex.js";
 import { handleDecision } from "./decision.js";
 import { hookLog, initHookLog } from "./log.js";
@@ -43,7 +44,15 @@ export async function run(argv: string[]): Promise<number> {
     if (opts.planContext) {
       if (!opts.observe) write(planContext(input, opts.dataDir));
     } else if (opts.checkpoint) {
-      if (ev === "PreToolUse" && !isDecisionTool) write(await checkpointInstruction(input, client));
+      if (ev === "PreToolUse" && !isDecisionTool) {
+        let denied: Record<string, unknown> | null = null;
+        try {
+          denied = openGuard(input, opts.dataDir);
+        } catch {
+          // fail open
+        }
+        write(denied ?? (await checkpointInstruction(input, client)));
+      }
     } else if (opts.observe && isDecisionTool && (ev === "PreToolUse" || ev === "PostToolUse")) {
       await observeDecisionTool(input, client);
     } else if (ev === "PreToolUse" && isDecisionTool) {

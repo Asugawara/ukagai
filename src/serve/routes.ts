@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { extname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
@@ -27,7 +27,7 @@ import type { Lang } from "../settings/config.js";
 import type { SseHub } from "./sse.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
-import { FILE_TYPES, documentDir, resolveDocumentFile, type DocumentScope } from "./files.js";
+import { FILE_TYPES, HTML_CSP, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml, type DocumentScope } from "./files.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanSummary } from "../contract.js";
 import { PlanSessions } from "./plan-session.js";
@@ -250,7 +250,13 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // Images of the document being shown (explanation file or plan file): see docs/spec/markdown.md 2.12. Missing and forbidden are both 404
-  app.get("/api/files", auth("any"), async (c) => {
+  const filesAuth = auth("any");
+  const whoOf = (c: Context): string => {
+    const d = c.req.query("decision");
+    return d !== undefined ? `decision=${encodeURIComponent(d)}` : `plan=${encodeURIComponent(c.req.query("plan") ?? "")}`;
+  };
+  // A page's own sub-resources carry a tag instead of the cookie (a sandboxed frame does not send it): see files.ts fileTag
+  app.get("/api/files", (c, next) => (validFileTag(whoOf(c), c.req.query("path") ?? "", c.req.query("tag")) ? next() : filesAuth(c, next)), async (c) => {
     const notFound = () => c.json({ error: "not found" }, 404);
     const written = c.req.query("path") ?? "";
     const decisionId = c.req.query("decision");
@@ -267,11 +273,16 @@ export function createApp(deps: AppDeps): Hono {
       const file = resolveDocumentFile(written, scope, deps.home, deps.dataDir);
       if (!file) return notFound();
       const body = await readFile(file);
-      return c.body(new Uint8Array(body), 200, {
+      const headers: Record<string, string> = {
         "Content-Type": FILE_TYPES[extname(file).toLowerCase()]!,
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, no-cache",
-      });
+      };
+      if (isHtmlFile(file)) {
+        headers["Content-Security-Policy"] = HTML_CSP;
+        return c.body(rewriteHtml(body.toString("utf8"), dirname(file), whoOf(c)), 200, headers);
+      }
+      return c.body(new Uint8Array(body), 200, headers);
     } catch {
       return notFound();
     }
