@@ -15,6 +15,7 @@ import { PlanReadStore } from "./plan-read.js";
 import { startPlanWatcher } from "./plan-watch.js";
 import { startRecapWatcher } from "./recap-watch.js";
 import { PlanSessions } from "./plan-session.js";
+import { PlanReady } from "./plan-ready.js";
 import { listPlans, planNameOfPath, planSummary, planSummarySync } from "./plans.js";
 import { createApp } from "./routes.js";
 import { SettingsStore } from "./settings.js";
@@ -69,11 +70,17 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const log = (event: string, fields?: Record<string, string | number | undefined>) => appendLogLine(join(dataDir, "serve.log"), event, fields);
   // First run (no plans-read.json): plans already on disk are not new
   if (!planRead.exists()) planRead.seed(await listPlans(home));
+  let planReady: PlanReady | undefined;
   const store = new Store({
     dir: dataDir,
     leaseGraceMs: opts.leaseGraceMs ?? LEASE_GRACE_MS,
     handoffGraceMs: opts.handoffGraceMs,
-    broadcast: (event, data) => hub.broadcast(event, data),
+    broadcast: (event, data) => {
+      hub.broadcast(event, data);
+      // A session's state or decisions changed: a plan of it may have become ready (or stopped being so) without its file changing
+      if (event === "session.updated") planReady?.recheck((data as { session_id: string }).session_id);
+      else if (event === "decision.created" || event === "decision.updated") planReady?.recheck((data as { session: { session_id: string } }).session.session_id);
+    },
     log,
     planNameOf: (filePath) => planNameOfPath(dir, filePath),
     // A plan decision that leaves `pending` marks its plan read at the current mtime, synchronously and before the store
@@ -84,7 +91,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       if (!summary) return;
       planRead.mark(d.plan_name, summary.mtime);
       const session_id = planSessions.cached(d.plan_name);
-      hub.broadcast("plan.updated", { ...summary, read: true, ...(session_id ? { session_id } : {}) });
+      planReady?.announce({ ...summary, read: true, ...(session_id ? { session_id } : {}) });
     },
   });
   store.load();
@@ -95,10 +102,12 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     Date.now,
     (name, session_id) => {
       void planSummary(dir, name, planRead.isRead).then((summary) => {
-        if (summary) hub.broadcast("plan.updated", { ...summary, session_id });
+        if (summary) planReady?.announce({ ...summary, session_id });
       });
     },
   );
+
+  planReady = new PlanReady(store, planSessions, (event, data) => hub.broadcast(event, data), dataDir);
 
   const settings = await SettingsStore.load(dataDir);
   const { lang } = settings.get();
@@ -112,6 +121,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     token,
     home,
     planSessions,
+    planReady,
     dataDir,
     lang,
     settings,
@@ -142,10 +152,11 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     isRead: planRead.isRead,
     // The lookup comes first: it records what this announcement carries, so a later find is a change
     onChange: (summary) => {
-      void planSessions.find(summary.name).then((session_id) => hub.broadcast("plan.updated", session_id ? { ...summary, session_id } : summary));
+      void planSessions.find(summary.name).then((session_id) => planReady.announce(session_id ? { ...summary, session_id } : summary));
     },
     onRemove: (name) => {
       planRead.remove(name);
+      planReady.forget(name);
       hub.broadcast("plan.removed", { name });
     },
   });

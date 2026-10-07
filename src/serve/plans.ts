@@ -73,10 +73,29 @@ async function resolvePlan(dir: string, name: string): Promise<Resolved | null> 
   return root ? resolveIn(root, name, true) : null;
 }
 
+/** The body lines of the H2 section titled `name` (trimmed, case-insensitive), or null */
+function h2Body(lines: string[], headings: { level: number; title: string; line: number }[], name: string): string[] | null {
+  const i = headings.findIndex((h) => h.level === 2 && h.title.trim().toLowerCase() === name);
+  if (i < 0) return null;
+  const next = headings.slice(i + 1).find((h) => h.level <= 2);
+  return lines.slice(headings[i]!.line + 1, next ? next.line : lines.length);
+}
+
+/**
+ * Whether a plan has the sections ukagai's plan-context text asks for: `Steps` with a list item and `Verification` with a task item
+ * (headings trimmed, case-insensitive). Required of a session only when ukagai handed it that text (see PlanReady)
+ */
+export function hasFormat(md: string): boolean {
+  const lines = md === "" ? [] : toLines(md.replace(/\r?\n$/, ""));
+  const headings = scanHeadings(lines, scanFences(lines).inFence);
+  if (!h2Body(lines, headings, "steps")?.some((l) => /^\s*(?:[-*+]|\d+[.)])\s+\S/.test(l))) return false;
+  return h2Body(lines, headings, "verification")?.some((l) => /^\s*[-*+]\s+\[[ xX]\]\s*\S/.test(l)) ?? false;
+}
+
 function buildSummary(name: string, size: number, mtimeMs: number, md: string, isRead: IsRead): PlanSummary {
   const s = scan(md);
   const mtime = new Date(mtimeMs).toISOString();
-  return { name, title: s.title ?? name, mtime, bytes: size, sections: s.sections, lines: s.lines, read: isRead(name, mtime) };
+  return { name, title: s.title ?? name, mtime, bytes: size, sections: s.sections, lines: s.lines, read: isRead(name, mtime), format_ok: hasFormat(md), ready: false };
 }
 
 async function summarize(name: string, r: Resolved, isRead: IsRead): Promise<PlanSummary> {
@@ -123,7 +142,7 @@ export async function readPlan(home: string, name: string, isRead: IsRead = () =
   // The explanation blocks written for AskUserQuestion are shown on the question screen, not in the plan
   const markdown = stripExplainBlocks(await readFile(r.path, "utf8"));
   const mtime = new Date(r.mtimeMs).toISOString();
-  return { name, title: scan(markdown).title ?? name, mtime, markdown, read: isRead(name, mtime) };
+  return { name, title: scan(markdown).title ?? name, mtime, markdown, read: isRead(name, mtime), format_ok: hasFormat(markdown), ready: false };
 }
 
 /** name -> "mtimeMs:size" of every listable plan file (same filters as the list, no cap), for change detection */

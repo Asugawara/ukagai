@@ -21,7 +21,7 @@ export interface ListItem {
   noExplanation: boolean;
   current: boolean;
   /** A plan file (its row says `plan`, `N sections · M lines`; new ones carry the dot, the others are plain) */
-  plan?: { sections: number; lines: number; isNew: boolean };
+  plan?: { sections: number; lines: number; isNew: boolean; writing: boolean };
 }
 
 export interface View {
@@ -599,7 +599,7 @@ function listBody(v: View, cols: number, rows: number): string[] {
     if (it.plan) {
       // A plan file: title, then `plan · age · N sections · M lines`; new ones carry the dot, the others are dim
       const meta = [it.kindLabel, elapsed(it.createdAt, v.now, v.lang), `${planCount(v.lang, "plan_sections", it.plan.sections)} · ${planCount(v.lang, "plan_lines", it.plan.lines)}`, it.current ? t(v.lang, "current") : ""].filter(Boolean).join(" · ");
-      out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${it.plan.isNew ? `${CYAN}●${RESET}` : " "} ${it.plan.isNew ? (on ? BOLD : "") : ""}${it.title}${RESET}`, cols));
+      out.push(truncate(`${on ? `${BOLD}▸${RESET}` : " "} ${it.plan.isNew && !it.plan.writing ? `${CYAN}●${RESET}` : " "} ${it.plan.isNew ? (on ? BOLD : "") : ""}${it.title}${RESET}${it.plan.writing ? ` ${BOLD}${t(v.lang, "plan_writing")}${RESET}` : ""}`, cols));
       out.push(truncate(`      ${meta}`, cols));
       return;
     }

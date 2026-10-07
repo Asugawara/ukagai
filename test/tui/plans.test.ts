@@ -25,11 +25,11 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 const ago = (ms: number) => new Date(clock - ms).toISOString();
 
 function file(name: string, title: string, markdown: string, ageMs: number): PlanContent {
-  return { name, title, mtime: ago(ageMs), markdown, read: false, session_id: "s-plan" };
+  return { name, title, mtime: ago(ageMs), markdown, read: false, format_ok: true, ready: true, session_id: "s-plan" };
 }
 function summary(f: PlanContent, read = false): PlanSummary {
   const o = planOutline(f.markdown);
-  return { name: f.name, title: f.title, mtime: f.mtime, bytes: f.markdown.length, sections: o.h2, lines: o.lines, read, session_id: f.session_id };
+  return { name: f.name, title: f.title, mtime: f.mtime, bytes: f.markdown.length, sections: o.h2, lines: o.lines, read, format_ok: true, ready: f.ready, session_id: f.session_id };
 }
 
 let FILES: Record<string, PlanContent>;
@@ -156,7 +156,7 @@ test("live update with no change in the text only ticks the age (the summary alo
   const { app } = setup();
   await arrive(app);
   fetched.length = 0;
-  app.planUpdated({ ...summary(FILES["b.md"]!), read: true }, clock); // a read mark from another UI: same mtime
+  app.planUpdated({ ...summary(FILES["b.md"]!), read: true, format_ok: true, ready: false }, clock); // a read mark from another UI: same mtime
   await tick();
   assert.deepEqual(fetched, []);
   assert.equal(app.shownPlan, "b.md");
@@ -181,7 +181,7 @@ test("decision precedence: a decision takes the screen (Pending 2); ] is the pla
 test("upgrade in place: the approval of the shown plan keeps the folding state, shows the buttons, is one list row; answering leaves nothing to mark read", async () => {
   const { app } = setup();
   await arrive(app);
-  press(app, down, enter, down, enter); // Changes, then its first subsection
+  press(app, down, enter, down, enter); // Steps, then its first subsection
   const open = [...app.view(clock).plan!.open].sort();
   assert.ok(open.length >= 3, "three sections open");
   const ap = decision({ id: "ap", kind: "approve_plan", request: { plan: LONG, planFilePath: "/Users/a/.claude/plans/b.md" } } as never);
@@ -201,7 +201,7 @@ test("upgrade in place: the approval of the shown plan keeps the folding state, 
   const out = press(app, ch("y"));
   assert.deepEqual(out, [{ type: "answer", id: "ap", body: { approve: true, set_mode_auto: true } }]);
   // The server marks the plan read when the approval leaves pending and broadcasts plan.updated first; the TUI posts nothing itself
-  app.planUpdated({ ...summary(FILES["b.md"]!), read: true }, clock);
+  app.planUpdated({ ...summary(FILES["b.md"]!), read: true, format_ok: true, ready: false }, clock);
   app.answered({ ...ap, status: "answered" } as never, clock);
   assert.equal(app.shownPlan, null, "the plan is read, so nothing is next");
 });
@@ -311,7 +311,7 @@ test("TUI and GUI use the same words for plans", async () => {
 
 test("a plan file without a session does not come up by itself and is not in Pending; it is in the list (b); it comes up once plan.updated carries its session", async () => {
   const { app } = setup();
-  const bare = { ...summary(FILES["c.md"]!), session_id: undefined };
+  const bare = { ...summary(FILES["c.md"]!), session_id: undefined, ready: false };
   app.planUpdated(bare, clock);
   await tick();
   assert.equal(app.shownPlan, null, "nothing pops up");
@@ -323,7 +323,7 @@ test("a plan file without a session does not come up by itself and is not in Pen
   await tick();
   assert.equal(app.shownPlan, null);
   FILES["c.md"] = { ...FILES["c.md"]!, session_id: "s-found" };
-  app.planUpdated({ ...bare, session_id: "s-found" }, clock); // the server found the session
+  app.planUpdated({ ...bare, session_id: "s-found", ready: true }, clock); // the server found the session
   await tick();
   assert.equal(app.shownPlan, "c.md", "now it is a new plan like any other");
   assert.equal(app.count(clock), 1);
@@ -331,7 +331,7 @@ test("a plan file without a session does not come up by itself and is not in Pen
 
 test("a plan file opened by hand from the list while its session is unknown learns the session when plan.updated carries it", async () => {
   const { app } = setup();
-  const bare = { ...summary(FILES["c.md"]!), session_id: undefined };
+  const bare = { ...summary(FILES["c.md"]!), session_id: undefined, ready: false };
   FILES["c.md"] = { ...FILES["c.md"]!, session_id: undefined };
   app.planUpdated(bare, clock);
   press(app, ch("b"), { name: "enter" });
@@ -339,7 +339,7 @@ test("a plan file opened by hand from the list while its session is unknown lear
   assert.equal(app.shownPlan, "c.md");
   assert.doesNotMatch(draw(app).text, /What should the agent do first\?/);
   FILES["c.md"] = { ...FILES["c.md"]!, session_id: "s-found" };
-  app.planUpdated({ ...bare, session_id: "s-found" }, clock);
+  app.planUpdated({ ...bare, session_id: "s-found", ready: true }, clock);
   await tick();
   assert.match(draw(app).text, /What should the agent do first\?/, "the card appears without a file write");
 });
@@ -380,4 +380,24 @@ test("long plan file without a session: → has nowhere to go and the zone stays
   const { text } = draw(app);
   assert.match(text, /The agent's session was not found/);
   assert.match(text, /j\/k Section · Enter Open · o All/);
+});
+
+test("a plan that is not ready (still being written) is not queued, counted or shown; the list (b) labels it Writing / 作成中; plan.updated with ready true brings it up", async () => {
+  for (const lang of ["en", "ja"] as const) {
+    const { app } = setup();
+    app.lang = lang;
+    const writing = { ...summary(FILES["c.md"]!), ready: false }; // has a session, but the agent is still working on it
+    app.planUpdated(writing, clock);
+    await tick();
+    assert.equal(app.shownPlan, null, "nothing pops up");
+    assert.equal(app.count(clock), 0, "not counted in Pending");
+    press(app, ch("b"));
+    assert.equal(app.view(clock).list!.items.length, 1, "listed in b");
+    assert.match(draw(app).text, lang === "en" ? /Writing/ : /作成中/);
+    press(app, esc);
+    app.planUpdated({ ...writing, ready: true }, clock); // the agent stopped: the plan is a new plan like any other
+    await tick();
+    assert.equal(app.shownPlan, "c.md");
+    assert.equal(app.count(clock), 1);
+  }
 });

@@ -57,6 +57,11 @@ export class PlanSessions {
     return this.seen.get(planName);
   }
 
+  /** The plans last found for a session */
+  plansOf(sessionId: string): string[] {
+    return [...this.seen].filter(([, id]) => id === sessionId).map(([name]) => name);
+  }
+
   /** The session id for a plan file name (`<slug>.md`), or undefined */
   async find(planName: string): Promise<string | undefined> {
     const id = await this.lookup(planName);

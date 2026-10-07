@@ -51,7 +51,7 @@ test("plan outline: the fixture has 9 sections, 15 contents rows, 200 lines, 12 
   assert.equal(o.long, true);
   assert.deepEqual(o.entries.filter((e) => e.scope).map((e) => e.plain), ["Scope and reversibility"]);
   // paths inside code fences are not counted; a section counts its children's files
-  const changes = o.entries.find((e) => e.plain === "Changes")!;
+  const changes = o.entries.find((e) => e.plain === "Steps")!;
   assert.equal(changes.files.size, 4);
 });
 
@@ -75,7 +75,7 @@ test("plan (long): every H2 is folded to one row except the first, there is no c
   const hs = headings(text);
   assert.equal(hs.filter((h) => h.startsWith("▾")).length, 1, hs.join("\n"));
   assert.match(hs[0]!, /^▾ ☑ Context \(\d+ lines\)/);
-  assert.match(hs[1]!, /^▸ ☐ Changes \(/);
+  assert.match(hs[1]!, /^▸ ☐ Steps \(/);
   assert.ok(!text.includes("Contents"), "no contents list");
   assert.equal(text.split("\n").map((l) => l.split(" │ ")[1] ?? "").filter((l) => /[☐☑] .+ \d+ lines/.test(l)).length, 0, "no contents rows in the decision column");
   // the plan zone is the start: the first section is selected (inverted) and the background column has the focus
@@ -94,12 +94,12 @@ test("plan (long): j / k and ↑ / ↓ move the section selection and Enter open
   press(app, ch("j"));
   assert.equal(app.view(clock).plan!.cur, 1);
   let { text, frame } = draw(app);
-  assert.ok(frame.text.includes("\x1b[7mChanges"), "Changes is selected");
+  assert.ok(frame.text.includes("\x1b[7mSteps"), "Steps is selected");
   assert.ok(!text.includes("Three pieces change"), "moving does not open");
   press(app, enter);
   ({ text } = draw(app));
-  assert.ok(text.includes("Three pieces change"), "Changes is open");
-  assert.ok(headings(text).some((h) => /^▾ ☑ Changes/.test(h)), headings(text).join("\n"));
+  assert.ok(text.includes("Three pieces change"), "Steps is open");
+  assert.ok(headings(text).some((h) => /^▾ ☑ Steps/.test(h)), headings(text).join("\n"));
   // its H3 children are folded rows of their own
   assert.ok(headings(text).some((h) => /^▸ ☐ 1\. Backend usecase/.test(h)), headings(text).join("\n"));
   press(app, down);
@@ -111,7 +111,7 @@ test("plan (long): j / k and ↑ / ↓ move the section selection and Enter open
   press(app, down, enter); // Enter again folds it (the mark stays ☑: it has been read)
   ({ text } = draw(app));
   assert.ok(!text.includes("Three pieces change"));
-  assert.ok(headings(text).some((h) => /^▸ ☑ Changes/.test(h)));
+  assert.ok(headings(text).some((h) => /^▸ ☑ Steps/.test(h)));
   assert.deepEqual(press(app, enter, enter), [], "Enter in the plan zone never approves");
 });
 
@@ -145,12 +145,12 @@ test("plan (long): Space folds too, Home / End / gg / G jump, and the background
   assert.equal(app.view(clock).plan!.cur, last);
   press(app, ch("g"), ch("g"));
   assert.equal(app.view(clock).plan!.cur, 0);
-  press(app, ch("j"), { name: "char", ch: " " }); // Changes was open: Space folds it
+  press(app, ch("j"), { name: "char", ch: " " }); // Steps was open: Space folds it
   d = draw(app, 140, 24);
-  assert.ok(/▸ ☑ Changes/.test(d.text), d.text);
+  assert.ok(/▸ ☑ Steps/.test(d.text), d.text);
   press(app, { name: "char", ch: " " });
   d = draw(app, 140, 24);
-  assert.ok(/▾ ☑ Changes/.test(d.text));
+  assert.ok(/▾ ☑ Steps/.test(d.text));
 });
 
 test("plan (long): → goes to the options zone, ← back (h and l too, Tab switches); the hint, the column focus and the cursor mark follow the zone", () => {
@@ -177,7 +177,7 @@ test("plan (long): → goes to the options zone, ← back (h and l too, Tab swit
   press(app, tab);
   assert.equal(app.view(clock).plan!.zone, "plan");
   // in the options zone j / k move between the options, not the sections; the selection and the cursor are both remembered
-  press(app, ch("j")); // plan zone: Changes
+  press(app, ch("j")); // plan zone: Steps
   press(app, right);
   assert.equal(app.view(clock).plan!.cur, 1);
   press(app, ch("j")); // Instruct: its box opens
@@ -236,7 +236,7 @@ test("plan (long): [ and ] switch pending decisions; h and l do not (they are th
 test("plan (long): one y sends at once with auto; the unread sections are one dim line above the buttons and update live; a does nothing", () => {
   const app = open();
   let { lines } = draw(app);
-  const at = lines.findIndex((l) => l.includes("Unread sections (7): Changes, Split and owners"));
+  const at = lines.findIndex((l) => l.includes("Unread sections (7): Steps, Split and owners"));
   const btn = lines.findIndex((l) => l.includes("[1] Approve")); // the options follow: Approve, Instruct, Reject
   assert.ok(at >= 0 && btn > at && lines.findIndex((l) => l.includes("[2] Instruct")) > btn && lines.findIndex((l) => l.includes("[3] Reject")) > btn, lines.join("\n"));
   assert.match(lines.slice(at, btn).map((l) => l.split(" │ ")[1] ?? "").join(" "), /Verification, Observation path \+2$/, "the line (wrapped) ends right above the options");
@@ -286,6 +286,6 @@ test("plan (long): the unread line is in Japanese", () => {
   const app = open();
   app.lang = "ja";
   const { lines } = draw(app);
-  assert.ok(lines.some((l) => /未読 7 節: Changes/.test(l)));
+  assert.ok(lines.some((l) => /未読 7 節: Steps/.test(l)));
   assert.ok(lines.some((l) => l.includes("[1] 承認（auto モードで続行）")));
 });

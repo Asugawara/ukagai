@@ -249,10 +249,10 @@ gui("an open section's heading row sticks to the top of the left column while it
   await reopen("document.querySelector('#background details.plan-sec')");
   key("o");
   await waitFor("all open", `document.querySelectorAll("#background details[open]").length === 15`);
-  // scroll into the middle of Changes (55 lines with its H3 children open)
-  ev(`document.getElementById("background").scrollTop = ${secOf("Changes")}.offsetTop + 200, "ok"`);
+  // scroll into the middle of Steps (55 lines with its H3 children open)
+  ev(`document.getElementById("background").scrollTop = ${secOf("Steps")}.offsetTop + 200, "ok"`);
   const top = (sel: string) => ev<number>(`${sel}.getBoundingClientRect().top - document.getElementById("background").getBoundingClientRect().top`);
-  const h2 = top(`${secOf("Changes")}.querySelector(":scope > summary")`);
+  const h2 = top(`${secOf("Steps")}.querySelector(":scope > summary")`);
   assert.ok(Math.abs(h2) <= 2, `the H2 summary is at the top (${h2})`);
   const sub = ev<string>(`(() => { const bg = document.getElementById("background").getBoundingClientRect().top; const s = [...document.querySelectorAll("#background details.plan-sub[open] > summary")].find(x => { const r = x.getBoundingClientRect(); return r.top - bg > 0 && r.top - bg < 40; }); return s ? s.textContent : ""; })()`);
   assert.ok(sub.includes("Backend usecase") || sub.includes("HTTP handler") || sub.includes("Worker"), `an H3 summary sits under the H2 summary: ${sub}`);
@@ -263,11 +263,11 @@ gui("j / k / ↑ / ↓ move the section selection, Home End gg G jump, Enter and
   await reopen("document.querySelector('#background details.plan-sec')");
   assert.equal(selTitle(), "Context");
   key("j");
-  assert.equal(selTitle(), "Changes");
+  assert.equal(selTitle(), "Steps");
   key("ArrowDown");
   assert.ok(selTitle().startsWith("1. Backend usecase"));
   key("k");
-  assert.equal(selTitle(), "Changes");
+  assert.equal(selTitle(), "Steps");
   key("ArrowUp");
   assert.equal(selTitle(), "Context");
   key("ArrowUp");
@@ -283,14 +283,14 @@ gui("j / k / ↑ / ↓ move the section selection, Home End gg G jump, Enter and
   key("g");
   key("g");
   assert.equal(selTitle(), "Context");
-  goTo("Changes");
+  goTo("Steps");
   key("Enter");
-  await waitFor("Changes open", `${secOf("Changes")}.open`);
+  await waitFor("Steps open", `${secOf("Steps")}.open`);
   key(" ");
-  await waitFor("Changes closed", `!${secOf("Changes")}.open`);
+  await waitFor("Steps closed", `!${secOf("Steps")}.open`);
   key("Enter");
-  await waitFor("Changes open again", `${secOf("Changes")}.open`);
-  assert.equal(selTitle(), "Changes", "the selection stays on the section it folded");
+  await waitFor("Steps open again", `${secOf("Steps")}.open`);
+  assert.equal(selTitle(), "Steps", "the selection stays on the section it folded");
   // Enter did not approve anything
   assert.equal(count("#decision .confirm-bar"), 0);
   assert.equal(ev(`document.querySelectorAll("#decision .approve-card").length`), 1);
@@ -499,11 +499,11 @@ gui("a does nothing on a plan", async () => {
 gui("the unread line sits above the buttons, updates as sections are opened and disappears at 0 (never blocks)", async () => {
   const { id } = await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
-  assert.equal(unreadLine(), "Unread sections (7): Changes, Split and owners, Commit granularity, Verification, Observation path +2");
+  assert.equal(unreadLine(), "Unread sections (7): Steps, Split and owners, Commit granularity, Verification, Observation path +2");
   assert.equal(ev(`document.querySelector("#decision .plan-unread").nextElementSibling.classList.contains("approve-card")`), true, "directly above the options");
-  goTo("Changes");
+  goTo("Steps");
   key("Enter");
-  await waitFor("Changes open", `${secOf("Changes")}.open`);
+  await waitFor("Steps open", `${secOf("Steps")}.open`);
   await waitFor("line updated", `document.querySelector("#decision .plan-unread").textContent.startsWith("Unread sections (6): Split and owners, Commit granularity")`);
   key("o");
   await waitFor("all open", `document.querySelectorAll("#background details[open]").length === 15`);
@@ -518,7 +518,7 @@ gui("ja: the unread line is 未読 n 節 and the options are 承認（auto モ�
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   await setLang("ja", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("未読 7 節:")`);
-  assert.equal(unreadLine(), "未読 7 節: Changes, Split and owners, Commit granularity, Verification, Observation path +2");
+  assert.equal(unreadLine(), "未読 7 節: Steps, Split and owners, Commit granularity, Verification, Observation path +2");
   assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .actions > .opt .lab")].map(l => l.firstChild.textContent))`), ["承認（auto モードで続行）", "指示", "却下"]);
   await setLang("en", `document.querySelector("#decision .plan-unread")?.textContent.startsWith("Unread sections (7)")`);
 });
@@ -596,9 +596,9 @@ gui("backticked paths in the plan are click-to-copy badges, and clicking one ins
   ev(`document.querySelector("#background details.plan-sec[open] .cbadge").click(), "ok"`);
   await waitFor("copied", `window.__copied.length === 1`);
   assert.equal(ev(`window.__copied[0]`), "src/export/usecase.ts");
-  // open Changes: its H3 summaries carry paths
-  ev(`${secOf("Changes")}.querySelector("summary").click(), "ok"`);
-  await waitFor("Changes open", `${secOf("Changes")}.open`);
+  // open Steps: its H3 summaries carry paths
+  ev(`${secOf("Steps")}.querySelector("summary").click(), "ok"`);
+  await waitFor("Steps open", `${secOf("Steps")}.open`);
   ev(`${secOf("1. Backend usecase")}.querySelector("summary .cbadge").click(), "ok"`);
   await waitFor("copied again", `window.__copied.length === 2`);
   assert.equal(ev(`window.__copied[1]`), "src/export/usecase.ts");
@@ -625,9 +625,9 @@ gui("screenshots for PL4: 1280 px, the plan zone with a section selected, and th
   await seedPlan(LONG);
   ab("set", "viewport", "1280", "800");
   await reopen("document.querySelector('#background details.plan-sec')");
-  goTo("Changes");
+  goTo("Steps");
   key("Enter");
-  await waitFor("Changes open", `${secOf("Changes")}.open`);
+  await waitFor("Steps open", `${secOf("Steps")}.open`);
   key("j");
   await sleep(300);
   ab("screenshot", join(SHOTS, "PL4-plan-zone.png"));

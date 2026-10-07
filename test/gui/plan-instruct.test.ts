@@ -254,7 +254,7 @@ gui("plan file card: two rapid Enters queue the instruction once", async () => {
   writeFileSync(join(home, ".claude", "plans", "quick-fox.md"), PLAN);
   const tpath = join(home, ".claude", "projects", "p", "s-quick.jsonl");
   writeFileSync(tpath, '{"type":"user","slug":"quick-fox"}\n');
-  await api("/api/events", { session_id: "s-quick", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await api("/api/events", { session_id: "s-quick", transcript_path: tpath, cwd: ROOT, hook_event_name: "Stop", received_at: new Date().toISOString() });
   await reopen("document.querySelector('#decision .done-reading')");
   const pick = () => ev<string>(`document.querySelector("#head .plan-file")?.textContent ?? ""`);
   for (let i = 0; i < 6 && pick() !== "quick-fox.md"; i++) { key("l"); await sleep(300); }
@@ -301,7 +301,7 @@ gui("plan file card: the box shows only when a session maps, and sends to the pl
   writeFileSync(join(home, ".claude", "plans", "lonely.md"), PLAN.replace("Export retry", "Lonely"));
   const tpath = join(home, ".claude", "projects", "p", "s-early.jsonl");
   writeFileSync(tpath, '{"type":"user","slug":"swift-otter"}\n');
-  await api("/api/events", { session_id: "s-early", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await api("/api/events", { session_id: "s-early", transcript_path: tpath, cwd: ROOT, hook_event_name: "Stop", received_at: new Date().toISOString() });
   await setPresets(["Review adversarially"]);
   await reopen("document.querySelector('#decision .done-reading')");
   // two new plan files: show swift-otter (has a session) first, then lonely
@@ -332,7 +332,7 @@ gui("long plan file card: starts in the plan zone, → lands on the Instruct car
   writeFileSync(join(home, ".claude", "plans", "long-fox.md"), LONG);
   const tpath = join(home, ".claude", "projects", "p", "s-long.jsonl");
   writeFileSync(tpath, '{"type":"user","slug":"long-fox"}\n');
-  await api("/api/events", { session_id: "s-long", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  await api("/api/events", { session_id: "s-long", transcript_path: tpath, cwd: ROOT, hook_event_name: "Stop", received_at: new Date().toISOString() });
   await reopen("document.querySelector('#decision .done-reading')");
   await waitFor("the long plan is shown", `document.querySelector("#background details.plan-sec") && document.querySelector("#instruct")`);
   const zone = () => ev<string>(`document.getElementById("background").classList.contains("zone-on") ? "plan" : document.getElementById("decision").classList.contains("zone-on") ? "opts" : "none"`);
@@ -379,18 +379,21 @@ gui("settings: the presets textarea saves on change and the chips on the main pa
   await waitFor("chips", `[...document.querySelectorAll("#decision .chip")].map(c => c.textContent).join("|") === "First one|Second one"`);
 });
 
-gui("plan file card: a queued stop answers 409 and the toast is the translated text, not the server's English message", async () => {
+gui("plan file card: the box goes away while the agent works (and says why) and is back after Stop; a queued stop still answers 409 on the plan endpoint", async () => {
   writeFileSync(join(home, ".claude", "plans", "stopped-fox.md"), PLAN.replace("Export retry", "Stopped fox"));
   const tpath = join(home, ".claude", "projects", "p", "s-stop.jsonl");
   writeFileSync(tpath, '{"type":"user","slug":"stopped-fox"}\n');
-  await api("/api/events", { session_id: "s-stop", transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() });
+  const ev_ = (name: string) => api("/api/events", { session_id: "s-stop", transcript_path: tpath, cwd: ROOT, hook_event_name: name, received_at: new Date().toISOString() });
+  await ev_("Stop");
+  await reopen("document.querySelector('#decision .done-reading')");
+  await waitFor("stopped fox shown with its box", `document.querySelector("#head .v2-title")?.textContent === "Stopped fox" && document.getElementById("instruct")`);
+  await ev_("UserPromptSubmit"); // the agent works again: the file is in flux, nothing can be handed to it
+  await waitFor("box gone, reason shown", `!document.getElementById("instruct") && document.querySelector("#plan-no-session")?.textContent === "The agent is still working"`);
   const at = new Date().toISOString();
   const cp = await api("/api/decisions", { tool_use_id: `checkpoint:s-stop:${at}`, kind: "checkpoint", session: { session_id: "s-stop", cwd: ROOT, transcript_path: tpath }, request: { recap: "recap", recap_at: at } });
   await api(`/api/decisions/${cp.id}/answer`, { kind: "stop" });
-  await reopen("document.querySelector('#decision .done-reading')");
-  await waitFor("stopped fox shown", `document.querySelector("#head .v2-title")?.textContent === "Stopped fox"`);
-  typeInto("add a section");
-  key("Enter", "#instruct");
-  await waitFor("translated toast", `document.body.textContent.includes("A stop is queued for this session; answer that first")`);
-  assert.equal(ev(`document.body.textContent.includes("a stop is queued for this session")`), false, "the server's lower-case message is not shown");
+  const r = await fetch(base + "/api/plans/stopped-fox.md/instruct", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ text: "x" }) });
+  assert.equal(r.status, 409);
+  await ev_("Stop");
+  await waitFor("box back after Stop", `document.getElementById("instruct")`);
 });

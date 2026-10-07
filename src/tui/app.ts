@@ -236,9 +236,15 @@ export class App {
     return this.visiblePlans().filter((p) => this.isNew(p, now));
   }
 
-  /** The new plans that flow in by themselves: a plan file whose agent session is unknown has no actions, so it only sits in the list (`b`) until the session is found */
+  /** The new plans that flow in by themselves: only a `ready` one (the server: complete, session known, not working, no decision pending); one still being written sits in the list (`b`) as "Writing" until it is */
   private queuedPlans(now: number): PlanSummary[] {
-    return this.newPlans(now).filter((p) => p.session_id);
+    return this.newPlans(now).filter((p) => p.ready);
+  }
+
+  /** The Instruct card of a plan file needs a session that is known and not working */
+  private planCanInstruct(name: string): boolean {
+    const sid = this.files.get(name)?.session_id;
+    return !!sid && this.sessions.get(sid)?.state !== "working";
   }
 
   /** What `Pending N` counts: the decisions waiting plus the queued new plans */
@@ -463,7 +469,7 @@ export class App {
             items: this.listItems(now).map((it): ListItem => {
               if (it.plan) {
                 const p = it.plan;
-                return { blocker: false, title: p.title, chips: [], kindLabel: t(this.lang, "plan_kind"), createdAt: p.mtime, noExplanation: false, current: p.name === this.shownPlan, plan: { sections: p.sections, lines: p.lines, isNew: this.isNew(p, now) } };
+                return { blocker: false, title: p.title, chips: [], kindLabel: t(this.lang, "plan_kind"), createdAt: p.mtime, noExplanation: false, current: p.name === this.shownPlan, plan: { sections: p.sections, lines: p.lines, isNew: this.isNew(p, now), writing: !p.ready } };
               }
               const d = it.decision!;
               return {
@@ -490,7 +496,7 @@ export class App {
       reason: dr?.reason ?? "",
       instruct: dr?.instruct ?? "",
       presets: this.presets,
-      canInstruct: !!m?.readonly && !!this.files.get(m.readonly.name)?.session_id,
+      canInstruct: !!m?.readonly && this.planCanInstruct(m.readonly.name),
       pending: count,
       toast: this.toast && this.toast.until > now ? this.toast.text : null,
       lang: this.lang,
@@ -581,7 +587,7 @@ export class App {
 
   /** Whether the options zone has anything to act on: a plan file needs a session for its Instruct card */
   private hasOptions(m: ScreenModel): boolean {
-    return !m.readonly || !!this.files.get(m.readonly.name)?.session_id;
+    return !m.readonly || this.planCanInstruct(m.readonly.name);
   }
 
   /** ← → on a long plan: the plan zone, or the options zone where the cursor's card takes over (Instruct opens its box, Reject its reason box) */
@@ -1047,8 +1053,8 @@ export class App {
   /** `i` on a plan: the approval card, or a plan file whose session is known. The text typed earlier comes back */
   private startInstruct(m: ScreenModel, dr: Draft, now: number): Effect[] {
     if (m.kind !== "plan") return [];
-    if (m.readonly && !this.files.get(m.readonly.name)?.session_id) {
-      this.showToast(t(this.lang, "plan_no_session"), now);
+    if (m.readonly && !this.planCanInstruct(m.readonly.name)) {
+      this.showToast(t(this.lang, this.files.get(m.readonly.name)?.session_id ? "plan_agent_working" : "plan_no_session"), now);
       return [];
     }
     dr.cursor = m.readonly ? 0 : 1;

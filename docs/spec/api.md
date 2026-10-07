@@ -273,17 +273,19 @@ Read-only access to the plan files Claude Code writes in plan mode, so a plan ca
 `GET /api/plans` → 200
 
 ```json
-{ "plans": [ { "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "bytes": 1234, "sections": 4, "lines": 60, "read": false, "session_id": "…" } ] }
+{ "plans": [ { "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "bytes": 1234, "sections": 4, "lines": 60, "read": false, "format_ok": true, "ready": false, "session_id": "…" } ] }
 ```
 
 - `session_id` (optional, also on the detail) is the live Claude Code session writing the plan: Claude Code names the plan after the session's `slug` and every transcript line carries `"slug":"<name>"`, so it is the session (not ended, last event within 6 hours, transcript under `~/.claude/projects/`) whose transcript has that slug. Claude Code assigns the slug lazily, when the session first enters plan mode (lines written before carry none, every later line does), so the lookup reads the **last** 256 KB of the transcript first (complete lines only), then the first 256 KB (once). While a session's slug is unknown the tail is read again whenever the file grew (one 256 KB read per poll per session); a found slug is kept for good. Absent when none is found. The `plan.updated` SSE event carries `session_id` when it is known: a plan whose session is found later (the server looks on a 10 s timer and on each of these two calls) is announced again with `session_id`, once, so clients learn it without a file write.
+- `format_ok` is true when the file has the sections ukagai's plan-writing rules (`planContextText`) ask for: an H2 `Steps` with at least one list item and an H2 `Verification` with at least one task item (`- [ ]` / `- [x]`), headings trimmed and case-insensitive.
+- `ready` (also on the detail and on every `plan.updated`) is computed by the server and is the only thing the GUI / TUI use to decide whether a plan is queued, shown by itself and counted. It is state, not size (a one-section plan shows): true when `session_id` is known, that session is not `working` (not between `UserPromptSubmit` and `Stop`; the file is in flux then), its last `Stop` was not an escaped question (the hook posted `escaped_question: true`: the agent ended its turn with a question and waits for the human in the terminal; cleared by the next `UserPromptSubmit`), it has no decision `pending` (the human is asked that first), and, **only when ukagai handed its plan format to that session** (the plan-context marker `<data-dir>/plan-context/<session_id, sanitized>` exists), `format_ok`. A session that never got the rules (no hook, a plan begun before plan mode, another language or format) is judged on state alone, so its plan is not "writing" forever. A plan that is not `ready` is still listed (labelled Writing / 作成中). `ready` flips without the file changing, so the server announces `plan.updated` again when a session's state changes (hook event, session end, the escaped-question flag) or one of its decisions is created or leaves `pending`, for the plans found for that session, and only when `ready` changed.
 - Only `*.md` files, newest `mtime` first, at most 50. Names starting with `.` are skipped. A file whose `realpath` is outside the plans directory (a symlink leading out) is not listed. A missing directory gives `{ "plans": [] }`.
 - `name` is the file name including `.md`. `title` is the first H1 (`# …`, outside code fences), or `name` if there is none. `sections` counts H2 headings (outside code fences). `lines` counts lines (0 for an empty file). A file over 1 MB is listed with `title = name` and `sections = 0`. `read` is true when the stored read mark equals the current `mtime`.
 
 `GET /api/plans/:name` → 200
 
 ```json
-{ "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "markdown": "# Add X\n…", "read": false, "session_id": "…" }
+{ "name": "foo-bar.md", "title": "Add X", "mtime": "2026-10-03T06:00:00.000Z", "markdown": "# Add X\n…", "read": false, "format_ok": true, "ready": false, "session_id": "…" }
 ```
 
 - 400 if `name` is empty or contains `/`, `\`, `..` or a NUL, or starts with `.` (URL-encoded separators are decoded first). 404 if the file does not exist, is not a regular file, or its `realpath` is outside the plans directory. 413 if it is larger than 1 MB.
@@ -349,9 +351,9 @@ The real path (symlinks resolved) must be a regular file under one of: `<HOME>/.
 
 ### GET /api/stream
 
-SSE. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read` and, when known, `session_id`), `plan.removed` (data is `{ "name" }`) and `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`).
+SSE. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`, `format_ok`, `ready` and, when known, `session_id`), `plan.removed` (data is `{ "name" }`) and `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`).
 
-`plan.updated` fires when a `*.md` file in `~/.claude/plans` is created or modified (debounced 400 ms per file: a burst of writes gives one event with the final state; files that are dotfiles, escape the directory by symlink, or exceed 1 MB are skipped silently) and when the read mark of a plan changes. `plan.removed` fires when a plan is deleted or renamed away. Plans already present when the server starts are not announced; use `GET /api/plans`. The server watches with `fs.watch` plus a 10 s listing poll (`name → mtime + size`), and polls until the directory exists if it is missing.
+`plan.updated` fires when a `*.md` file in `~/.claude/plans` is created or modified (debounced 400 ms per file: a burst of writes gives one event with the final state; files that are dotfiles, escape the directory by symlink, or exceed 1 MB are skipped silently) when the read mark of a plan changes, and when `ready` flips with no file change (see `ready` above). `plan.removed` fires when a plan is deleted or renamed away. Plans already present when the server starts are not announced; use `GET /api/plans`. The server watches with `fs.watch` plus a 10 s listing poll (`name → mtime + size`), and polls until the directory exists if it is missing.
 
 AskUserQuestion is not available inside subagents, so no decision arises there (confirmed with Claude Code 2.1.287).
 

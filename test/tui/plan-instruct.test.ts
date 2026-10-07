@@ -73,12 +73,12 @@ test("approval: the hint line lists i Instruct, the Instruct option is shown as 
 });
 
 test("plan file: a session shows the box and sends through the plan endpoint; no session says why", async () => {
-  const file = (session_id?: string): PlanContent => ({ name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, ...(session_id ? { session_id } : {}) });
-  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false };
+  const file = (session_id?: string): PlanContent => ({ name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, format_ok: true, ready: false, ...(session_id ? { session_id } : {}) });
+  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false, format_ok: true, ready: false };
   for (const withSession of [true, false]) {
     const app = new App();
     app.fetchPlan = async () => file(withSession ? "s-live" : undefined);
-    app.replacePlans([withSession ? { ...summary, session_id: "s-live" } : summary], clock);
+    app.replacePlans([withSession ? { ...summary, session_id: "s-live", ready: true } : summary], clock);
     await new Promise((r) => setTimeout(r, 5));
     if (!withSession) {
       assert.equal(app.shownPlan, null, "a plan without a session does not come up by itself");
@@ -99,8 +99,8 @@ test("plan file: a session shows the box and sends through the plan endpoint; no
 });
 
 test("plan file: the draft survives a failed send, a second Enter while sending does nothing, success clears it", async () => {
-  const file: PlanContent = { name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, session_id: "s-live" };
-  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file.mtime, bytes: 20, sections: 1, lines: 5, read: false, session_id: "s-live" };
+  const file: PlanContent = { name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, format_ok: true, ready: true, session_id: "s-live" };
+  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file.mtime, bytes: 20, sections: 1, lines: 5, read: false, format_ok: true, ready: true, session_id: "s-live" };
   const app = new App();
   app.fetchPlan = async () => file;
   app.replacePlans([summary], clock);
@@ -238,11 +238,11 @@ test("approval: in the box digits and letters are text once there is text; Enter
 });
 
 test("plan file with a session: the card is always there, no i needed; without a session it says why and there is no card", async () => {
-  const file = (session_id?: string): PlanContent => ({ name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, ...(session_id ? { session_id } : {}) });
-  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false };
+  const file = (session_id?: string): PlanContent => ({ name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, format_ok: true, ready: false, ...(session_id ? { session_id } : {}) });
+  const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false, format_ok: true, ready: false };
   const app = new App();
   app.fetchPlan = async () => file("s-live");
-  app.replacePlans([{ ...summary, session_id: "s-live" }], clock);
+  app.replacePlans([{ ...summary, session_id: "s-live", ready: true }], clock);
   await new Promise((r) => setTimeout(r, 5));
   assert.match(draw(app).text, /What should the agent do first\?/);
   assert.equal(app.mode, "normal");

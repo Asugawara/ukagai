@@ -120,13 +120,13 @@ async function seedQuestion(): Promise<{ id: string }> {
 }
 
 /** A live session whose transcript carries `slug` (the plan file `<slug>.md` is then its plan); `withSlug: false` writes a transcript that has none yet */
-async function registerSession(slug: string, withSlug = true): Promise<string> {
+async function registerSession(slug: string, withSlug = true, hookEvent = "Stop"): Promise<string> {
   const tpath = join(home, ".claude", "projects", "p", `${slug}.jsonl`);
   writeFileSync(tpath, withSlug ? `{"type":"user","slug":"${slug}"}\n` : '{"type":"user"}\n');
   await fetch(base + "/api/events", {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ session_id: `s-${slug}`, transcript_path: tpath, cwd: ROOT, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString() }),
+    body: JSON.stringify({ session_id: `s-${slug}`, transcript_path: tpath, cwd: ROOT, hook_event_name: hookEvent, received_at: new Date().toISOString() }),
   });
   return tpath;
 }
@@ -485,6 +485,31 @@ gui("a plan file whose session is found later pops up as new once plan.updated c
   writeFileSync(tpath, '{"type":"user"}\n{"type":"assistant","slug":"late"}\n'); // Claude Code assigns the slug lazily, later in the transcript
   await api("/api/plans"); // the next lookup finds it and announces it
   await waitFor("pop-up after the session is known", `document.querySelector("#head .plan-file")?.textContent === "late.md"`, 5000);
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
+  key("Escape");
+  await waitFor("idle", IDLE);
+});
+
+gui("a plan that is not ready (its agent is working) is not queued or counted; the drawer lists it as Writing; it pops up once plan.updated says ready", async () => {
+  await reopen(IDLE);
+  await registerSession("wip", true, "UserPromptSubmit"); // the agent is between prompt and stop: the file is in flux
+  writePlan("wip.md", SHORT_A);
+  await waitFor("plan known to the page", `document.getElementById("pending-btn") && !document.getElementById("pending-btn").hidden`, 4000);
+  await sleep(800);
+  assert.equal(ev(IDLE), true, "the idle screen stays");
+  assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "0");
+  assert.ok(!ev<string>(`document.title`).startsWith("(1)"));
+  assert.equal(ev(`document.getElementById("favicon")?.getAttribute("href")?.startsWith("data:image/png")`), false, "no count on the tab icon");
+  key("b");
+  await waitFor("drawer row", `document.body.textContent.includes("Short plan A")`);
+  assert.equal(ev(`document.querySelector('#drawer .plan-row[data-name="wip.md"] .mark.writing')?.textContent`), "Writing");
+  await setLang("ja", `document.querySelector('#drawer .plan-row[data-name="wip.md"] .mark.writing')?.textContent === "作成中"`);
+  await setLang("en", `document.querySelector('#drawer .plan-row[data-name="wip.md"] .mark.writing')?.textContent === "Writing"`);
+  key("Escape");
+  await sleep(200);
+  // the agent stops: the file did not change, the flip alone brings the plan up
+  await registerSession("wip", true, "Stop");
+  await waitFor("pop-up once ready", `document.querySelector("#head .plan-file")?.textContent === "wip.md"`, 5000);
   assert.equal(String(ev(`document.getElementById("pending-count").textContent`)), "1");
   key("Escape");
   await waitFor("idle", IDLE);

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { start, type ServeHandle } from "../../src/serve/index.js";
+import { hasFormat } from "../../src/serve/plans.js";
 
 const roots: string[] = [];
 const handles: ServeHandle[] = [];
@@ -111,7 +112,7 @@ test("detail: {name, title, mtime, markdown, read}; no sections, and `since` no 
   const r = await get(`/api/plans/titled.md?since=${encodeURIComponent("2026-10-01T00:00:00.000Z")}`);
   assert.equal(r.status, 200);
   const j = (await r.json()) as Record<string, unknown>;
-  assert.deepEqual(Object.keys(j).sort(), ["markdown", "mtime", "name", "read", "title"]);
+  assert.deepEqual(Object.keys(j).sort(), ["format_ok", "markdown", "mtime", "name", "read", "ready", "title"]);
 });
 
 test("detail: over 1 MB is 413 (and stays listed)", async () => {
@@ -237,4 +238,27 @@ test("plan with explanation blocks: markdown, lines, section count ignore them",
   const p = list.find((x) => x.name === "plain.md")!;
   assert.equal(w.lines, p.lines);
   assert.equal(w.sections, p.sections);
+});
+
+// ---- format ----
+
+test("hasFormat: Steps with a list item and Verification with a task item (case-insensitive); missing either fails", () => {
+  const steps = "## Steps\n1. **Do it** `src/x.ts`\n";
+  const verify = "## Verification\n- [ ] npm test\n";
+  assert.equal(hasFormat(`# T\n\n${steps}\n${verify}`), true);
+  assert.equal(hasFormat(`# T\n\n${steps.replace("Steps", " STEPS ")}\n${verify.replace("Verification", "verification")}`), true);
+  assert.equal(hasFormat(`# T\n\n${steps}`), false, "no Verification");
+  assert.equal(hasFormat(`# T\n\n${steps}\n## Verification\nrun the tests\n`), false, "no task item");
+  assert.equal(hasFormat(`# T\n\n${verify}`), false, "no Steps");
+  assert.equal(hasFormat(`# T\n\n## Steps\nsoon\n\n${verify}`), false, "Steps without a list item");
+});
+
+test("summary: `format_ok` and `ready` are on every summary; a tiny plan is not held back by its size", async () => {
+  const e = await env();
+  writeFileSync(join(e.dir, "tiny.md"), "# T\n\n## A\n\nOne line.\n");
+  writeFileSync(join(e.dir, "full.md"), "# T\n\n## Steps\n1. **Do it** `src/x.ts`\n\n## Verification\n- [ ] npm test\n");
+  const list = ((await (await e.get("/api/plans")).json()) as { plans: { name: string; format_ok: boolean; ready: boolean }[] }).plans;
+  assert.equal(list.find((p) => p.name === "tiny.md")!.format_ok, false);
+  assert.equal(list.find((p) => p.name === "full.md")!.format_ok, true);
+  assert.ok(list.every((p) => p.ready === false), "no session: never ready");
 });

@@ -18,9 +18,9 @@ Context step 11: keep the change small and reviewable, and write down what was c
 
 The failing path is in `src/export/usecase.ts` and the schedule lives in `config/export.yaml`.
 
-## Changes
+## Steps
 
-Three pieces change; each is described below.
+1. Three pieces change; each is described below.
 
 ### 1. Backend usecase — `src/export/usecase.ts`
 
@@ -111,7 +111,7 @@ One commit per file group: `test/export/retry.test.ts` and `docs/export.md` go l
 
 ## Verification
 
-Verify step 1: keep the change small and reviewable, and write down what was checked.
+- [ ] Verify step 1: keep the change small and reviewable, and write down what was checked.
 Verify step 2: keep the change small and reviewable, and write down what was checked.
 Verify step 3: keep the change small and reviewable, and write down what was checked.
 Verify step 4: keep the change small and reviewable, and write down what was checked.
