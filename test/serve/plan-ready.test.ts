@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Decision, PlanSummary } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
+import { Store } from "../../src/serve/store.js";
 
 const roots: string[] = [];
 const handles: ServeHandle[] = [];
@@ -102,7 +103,7 @@ async function boot() {
     });
     return (await r.json()) as Decision;
   };
-  return { h, home, marker, api, event, updates, plan, listed, detail, ask };
+  return { h, home, transcript, marker, api, event, updates, plan, listed, detail, ask };
 }
 
 test("ready is false while the session is working and true after Stop; the flip is announced without a file change", async () => {
@@ -229,4 +230,102 @@ test("nothing is announced when ready did not change (other session events)", as
   await e.event("Stop");
   await sleep(300);
   assert.equal(e.updates.length, n);
+});
+
+// ---- background subagents ----
+
+/** An event of s1 with extra fields (agent_id, wakeup) */
+const ev = (e: Awaited<ReturnType<typeof boot>>, name: string, extra: Record<string, unknown> = {}) =>
+  e.api("/api/events", { session_id: "s1", transcript_path: e.transcript, cwd: "/w", hook_event_name: name, received_at: new Date().toISOString(), ...extra });
+
+test("background subagents started before the Stop: not ready until the wake-up turn has started and stopped; only real flips are announced", async () => {
+  const e = await boot();
+  await ev(e, "UserPromptSubmit");
+  e.plan(COMPLETE);
+  await until(() => e.updates.some((u) => u.name === "fox.md"));
+  await ev(e, "SubagentStart", { agent_id: "a1" });
+  await ev(e, "SubagentStart", { agent_id: "a2" });
+  await ev(e, "Stop");
+  await sleep(250);
+  assert.equal((await e.detail()).ready, false, "idle, but two subagents run");
+  await ev(e, "SubagentStop", { agent_id: "a1" });
+  assert.equal((await e.detail()).ready, false, "one still runs");
+  await ev(e, "SubagentStop", { agent_id: "a2" });
+  assert.equal((await e.detail()).ready, false, "wake-up due");
+  assert.ok(e.updates.every((u) => !u.ready), "no ready=true announced so far");
+  await ev(e, "UserPromptSubmit", { wakeup: true });
+  assert.equal((await e.detail()).ready, false, "working");
+  await ev(e, "Stop");
+  await until(() => e.updates.at(-1)?.ready === true);
+  assert.equal((await e.detail()).ready, true);
+  // every announcement changed `ready`
+  const flips = e.updates.map((u) => u.ready);
+  assert.deepEqual(flips.filter((r, i) => i > 0 && r === flips[i - 1]).length > 0 ? ["dup"] : [], [], "no repeated ready value announced by recheck");
+});
+
+test("a foreground subagent (SubagentStop while working) sets no wake-up mark: ready after the Stop", async () => {
+  const e = await boot();
+  await ev(e, "UserPromptSubmit");
+  await ev(e, "SubagentStart", { agent_id: "f1" });
+  await ev(e, "SubagentStop", { agent_id: "f1" });
+  e.plan(COMPLETE);
+  await until(() => e.updates.some((u) => u.name === "fox.md"));
+  await ev(e, "Stop");
+  await until(() => e.updates.at(-1)?.ready === true);
+});
+
+test("a SubagentStop while idle for an unknown agent_id still sets wake-up due", async () => {
+  const e = await boot();
+  await ev(e, "Stop");
+  e.plan(COMPLETE);
+  await until(() => e.updates.some((u) => u.name === "fox.md" && u.ready));
+  await ev(e, "SubagentStop", { agent_id: "never-seen" });
+  await until(() => e.updates.at(-1)?.ready === false);
+});
+
+const storeEvent = (store: Store, name: string, at: Date, extra: Record<string, unknown> = {}) =>
+  store.addEvent({ session_id: "s1", transcript_path: "/t", cwd: "/w", hook_event_name: name, received_at: at.toISOString(), ...extra });
+
+test("staleness: a SubagentStart 61 minutes old and a wake-up mark 3 minutes old are ignored", () => {
+  const dir = tmp();
+  const store = new Store({ dir, leaseGraceMs: 60_000, broadcast: () => {} });
+  store.load();
+  try {
+    const now = Date.now();
+    storeEvent(store, "SubagentStart", new Date(now - 61 * 60_000), { agent_id: "old" });
+    assert.equal(store.isWaitingOnSubagents("s1", now), false);
+    storeEvent(store, "SubagentStart", new Date(now - 59 * 60_000), { agent_id: "live" });
+    assert.equal(store.isWaitingOnSubagents("s1", now), true);
+    storeEvent(store, "SubagentStop", new Date(now - 3 * 60_000), { agent_id: "live" });
+    assert.equal(store.isWaitingOnSubagents("s1", now), false, "no mark while working");
+    storeEvent(store, "Stop", new Date(now - 3 * 60_000));
+    storeEvent(store, "SubagentStop", new Date(now - 3 * 60_000), { agent_id: "x" });
+    assert.equal(store.isWaitingOnSubagents("s1", now), false, "3 minutes old mark");
+    assert.equal(store.isWaitingOnSubagents("s1", now - 2 * 60_000), true, "the same mark one minute old");
+    storeEvent(store, "SubagentStart", new Date(now), { agent_id: "no-id-ignored" });
+    storeEvent(store, "SubagentStart", new Date(now));
+  } finally {
+    store.close();
+  }
+});
+
+test("reload: the running set and the wake-up mark come back from events.jsonl", () => {
+  const dir = tmp();
+  const a = new Store({ dir, leaseGraceMs: 60_000, broadcast: () => {} });
+  a.load();
+  storeEvent(a, "UserPromptSubmit", new Date());
+  storeEvent(a, "SubagentStart", new Date(), { agent_id: "r1" });
+  a.close();
+  const b = new Store({ dir, leaseGraceMs: 60_000, broadcast: () => {} });
+  b.load();
+  assert.equal(b.isWaitingOnSubagents("s1"), true, "running entry");
+  storeEvent(b, "Stop", new Date());
+  storeEvent(b, "SubagentStop", new Date(), { agent_id: "r1" });
+  b.close();
+  const c = new Store({ dir, leaseGraceMs: 60_000, broadcast: () => {} });
+  c.load();
+  assert.equal(c.isWaitingOnSubagents("s1"), true, "wake-up due");
+  storeEvent(c, "UserPromptSubmit", new Date(), { wakeup: true });
+  assert.equal(c.isWaitingOnSubagents("s1"), false);
+  c.close();
 });

@@ -105,6 +105,11 @@ function firstQuestion(d: { request: Decision["request"] }): string | undefined 
   return qs?.[0]?.question;
 }
 
+/** A running-subagent entry older than this is ignored (a lost SubagentStop or a killed task must not hide the plan forever) */
+export const SUBAGENT_TTL_MS = 60 * 60_000;
+/** A wake-up-due mark older than this is ignored */
+export const WAKEUP_DUE_TTL_MS = 2 * 60_000;
+
 export class Store {
   private decisions = new Map<string, Decision>();
   private byToolUse = new Map<string, string>();
@@ -121,6 +126,10 @@ export class Store {
   private lastActivity = new Map<string, number>();
   /** Sessions whose last UserPromptSubmit was a harness wake-up: their events are not activity (see applyEvent) */
   private wakeupTurns = new Set<string>();
+  /** session -> running background subagents (agent_id -> SubagentStart received_at, epoch ms) */
+  private runningSubagents = new Map<string, Map<string, number>>();
+  /** session -> when a SubagentStop arrived while the agent was idle (epoch ms): the harness starts a wake-up turn; cleared by the next UserPromptSubmit */
+  private wakeupDue = new Map<string, number>();
   /** Called after each live hook event of a session (the recap watcher reads that session's transcript now) */
   onSessionEvent: ((sessionId: string, hookEvent: string) => void) | undefined;
   /** Called after a checkpoint is answered (the Codex bridge delivers its answer in-process; Claude's hook polls the instruction instead) */
@@ -743,6 +752,14 @@ export class Store {
     return this.askedInTerminal.has(sessionId);
   }
 
+  /** The session's Stop is not final: a background subagent still runs, or the wake-up turn its end triggers has not started. Stale marks are ignored */
+  isWaitingOnSubagents(sessionId: string, now = Date.now()): boolean {
+    const due = this.wakeupDue.get(sessionId);
+    if (due !== undefined && now - due <= WAKEUP_DUE_TTL_MS) return true;
+    for (const at of this.runningSubagents.get(sessionId)?.values() ?? []) if (now - at <= SUBAGENT_TTL_MS) return true;
+    return false;
+  }
+
   listSessions(): SessionSummary[] {
     return [...this.sessions.values()].sort((a, b) => b.last_event_at.localeCompare(a.last_event_at));
   }
@@ -767,6 +784,7 @@ export class Store {
     }
     // A wake-up turn is the harness polling the agent: only a change to files counts as progress
     if (!this.wakeupTurns.has(ev.session_id) || isFileChange(ev)) this.markActivity(ev.session_id, Date.parse(ev.received_at));
+    this.trackSubagents(ev);
     if (ev.escaped_question) this.escapedQuestions++;
     if (ev.hook_event_name === "Stop" && ev.escaped_question) this.askedInTerminal.add(ev.session_id);
     else if (ev.hook_event_name === "Stop" || ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "SessionEnd") this.askedInTerminal.delete(ev.session_id);
@@ -806,6 +824,25 @@ export class Store {
     if (live && ev.hook_event_name === "Stop") this.offerQueuedInstruction(ev.session_id);
     if (ev.hook_event_name === "SessionEnd") this.endCheckpoints(ev.session_id, live);
     if (live) this.onSessionEvent?.(ev.session_id, ev.hook_event_name);
+  }
+
+  private trackSubagents(ev: EventInput): void {
+    const sid = ev.session_id;
+    const at = Date.parse(ev.received_at);
+    if (ev.hook_event_name === "SubagentStart" && ev.agent_id && Number.isFinite(at)) {
+      let m = this.runningSubagents.get(sid);
+      if (!m) this.runningSubagents.set(sid, (m = new Map()));
+      m.set(ev.agent_id, at);
+    } else if (ev.hook_event_name === "SubagentStop") {
+      this.runningSubagents.get(sid)?.delete(ev.agent_id ?? "");
+      // The agent already stopped: the harness wakes it with a task notification
+      if (this.sessions.get(sid)?.state === "idle" && Number.isFinite(at)) this.wakeupDue.set(sid, at);
+    } else if (ev.hook_event_name === "UserPromptSubmit") {
+      this.wakeupDue.delete(sid);
+    } else if (ev.hook_event_name === "SessionEnd") {
+      this.wakeupDue.delete(sid);
+      this.runningSubagents.delete(sid);
+    }
   }
 
   /** The session ended: its pending checkpoints and the instruction nobody can receive any more are dropped */

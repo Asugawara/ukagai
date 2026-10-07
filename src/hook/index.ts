@@ -62,6 +62,7 @@ export async function run(argv: string[]): Promise<number> {
       write(await permissionRequest(input, client));
     } else if (ev === "SessionStart" || ev === "SubagentStart") {
       write(await sessionContext(input, opts));
+      if (ev === "SubagentStart") await observedEvent(input, client, opts.dataDir);
     } else {
       await observedEvent(input, client, opts.dataDir);
     }

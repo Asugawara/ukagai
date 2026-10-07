@@ -8,7 +8,7 @@ import { readConfig, type Lang } from "../settings/config.js";
 
 type Out = Record<string, unknown>;
 
-const OBSERVED = new Set(["UserPromptSubmit", "Stop", "SubagentStop", "PostToolUse", "SessionEnd", "Notification"]);
+const OBSERVED = new Set(["UserPromptSubmit", "Stop", "SubagentStart", "SubagentStop", "PostToolUse", "SessionEnd", "Notification"]);
 /** Cut-off for observed events of async hooks; allows for the first fetch of a cold Node */
 const ASYNC_EVENT_TIMEOUT_MS = 1500;
 /** SessionEnd is sync (1.5 second budget), so keep it short */

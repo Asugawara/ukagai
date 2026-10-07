@@ -649,6 +649,25 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
   });
 }
 
+test("SubagentStart prints the context and posts the event with agent_id; SessionStart posts nothing; a down server changes nothing", async () => {
+  const input = (ev: string) => JSON.stringify({ session_id: "s1", transcript_path: "/t", cwd: "/c", hook_event_name: ev, agent_id: "a1", agent_type: "general-purpose" });
+  await withServer(() => false, async (f, d) => {
+    const r = await runHook([...args(f, d), "--no-autostart"], input("SubagentStart"));
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.hookEventName, "SubagentStart");
+    const evs = f.calls.filter((c) => c.path === "/api/events");
+    assert.equal(evs.length, 1);
+    assert.equal(evs[0]?.body.hook_event_name, "SubagentStart");
+    assert.equal(evs[0]?.body.agent_id, "a1");
+    await runHook([...args(f, d), "--no-autostart"], input("SessionStart"));
+    assert.equal(f.calls.filter((c) => c.path === "/api/events").length, 1, "SessionStart still posts nothing");
+  });
+  const dd = dataDirWithToken();
+  const up = await runHook(["--data-dir", dd, "--no-autostart"], input("SubagentStart"));
+  const down = await runHook(["--server", "http://127.0.0.1:1", "--data-dir", dd, "--no-autostart"], input("SubagentStart"));
+  assert.equal(down.code, 0);
+  assert.equal(down.stdout, up.stdout);
+});
+
 test("SessionStart with lang: ja in config.json adds the Japanese instruction (still 5 lines, English text)", async () => {
   const dd = tmpDir();
   writeFile(join(dd, "config.json"), JSON.stringify({ lang: "ja" }));
