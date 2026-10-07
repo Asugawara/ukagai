@@ -24,6 +24,7 @@ import {
   type DecisionSession,
 } from "../contract.js";
 import type { Lang } from "../settings/config.js";
+import type { GuiOpener } from "./gui-open.js";
 import type { SseHub } from "./sse.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
@@ -57,6 +58,8 @@ export type AppDeps = {
   /** Live settings (<dataDir>/config.json). Without it GET /api/settings serves the defaults and PUT is refused */
   settings?: SettingsStore;
   getPort: () => number;
+  /** The daily GUI open (POST /api/gui/open). Without it the route answers `opened_today` */
+  guiOpener?: Pick<GuiOpener, "request">;
   /** One line to serve.log (plan_instructed) */
   log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
   collect: (session: DecisionSession) => Promise<DecisionContext>;
@@ -501,7 +504,9 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get("/api/metrics", auth("any"), (c) => c.json(store.metrics()));
 
-  app.get("/api/stream", auth("any"), (c) => hub.connect(c.req.raw.signal));
+  app.post("/api/gui/open", auth("bearer"), jsonOnly, (c) => c.json({ result: deps.guiOpener?.request() ?? "opened_today" }));
+
+  app.get("/api/stream", auth("any"), (c) => hub.connect(c.req.raw.signal, cookieOnly(c)));
 
   return app;
 }

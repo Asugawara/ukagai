@@ -1,3 +1,4 @@
+import { spawn as nodeSpawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
@@ -11,6 +12,7 @@ import { LEASE_GRACE_MS, plansDir } from "../contract.js";
 import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
 import { startCheckpointDelivery } from "./deliver.js";
+import { GuiOpener } from "./gui-open.js";
 import { PlanReadStore } from "./plan-read.js";
 import { startPlanWatcher } from "./plan-watch.js";
 import { startRecapWatcher } from "./recap-watch.js";
@@ -114,6 +116,16 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   const token = randomBytes(32).toString("hex");
 
   let port = opts.port ?? DEFAULT_PORT;
+  const guiOpener = new GuiOpener({
+    dataDir,
+    port: () => port,
+    hub,
+    spawn: (cmd, args, o) => nodeSpawn(cmd, args, o),
+    platform: process.platform,
+    now: () => new Date(),
+    setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
+    log,
+  });
   const app = createApp({
     planRead,
     store,
@@ -127,6 +139,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     settings,
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
+    guiOpener,
     log,
     collect: (session) => collectContext(session, { home }),
   });

@@ -170,6 +170,14 @@ export class Client {
     return r?.status === 200;
   }
 
+  /** Ask the server to open the GUI (once a day, only when no tab is connected). The result string, or null on any failure */
+  async requestGuiOpen(timeoutMs: number): Promise<string | null> {
+    const r = await this.request("POST", "/api/gui/open", {}, timeoutMs);
+    if (!r || r.status !== 200) return null;
+    const result = (Client.json(r.text) as { result?: unknown } | undefined)?.result;
+    return typeof result === "string" ? result : null;
+  }
+
   async postEvent(event: Record<string, unknown>, timeoutMs: number): Promise<boolean> {
     const r = await this.request("POST", "/api/events", event, timeoutMs);
     return r !== null && r.status >= 200 && r.status < 300;
