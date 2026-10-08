@@ -1,6 +1,6 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,22 +14,34 @@ after(async () => {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 });
 
-async function setup(onShutdown?: () => void): Promise<{ h: ServeHandle; url: string; dataDir: string }> {
+async function setup(onShutdown?: () => void, cliPath?: string): Promise<{ h: ServeHandle; url: string; dataDir: string }> {
   const dataDir = mkdtempSync(join(tmpdir(), "ukagai-hz-"));
   const home = mkdtempSync(join(tmpdir(), "ukagai-hz-home-"));
   roots.push(dataDir, home);
-  const h = await start({ port: 0, dataDir, home, onShutdown });
+  const h = await start({ port: 0, dataDir, home, onShutdown, cliPath });
   handles.push(h);
   return { h, url: `http://127.0.0.1:${h.port}`, dataDir };
 }
 
-test("GET /healthz reports the version and this process's dist/cli.js", async () => {
+test("GET /healthz reports the version; under tsx dist/cli.js does not exist, so `cli` is absent", async () => {
   const { url } = await setup();
-  const body = (await (await fetch(`${url}/healthz`)).json()) as { ok: boolean; version: string; cli: string };
+  const body = (await (await fetch(`${url}/healthz`)).json()) as { ok: boolean; version: string; cli?: string };
   assert.equal(body.ok, true);
   assert.equal(body.version, VERSION);
   assert.equal(body.version, JSON.parse(readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8")).version);
-  assert.equal(body.cli, fileURLToPath(new URL("../../src/cli.js", import.meta.url)));
+  assert.equal(existsSync(fileURLToPath(new URL("../../src/cli.js", import.meta.url))), false, "premise: no src/cli.js under tsx");
+  assert.equal("cli" in body, false);
+});
+
+test("GET /healthz reports `cli` equal to the path when that file exists, and omits it when it is gone", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ukagai-hz-cli-"));
+  roots.push(dir);
+  const cli = join(dir, "cli.js");
+  writeFileSync(cli, "// stub\n");
+  const { url } = await setup(undefined, cli);
+  assert.equal(((await (await fetch(`${url}/healthz`)).json()) as { cli?: string }).cli, cli);
+  const missing = await setup(undefined, join(dir, "nope.js"));
+  assert.equal("cli" in ((await (await fetch(`${missing.url}/healthz`)).json()) as object), false);
 });
 
 test("serve writes its node to <data-dir>/node-path", async () => {

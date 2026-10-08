@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +49,8 @@ export type ServeOptions = {
   codexCheckpointDelayMs?: number;
   /** Where Claude Code checkpoint replies are typed when the agent is idle (default: herdr panes; tests inject a fake) */
   terminal?: Terminal;
+  /** This process's dist/cli.js, reported by /healthz only when the file exists (default: ../cli.js next to this module, absent under tsx) */
+  cliPath?: string;
   /** Called after POST /api/shutdown has closed the server (`run` ends its wait here) */
   onShutdown?: () => void;
   /** How often a working agent's status is re-read before a reply is left for the hook (default 500 ms; tests shorten it) */
@@ -141,7 +143,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     settings,
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
-    cliPath: fileURLToPath(new URL("../cli.js", import.meta.url)),
+    cliPath: ((p) => (existsSync(p) ? p : undefined))(opts.cliPath ?? fileURLToPath(new URL("../cli.js", import.meta.url))),
     shutdown: () => {
       void close().then(() => opts.onShutdown?.());
     },

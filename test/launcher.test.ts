@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -21,7 +21,7 @@ function tree(): { root: string; launcher: string; home: string; tools: string; 
   const launcher = join(root, "bin", "ukagai");
   writeFileSync(launcher, src, { mode: 0o755 });
   writeFileSync(join(root, "dist", "cli.js"), "process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), launcher: process.env.UKAGAI_LAUNCHER }));\n");
-  for (const t of ["dirname", "readlink", "cat", "timeout"]) {
+  for (const t of ["dirname", "readlink", "cat", "tr", "sleep", "timeout"]) {
     for (const d of ["/usr/bin", "/bin", "/opt/homebrew/bin"]) {
       if (existsSync(join(d, t))) {
         symlinkSync(join(d, t), join(tools, t));
@@ -153,4 +153,35 @@ test("no node + any other command: exit 127 with a message on stderr", () => {
   assert.equal(r.status, 127);
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /node \(>= 22\) not found: set UKAGAI_NODE or put node on PATH/);
+});
+
+test("no node + pretty-printed SessionStart JSON (spaces around the colon): the same one line", () => {
+  const t = tree();
+  const r = run(t, ["hook"], { input: '{\n  "session_id": "s",\n  "hook_event_name" : "SessionStart"\n}\n' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /^ukagai: Node\.js 22 or newer was not found/);
+  assert.equal(r.stdout.trim().split("\n").length, 1);
+});
+
+test("a login shell that hangs is cut off after the limit and the launcher falls through (watchdog without `timeout`)", () => {
+  const t = tree();
+  rmSync(join(t.tools, "timeout"), { force: true }); // force the watchdog branch
+  const fakeShell = join(t.dir, "slow-shell");
+  writeFileSync(fakeShell, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+  const started = Date.now();
+  const r = run(t, ["hook"], { input: JSON.stringify({ hook_event_name: "SessionStart" }), env: { SHELL: fakeShell } });
+  const took = Date.now() - started;
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Node\.js 22 or newer was not found/);
+  assert.ok(took < 9000, `took ${took} ms`);
+});
+
+test("known locations include fnm's macOS directory (a path with a space)", () => {
+  const t = tree();
+  const bin = join(t.home, "Library", "Application Support", "fnm", "node-versions", "v22.4.0", "installation", "bin");
+  mkdirSync(bin, { recursive: true });
+  fakeNode(join(bin, "node"), "22.4.0");
+  const r = run(t, ["x"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).argv, ["x"]);
 });

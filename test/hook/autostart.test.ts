@@ -235,11 +235,20 @@ test("shutdown refused: fail open, nothing is spawned, the GUI request still goe
 
 test("shutdown accepted but the server never goes down: waits at most 3 s, spawns nothing", async () => {
   const s = stale({ version: "1.1.0" }, { stopsOnShutdown: false });
+  // a fake clock: every sleep advances it, nothing waits in wall time
+  let clock = 0;
+  s.deps.sleep = async (ms) => {
+    clock += ms;
+  };
   try {
     await sessionContext(RAW, s.hookOpts, s.deps);
-    assert.equal(s.shutdowns(), 1);
+    assert.equal(s.shutdowns(), 1, "the shutdown was asked");
     assert.equal(s.spawns.length, 0);
-    assert.ok(s.calls.filter((c) => c === "GET /healthz").length <= 1 + 30);
+    const probes = s.calls.filter((c) => c === "GET /healthz").length;
+    // the wait loop polls every 100 ms for 3 s: 1 first probe + 30 polls; both bounds fail if the loop is removed or unbounded
+    assert.ok(probes >= 1 + 30, `expected at least 31 healthz probes, got ${probes}`);
+    assert.ok(probes <= 1 + 30 + 1, `expected at most 32 healthz probes, got ${probes}`);
+    assert.ok(clock >= 3000 && clock <= 3100, `waited ${clock} ms on the fake clock`);
   } finally {
     s.restore();
   }

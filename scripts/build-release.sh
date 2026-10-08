@@ -60,8 +60,10 @@ main() {
   if tar --version 2>/dev/null | grep -qi 'bsdtar'; then
     (cd "$OUT/stage" && COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --no-mac-metadata -czf "$tarball" "ukagai-$V")
   else
-    mtime=2000-01-01
-    [ -n "${SOURCE_DATE_EPOCH:-}" ] && mtime=@$SOURCE_DATE_EPOCH
+    # GET /api/config `build` is the mtime of public/app.js: it must differ between releases
+    epoch=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || true)}
+    [ -n "$epoch" ] || { echo "build-release: set SOURCE_DATE_EPOCH (no git commit time available for the tar mtime)" >&2; exit 1; }
+    mtime=@$epoch
     (cd "$OUT/stage" && tar --owner=0 --group=0 --numeric-owner --sort=name --mtime="$mtime" -czf "$tarball" "ukagai-$V")
   fi
 
