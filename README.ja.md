@@ -4,7 +4,7 @@ Agents ask. Humans decide. コーディングエージェントの質問を 1 �
 
 [English](README.md) | 日本語
 
-![ukagai の GUI に表示された質問](docs/images/question.png)
+![ukagai の GUI に表示された質問](docs/images/ja/question.png)
 
 ## ukagai とは
 
@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 そのあと `claude` を起動してください。サーバーは自動で起動し、その日の最初のセッションで GUI が開きます。以降は `AskUserQuestion` とプラン承認がすべてそこに届きます。GUI を英語にするには `--lang en`、Codex CLI も使うなら `--codex` を追加します。
 
-![プラン承認の画面](docs/images/plan.png)
+![プラン承認の画面](docs/images/ja/plan.png)
 
 ## できること
 
@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 - **設定ページ**: 言語、テーマ、通知、プランの自動表示。[ガイド](docs/guide.md#settings)
 - **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
 
-![保留中の判断の一覧](docs/images/drawer.png)
+![保留中の判断の一覧](docs/images/ja/drawer.png)
 
 ガイドは英語です。
 
