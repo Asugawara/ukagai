@@ -6,7 +6,7 @@ import { unifiedDiff } from "../settings/diff.js";
 import { LANGS, configPath, isLang, readConfig, writeConfig, type Lang } from "../settings/config.js";
 import { mergeHooks, readSettings, serialize, writeSettings } from "../settings/merge.js";
 import { CODEX_SPECS, apply as applyCodex, plan, type CodexInstallOptions } from "./codex.js";
-import { CLI_PATH, SKILL_SOURCE, parseTarget } from "../settings/target.js";
+import { SKILL_SOURCE, hookInvocation, parseTarget } from "../settings/target.js";
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
 
@@ -44,17 +44,17 @@ export async function run(argv: string[]): Promise<number> {
     return 2;
   }
   try {
+    const inv = hookInvocation();
     const cx: CodexInstallOptions = {
       home: t.codexHome,
-      node: process.execPath,
-      cli: CLI_PATH,
+      invocation: inv,
       timeout: t.timeout,
       hookArgs: t.hookArgs,
       noAutostart: t.noAutostart,
     };
     const codexPlan = t.codex ? await plan(cx, "install") : undefined;
     const before = await readSettings(t.settingsFile);
-    const entries = buildHookEntries({ node: process.execPath, cli: CLI_PATH, timeout: t.timeout, observe: t.observe, hookArgs: t.hookArgs, autostart: !t.noAutostart });
+    const entries = buildHookEntries({ invocation: inv, timeout: t.timeout, observe: t.observe, hookArgs: t.hookArgs, autostart: !t.noAutostart });
     const after = mergeHooks(before, entries);
     const skillDest = join(t.skillDir, "SKILL.md");
 
@@ -87,7 +87,8 @@ export async function run(argv: string[]): Promise<number> {
       }
       out.push(`settings: ${t.settingsFile}`);
       if (bak) out.push(`backup:   ${bak}`);
-      out.push(`node:     ${process.execPath}`, `cli:      ${CLI_PATH}`);
+      out.push(`hook:     ${[inv.command, ...inv.prefix, "hook"].join(" ")}${inv.launcher ? "" : " (dev checkout: hooks run node + dist/cli.js)"}`);
+      if (inv.launcher && inv.command.includes("/versions/")) out.push("note:     hooks point at a versioned path; run the ukagai on PATH instead");
       out.push(`timeout:  ${t.timeout}s (PreToolUse --budget ${t.timeout - 10})${t.observe ? " [observe]" : ""}`);
       out.push(`events:   ${HOOK_EVENTS.join(", ")}`);
       out.push(t.noAutostart ? "autostart: off (--no-autostart)" : "autostart: on");

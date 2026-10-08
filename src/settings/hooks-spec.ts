@@ -26,8 +26,8 @@ export interface MatcherGroup {
 }
 
 export interface BuildOptions {
-  node: string;
-  cli: string;
+  /** How the hook is started: `command` + `prefix` + `hook` … */
+  invocation: { command: string; prefix: string[] };
   timeout: number;
   observe: boolean;
   /** If false, pass --no-autostart to the SessionStart hook. Defaults to true */
@@ -65,8 +65,8 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
     more: Partial<HookCommand> = {},
   ): HookCommand => ({
     type: "command",
-    command: opts.node,
-    args: [opts.cli, "hook", ...extra, ...(opts.hookArgs ?? []), MANAGED_FLAG, MANAGED_VALUE],
+    command: opts.invocation.command,
+    args: [...opts.invocation.prefix, "hook", ...extra, ...(opts.hookArgs ?? []), MANAGED_FLAG, MANAGED_VALUE],
     timeout,
     ...more,
   });

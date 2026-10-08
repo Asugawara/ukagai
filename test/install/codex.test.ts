@@ -1,3 +1,4 @@
+import { cleanEnv } from "./clean-env.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -8,6 +9,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rm } from "node:fs/promises";
 import { editState, hookHash, readState } from "../../src/install/codex-trust.js";
+import { CODEX_SPECS } from "../../src/install/codex.js";
 
 const CLI = resolve("src/cli.ts");
 const TSX = import.meta.resolve("tsx");
@@ -75,9 +77,9 @@ async function setup(): Promise<Env> {
   await mkdir(fakeHome);
   return { dir, home: dir, codex, fakeHome };
 }
-function ukagai(e: Env, args: string[]): Promise<{ code: number; out: string; err: string }> {
+function ukagai(e: Env, args: string[], extra: Record<string, string> = {}): Promise<{ code: number; out: string; err: string }> {
   return new Promise((res) => {
-    execFile(process.execPath, ["--import", TSX, CLI, ...args], { cwd: e.dir, env: { ...process.env, HOME: e.fakeHome, CODEX_HOME: "" } }, (er, out, err) => {
+    execFile(process.execPath, ["--import", TSX, CLI, ...args], { cwd: e.dir, env: cleanEnv({ HOME: e.fakeHome, CODEX_HOME: "", ...extra }) }, (er, out, err) => {
       res({ code: er ? ((er as { code?: number }).code ?? 1) : 0, out, err });
     });
   });
@@ -317,4 +319,25 @@ test("uninstall without a usable backup still removes the added final newline (l
   for (const f of await readdir(e.codex)) if (f.startsWith("config.toml.bak-")) await rm(join(e.codex, f));
   await ukagai(e, ["uninstall", ...args]);
   assert.equal(await readFile(cf, "utf8"), cfg);
+});
+
+test("launcher form: the Codex commands run the launcher; re-install from the node form leaves only the new keys trusted", async () => {
+  const e = await setup();
+  const launcher = resolve("bin/ukagai");
+  const args = ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--lang", "en"];
+  await ukagai(e, args);
+  const cmds = (): string[] => Object.values<any[]>(JSON.parse(readFileSync(join(e.codex, "hooks.json"), "utf8")).hooks).flatMap((g) => g.flatMap((x: any) => x.hooks.map((h: any) => h.command as string)));
+  assert.ok(cmds().every((c) => c.startsWith(process.execPath)));
+  const r = await ukagai(e, args, { UKAGAI_LAUNCHER: launcher });
+  assert.equal(r.code, 0, r.err);
+  const after = cmds();
+  assert.equal(after.length, CODEX_SPECS.length);
+  for (const c of after) {
+    assert.ok(c.startsWith(`${launcher} hook --agent codex`), c);
+    assert.doesNotMatch(c, /dist\/cli\.js/);
+  }
+  const state = readState(readFileSync(join(e.codex, "config.toml"), "utf8"));
+  assert.equal(state.size, CODEX_SPECS.length, "only the new keys stay trusted");
+  const d = await ukagai(e, ["doctor", "--codex", "--codex-home", e.codex, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")], { UKAGAI_LAUNCHER: launcher });
+  assert.doesNotMatch(d.out, /× +codex hook/);
 });

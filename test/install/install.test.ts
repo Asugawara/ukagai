@@ -1,9 +1,11 @@
+import { cleanEnv } from "./clean-env.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, writeFile, readdir, stat, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { symlink, chmod } from "node:fs/promises";
 
 const CLI = resolve("src/cli.ts");
 const TSX = import.meta.resolve("tsx");
@@ -15,9 +17,9 @@ async function setup(): Promise<Env> {
   await mkdir(home);
   return { home, dir, settings: join(dir, "settings.json") };
 }
-function ukagai(env: Env, args: string[], cwd = env.dir): Promise<{ code: number; out: string; err: string }> {
+function ukagai(env: Env, args: string[], cwd = env.dir, extra: Record<string, string> = {}): Promise<{ code: number; out: string; err: string }> {
   return new Promise((res) => {
-    execFile(process.execPath, ["--import", TSX, CLI, ...args], { cwd, env: { ...process.env, HOME: env.home } }, (e, out, err) => {
+    execFile(process.execPath, ["--import", TSX, CLI, ...args], { cwd, env: cleanEnv({ HOME: env.home, ...extra }) }, (e, out, err) => {
       res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err });
     });
   });
@@ -267,4 +269,122 @@ test("upgrade in place: an installed Write|Edit PermissionRequest group is repla
   assert.equal(s.hooks.PermissionRequest.length, 1);
   assert.equal(s.hooks.PermissionRequest[0].matcher, undefined);
   assert.deepEqual(s, full);
+});
+
+// ---- the launcher form (UKAGAI_LAUNCHER) ----
+
+const LAUNCHER = resolve("bin/ukagai");
+const launcherEnv = (p: string): Record<string, string> => ({ UKAGAI_LAUNCHER: p });
+const allHooks = (s: any): any[] => Object.values<any[]>(s.hooks).flatMap((g) => g.flatMap((x: any) => x.hooks));
+
+test("launcher form: command is the launcher path and args start with hook", async () => {
+  const e = await setup();
+  const r = await ukagai(e, ["install", "--settings", e.settings], e.dir, launcherEnv(LAUNCHER));
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /hook: +\S+bin\/ukagai hook\n/);
+  assert.doesNotMatch(r.out, /dev checkout/);
+  const hooks = allHooks(await readJson(e.settings));
+  assert.ok(hooks.length > 0);
+  for (const h of hooks) {
+    assert.equal(h.command, LAUNCHER);
+    assert.equal(h.args[0], "hook");
+    assert.deepEqual(h.args.slice(-2), ["--managed-by", "ukagai"]);
+  }
+});
+
+test("node form: the install summary says it is a dev checkout", async () => {
+  const e = await setup();
+  const r = await ukagai(e, ["install", "--settings", e.settings]);
+  assert.match(r.out, /dev checkout: hooks run node \+ dist\/cli\.js/);
+});
+
+test("launcher form: a symlink to the launcher is registered as the unresolved link path", async () => {
+  const e = await setup();
+  const link = join(e.dir, "bin-link");
+  await symlink(LAUNCHER, link);
+  const r = await ukagai(e, ["install", "--settings", e.settings], e.dir, launcherEnv(link));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(allHooks(await readJson(e.settings))[0].command, link);
+});
+
+test("launcher form: a path under /versions/ gets a note", async () => {
+  const e = await setup();
+  await mkdir(join(e.dir, "versions", "1.0.0"), { recursive: true });
+  const link = join(e.dir, "versions", "1.0.0", "ukagai");
+  await symlink(LAUNCHER, link);
+  const r = await ukagai(e, ["install", "--settings", e.settings], e.dir, launcherEnv(link));
+  assert.match(r.out, /hooks point at a versioned path; run the ukagai on PATH instead/);
+});
+
+test("a launcher that is another tree's (or missing / relative) falls back to the node form", async () => {
+  const e = await setup();
+  const other = join(e.dir, "other-ukagai");
+  await writeFile(other, "#!/bin/sh\n");
+  await chmod(other, 0o755);
+  for (const l of [other, join(e.dir, "missing"), "bin/ukagai"]) {
+    await ukagai(e, ["install", "--settings", e.settings], e.dir, launcherEnv(l));
+    const h = allHooks(await readJson(e.settings))[0];
+    assert.equal(h.command, process.execPath, l);
+    assert.equal(h.args[1], "hook");
+  }
+});
+
+test("old node-form entries are replaced by launcher-form ones: same count, foreign hooks kept", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify(OTHER));
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const old = await readJson(e.settings);
+  const n = count(old);
+  await ukagai(e, ["install", "--settings", e.settings], e.dir, launcherEnv(LAUNCHER));
+  const s = await readJson(e.settings);
+  assert.equal(count(s), n);
+  const managed = allHooks(s).filter((h) => h.args?.includes("--managed-by"));
+  assert.ok(managed.length > 0);
+  for (const h of managed) assert.equal(h.command, LAUNCHER);
+  assert.equal(s.model, "opus");
+  assert.ok(allHooks(s).some((h) => h.command === "/usr/bin/other"));
+  assert.equal(allHooks(s).length, allHooks(old).length);
+});
+
+test("uninstall removes both the node form and the launcher form", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify(OTHER));
+  await ukagai(e, ["install", "--settings", e.settings]);
+  await ukagai(e, ["uninstall", "--settings", e.settings]);
+  assert.equal(count(await readJson(e.settings)), 1);
+  await ukagai(e, ["install", "--settings", e.settings], e.dir, launcherEnv(LAUNCHER));
+  await ukagai(e, ["uninstall", "--settings", e.settings], e.dir, launcherEnv(LAUNCHER));
+  const s = await readJson(e.settings);
+  assert.equal(count(s), 1);
+  assert.equal(allHooks(s)[0].command, "/usr/bin/other");
+});
+
+test("doctor: version row; launcher form shows launcher + node-path rows, node form shows node / cli rows", async () => {
+  const e = await setup();
+  const data = join(e.dir, "data");
+  const doctor = (extra: Record<string, string> = {}) =>
+    ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", data], e.dir, extra);
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const node = await doctor();
+  assert.match(node.out, /○ +version +\S+ \(/);
+  assert.match(node.out, /○ +node exists/);
+  assert.match(node.out, /[○×] +cli exists/);
+  assert.doesNotMatch(node.out, /[○×] +(launcher|node-path) /);
+
+  await ukagai(e, ["install", "--settings", e.settings], e.dir, launcherEnv(LAUNCHER));
+  const noNodePath = await doctor();
+  assert.match(noNodePath.out, /○ +launcher +\S+/);
+  assert.match(noNodePath.out, /× +node-path .*re-run install\.sh/);
+  await mkdir(data, { recursive: true });
+  await writeFile(join(data, "node-path"), process.execPath + "\n");
+  const ok = await doctor();
+  assert.match(ok.out, /○ +node-path/);
+  assert.doesNotMatch(ok.out, /node exists|cli exists/);
+});
+
+test("doctor: a missing launcher is ×", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: join(e.dir, "gone"), args: ["hook", "--managed-by", "ukagai"] }] }] } }));
+  const r = await ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")]);
+  assert.match(r.out, /× +launcher .*missing or not executable/);
 });

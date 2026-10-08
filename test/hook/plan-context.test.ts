@@ -111,7 +111,7 @@ test("--observe prints nothing", async () => {
 });
 
 test("buildHookEntries: the plan-context group is sync, 3 s, and omitted with --observe", () => {
-  const e = buildHookEntries({ node: "node", cli: "cli.js", timeout: 3600, observe: false });
+  const e = buildHookEntries({ invocation: { command: "node", prefix: ["cli.js"] }, timeout: 3600, observe: false });
   const g = e["PreToolUse"]!.find((x) => x.matcher === "EnterPlanMode")!;
   assert.ok(g);
   assert.equal(g.hooks[0]?.timeout, 3);
@@ -126,7 +126,7 @@ test("buildHookEntries: the plan-context group is sync, 3 s, and omitted with --
   assert.equal(u[1]!.hooks[0]?.timeout, 3);
   assert.equal(u[1]!.hooks[0]?.async, undefined);
   assert.ok(u[1]!.hooks[0]!.args.includes("--plan-context"));
-  const o = buildHookEntries({ node: "node", cli: "cli.js", timeout: 3600, observe: true });
+  const o = buildHookEntries({ invocation: { command: "node", prefix: ["cli.js"] }, timeout: 3600, observe: true });
   assert.equal(o["PreToolUse"]!.some((x) => x.matcher === "EnterPlanMode"), false);
   assert.equal(o["UserPromptSubmit"]!.length, 1);
 });

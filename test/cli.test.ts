@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
@@ -39,4 +40,13 @@ test("tui --help exits 0; without a TTY, tui exits 1", () => {
   const r = runCli(["tui"]);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /TTY/);
+});
+
+test("--version and -v print the package.json version", () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8")) as { version: string };
+  for (const flag of ["--version", "-v"]) {
+    const r = runCli([flag]);
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, `${pkg.version}\n`);
+  }
 });

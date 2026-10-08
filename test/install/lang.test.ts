@@ -1,3 +1,4 @@
+import { cleanEnv } from "./clean-env.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -16,7 +17,7 @@ async function setup(): Promise<{ dir: string; settings: string; dataDir: string
 // stdin is a pipe (not a TTY), so install never prompts here
 function ukagai(home: string, args: string[]): Promise<{ code: number; out: string; err: string }> {
   return new Promise((res) => {
-    const child = execFile(process.execPath, ["--import", TSX, CLI, ...args], { env: { ...process.env, HOME: home } }, (e, out, err) => {
+    const child = execFile(process.execPath, ["--import", TSX, CLI, ...args], { env: cleanEnv({ HOME: home }) }, (e, out, err) => {
       res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err });
     });
     child.stdin?.end();
