@@ -27,6 +27,12 @@ export interface Target {
   codexHome: string;
   /** Extra args for the hook (only when they differ from the defaults) */
   hookArgs: string[];
+  /** `--force`: register in settings.json / hooks.json even when the ukagai plugin is enabled */
+  force: boolean;
+  /** `--settings <file>` was given */
+  settingsGiven: boolean;
+  /** Settings files that can enable the plugin: the user file, plus the project files with `--project` */
+  pluginSettingsFiles: string[];
 }
 
 const DEFAULT_SERVER = "http://127.0.0.1:4818";
@@ -35,6 +41,7 @@ export function parseTarget(argv: string[]): Target {
   let settings: string | undefined;
   let project = false;
   let skill = false;
+  let force = false;
   let codex = false;
   let claude = false;
   let codexHome: string | undefined;
@@ -62,6 +69,7 @@ export function parseTarget(argv: string[]): Target {
     else if (a === "--observe") t.observe = true;
     else if (a === "--no-skill") t.noSkill = true;
     else if (a === "--skill") skill = true;
+    else if (a === "--force") force = true;
     else if (a === "--codex") codex = true;
     else if (a === "--claude") claude = true;
     else if (a === "--codex-home") codexHome = resolve(val());
@@ -89,6 +97,9 @@ export function parseTarget(argv: string[]): Target {
     claude: !codex || claude || settings !== undefined || project,
     codexHome: resolve(resolveCodexHome(codexHome)),
     hookArgs,
+    force,
+    settingsGiven: settings !== undefined,
+    pluginSettingsFiles: [join(homedir(), ".claude", "settings.json"), ...(project ? [join(base, "settings.json"), join(base, "settings.local.json")] : [])],
     handleSkill: !t.noSkill && (settings === undefined || skill),
     settingsFile: settings ?? join(base, "settings.json"),
     skillDir: join(base, "skills", "ukagai-explain"),

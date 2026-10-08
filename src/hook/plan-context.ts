@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { skillName } from "./skill-name.js";
 import { fileURLToPath } from "node:url";
 
 /** Where the ukagai checkout's copy of the dialect spec lives, or null when this install has no docs next to it (docs/spec/markdown.md section 4) */
@@ -13,7 +14,8 @@ function specPath(): string | null {
 }
 
 /** The plan-writing rules handed to the agent at EnterPlanMode (docs/spec/markdown.md section 4); 25 lines at most */
-export function planContextText(spec: string | null = specPath()): string {
+export function planContextText(spec: string | null = specPath(), env: NodeJS.ProcessEnv = process.env): string {
+  const sk = skillName(env);
   return [
     "[ukagai] Write the plan in ukagai Markdown; a human reads it in a GUI / TUI and decides on it. Plan sections, in this order:",
     "- `# Title`: one line saying what the plan does.",
@@ -21,7 +23,7 @@ export function planContextText(spec: string | null = specPath()): string {
     "- `## Steps`: an ordered list; each item starts with a **bold title**, then a badge ([done] [todo] [doing] [blocked] [risk] [skip]) and the `path` it touches; nest task lists or details under it.",
     "- `## Risks`: one callout per risk, `> [!CAUTION] Title` for anything irreversible or touching other people / external systems, `> [!WARNING]` for costly to undo.",
     "- `## Verification`: a task list (`- [ ] command or check`) the reader can tick off.",
-    "A question you ask while in plan mode needs its explanation inside the plan file between `<!-- ukagai-explain -->` and `<!-- /ukagai-explain -->` (same format as the explanation file; see skill ukagai-explain).",
+    `A question you ask while in plan mode needs its explanation inside the plan file between \`<!-- ukagai-explain -->\` and \`<!-- /ukagai-explain -->\` (same format as the explanation file; see skill ${sk}).`,
     "Palette (use what makes the decision easier to read, nothing more):",
     "- callouts with titles `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION] Title`, task lists `- [x]` / `- [ ]`, folding `<details><summary>..</summary>` (blank line after the summary) for long evidence;",
     "- Mermaid of any type (flowchart, sequenceDiagram, stateDiagram-v2, gantt, pie, quadrantChart, ...), code blocks with a title (```ts title=\"src/x.ts\") and ```diff for proposed changes;",
@@ -29,8 +31,8 @@ export function planContextText(spec: string | null = specPath()): string {
     "- `==mark==` for the one phrase not to miss, `::: columns` (columns split by `---`, closed by `:::`) for before / after (the Options section stays a table), images `![meaningful alt](shots/x.png)` only for a file that already exists next to the plan file (the plan file is the only file you may write).",
     "Never open a file or a URL for the human (`open`, `xdg-open`, a browser): put it in the explanation — images `![alt](x.png)`, HTML pages `![alt](x.html)` (the GUI renders them in a sandboxed frame); files next to the explanation file or under the session's scratchpad.",
     spec
-      ? `Full spec: skill ukagai-explain, section "Rich Markdown (ukagai dialect)", or ${spec}.`
-      : 'Full spec: skill ukagai-explain, section "Rich Markdown (ukagai dialect)".',
+      ? `Full spec: skill ${sk}, section "Rich Markdown (ukagai dialect)", or ${spec}.`
+      : `Full spec: skill ${sk}, section "Rich Markdown (ukagai dialect)".`,
   ].join("\n");
 }
 

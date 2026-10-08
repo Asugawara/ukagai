@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { configPath, readConfig } from "../settings/config.js";
 import { CHECKPOINT_FLAG, HOOK_EVENTS, PLAN_CONTEXT_FLAG } from "../settings/hooks-spec.js";
 import { findManaged, readSettings } from "../settings/merge.js";
+import { enabledClaudePlugin, enabledCodexPlugin } from "../settings/plugins.js";
 import { status as codexStatus } from "../install/codex.js";
 import { REPO_ROOT, parseTarget } from "../settings/target.js";
 import { VERSION } from "../version.js";
@@ -31,10 +32,16 @@ export async function run(argv: string[]): Promise<number> {
       add(false, `settings ${t.settingsFile}`, (err as Error).message);
     }
   }
+  const claudePlugin = t.claude ? await enabledClaudePlugin(t.pluginSettingsFiles) : undefined;
+  const codexPlugin = t.codex ? await enabledCodexPlugin(t.codexHome) : undefined;
+  const managedInSettings = HOOK_EVENTS.some((ev) => findManaged(settings, ev) !== undefined);
+  // with the plugin enabled and nothing in settings.json, the hooks and the skill come from the plugin
+  const viaPlugin = claudePlugin !== undefined && !managedInSettings;
   if (t.codex) {
     try {
       const cs = await codexStatus(t.codexHome);
-      for (const r of cs.rows) {
+      const codexViaPlugin = codexPlugin !== undefined && !cs.rows.some((r) => r.installed);
+      for (const r of codexViaPlugin ? [] : cs.rows) {
         add(r.installed && r.trusted === "trusted", `codex hook ${r.event}`, !r.installed ? "not registered" : r.trusted === "trusted" ? "trusted" : `${r.trusted} (run: ukagai install --codex)`);
       }
       const cmd = cs.rows.find((r) => r.command !== undefined)?.command;
@@ -43,10 +50,18 @@ export async function run(argv: string[]): Promise<number> {
       add(false, `codex ${t.codexHome}`, (err as Error).message);
     }
   }
+  if (t.claude) {
+    add(true, "plugin", claudePlugin !== undefined ? `${claudePlugin} enabled` : "no plugin");
+    if (claudePlugin !== undefined && managedInSettings) add(false, "hooks registered twice", "plugin and settings.json: run ukagai install");
+  }
+  if (t.codex) {
+    add(true, "codex plugin", codexPlugin !== undefined ? `${codexPlugin} enabled` : "no plugin");
+    if (codexPlugin !== undefined && (await codexStatus(t.codexHome).then((c) => c.rows.some((r) => r.installed), () => false))) add(false, "codex hooks registered twice", "plugin and hooks.json: run ukagai install --codex");
+  }
   let node: string | undefined;
   let cli: string | undefined;
   let launcher = false;
-  for (const ev of t.claude ? HOOK_EVENTS : []) {
+  for (const ev of t.claude && !viaPlugin ? HOOK_EVENTS : []) {
     const h = findManaged(settings, ev);
     add(h !== undefined, `hook ${ev}`, h ? "" : "not registered");
     if (h && node === undefined) {
@@ -57,7 +72,7 @@ export async function run(argv: string[]): Promise<number> {
       cli = Array.isArray(args) && typeof args[0] === "string" && !launcher ? args[0] : undefined;
     }
   }
-  if (t.claude) {
+  if (t.claude && !viaPlugin) {
     const c = findManaged(settings, "PreToolUse", (h) => Array.isArray(h["args"]) && h["args"].includes(CHECKPOINT_FLAG));
     const observing = Array.isArray(findManaged(settings, "PreToolUse")?.["args"]) && (findManaged(settings, "PreToolUse")!["args"] as unknown[]).includes("--observe");
     add(c !== undefined || observing, "hook PreToolUse (checkpoint)", c ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
@@ -97,7 +112,8 @@ export async function run(argv: string[]): Promise<number> {
   }
   add(await exists(join(t.dataDir, "token")), "token", join(t.dataDir, "token"));
   if (t.claude) {
-    if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
+    if (viaPlugin) add(true, "skill ukagai-explain", "from the plugin");
+    else if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
     else add(true, "skill ukagai-explain", "not handled");
   }
 

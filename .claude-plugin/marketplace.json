@@ -1,0 +1,12 @@
+{
+  "name": "ukagai",
+  "owner": { "name": "Asugawara" },
+  "metadata": { "description": "ukagai: answer the agent's questions and plan approvals together in a GUI" },
+  "plugins": [
+    {
+      "name": "ukagai",
+      "description": "Intercepts AskUserQuestion / ExitPlanMode with hooks and lets a human answer them in a GUI.",
+      "source": { "source": "github", "repo": "Asugawara/ukagai", "ref": "plugin" }
+    }
+  ]
+}
