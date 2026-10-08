@@ -35,7 +35,8 @@ main() {
   rm -rf "$OUT/stage"
   mkdir -p "$stage/docs/spec"
   cp -R bin dist public skills "$stage/"
-  cp README.md LICENSE package.json package-lock.json "$stage/"
+  cp README.md README.ja.md LICENSE package.json package-lock.json "$stage/"
+  cp docs/guide.md "$stage/docs/guide.md"
   cp docs/spec/markdown.md "$stage/docs/spec/markdown.md"
   chmod 755 "$stage/bin/ukagai"
 
