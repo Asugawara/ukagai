@@ -21,7 +21,7 @@ TypeScript (ESM, NodeNext), Node >= 22, npm, Hono + `@hono/node-server`, zod, `n
 ## Docs
 
 - `docs/guide.md` — the user guide (the details the README links to)
-- `README.md` / `README.ja.md` — keep them in sync (same structure, same images)
+- `README.md` / `README.ja.md` — keep them in sync (same structure, same images; English screenshots in `docs/images/`, Japanese in `docs/images/ja/`)
 - `docs/strategy/03-*`, `04-*` — the implementation plans (MVP, distribution); 00 / 02 were removed before publication
 - `docs/spec/` — contracts (API, explanation file)
 - `docs/verification/` — records of real-environment verification
