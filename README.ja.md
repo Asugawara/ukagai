@@ -1,6 +1,8 @@
-# ukagai
+<p align="center"><img src="docs/images/logo.png" width="140" alt="ukagai のロゴ"></p>
 
-Agents ask. Humans decide. コーディングエージェントの質問を 1 か所に集め、答えるための文脈も一緒に届けます。
+<h1 align="center">ukagai</h1>
+
+<p align="center"><b>Agents ask. Humans decide.</b><br>Claude Code と Codex CLI の質問・プラン承認を 1 か所に集め、答えるための文脈も一緒に届けます。</p>
 
 [English](README.md) | 日本語
 

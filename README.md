@@ -1,6 +1,8 @@
-# ukagai
+<p align="center"><img src="docs/images/logo.png" width="140" alt="ukagai logo"></p>
 
-Agents ask. Humans decide. One place for every coding agent's questions, with the context to answer them.
+<h1 align="center">ukagai</h1>
+
+<p align="center"><b>Agents ask. Humans decide.</b><br>One inbox for every question and plan approval from Claude Code and Codex CLI, with the context to answer them.</p>
 
 English | [日本語](README.ja.md)
 
