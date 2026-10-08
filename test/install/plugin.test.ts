@@ -113,3 +113,77 @@ test("doctor --codex: plugin row and twice-registered error", async () => {
   r = await run(e, ["doctor", "--codex", "--codex-home", e.codex]);
   assert.match(r.out, /×\s+codex hooks registered twice/);
 });
+
+test("enabledCodexPlugin: literal keys, [plugins] dotted / inline forms, false, and a later table", async () => {
+  const e = await setup();
+  const cases: Array<[string, string | undefined]> = [
+    ["[plugins.'ukagai@m']\nenabled = true\n", "ukagai@m"],
+    ['[plugins]\n"ukagai@m".enabled = true\n', "ukagai@m"],
+    ["[plugins]\n'ukagai@m'.enabled = true\n", "ukagai@m"],
+    ['[plugins]\n"ukagai@m" = { enabled = true }\n', "ukagai@m"],
+    ['plugins."ukagai@m".enabled = true\n', "ukagai@m"],
+    ['[plugins."ukagai@m"] # c\nenabled = true\n', "ukagai@m"],
+    ['[plugins."ukagai@m"]\nenabled = false\n', undefined],
+    ['[plugins]\n"ukagai@m".enabled = false\n"ukagai@n" = { enabled = false }\n', undefined],
+    ['[plugins."other@m"]\nenabled = true\n', undefined],
+    ['[plugins."ukagai@m"]\nenabled = false\n\n[other]\nenabled = true\n', undefined],
+    ['[plugins."ukagai@m"]\nname = "x"\n[features]\nenabled = true\n', undefined],
+  ];
+  for (const [toml, want] of cases) {
+    await writeFile(join(e.codex, "config.toml"), toml);
+    assert.equal(await enabledCodexPlugin(e.codex), want, toml);
+  }
+});
+
+test("enabledClaudePlugin: the first file that mentions a ukagai@ key decides (local > project > user)", async () => {
+  const e = await setup();
+  const [local, project, user] = ["l.json", "p.json", "u.json"].map((n) => join(e.dir, n)) as [string, string, string];
+  const w = (f: string, v: unknown): Promise<void> => writeFile(f, JSON.stringify({ enabledPlugins: v }));
+  await w(user, { "ukagai@m": true });
+  await w(project, { "ukagai@m": false });
+  assert.equal(await enabledClaudePlugin([local, project, user]), undefined, "project false beats user true");
+  await w(user, { "ukagai@m": false });
+  await w(project, { "ukagai@m": true });
+  assert.equal(await enabledClaudePlugin([local, project, user]), "ukagai@m", "project true beats user false");
+  await w(local, { "other@m": true });
+  assert.equal(await enabledClaudePlugin([local, project, user]), "ukagai@m", "a file without a ukagai@ key does not decide");
+  await w(local, { "ukagai@m": false });
+  assert.equal(await enabledClaudePlugin([local, project, user]), undefined, "local false beats project true");
+  assert.equal(await enabledClaudePlugin([join(e.dir, "none.json"), user]), undefined);
+  await w(user, { "ukagai@m": true });
+  assert.equal(await enabledClaudePlugin([join(e.dir, "none.json"), user]), "ukagai@m", "user only");
+});
+
+test("install --project: project settings false overrides user true (precedence through the CLI)", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify(PLUGIN));
+  await mkdir(join(e.dir, ".claude"), { recursive: true });
+  await writeFile(join(e.dir, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "ukagai@ukagai": false } }));
+  const r = await run(e, ["install", "--project", "--dry-run"]);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(!/is enabled/.test(r.out), r.out);
+});
+
+test("install --dry-run with the plugin enabled prints the plugin line and writes nothing", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify(PLUGIN));
+  await writeFile(join(e.codex, "config.toml"), '[plugins."ukagai@m"]\nenabled = true\n');
+  const before = await readFile(e.settings, "utf8");
+  const r = await run(e, ["install", "--dry-run", "--codex", "--claude", "--codex-home", e.codex]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /plugin ukagai@ukagai is enabled/);
+  assert.match(r.out, /plugin ukagai@m is enabled/);
+  assert.match(r.out, /nothing was written/);
+  assert.equal(await readFile(e.settings, "utf8"), before);
+  assert.ok(!(await exists(join(e.dir, "data", "config.json"))));
+});
+
+test("doctor --settings <file> ignores the user-level plugin and reports that file's hooks", async () => {
+  const e = await setup();
+  await writeFile(e.settings, JSON.stringify(PLUGIN));
+  const other = join(e.dir, "dev.json");
+  const r = await run(e, ["doctor", "--settings", other]);
+  assert.ok(!/plugin\s+ukagai@ukagai enabled/.test(r.out), r.out);
+  assert.ok(!/from the plugin/.test(r.out), r.out);
+  assert.match(r.out, /hook SessionStart/);
+});

@@ -65,6 +65,8 @@ export async function run(argv: string[]): Promise<number> {
     const skillDest = join(t.skillDir, "SKILL.md");
 
     if (t.dryRun) {
+      if (claudePlugin !== undefined) process.stdout.write(pluginLine(claudePlugin) + "\n");
+      if (codexPluginKey !== undefined) process.stdout.write(pluginLine(codexPluginKey) + "\n");
       if (t.claude) {
         const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
         process.stdout.write(diff === "" ? "settings: no changes\n" : diff);

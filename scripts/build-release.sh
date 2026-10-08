@@ -51,9 +51,7 @@ main() {
   (cd "$stage" && npm ci --omit=dev --ignore-scripts)
   rm -f "$stage/package-lock.json" "$stage/node_modules/.package-lock.json"
 
-  if [ -f scripts/write-plugin-files.mjs ]; then
-    node scripts/write-plugin-files.mjs "$stage" "$V"
-  fi
+  node scripts/write-plugin-files.mjs "$stage" "$V"
 
   tarball=$OUT/ukagai-$V.tar.gz
   rm -f "$tarball"

@@ -32,7 +32,8 @@ export async function run(argv: string[]): Promise<number> {
       add(false, `settings ${t.settingsFile}`, (err as Error).message);
     }
   }
-  const claudePlugin = t.claude ? await enabledClaudePlugin(t.pluginSettingsFiles) : undefined;
+  // --settings <file> inspects that file on its own (a dev setup): the user-level plugin does not speak for it
+  const claudePlugin = t.claude && !t.settingsGiven ? await enabledClaudePlugin(t.pluginSettingsFiles) : undefined;
   const codexPlugin = t.codex ? await enabledCodexPlugin(t.codexHome) : undefined;
   const managedInSettings = HOOK_EVENTS.some((ev) => findManaged(settings, ev) !== undefined);
   // with the plugin enabled and nothing in settings.json, the hooks and the skill come from the plugin

@@ -31,7 +31,7 @@ export interface Target {
   force: boolean;
   /** `--settings <file>` was given */
   settingsGiven: boolean;
-  /** Settings files that can enable the plugin: the user file, plus the project files with `--project` */
+  /** Settings files that can enable the plugin, in Claude Code's precedence order (local > project > user): the first one that mentions a ukagai@ key decides. Project files only with `--project` */
   pluginSettingsFiles: string[];
 }
 
@@ -99,7 +99,7 @@ export function parseTarget(argv: string[]): Target {
     hookArgs,
     force,
     settingsGiven: settings !== undefined,
-    pluginSettingsFiles: [join(homedir(), ".claude", "settings.json"), ...(project ? [join(base, "settings.json"), join(base, "settings.local.json")] : [])],
+    pluginSettingsFiles: [...(project ? [join(base, "settings.local.json"), join(base, "settings.json")] : []), join(homedir(), ".claude", "settings.json")],
     handleSkill: !t.noSkill && (settings === undefined || skill),
     settingsFile: settings ?? join(base, "settings.json"),
     skillDir: join(base, "skills", "ukagai-explain"),
