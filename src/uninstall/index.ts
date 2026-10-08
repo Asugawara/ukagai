@@ -56,7 +56,8 @@ async function serverStep(t: Target, dryRun: boolean): Promise<string | undefine
       if (!(await healthy(t.server))) return `server:   stopped ${t.server}`;
     }
   } catch {
-    // fail soft: fall through to the manual hint
+    // fail soft: the hook check or the shutdown request failed; say only what is true about the server
+    if (!(await healthy(t.server))) return "server:   not running";
   }
   return `server:   still running at ${t.server}; stop it yourself (its process is "ukagai serve" or "dist/cli.js serve")`;
 }
