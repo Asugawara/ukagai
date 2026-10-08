@@ -35,7 +35,8 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/settings` / `PUT /api/settings` | GUI / TUI (cookie or Bearer) | The settings kept in `<data-dir>/config.json`: read, and replace as a whole (validated, applied live, broadcast as `settings.updated`). See below |
 | `POST /api/gui/open` | hook (Bearer only) | Body `{}`. Asks the server to open the GUI once a day: returns `{ "result": "opened_today" \| "connected" \| "pending" }`. See below |
 | `GET /api/stream` | GUI / TUI | SSE. `decision.created` / `decision.updated` / `session.updated` / `plan.updated` / `plan.removed` / `settings.updated` |
-| `GET /healthz` | hook | Connectivity check |
+| `GET /healthz` | hook | Connectivity check and identity: `{ "ok": true, "version": "<package version>", "cli": "<absolute path of this process's dist/cli.js>" }` |
+| `POST /api/shutdown` | hook (Bearer only) | Body `{}`. Replies `{ "ok": true }`, then stops the server gracefully. See below |
 
 ### POST /api/decisions
 
@@ -368,6 +369,14 @@ The real path (symlinks resolved) must be a regular file under one of: `<HOME>/.
 ### POST /api/gui/open
 
 Bearer only (a cookie is 401), `Content-Type: application/json`, body `{}`. The SessionStart hook calls it once the server is up; the server owns the daily open and the marker `<data-dir>/gui-opened` (local `YYYY-MM-DD`). `opened_today`: the marker is today, nothing happens. `connected`: a browser GUI tab is on `/api/stream` now, so the marker is written and nothing is opened. `pending`: no tab is connected; the first such call arms one 8 s timer (a reconnecting pinned tab retries every 5 s at most), further calls only return `pending`. When it fires the marker is written and, if still no tab is connected, `open` (darwin) / `xdg-open` (linux) is run on `http://127.0.0.1:<port>/?autostart=1` (no opener on other platforms). One `gui_open` line goes to `serve.log` (`result`, `opened`). Never fails the caller.
+
+### GET /healthz
+
+No authorization. `{ "ok": true, "version": string, "cli": string }`. The SessionStart hook compares `version` with its own and checks that the file `cli` still exists; a different version, or a `cli` that is gone (the install was replaced), makes it restart the server (`POST /api/shutdown`, then start a new one). `ukagai doctor` shows a version mismatch as a note, not a failure.
+
+### POST /api/shutdown
+
+Bearer only (a cookie is 401), `Content-Type: application/json`, body `{}`. Replies `{ "ok": true }` and on the next tick closes the SSE streams, stops the HTTP server and ends the process with exit 0. Used by the SessionStart hook to replace a stale server.
 
 ### GET /api/stream
 

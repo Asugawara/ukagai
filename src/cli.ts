@@ -16,7 +16,8 @@ Commands:
   tui        Answer decisions in the terminal (same screen as the GUI, vim-style keys)
 
 Options:
-  -h, --help  Show this help
+  -v, --version  Print the version
+  -h, --help     Show this help
 `;
 
 const SETTINGS_OPTIONS = `  --settings <file>  Target settings file (default: ~/.claude/settings.json)
@@ -129,6 +130,11 @@ function isSubcommand(name: string): name is Subcommand {
 
 async function main(argv: string[]): Promise<number> {
   const [name, ...rest] = argv;
+  if (name === "--version" || name === "-v") {
+    const { VERSION } = await import("./version.js");
+    process.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
   if (name === undefined || name === "--help" || name === "-h") {
     process.stdout.write(USAGE);
     return 0;

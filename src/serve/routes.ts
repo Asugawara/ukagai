@@ -23,6 +23,7 @@ import {
   type DecisionContext,
   type DecisionSession,
 } from "../contract.js";
+import { VERSION } from "../version.js";
 import type { Lang } from "../settings/config.js";
 import type { GuiOpener } from "./gui-open.js";
 import type { SseHub } from "./sse.js";
@@ -58,6 +59,10 @@ export type AppDeps = {
   /** Live settings (<dataDir>/config.json). Without it GET /api/settings serves the defaults and PUT is refused */
   settings?: SettingsStore;
   getPort: () => number;
+  /** This process's dist/cli.js (reported by /healthz so a hook can tell the files were replaced) */
+  cliPath?: string;
+  /** POST /api/shutdown: stop the server gracefully (the route replies first). Without it the route is refused */
+  shutdown?: () => void;
   /** The daily GUI open (POST /api/gui/open). Without it the route answers `opened_today` */
   guiOpener?: Pick<GuiOpener, "request">;
   /** One line to serve.log (plan_instructed) */
@@ -142,7 +147,7 @@ export function createApp(deps: AppDeps): Hono {
 
   // ---- No authorization ----
 
-  app.get("/healthz", (c) => c.json({ ok: true }));
+  app.get("/healthz", (c) => c.json({ ok: true, version: VERSION, ...(deps.cliPath !== undefined ? { cli: deps.cliPath } : {}) }));
 
   // The two pages (/ and /settings) are served alike: session cookie, mtime-versioned asset URLs, the display language injected into <html>
   const page = (file: string, assets: string[]) => async (c: Context) => {
@@ -505,6 +510,14 @@ export function createApp(deps: AppDeps): Hono {
   app.get("/api/metrics", auth("any"), (c) => c.json(store.metrics()));
 
   app.post("/api/gui/open", auth("bearer"), jsonOnly, (c) => c.json({ result: deps.guiOpener?.request() ?? "opened_today" }));
+
+  app.post("/api/shutdown", auth("bearer"), jsonOnly, (c) => {
+    if (!deps.shutdown) return c.json({ error: "shutdown is not available" }, 501);
+    // reply first; the server stops on the next tick
+    const stop = deps.shutdown;
+    setImmediate(stop);
+    return c.json({ ok: true });
+  });
 
   app.get("/api/stream", auth("any"), (c) => hub.connect(c.req.raw.signal, cookieOnly(c)));
 

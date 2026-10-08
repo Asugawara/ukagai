@@ -137,3 +137,110 @@ test("SubagentStart: does nothing", async () => {
     s.restore();
   }
 });
+
+// ---- a running server of another version / with a replaced dist is restarted ----
+
+/** A server whose healthz body is `health` until POST /api/shutdown (answered `shutdownStatus`), then (optionally) it is down until a spawn */
+function stale(health: Record<string, unknown>, o: { shutdownStatus?: number; stopsOnShutdown?: boolean; version?: string; exists?: (p: string) => boolean } = {}) {
+  const s = setup({ up: true });
+  const calls: string[] = [];
+  let down = false;
+  let started = false;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const path = new URL(url).pathname;
+    calls.push(`${init?.method ?? "GET"} ${path}`);
+    s.posts.push({ url, method: init?.method ?? "GET", body: undefined, auth: String((init?.headers as any)?.Authorization) });
+    if (path === "/api/shutdown") {
+      if ((o.shutdownStatus ?? 200) === 200 && (o.stopsOnShutdown ?? true)) down = true;
+      return new Response("{}", { status: o.shutdownStatus ?? 200 });
+    }
+    return new Response(JSON.stringify({ result: "connected" }), { status: 200 });
+  }) as typeof fetch;
+  s.deps.fetch = (async () => {
+    calls.push("GET /healthz");
+    if (down && !started) throw new Error("ECONNREFUSED");
+    return new Response(JSON.stringify({ ok: true, ...health }), { status: 200 });
+  }) as typeof fetch;
+  const spawn = s.deps.spawn;
+  s.deps.spawn = (cmd, args, opts) => {
+    started = true;
+    return spawn(cmd, args, opts);
+  };
+  s.deps.version = o.version ?? "1.2.0";
+  if (o.exists) s.deps.exists = o.exists;
+  return { ...s, calls, shutdowns: () => calls.filter((c) => c === "POST /api/shutdown").length };
+}
+
+test("same version and cli present: no shutdown, no spawn", async () => {
+  const s = stale({ version: "1.2.0", cli: "/x/dist/cli.js" }, { exists: () => true });
+  try {
+    await sessionContext(RAW, s.hookOpts, s.deps);
+    assert.equal(s.shutdowns(), 0);
+    assert.equal(s.spawns.length, 0);
+    assert.equal(guiPosts(s).length, 1);
+  } finally {
+    s.restore();
+  }
+});
+
+test("a healthz without version / cli (an older server): left alone", async () => {
+  const s = stale({}, { exists: () => false });
+  try {
+    await sessionContext(RAW, s.hookOpts, s.deps);
+    assert.equal(s.shutdowns(), 0);
+    assert.equal(s.spawns.length, 0);
+  } finally {
+    s.restore();
+  }
+});
+
+test("another version: shutdown with the bearer token, then a new server is spawned once", async () => {
+  const s = stale({ version: "1.1.0", cli: "/x/dist/cli.js" }, { exists: () => true });
+  try {
+    await sessionContext(RAW, s.hookOpts, s.deps);
+    assert.equal(s.shutdowns(), 1);
+    assert.equal(s.posts.find((p) => p.url.endsWith("/api/shutdown"))!.auth, "Bearer tok");
+    assert.equal(s.spawns.length, 1);
+    assert.ok(s.spawns[0]!.args.includes("serve"));
+    assert.ok(s.calls.indexOf("POST /api/shutdown") < s.calls.length - 1);
+    assert.equal(guiPosts(s).length, 1);
+  } finally {
+    s.restore();
+  }
+});
+
+test("cli file gone: same restart", async () => {
+  const s = stale({ version: "1.2.0", cli: "/old/versions/1.2.0/dist/cli.js" }, { exists: () => false });
+  try {
+    await sessionContext(RAW, s.hookOpts, s.deps);
+    assert.equal(s.shutdowns(), 1);
+    assert.equal(s.spawns.length, 1);
+  } finally {
+    s.restore();
+  }
+});
+
+test("shutdown refused: fail open, nothing is spawned, the GUI request still goes to the running server", async () => {
+  const s = stale({ version: "1.1.0" }, { shutdownStatus: 500 });
+  try {
+    const out = await sessionContext(RAW, s.hookOpts, s.deps);
+    assert.ok(out);
+    assert.equal(s.shutdowns(), 1);
+    assert.equal(s.spawns.length, 0);
+    assert.equal(guiPosts(s).length, 1);
+  } finally {
+    s.restore();
+  }
+});
+
+test("shutdown accepted but the server never goes down: waits at most 3 s, spawns nothing", async () => {
+  const s = stale({ version: "1.1.0" }, { stopsOnShutdown: false });
+  try {
+    await sessionContext(RAW, s.hookOpts, s.deps);
+    assert.equal(s.shutdowns(), 1);
+    assert.equal(s.spawns.length, 0);
+    assert.ok(s.calls.filter((c) => c === "GET /healthz").length <= 1 + 30);
+  } finally {
+    s.restore();
+  }
+});

@@ -1,12 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
+import { access, constants, readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { configPath, readConfig } from "../settings/config.js";
 import { CHECKPOINT_FLAG, HOOK_EVENTS, PLAN_CONTEXT_FLAG } from "../settings/hooks-spec.js";
 import { findManaged, readSettings } from "../settings/merge.js";
 import { status as codexStatus } from "../install/codex.js";
-import { parseTarget } from "../settings/target.js";
+import { REPO_ROOT, parseTarget } from "../settings/target.js";
+import { VERSION } from "../version.js";
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
+const executable = (p: string): Promise<boolean> => access(p, constants.X_OK).then(() => true, () => false);
 
 export async function run(argv: string[]): Promise<number> {
   let t;
@@ -18,6 +20,8 @@ export async function run(argv: string[]): Promise<number> {
   }
   const rows: [boolean, string, string][] = [];
   const add = (ok: boolean, name: string, note = ""): void => void rows.push([ok, name, note]);
+
+  add(true, "version", `${VERSION} (${REPO_ROOT})`);
 
   let settings: Record<string, unknown> = {};
   if (t.claude) {
@@ -41,13 +45,16 @@ export async function run(argv: string[]): Promise<number> {
   }
   let node: string | undefined;
   let cli: string | undefined;
+  let launcher = false;
   for (const ev of t.claude ? HOOK_EVENTS : []) {
     const h = findManaged(settings, ev);
     add(h !== undefined, `hook ${ev}`, h ? "" : "not registered");
     if (h && node === undefined) {
       node = typeof h["command"] === "string" ? h["command"] : undefined;
       const args = h["args"];
-      cli = Array.isArray(args) && typeof args[0] === "string" ? args[0] : undefined;
+      // The launcher form is `<launcher> hook …`; the node form is `<node> <cli.js> hook …`
+      launcher = Array.isArray(args) && args[0] === "hook";
+      cli = Array.isArray(args) && typeof args[0] === "string" && !launcher ? args[0] : undefined;
     }
   }
   if (t.claude) {
@@ -59,12 +66,32 @@ export async function run(argv: string[]): Promise<number> {
     const u = findManaged(settings, "UserPromptSubmit", (h) => Array.isArray(h["args"]) && h["args"].includes(PLAN_CONTEXT_FLAG));
     add(u !== undefined || observing, "hook UserPromptSubmit (plan context)", u ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
   }
-  if (node !== undefined) add(await exists(node), "node exists", node);
-  if (cli !== undefined) add(await exists(cli), "cli exists", cli);
+  if (node !== undefined && launcher) {
+    const ok = await executable(node);
+    const real = ok ? await realpath(node).catch(() => node!) : undefined;
+    add(ok, "launcher", ok ? (real !== node ? `${node} -> ${real}` : node) : `${node} is missing or not executable (run: ukagai install)`);
+    const np = join(t.dataDir, "node-path");
+    let target: string | undefined;
+    try {
+      target = (await readFile(np, "utf8")).split("\n")[0]?.trim() || undefined;
+    } catch {
+      // missing
+    }
+    const good = target !== undefined && (await executable(target));
+    add(good, "node-path", good ? `${np} -> ${target}` : `${np} is missing or points at no executable (re-run install.sh)`);
+  } else {
+    if (node !== undefined) add(await exists(node), "node exists", node);
+    if (cli !== undefined) add(await exists(cli), "cli exists", cli);
+  }
 
   try {
     const res = await fetch(`${t.server}/healthz`, { signal: AbortSignal.timeout(2000) });
-    add(res.status === 200, `server ${t.server}/healthz`, `HTTP ${res.status}`);
+    let note = `HTTP ${res.status}`;
+    if (res.status === 200) {
+      const sv = ((await res.json().catch(() => null)) as { version?: unknown } | null)?.version;
+      if (typeof sv === "string" && sv !== VERSION) note += `; server runs ${sv}; it restarts at the next session start`;
+    }
+    add(res.status === 200, `server ${t.server}/healthz`, note);
   } catch (err) {
     add(false, `server ${t.server}/healthz`, `cannot connect (${(err as Error).cause instanceof Error ? ((err as Error).cause as Error).message : (err as Error).message})`);
   }

@@ -26,8 +26,8 @@ export const CODEX_SPECS: CodexSpec[] = [
 
 export interface CodexInstallOptions {
   home: string;
-  node: string;
-  cli: string;
+  /** How the hook is started: `command` + `prefix` + `hook` … */
+  invocation: { command: string; prefix: string[] };
   /** Timeout of the waiting events (seconds) */
   timeout: number;
   /** --data-dir / --server for the hook */
@@ -42,7 +42,7 @@ export function isManagedCommand(command: unknown): boolean {
 }
 
 export function hookCommand(o: CodexInstallOptions, spec: CodexSpec): string {
-  const parts = [o.node, o.cli, "hook", "--agent", "codex"];
+  const parts = [o.invocation.command, ...o.invocation.prefix, "hook", "--agent", "codex"];
   if (spec.event === "SessionStart") {
     if (o.noAutostart) parts.push("--no-autostart");
   } else if (spec.event !== "SessionEnd") parts.push("--budget", String(o.timeout - 10));

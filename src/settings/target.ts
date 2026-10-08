@@ -1,5 +1,6 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, dirname } from "node:path";
+import { isAbsolute, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCodexHome } from "../serve/codex-bridge/index.js";
 import { LANGS, isLang, type Lang } from "./config.js";
@@ -99,3 +100,28 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "../..");
 export const CLI_PATH = join(REPO_ROOT, "dist", "cli.js");
 export const SKILL_SOURCE = join(REPO_ROOT, "skills", "ukagai-explain", "SKILL.md");
+
+/** How a hook command is spelled in the registered settings */
+export interface Invocation {
+  command: string;
+  /** Args before `hook` (the node form puts dist/cli.js here) */
+  prefix: string[];
+  /** True when the stable launcher (bin/ukagai) is used */
+  launcher: boolean;
+}
+
+/**
+ * The launcher form when this process was started through this tree's bin/ukagai (UKAGAI_LAUNCHER is the path as invoked,
+ * symlinks not resolved, so hooks keep pointing at the stable path); otherwise node + dist/cli.js. Never throws.
+ */
+export function hookInvocation(env: NodeJS.ProcessEnv = process.env): Invocation {
+  const l = env["UKAGAI_LAUNCHER"];
+  try {
+    if (l !== undefined && isAbsolute(l) && realpathSync(l) === realpathSync(join(REPO_ROOT, "bin", "ukagai"))) {
+      return { command: l, prefix: [], launcher: true };
+    }
+  } catch {
+    // fall through to the node form
+  }
+  return { command: process.execPath, prefix: [CLI_PATH], launcher: false };
+}

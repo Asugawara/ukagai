@@ -178,6 +178,12 @@ export class Client {
     return typeof result === "string" ? result : null;
   }
 
+  /** Ask the running server to stop (POST /api/shutdown). True when it said ok */
+  async shutdown(timeoutMs: number): Promise<boolean> {
+    const r = await this.request("POST", "/api/shutdown", {}, timeoutMs);
+    return r?.status === 200;
+  }
+
   async postEvent(event: Record<string, unknown>, timeoutMs: number): Promise<boolean> {
     const r = await this.request("POST", "/api/events", event, timeoutMs);
     return r !== null && r.status >= 200 && r.status < 300;

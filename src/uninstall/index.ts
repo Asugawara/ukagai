@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { unifiedDiff } from "../settings/diff.js";
 import { readSettings, removeHooks, serialize, writeSettings } from "../settings/merge.js";
 import { apply as applyCodex, plan } from "../install/codex.js";
-import { CLI_PATH, parseTarget } from "../settings/target.js";
+import { hookInvocation, parseTarget } from "../settings/target.js";
 
 async function exists(p: string): Promise<boolean> {
   return stat(p).then(() => true, () => false);
@@ -25,7 +25,7 @@ export async function run(argv: string[]): Promise<number> {
     const skillFile = join(t.skillDir, "SKILL.md");
     const skillExists = t.claude && t.handleSkill && (await exists(skillFile));
     const codexPlan = t.codex
-      ? await plan({ home: t.codexHome, node: process.execPath, cli: CLI_PATH, timeout: t.timeout, hookArgs: [], noAutostart: false }, "uninstall")
+      ? await plan({ home: t.codexHome, invocation: hookInvocation(), timeout: t.timeout, hookArgs: [], noAutostart: false }, "uninstall")
       : undefined;
 
     if (t.dryRun) {

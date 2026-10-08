@@ -49,6 +49,8 @@ export type ServeOptions = {
   codexCheckpointDelayMs?: number;
   /** Where Claude Code checkpoint replies are typed when the agent is idle (default: herdr panes; tests inject a fake) */
   terminal?: Terminal;
+  /** Called after POST /api/shutdown has closed the server (`run` ends its wait here) */
+  onShutdown?: () => void;
   /** How often a working agent's status is re-read before a reply is left for the hook (default 500 ms; tests shorten it) */
   terminalPollMs?: number;
 };
@@ -139,10 +141,19 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     settings,
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
+    cliPath: fileURLToPath(new URL("../cli.js", import.meta.url)),
+    shutdown: () => {
+      void close().then(() => opts.onShutdown?.());
+    },
     guiOpener,
     log,
     collect: (session) => collectContext(session, { home }),
   });
+
+  // Assigned below once the pieces to stop exist; POST /api/shutdown and the handle share it (idempotent)
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => (closing ??= doClose());
+  let doClose: () => Promise<void> = () => Promise.resolve();
 
   const server = await new Promise<Server>((resolve, reject) => {
     const s = serve({ fetch: app.fetch, port, hostname: HOST }, (info) => {
@@ -154,6 +165,12 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   });
   // Write only after listening succeeds (a second server that dies on a busy port must not clobber the running server's token)
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  // The launcher's last resort for plugin-only installs: the node that runs this server
+  try {
+    writeFileSync(join(dataDir, "node-path"), process.execPath + "\n", { mode: 0o644 });
+  } catch {
+    // best effort
+  }
   const tokenFile = join(dataDir, "token");
   writeFileSync(tokenFile, token + "\n", { mode: 0o600 });
   chmodSync(tokenFile, 0o600);
@@ -186,6 +203,19 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     ? startCodexBridge({ store, dataDir, lang, settings, codexHome: opts.codexHome, checkpointDelayMs: opts.codexCheckpointDelayMs, collect: (session) => collectContext(session, { home }) })
     : undefined;
 
+  doClose = () =>
+    new Promise<void>((resolve) => {
+      codexBridge?.close();
+      planWatcher.stop();
+      clearInterval(sessionPoll);
+      recapWatcher.stop();
+      store.close();
+      hub.closeAll();
+      void settings.flush();
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
+
   return {
     port,
     token,
@@ -193,18 +223,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     store,
     settings,
     codexBridge,
-    close: () =>
-      new Promise<void>((resolve) => {
-        codexBridge?.close();
-        planWatcher.stop();
-        clearInterval(sessionPoll);
-        recapWatcher.stop();
-        store.close();
-        hub.closeAll();
-        void settings.flush();
-        server.close(() => resolve());
-        server.closeAllConnections();
-      }),
+    close,
   };
 }
 
@@ -243,8 +262,10 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   let handle: ServeHandle;
+  let onShutdown = (): void => {};
   try {
     handle = await start({
+      onShutdown: () => onShutdown(),
       port,
       dataDir: values["data-dir"],
       leaseGraceMs,
@@ -260,6 +281,7 @@ export async function run(argv: string[]): Promise<number> {
   process.stdout.write(`ukagai serve: http://${HOST}:${handle.port}\n`);
 
   await new Promise<void>((resolve) => {
+    onShutdown = resolve;
     const onSignal = () => resolve();
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
