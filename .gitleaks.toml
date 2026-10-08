@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "vendored third-party GUI assets"
+paths = ['''^public/vendor/''']
