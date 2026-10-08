@@ -82,7 +82,7 @@ Open <http://127.0.0.1:4818/settings> (the header's `Settings` link, or the `,` 
 
 ## Rich Markdown
 
-Explanations and plans are written in a small Markdown dialect that the GUI renders richly and the TUI degrades to readable text: titled callouts, task lists, `<details>`, any Mermaid diagram, code blocks with a title or `diff`, status badges (`[done]`, `[risk]`, …), `==mark==`, `::: columns`, a Steps timeline, screenshots from allowed folders and HTML pages (`![alt](compare.html)`, shown in a sandboxed frame in the GUI; `docs/spec/markdown.md`).
+Explanations and plans are written in a small Markdown dialect that the GUI renders richly and the TUI degrades to readable text: titled callouts, task lists, `<details>`, any Mermaid diagram, code blocks with a title or `diff`, status badges (`[done]`, `[risk]`, …), `==mark==`, `::: columns`, a Steps timeline, screenshots from allowed folders and HTML pages (`![alt](compare.html)`, shown in a sandboxed frame in the GUI; `docs/spec/markdown.md`). The screenshot in the [README](../README.md#what-makes-it-different) (`docs/images/compare.png`) shows two such HTML proposals side by side in `::: columns` next to the options.
 
 Agents never `open` a file for you: the cheap `hook --checkpoint` path denies a Bash `open` / `xdg-open` / `start` on a scratchpad / data-dir path or a document / image file and tells the agent to reference it from the explanation (Codex's hooks do not see shell commands, so only its context sentence applies).
 
