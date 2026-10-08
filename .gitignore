@@ -15,4 +15,4 @@ out/
 .env
 .env.*
 *.bak*
-verification/
+/verification/
