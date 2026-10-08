@@ -88,6 +88,7 @@ export function parseTarget(argv) {
         hookArgs,
         force,
         settingsGiven: settings !== undefined,
+        projectGiven: project,
         pluginSettingsFiles: [...(project ? [join(base, "settings.local.json"), join(base, "settings.json")] : []), join(homedir(), ".claude", "settings.json")],
         handleSkill: !t.noSkill && (settings === undefined || skill),
         settingsFile: settings ?? join(base, "settings.json"),

@@ -105,6 +105,10 @@ export async function run(argv) {
         if (cli !== undefined)
             add(await exists(cli), "cli exists", cli);
     }
+    const tokenFile = join(t.dataDir, "token");
+    const hasToken = await exists(tokenFile);
+    // The server never ran with this data dir: it starts at the first claude session, so that is not a problem yet
+    const neverStarted = !hasToken && !(await exists(join(t.dataDir, "gui-opened")));
     try {
         const res = await fetch(`${t.server}/healthz`, { signal: AbortSignal.timeout(2000) });
         let note = `HTTP ${res.status}`;
@@ -116,9 +120,15 @@ export async function run(argv) {
         add(res.status === 200, `server ${t.server}/healthz`, note);
     }
     catch (err) {
-        add(false, `server ${t.server}/healthz`, `cannot connect (${err.cause instanceof Error ? err.cause.message : err.message})`);
+        if (neverStarted)
+            add(true, `server ${t.server}/healthz`, "not started yet (starts at your first claude session; or run: ukagai serve)");
+        else
+            add(false, `server ${t.server}/healthz`, `cannot connect (${err.cause instanceof Error ? err.cause.message : err.message}); start a claude session or run: ukagai serve`);
     }
-    add(await exists(join(t.dataDir, "token")), "token", join(t.dataDir, "token"));
+    if (!hasToken && neverStarted)
+        add(true, "token", "not created yet (the server writes it on its first start)");
+    else
+        add(hasToken, "token", tokenFile);
     if (t.claude) {
         if (viaPlugin)
             add(true, "skill ukagai-explain", "from the plugin");
