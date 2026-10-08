@@ -35,7 +35,12 @@ export interface CodexInstallOptions {
   noAutostart: boolean;
 }
 
-const shq = (s: string): string => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+const shq = (s: string): string =>
+  /^[\w@%+=:,./-]+$/.test(s)
+    ? s
+    : /^\$\{(?:CLAUDE_)?PLUGIN_ROOT\}\/[\w@%+=:,./-]+$/.test(s)
+      ? `"${s}"` // a plugin path: the variable must stay expandable
+      : `'${s.replace(/'/g, `'\\''`)}'`;
 
 export function isManagedCommand(command: unknown): boolean {
   return typeof command === "string" && new RegExp(`(^|\\s)${MANAGED_FLAG} ${MANAGED_VALUE}(\\s|$)`).test(command);

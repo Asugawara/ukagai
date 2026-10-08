@@ -77,8 +77,30 @@ jobs:
         run: |
           set -eux
           sh scripts/build-release.sh "$V" out
-      # TODO(plugin): push out/stage/ukagai-$V as the tree of branch plugin
+      # The whole content of branch plugin is the stage tree (node_modules included), committed from a separate
+      # worktree so the repo's .gitignore never applies.
       - name: Update the plugin branch
         run: |
           set -eux
-          echo "plugin branch step is added by the plugin work"
+          stage="$PWD/out/stage/ukagai-$V"
+          test -f "$stage/plugin.json"
+          wt="$RUNNER_TEMP/plugin-wt"
+          if git ls-remote --exit-code --heads origin plugin >/dev/null 2>&1; then
+            git fetch origin plugin
+            git worktree add -B plugin "$wt" origin/plugin
+          else
+            git worktree add --detach "$wt"
+            git -C "$wt" checkout --orphan plugin
+          fi
+          # empty the tree, keep .git
+          find "$wt" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R "$stage"/. "$wt"/
+          # a stage has no .gitignore, and the checkout's must not leak in
+          rm -f "$wt/.gitignore"
+          git -C "$wt" add -A -f
+          if git -C "$wt" diff --cached --quiet && git -C "$wt" rev-parse --verify -q HEAD >/dev/null 2>&1 && [ "$(git -C "$wt" rev-parse --abbrev-ref HEAD)" = plugin ]; then
+            echo "plugin branch is already up to date"
+            exit 0
+          fi
+          git -C "$wt" -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "release: v$V"
+          git -C "$wt" push origin plugin
