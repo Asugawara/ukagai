@@ -1,0 +1,105 @@
+name: package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Build release tarball
+        run: |
+          set -eux
+          sh scripts/build-release.sh "${{ inputs.version }}" out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ inputs.version }}
+          path: |
+            out/ukagai-*.tar.gz
+            out/SHA256SUMS
+          retention-days: 7
+
+  install-sh:
+    needs: stage
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      V: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ inputs.version }}
+          path: out
+      - name: Lay out the local release mirror
+        run: |
+          set -eux
+          mkdir -p "mirror/download/v$V" mirror/latest/download
+          cp "out/ukagai-$V.tar.gz" "out/SHA256SUMS" "mirror/download/v$V/"
+          cp out/SHA256SUMS mirror/latest/download/SHA256SUMS
+          python3 -m http.server -d mirror 8765 >"$RUNNER_TEMP/mirror.log" 2>&1 &
+          sleep 2
+      - name: install.sh twice
+        run: |
+          set -eux
+          export UKAGAI_HOME="$RUNNER_TEMP/home" UKAGAI_BIN_DIR="$RUNNER_TEMP/bin" UKAGAI_DATA_DIR="$RUNNER_TEMP/data" UKAGAI_BASE_URL=http://127.0.0.1:8765
+          sh install.sh
+          sh install.sh >"$RUNNER_TEMP/second.log" 2>&1
+          cat "$RUNNER_TEMP/second.log"
+          if ! grep -q 'already installed' "$RUNNER_TEMP/second.log"; then echo "second run did not report 'already installed'"; exit 1; fi
+          got="$("$RUNNER_TEMP/bin/ukagai" --version)"
+          if [ "$got" != "$V" ]; then echo "version mismatch: got $got, want $V"; exit 1; fi
+      - name: install.sh with wget
+        if: runner.os == 'Linux'
+        run: |
+          set -eux
+          export UKAGAI_HOME="$RUNNER_TEMP/home-wget" UKAGAI_BIN_DIR="$RUNNER_TEMP/bin-wget" UKAGAI_DATA_DIR="$RUNNER_TEMP/data-wget" UKAGAI_BASE_URL=http://127.0.0.1:8765 UKAGAI_DOWNLOADER=wget
+          sh install.sh
+          got="$("$RUNNER_TEMP/bin-wget/ukagai" --version)"
+          if [ "$got" != "$V" ]; then echo "version mismatch (wget): got $got, want $V"; exit 1; fi
+      - name: ukagai install writes launcher hooks
+        run: |
+          set -eux
+          "$RUNNER_TEMP/bin/ukagai" install --settings "$RUNNER_TEMP/s.json" --data-dir "$RUNNER_TEMP/data" --lang en
+          bad="$(jq -r --arg cmd "$RUNNER_TEMP/bin/ukagai" '[.hooks[][] | .hooks[]? | select((.command == $cmd and .args[0] == "hook") | not)] | length' "$RUNNER_TEMP/s.json")"
+          total="$(jq -r '[.hooks[][] | .hooks[]?] | length' "$RUNNER_TEMP/s.json")"
+          if [ "$total" -eq 0 ]; then echo "no hooks written"; exit 1; fi
+          if [ "$bad" -ne 0 ]; then echo "$bad hook(s) do not use the launcher"; jq . "$RUNNER_TEMP/s.json"; exit 1; fi
+      - name: hook fails open and exits 0
+        run: |
+          set -eux
+          echo '{"hook_event_name":"Stop","session_id":"x"}' | UKAGAI_DATA_DIR="$RUNNER_TEMP/data" "$RUNNER_TEMP/bin/ukagai" hook
+      - name: Corrupted SHA256SUMS fails and leaves nothing
+        run: |
+          set -eux
+          echo "0000000000000000000000000000000000000000000000000000000000000000  ukagai-$V.tar.gz" >"mirror/download/v$V/SHA256SUMS"
+          cp "mirror/download/v$V/SHA256SUMS" mirror/latest/download/SHA256SUMS
+          if UKAGAI_HOME="$RUNNER_TEMP/home-bad" UKAGAI_BIN_DIR="$RUNNER_TEMP/bin-bad" UKAGAI_DATA_DIR="$RUNNER_TEMP/data-bad" UKAGAI_BASE_URL=http://127.0.0.1:8765 sh install.sh; then
+            echo "install.sh succeeded with a corrupted SHA256SUMS"; exit 1
+          fi
+          if [ -e "$RUNNER_TEMP/home-bad/versions/$V" ]; then echo "versions/$V exists after a failed install"; exit 1; fi
