@@ -70,6 +70,10 @@ export class Client {
       this.lastFailure = { message: "no token" };
       return null;
     }
+    // A referenced timer, not AbortSignal.timeout: its timer is unref'd, so a request that never settles can leave
+    // the event loop with nothing to wait for before the abort fires (seen on Node 22; the hook must fail open in time)
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(new Error(`timeout after ${timeoutMs} ms`)), timeoutMs);
     try {
       const res = await fetch(this.server + path, {
         method,
@@ -78,7 +82,7 @@ export class Client {
           ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
         },
         body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: ac.signal,
       });
       const text = await res.text();
       if (res.status < 200 || res.status >= 300) this.lastFailure = { status: res.status, message: `HTTP ${res.status}` };
@@ -87,6 +91,8 @@ export class Client {
       const cause = err instanceof Error && err.cause instanceof Error ? `: ${err.cause.message}` : "";
       this.lastFailure = { message: `${err instanceof Error ? err.message : String(err)}${cause}` };
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

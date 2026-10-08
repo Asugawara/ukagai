@@ -40,8 +40,11 @@ interface Health {
 }
 
 async function probe(server: string, deps: AutostartDeps): Promise<Health> {
+  // A referenced timer rather than AbortSignal.timeout (whose timer is unref'd): see Client.requestOnce
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error(`timeout after ${HEALTHZ_TIMEOUT_MS} ms`)), HEALTHZ_TIMEOUT_MS);
   try {
-    const res = await deps.fetch(`${server}/healthz`, { signal: AbortSignal.timeout(HEALTHZ_TIMEOUT_MS) });
+    const res = await deps.fetch(`${server}/healthz`, { signal: ac.signal });
     if (res.status !== 200) return { up: false };
     try {
       const j = (await res.json()) as { version?: unknown; cli?: unknown } | null;
