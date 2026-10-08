@@ -20,6 +20,8 @@ TypeScript (ESM, NodeNext), Node >= 22, npm, Hono + `@hono/node-server`, zod, `n
 
 ## Docs
 
+- `docs/guide.md` — the user guide (the details the README links to)
+- `README.md` / `README.ja.md` — keep them in sync (same structure, same images)
 - `docs/strategy/03-*`, `04-*` — the implementation plans (MVP, distribution); 00 / 02 were removed before publication
 - `docs/spec/` — contracts (API, explanation file)
 - `docs/verification/` — records of real-environment verification
@@ -36,4 +38,6 @@ English is the default for code, comments, tests, docs, the skill, CLI output an
 
 ## Commits
 
-- Before merging a branch into main with `--no-ff`, rebase it onto main. release-please walks the history by commit date and stops at the last release commit, so older-dated commits on an unrebased branch are left out of the changelog.
+- `main` is protected on GitHub: no direct push, no force push, no deletion; a pull request with green CI (`test (ubuntu-latest)`, `test (macos-latest)`, `lint-sh`, `gitleaks`) is the only way in, for admins too. Flow: rebase the branch onto `main`, push it, `gh pr create`, wait with `gh pr checks <n> --watch`, then `gh pr merge <n> --merge` (merge commits only; squash and rebase merges are disabled in the repository settings).
+- Rebase before merging: release-please walks the history by commit date and stops at the last release commit, so older-dated commits on an unrebased branch are left out of the changelog.
+- Conventional commit subjects on the branch commits (`feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`); the merge commit's subject stays `Merge …` so release-please does not count a change twice.
