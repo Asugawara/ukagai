@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.1](https://github.com/Asugawara/ukagai/compare/v0.1.0...v0.1.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **install:** uninstall stops the server once no ukagai hooks remain (left running after a Claude-only or Codex-only uninstall; skipped for --settings / --project; dry-run says what it would do), doctor reports a server that never ran as 'not started yet' instead of two problems, README and guide say --codex --claude for both agents, what doctor shows after install, and that ~/.ukagai is kept on uninstall ([58fa6b1](https://github.com/Asugawara/ukagai/commit/58fa6b181226baba04b83fa9f8408afc3ea8e0f7))
+* **install:** uninstall stops the server, doctor explains 'not started yet', README says --codex --claude ([9250666](https://github.com/Asugawara/ukagai/commit/925066670a6868793f2df6db515f3bd67676514a))
+* **uninstall:** when the hook check throws and no server answers, say 'not running' instead of 'still running'; tests for the --project skip and the catch path; CLAUDE.md: PR titles carry no type prefix because release-please reads them for the merge commit ([367a92d](https://github.com/Asugawara/ukagai/commit/367a92d4e48b97b7a9376ecd5dc6edb30b39661c))
+
 ## 0.1.0 (2026-10-08)
 
 
