@@ -1,7 +1,17 @@
 {
   "name": "ukagai",
   "version": "0.1.0",
-  "description": "Hooks + GUI that gather a coding agent's decisions in one place, with the agent's own explanation.",
+  "description": "Agents ask, humans decide. Hooks + GUI that collect Claude Code and Codex CLI questions (AskUserQuestion) and plan approvals in one place, each with the agent's own explanation.",
+  "keywords": [
+    "claude-code",
+    "codex-cli",
+    "hooks",
+    "human-in-the-loop",
+    "ai-agents",
+    "coding-agent",
+    "plan-approval",
+    "askuserquestion"
+  ],
   "private": true,
   "license": "MIT",
   "repository": {
