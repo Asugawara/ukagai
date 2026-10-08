@@ -6,11 +6,21 @@
 
 [English](README.md) | 日本語
 
-![ukagai の GUI に表示された質問](docs/images/ja/question.png)
+![エージェントの説明つきの質問: シーケンス図、推奨、選択肢](docs/images/ja/hero.png)
 
 ## ukagai とは
 
 ukagai は、コーディングエージェントが人間に求める判断（Claude Code の `AskUserQuestion` とプラン承認）を hooks で横取りし、localhost の GUI（またはターミナル UI）に集めます。各判断には、エージェント自身が書いた説明（なぜ今なのか、推奨、選択肢の表、Mermaid 図、関連する diff）が付きます。MCP は使いません。hooks + スキル + GUI だけで動きます。
+
+## 何が違うのか
+
+- **エージェントがリッチな Markdown で説明し、描画された状態で見られます。** 図（Mermaid）、diff、画像、そして UI やランディングページの案のような HTML ページ丸ごとがサンドボックス化されたフレームで、選択肢のすぐ隣に表示されます。比べて決めるのが 1 か所で済みます。
+- **セッションもエージェントも横断する 1 つの受信箱。** Claude Code と Codex CLI、質問とプラン承認を、保留一覧と履歴つきで扱えます。
+- **MCP なし、毎ターンの文脈に何も足しません。** hooks とスキルがエージェント自身の `AskUserQuestion` / プラン承認を横取りし、ツール定義が文脈に居座ることはありません。
+
+![エージェントが提案した 2 つのオンボーディングページ案を GUI で並べて表示](docs/images/ja/compare.png)
+
+*エージェントが提案した 2 つのランディングページ案を GUI で比べ、そのまま答えます。*
 
 ## なぜ必要か
 
@@ -39,6 +49,10 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 - **Codex CLI**: hooks とプラン承認用のブリッジ。[ガイド](docs/guide.md#codex-cli)
 - **設定ページ**: 言語、テーマ、通知、プランの自動表示。[ガイド](docs/guide.md#settings)
 - **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
+
+![ターミナルでの同じ判断](docs/images/ja/tui.png)
+
+*同じ判断をターミナルで。*
 
 ![保留中の判断の一覧](docs/images/ja/drawer.png)
 

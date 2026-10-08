@@ -6,11 +6,21 @@
 
 English | [日本語](README.ja.md)
 
-![A question in the ukagai GUI](docs/images/question.png)
+![A question with the agent's explanation: a sequence diagram, a recommendation and the options](docs/images/hero.png)
 
 ## What it is
 
 ukagai intercepts the decisions a coding agent asks a human for (Claude Code's `AskUserQuestion` and plan approval) with hooks, and collects them in one localhost GUI (or a terminal UI). Each decision comes with an explanation the agent wrote itself: why now, a recommendation, an options table, a Mermaid diagram and the related diff. No MCP is involved: it is hooks + a skill + a GUI.
+
+## What makes it different
+
+- **The agent explains in rich Markdown and you see it rendered.** Diagrams (Mermaid), diffs, images and whole HTML pages, such as UI or landing-page variants in a sandboxed frame, appear next to the options, so you compare and decide in one place.
+- **One inbox across sessions and agents.** Claude Code and Codex CLI, questions and plan approvals, with a pending list and history.
+- **No MCP, nothing added to every turn.** Hooks and a skill intercept the agent's own `AskUserQuestion` / plan approval; no tool definitions sit in the context.
+
+![Two onboarding-page variants proposed by the agent, side by side in the GUI](docs/images/compare.png)
+
+*Two landing-page variants proposed by the agent, compared in the GUI and answered there.*
 
 ## Why
 
@@ -39,6 +49,10 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 - **Codex CLI**: hooks plus a bridge for plan approval. [Guide](docs/guide.md#codex-cli)
 - **Settings page**: language, theme, notifications, plan auto-show. [Guide](docs/guide.md#settings)
 - **Rich Markdown**: callouts, Mermaid, diffs, task lists and more in explanations and plans. [Guide](docs/guide.md#rich-markdown)
+
+![The same decision in the terminal UI](docs/images/tui.png)
+
+*The same decision in the terminal.*
 
 ![The pending list](docs/images/drawer.png)
 
