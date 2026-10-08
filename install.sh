@@ -8,29 +8,36 @@ BASE=${UKAGAI_BASE_URL:-https://github.com/$REPO/releases}
 HOME_DIR=${UKAGAI_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/ukagai}
 BIN_DIR=${UKAGAI_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
 DATA_DIR=${UKAGAI_DATA_DIR:-$HOME/.ukagai}
+PORT=${UKAGAI_PORT:-4818}
 
 V=${UKAGAI_VERSION:-}
 INSTALL_ARGS=""
 FORCE=0
 NODE_BIN=""
+NODE_REAL=""
 PREV=""
+DEV_SERVER=0
 TMP=""
 
 say() { echo "ukagai-install: $*" >&2; }
 err() { echo "ukagai-install: error: $*" >&2; }
 
-usage() {
-  cat >&2 <<USAGE
+usage_text() {
+  cat <<USAGE
 usage: install.sh [--version vX.Y.Z] [--lang en|ja] [--codex] [--claude] [--force]
   --version   install this version (default: latest release)
   --lang      GUI language, passed to "ukagai install"
-  --codex     also register the Codex CLI hooks ("ukagai install --codex")
+  --codex     register the Codex CLI hooks (Codex only; add --claude for Claude Code too)
   --claude    register the Claude Code hooks ("ukagai install")
   --force     replace an existing non-ukagai file at the bin path
 env: UKAGAI_VERSION UKAGAI_NODE UKAGAI_DOWNLOADER=curl|wget UKAGAI_BASE_URL
-     UKAGAI_HOME UKAGAI_BIN_DIR UKAGAI_DATA_DIR
+     UKAGAI_HOME UKAGAI_BIN_DIR UKAGAI_DATA_DIR UKAGAI_PORT (server probed while pruning, default 4818)
+Note: --lang / --codex / --claude register the hooks in the real ~/.claude and ~/.codex
+(there is no --settings pass-through); UKAGAI_DATA_DIR is forwarded as --data-dir.
 USAGE
 }
+
+usage() { usage_text >&2; }
 
 add_arg() { INSTALL_ARGS="$INSTALL_ARGS $1"; }
 
@@ -48,7 +55,7 @@ parse_args() {
       --codex) add_arg --codex; shift ;;
       --claude) add_arg --claude; shift ;;
       --force) FORCE=1; shift ;;
-      -h|--help) usage; exit 0 ;;
+      -h|--help) usage_text; exit 0 ;;
       *) usage; exit 2 ;;
     esac
   done
@@ -64,6 +71,11 @@ need() {
 check_node() {
   if [ -n "${UKAGAI_NODE:-}" ]; then
     NODE_BIN=$UKAGAI_NODE
+    case $NODE_BIN in
+      /*) ;;
+      */*) NODE_BIN="$(pwd)/$NODE_BIN" ;;
+      *) NODE_BIN=$(command -v "$NODE_BIN" 2>/dev/null || printf '%s' "$NODE_BIN") ;;
+    esac
   else
     NODE_BIN=$(command -v node 2>/dev/null || true)
   fi
@@ -88,11 +100,19 @@ Install Node.js first, then re-run this script:
 MSG
     exit 1
   fi
+  # record the absolute path with symlinks resolved (fnm / nvm shims are per-shell)
+  NODE_REAL=$("$NODE_BIN" -p process.execPath 2>/dev/null || true)
+  case $NODE_REAL in
+    /*) ;;
+    *) NODE_REAL=$NODE_BIN ;;
+  esac
 }
 
 fetch() {
   url=$1 out=$2
   dl=${UKAGAI_DOWNLOADER:-}
+  https=0
+  case $BASE in https://*) https=1 ;; esac
   if [ -z "$dl" ]; then
     if command -v curl >/dev/null 2>&1; then dl=curl
     elif command -v wget >/dev/null 2>&1; then dl=wget
@@ -100,9 +120,17 @@ fetch() {
   fi
   case $dl in
     curl) command -v curl >/dev/null 2>&1 || { err "need curl or wget"; exit 1; }
-          curl -fsSL --retry 3 -o "$out" "$url" ;;
+          if [ "$https" = 1 ]; then
+            curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --retry 3 -o "$out" "$url"
+          else
+            curl -fsSL --connect-timeout 15 --retry 3 -o "$out" "$url"
+          fi ;;
     wget) command -v wget >/dev/null 2>&1 || { err "need curl or wget"; exit 1; }
-          wget -q -O "$out" "$url" ;;
+          if [ "$https" = 1 ]; then
+            wget -q --https-only -O "$out" "$url"
+          else
+            wget -q -O "$out" "$url"
+          fi ;;
     *) err "need curl or wget"; exit 1 ;;
   esac
 }
@@ -168,16 +196,16 @@ install_version() {
   fi
 }
 
+# node-path is only an optimization for the launcher: a failure is a warning
 record_node() {
-  mkdir -p "$DATA_DIR"
+  mkdir -p "$DATA_DIR" 2>/dev/null || { say "warning: cannot create $DATA_DIR; skipped recording the node path"; return 0; }
   chmod 700 "$DATA_DIR" 2>/dev/null || true
-  printf '%s\n' "$NODE_BIN" > "$DATA_DIR/node-path"
+  printf '%s\n' "$NODE_REAL" > "$DATA_DIR/node-path" 2>/dev/null || say "warning: cannot write $DATA_DIR/node-path"
 }
 
-link_bin() {
-  target=$HOME_DIR/versions/$V/bin/ukagai
+# refuse a foreign file at the bin path before anything is downloaded; remembers the previous version
+check_link() {
   link=$BIN_DIR/ukagai
-  mkdir -p "$BIN_DIR"
   if [ -L "$link" ]; then
     cur=$(readlink "$link" 2>/dev/null || true)
     case $cur in
@@ -187,6 +215,12 @@ link_bin() {
   elif [ -e "$link" ]; then
     [ "$FORCE" = 1 ] || { err "$link exists and is not ours (use --force)"; exit 1; }
   fi
+}
+
+link_bin() {
+  target=$HOME_DIR/versions/$V/bin/ukagai
+  link=$BIN_DIR/ukagai
+  mkdir -p "$BIN_DIR"
   rm -f "$BIN_DIR/.ukagai.$$"
   ln -s "$target" "$BIN_DIR/.ukagai.$$"
   mv -f "$BIN_DIR/.ukagai.$$" "$link"
@@ -195,7 +229,13 @@ link_bin() {
 prune() {
   running=""
   if command -v curl >/dev/null 2>&1; then
-    hz=$(curl -fsS --max-time 2 http://127.0.0.1:4818/healthz 2>/dev/null || true)
+    hz=$(curl -fsS --max-time 2 "http://127.0.0.1:$PORT/healthz" 2>/dev/null || true)
+    # a server that answers without "version" is a development / pre-version server: it is never restarted by itself
+    case $hz in
+      '') ;;
+      *'"version"'*) ;;
+      *) DEV_SERVER=1 ;;
+    esac
     running=$(printf '%s' "$hz" | sed -n 's|.*versions/\([^/"]*\)/.*|\1|p' | head -n 1)
   fi
   for d in "$HOME_DIR"/versions/*; do
@@ -203,6 +243,10 @@ prune() {
     n=${d##*/}
     case $n in
       "$V"|"$PREV"|"$running") continue ;;
+    esac
+    # a young *.tmp is a concurrent install in progress
+    case $n in
+      *.tmp) [ -z "$(find "$d" -maxdepth 0 -mmin -10 2>/dev/null)" ] || continue ;;
     esac
     rm -rf "$d"
   done
@@ -220,10 +264,15 @@ path_hint() {
 post() {
   if [ -n "$INSTALL_ARGS" ]; then
     # shellcheck disable=SC2086
+    set -- install $INSTALL_ARGS
+    # forward a non-default data dir so config.json and node-path land in the same place
+    if [ "$DATA_DIR" != "$HOME/.ukagai" ]; then
+      set -- "$@" --data-dir "$DATA_DIR"
+    fi
     if [ -t 0 ]; then
-      "$BIN_DIR/ukagai" install $INSTALL_ARGS
+      "$BIN_DIR/ukagai" "$@"
     else
-      "$BIN_DIR/ukagai" install $INSTALL_ARGS </dev/null
+      "$BIN_DIR/ukagai" "$@" </dev/null
     fi
   else
     say "ukagai $V installed: $BIN_DIR/ukagai"
@@ -232,13 +281,19 @@ post() {
   fi
   if [ -n "$PREV" ] && [ "$PREV" != "$V" ]; then
     say "upgraded $PREV -> $V. If a ukagai server is running it restarts at the next session start; or: pkill -f \"cli.js serve\""
+  elif [ "$DEV_SERVER" = 1 ]; then
+    say "a ukagai server without a version is running (a development server); it is not restarted by itself: pkill -f \"cli.js serve\""
   fi
 }
 
 main() {
   parse_args "$@"
   need tar mkdir ln mv rm
+  if [ "$(id -u 2>/dev/null || echo 1)" = 0 ]; then
+    say "warning: running as root: the files under $HOME will be owned by root"
+  fi
   check_node
+  check_link
   resolve_version
   install_version
   record_node

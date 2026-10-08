@@ -27,6 +27,8 @@ jobs:
       - name: Build release tarball
         run: |
           set -eux
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
           sh scripts/build-release.sh "${{ inputs.version }}" out
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -63,7 +65,7 @@ jobs:
           cp "out/ukagai-$V.tar.gz" "out/SHA256SUMS" "mirror/download/v$V/"
           cp out/SHA256SUMS mirror/latest/download/SHA256SUMS
           python3 -m http.server -d mirror 8765 >"$RUNNER_TEMP/mirror.log" 2>&1 &
-          sleep 2
+          curl -fsS --retry 10 --retry-delay 1 --retry-connrefused -o /dev/null "http://127.0.0.1:8765/latest/download/SHA256SUMS"
       - name: install.sh twice
         run: |
           set -eux
@@ -93,7 +95,8 @@ jobs:
       - name: hook fails open and exits 0
         run: |
           set -eux
-          echo '{"hook_event_name":"Stop","session_id":"x"}' | UKAGAI_DATA_DIR="$RUNNER_TEMP/data" "$RUNNER_TEMP/bin/ukagai" hook
+          out="$(echo '{"hook_event_name":"Stop","session_id":"x"}' | UKAGAI_DATA_DIR="$RUNNER_TEMP/data" "$RUNNER_TEMP/bin/ukagai" hook)"
+          if [ -n "$out" ]; then echo "hook printed: $out"; exit 1; fi
       - name: Corrupted SHA256SUMS fails and leaves nothing
         run: |
           set -eux

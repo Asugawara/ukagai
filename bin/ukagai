@@ -21,14 +21,26 @@ while [ -h "$f" ]; do
 done
 root=$(cd "$(dirname "$f")/.." && pwd -P)
 
-# run a command with a time limit when `timeout` exists
+# run a command with a time limit (macOS has no `timeout`: use a background watchdog)
 with_timeout() {
   secs=$1
   shift
   if command -v timeout >/dev/null 2>&1; then
     timeout "$secs" "$@"
   else
-    "$@"
+    (
+      "$@" &
+      p=$!
+      (
+        sleep "$secs"
+        kill "$p" 2>/dev/null
+      ) >/dev/null 2>&1 &
+      w=$!
+      wait "$p"
+      r=$?
+      kill "$w" 2>/dev/null
+      exit "$r"
+    )
   fi
 }
 
@@ -117,9 +129,15 @@ find_node() {
       "$h/.nvm/versions/node/*/bin/node" \
       "$h/.local/share/nvm/*/bin/node" \
       "$h/.local/share/fnm/node-versions/*/installation/bin/node" \
+      "$h/Library/Application Support/fnm/node-versions/*/installation/bin/node" \
       "$h/.local/share/mise/installs/node/*/bin/node"; do
+      # split on newlines only: a pattern may contain spaces ("Application Support")
+      oldifs=$IFS
+      IFS='
+'
       # shellcheck disable=SC2086
       set -- $pattern
+      IFS=$oldifs
       [ -e "$1" ] || continue
       cand=$(newest_of "$@")
       if node_ok "$cand"; then
@@ -140,7 +158,7 @@ find_node() {
   done
 
   if [ -n "${SHELL:-}" ] && [ -x "$SHELL" ]; then
-    out=$(with_timeout 10 "$SHELL" -lc 'command -v node' 2>/dev/null </dev/null || true)
+    out=$(with_timeout 5 "$SHELL" -lc 'command -v node' 2>/dev/null </dev/null || true)
     cand=${out##*
 }
     if node_ok "$cand"; then
@@ -154,8 +172,10 @@ find_node() {
 if ! node=$(find_node); then
   if [ "${1:-}" = hook ]; then
     input=$(cat 2>/dev/null || true)
-    case $input in
-      *'hook_event_name":"SessionStart"'* | *'hook_event_name": "SessionStart"'*)
+    # accept optional whitespace around ":" (pretty-printed JSON)
+    flat=$(printf '%s' "$input" | tr -d ' \t')
+    case $flat in
+      *'hook_event_name":"SessionStart"'*)
         echo 'ukagai: Node.js 22 or newer was not found; the ukagai hooks are inactive. Re-run install.sh or set UKAGAI_NODE.'
         ;;
     esac

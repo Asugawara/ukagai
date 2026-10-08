@@ -339,5 +339,9 @@ test("launcher form: the Codex commands run the launcher; re-install from the no
   const state = readState(readFileSync(join(e.codex, "config.toml"), "utf8"));
   assert.equal(state.size, CODEX_SPECS.length, "only the new keys stay trusted");
   const d = await ukagai(e, ["doctor", "--codex", "--codex-home", e.codex, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")], { UKAGAI_LAUNCHER: launcher });
+  // the exit code is 1 only because the server at 127.0.0.1:1 is unreachable; the hook rows are what is asserted
+  assert.equal(d.code, 1, d.err);
+  assert.match(d.out, /× +server/);
+  assert.match(d.out, /○ +codex hook PreToolUse/);
   assert.doesNotMatch(d.out, /× +codex hook/);
 });
