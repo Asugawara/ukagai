@@ -20,7 +20,7 @@ TypeScript (ESM, NodeNext), Node >= 22, npm, Hono + `@hono/node-server`, zod, `n
 
 ## Docs
 
-- `docs/strategy/03-*`, `04-*` — the implementation plans (MVP, distribution); 00 / 02 are superseded
+- `docs/strategy/03-*`, `04-*` — the implementation plans (MVP, distribution); 00 / 02 were removed before publication
 - `docs/spec/` — contracts (API, explanation file)
 - `docs/verification/` — records of real-environment verification
 

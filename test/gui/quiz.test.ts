@@ -201,5 +201,5 @@ gui("a multi-line quiz question: the head shows only the last paragraph, un-clam
   assert.ok(!head.includes("Premise:"), "the premise lines are not in the head");
   assert.equal(ev<boolean>(`!document.querySelector("#background .headline").classList.contains("clampable")`), true, "not clamped");
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background .headline")).whiteSpace`), "pre-line");
-  ab("screenshot", "/tmp/scratchpad/ukagai-quiz-head.png");
+  ab("screenshot", join(tmpdir(), "ukagai-quiz-head.png"));
 });

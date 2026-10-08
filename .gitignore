@@ -11,3 +11,8 @@ verification/e2e-settings*.json
 verification/state/
 verification/e3-note.md
 out/
+.claude/
+.env
+.env.*
+*.bak*
+verification/

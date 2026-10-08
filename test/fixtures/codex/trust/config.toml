@@ -1,3 +1,5 @@
+# Synthetic fixture: the trusted_hash values were recomputed with hookHash (src/install/codex-trust.ts)
+# after the personal paths in hooks.json / proj-hooks.json were replaced; Codex did not write them.
 model = "gpt-5.6-sol"
 model_reasoning_effort = "low"
 sandbox_mode = "workspace-write"
@@ -15,22 +17,22 @@ screen_reader_detection_done = true
 [hooks.state]
 
 [hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:pre_tool_use:0:0"]
-trusted_hash = "sha256:ee4ed1fc1a0c5519adbf26b501fe23c771075a0d153e5aa82bf05e6796b8c331"
+trusted_hash = "sha256:2c3035b08c456f868a77ddc9837ed54941acabd66bcc6dd5fd5543ab20bc3e42"
 
 [hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:permission_request:0:0"]
-trusted_hash = "sha256:9da4686c48b44fbe8dda3cf5927eac5147760e27b3a7c92a26f364fd7801ff05"
+trusted_hash = "sha256:946c6277a0c673c4cb808cc552d9a12af667219cc62704a1002f7e447f8bdb65"
 
 [hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:post_tool_use:0:0"]
-trusted_hash = "sha256:721da2c3e6dd740af129e0511336e0a35237f40b5bc69880905276d88196aba4"
+trusted_hash = "sha256:daeb5748eb91cc5fc460b1efa044a2a311ed08cedc088abcec645e5b9322a004"
 
 [hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:session_start:0:0"]
-trusted_hash = "sha256:6fd592054b8a32b9b383a616e5bc76a0b3cc414941fbb8554fa21fbc00b2ec2a"
+trusted_hash = "sha256:1fb74acf380b3f9570c79f394dd63651bec8da9f97caaad4ddc4b4a9c2e20c75"
 
 [hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:user_prompt_submit:0:0"]
-trusted_hash = "sha256:c9d460481854a031105c6ec81010cd42daf2a6685dffe0b99808238ab97f79f7"
+trusted_hash = "sha256:8c14e23e581b2009a90216828ee148f8c292198dfe757bd38c3515c0483f1a8f"
 
 [hooks.state."/tmp/scratchpad/codex-verify/home/hooks.json:stop:0:0"]
-trusted_hash = "sha256:6b5f29625f6f6e5d21b3f51be1ede4d05c15ca656bbe4352aff50567b9a99de4"
+trusted_hash = "sha256:a7ef92bc4097cb9cbcb9d9a0a3b270f4705a095e881caf6fd10437086b2bbc07"
 
 [hooks.state."/tmp/scratchpad/codex-verify/proj/.codex/hooks.json:pre_tool_use:0:0"]
-trusted_hash = "sha256:ec4e5b824b57629f9fca1e03511a3440dc3f2b088c58ac349e23303bb865d58b"
+trusted_hash = "sha256:ba510cd641d23e90c3d502d655ea7d73060ccf91bd25b9da6dd5139e678ef88d"
