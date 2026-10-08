@@ -1,0 +1,431 @@
+import { planOutline } from "./plan.js";
+import { AskUserQuestionInput, CheckpointRequest, ExitPlanModeInput } from "../contract.js";
+import { COLUMN_HAPPENS, COLUMN_RISK, RECOMMEND_COND, SECTION, UNDO_BAD_WORDS, UNDO_WORDS, findCoinedTerms, findSection, findTables, normalizeLabel, parseBullets, parseFootnotes, parseFrontMatter, parseTerms, scanFences, scanHeadings, toLines, } from "../hook/explain.js";
+import { t } from "./i18n.js";
+/** Words saying it cannot be undone (red), then words saying how to undo (green): the hook's shared vocabulary, with the g flag for matchAll */
+export const IRREVERSIBLE_RE = new RegExp(UNDO_BAD_WORDS.source, "giu");
+export const UNDO_RE = new RegExp(UNDO_WORDS.source, "giu");
+const FIXED_ALIASES = {
+    done: ["Done. Continue", "対応した。続けて", "完了。続けて"],
+    skip: ["Skip this step and continue", "この手順は飛ばして続けて", "この手順を飛ばして続けて"],
+    stop: ["Stop here", "ここで中断", "ここで止める"],
+};
+const squash = (s) => s.normalize("NFKC").replace(/\s/gu, "").toLowerCase();
+/** Which blocker fixed label this option is (any language alias, with or without the (Recommended) suffix), if any */
+export function fixedLabel(label) {
+    const key = squash(label.replace(SUFFIX_RE, ""));
+    return Object.keys(FIXED_ALIASES).find((k) => FIXED_ALIASES[k].some((a) => squash(a) === key));
+}
+// Accepts both the English and the Japanese suffix
+const SUFFIX_RE = /\s*[(（]\s*(recommended|推奨)\s*[)）]\s*$/i;
+const stripSuffix = (s) => s.replace(SUFFIX_RE, "");
+const NONE_REASON = {
+    loop_guard: "reason_loop_guard",
+    plan_mode: "reason_plan_mode",
+    not_required: "reason_not_required",
+};
+const WT_RE = /\/\.herdr\/worktrees\/([^/]+)\/([^/]+)/;
+const tail = (cwd) => cwd.split("/").filter(Boolean).pop() || cwd;
+export const tildePath = (p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+/** File name of the plan an approval decision is about (the basename of `planFilePath`); null when there is none */
+export function planNameOf(d) {
+    if (d.kind !== "approve_plan")
+        return null;
+    const p = d.request.planFilePath;
+    return typeof p === "string" && p ? (p.split(/[\\/]/).pop() || null) : null;
+}
+const planOf = (d) => {
+    const r = ExitPlanModeInput.safeParse(d.request);
+    return r.success ? r.data.plan : "";
+};
+const questionsOf = (d) => {
+    const r = AskUserQuestionInput.safeParse(d.request);
+    return r.success ? r.data.questions : [];
+};
+export function isBlocker(d, fm = {}) {
+    const ex = d.explanation;
+    if (!ex)
+        return false;
+    if (ex.type)
+        return ex.type === "blocker";
+    return d.kind === "answer_question" && hasExplanation(d) && fm["type"] === "blocker";
+}
+/** Extract the contents of fenced code blocks in order */
+export function codeBlocks(md) {
+    const out = [];
+    const re = /^(```|~~~)[^\n]*\n([\s\S]*?)^\1[ \t]*$/gm;
+    for (let m = re.exec(md); m; m = re.exec(md))
+        out.push((m[2] ?? "").replace(/\n$/, ""));
+    return out;
+}
+export function hasExplanation(d) {
+    return !!d.explanation && d.explanation.attached_via !== "none";
+}
+/**
+ * A stable accent per repository, shared with the GUI (repoSlot in public/app.js is the same algorithm):
+ * FNV-1a (32 bit) over the repo name (the working directory's last segment when there is no repo) -> slot = hash % 12.
+ * GUI: hue = (238 + slot * 27) % 360 (the 12 hues skip 200-235, which is the UI accent blue); `plans/` is a neutral grey.
+ * TUI: each slot gets the ANSI colour nearest to that hue (non-bright 31-36, drawn bold), so the same repo reads as the same colour:
+ *   hues 238 265 -> blue, 292 319 -> magenta, 346 13 -> red, 40 67 -> yellow, 94 121 148 -> green, 175 -> cyan. `plans/` is bright black (grey).
+ */
+export function repoSlot(name) {
+    let h = 0x811c9dc5;
+    for (const ch of name) {
+        h ^= ch.codePointAt(0);
+        h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h % 12;
+}
+const SLOT_ANSI = [34, 34, 35, 35, 31, 31, 33, 33, 32, 32, 32, 36];
+export const PLANS_ANSI = "\x1b[90m";
+export const repoAnsi = (name) => `\x1b[${SLOT_ANSI[repoSlot(name)]}m`;
+export function chipsOf(d) {
+    const m = WT_RE.exec(d.session.cwd);
+    const out = [{ kind: "repo", text: `◈ ${m?.[1] ?? tail(d.session.cwd)}` }];
+    if (d.context?.branch)
+        out.push({ kind: "branch", text: `⎇ ${d.context.branch}` });
+    if (m?.[2])
+        out.push({ kind: "worktree", text: `⧉ ${m[2]}` });
+    return out;
+}
+export function titleOf(d, fm, lang = "en") {
+    const explicit = d.explanation?.title || (hasExplanation(d) && d.kind === "answer_question" ? fm["title"] : undefined);
+    if (explicit)
+        return explicit;
+    if (d.kind === "approve_plan") {
+        return /^#[ \t]+(.+?)[ \t]*$/m.exec(planOf(d))?.[1] ?? t(lang, "default_plan_title");
+    }
+    if (d.kind === "checkpoint")
+        return `${t(lang, "checkpoint_title")} · ${d.session.title || tail(d.session.cwd)}`;
+    const q = questionsOf(d)[0]?.question;
+    return stripSuffix(d.session.title || q || t(lang, "default_question_title"));
+}
+function metaOf(d, fm, key) {
+    const ex = d.explanation;
+    if (!ex)
+        return undefined;
+    if (ex[key])
+        return ex[key];
+    if (d.kind === "answer_question" && hasExplanation(d))
+        return fm[key];
+    return undefined;
+}
+export function elapsed(iso, now = Date.now(), lang = "en") {
+    const sec = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+    if (sec < 60)
+        return t(lang, "elapsed_s", { n: sec });
+    if (sec < 3600)
+        return t(lang, "elapsed_m", { n: Math.floor(sec / 60) });
+    return t(lang, "elapsed_h", { n: Math.floor(sec / 3600) });
+}
+const hasMatch = (re, s) => new RegExp(re.source, re.flags.replace("g", "")).test(s);
+const isDash = (s) => /^[-—ー]*$/u.test(s.trim());
+/** Match a table (first column = label) to the options. Null if no row matches */
+function cardsFromTable(t, options, recommended) {
+    const hi = t.header.findIndex((h) => COLUMN_HAPPENS.test(h.normalize("NFKC")));
+    const ri = t.header.findIndex((h) => COLUMN_RISK.test(h.normalize("NFKC")));
+    const cards = [];
+    const used = new Set();
+    for (const row of t.rows) {
+        const key = normalizeLabel(row[0] ?? "");
+        const o = options.find((x) => normalizeLabel(x.label) === key);
+        if (!o || used.has(o.label))
+            continue;
+        used.add(o.label);
+        let lines;
+        if (hi >= 0 && ri >= 0) {
+            lines = [
+                { text: row[hi] ?? "", md: true },
+                { text: row[ri] ?? "", md: true, risk: true },
+                ...t.extraColumns.map((c) => ({ text: row[c] ?? "", md: true, name: t.header[c] ?? "" })),
+            ];
+        }
+        else {
+            lines = row.slice(1).map((c, j) => ({ text: c ? `${t.header[j + 1] ?? ""}: ${c}` : "", md: true }));
+        }
+        lines = lines.filter((l) => l.text && !isDash(l.text));
+        cards.push({
+            value: o.label,
+            label: stripSuffix(row[0] ?? ""),
+            lines,
+            recommended: false,
+            heavy: ri >= 0 && hasMatch(IRREVERSIBLE_RE, row[ri] ?? ""),
+            suffix: SUFFIX_RE.test(row[0] ?? ""),
+            key,
+        });
+    }
+    if (!cards.length)
+        return null;
+    const want = recommended ? normalizeLabel(recommended) : null;
+    const byFm = want ? cards.filter((c) => normalizeLabel(c.value) === want) : [];
+    for (const c of byFm.length ? byFm : cards.filter((c) => c.suffix))
+        c.recommended = true;
+    const extras = options
+        .filter((o) => !used.has(o.label))
+        .map((o) => rawCard(o, false));
+    return { cards: cards.map(({ suffix: _s, key: _k, ...c }) => withFixed(c)), extras };
+}
+const withFixed = (c) => {
+    const f = fixedLabel(c.value);
+    return f ? { ...c, fixed: f } : c;
+};
+function rawCard(o, recommended) {
+    return withFixed({
+        value: o.label,
+        label: stripSuffix(o.label),
+        lines: o.description ? [{ text: o.description, md: false }] : [],
+        recommended,
+    });
+}
+/** Extract the body of the "Scope and reversibility" section from a plan (exact match first, then partial); null if absent */
+/** The `ScreenModel.planKey` / id of a plan file: `plan:<file name>` */
+export const planKeyOf = (name) => `plan:${name}`;
+export function impactOf(plan) {
+    const body = toLines(plan);
+    const { inFence } = scanFences(body);
+    const sec = findSection(scanHeadings(body, inFence), body.length, SECTION.impact);
+    if (!sec)
+        return null;
+    return body.slice(sec.start + 1, sec.end).join("\n").trim() || null;
+}
+/** Split off the first sentence (`。` `!` `?`, or a `.` followed by whitespace / the end) */
+/** The last sentence of the recommendation's prose (callouts and code excluded) when it holds a condition word and is not the headline itself */
+export function condOf(recommendation) {
+    let fence = false;
+    const prose = [];
+    for (const line of recommendation.split("\n")) {
+        if (/^\s*(```|~~~)/.test(line))
+            fence = !fence;
+        else if (!fence && !line.startsWith(">"))
+            prose.push(line);
+    }
+    const sentences = prose.join(" ").split(/(?<=[。！？])|(?<=[.!?])\s+/u).map((x) => x.trim()).filter(Boolean);
+    const last = sentences.length > 1 ? sentences.at(-1) : "";
+    return last && RECOMMEND_COND.test(last) ? last : null;
+}
+export function splitHeadline(text) {
+    const flat = text.replace(/\s*\n\s*/g, " ").trim();
+    const m = /^(.+?(?:[。！？!?]+|\.(?=\s|$)))\s*(.*)$/su.exec(flat);
+    return m ? { headline: m[1].trim(), rest: m[2].trim() } : { headline: flat, rest: "" };
+}
+/** The Deny option of a Codex approval */
+const DENY_RE = /^\s*(deny|denied|reject|拒否|却下)/i;
+const NO_RICH = { why: null, cond: null, headline: null, recRest: null, unknowns: [], assumptions: [], against: null, affects: [], terms: [], coinedTerms: [], footnotes: [] };
+export function buildModel(d, lang = "en", history = null) {
+    const explained = hasExplanation(d);
+    const md = explained ? (d.explanation?.markdown ?? "") : "";
+    const all = toLines(md);
+    const fmParsed = d.kind === "answer_question" && explained ? parseFrontMatter(all) : null;
+    const fm = fmParsed?.fields ?? {};
+    const rev = metaOf(d, fm, "reversibility");
+    const base = {
+        id: d.id,
+        title: titleOf(d, fm, lang),
+        chips: chipsOf(d),
+        cwd: tildePath(d.session.cwd),
+        ...(rev ? { reversibility: rev } : {}),
+        ...(metaOf(d, fm, "scope") ? { scope: metaOf(d, fm, "scope") } : {}),
+        createdAt: d.created_at,
+        hasExplanation: explained,
+        history,
+        blocker: isBlocker(d, fm),
+        todo: null,
+        todoCode: [],
+    };
+    const coinedTerms = d.kind === "answer_question" && explained && questionsOf(d).length === 1
+        ? findCoinedTerms(md, questionsOf(d)[0].options.map((o) => stripSuffix(o.label)))
+        : [];
+    if (d.kind === "checkpoint") {
+        const recap = CheckpointRequest.safeParse(d.request).data?.recap ?? "";
+        return { ...base, ...NO_RICH, kind: "checkpoint", background: null, recommendation: null, checkpoint: { recap, headline: splitHeadline(recap).headline } };
+    }
+    if (d.kind === "approve_plan") {
+        const plan = planOf(d);
+        let background = plan;
+        let extra = "";
+        // The hook puts the plan body in explanation.markdown, so only append it when it differs from the plan
+        if (explained && md.trim() !== plan.trim()) {
+            const lines = toLines(md);
+            extra = "\n\n---\n\n" + lines.slice(parseFrontMatter(lines).bodyStart).join("\n");
+            background += extra;
+        }
+        const outline = planOutline(plan);
+        const name = planNameOf(d);
+        return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan), plan: outline.long ? { outline, text: plan, extra } : null, ...(name ? { planKey: planKeyOf(name) } : {}) };
+    }
+    const qs = questionsOf(d);
+    const q = qs[0];
+    if (!q || qs.length > 1) {
+        return {
+            ...base,
+            ...NO_RICH,
+            kind: "question",
+            background: null,
+            recommendation: null,
+            unsupported: t(lang, "unsupported_multi"),
+        };
+    }
+    const rawCards = q.options.map((o) => rawCard(o, SUFFIX_RE.test(o.label)));
+    // With no options (a prose question) only free text is left: the cursor starts on it (slot 2, after the hidden None of these / Can't answer)
+    const pref = (cards) => (cards.length ? Math.max(0, cards.findIndex((c) => c.recommended)) : 2);
+    const plainQuestion = {
+        text: q.question,
+        header: q.header,
+        approval: /^approval$/i.test(q.header.trim()),
+        multi: !!q.multiSelect,
+    };
+    if (!explained) {
+        const code = d.explanation?.none_reason ?? "";
+        const reason = NONE_REASON[code] ? t(lang, NONE_REASON[code]) : code;
+        return {
+            ...base,
+            ...NO_RICH,
+            kind: "question",
+            background: null,
+            backgroundNote: reason ? t(lang, "no_explanation_note_reason", { reason }) : t(lang, "no_explanation_note"),
+            recommendation: null,
+            question: { ...plainQuestion, cards: rawCards, initialCursor: pref(rawCards), v2: false },
+        };
+    }
+    const body = all.slice(fmParsed.bodyStart);
+    const { inFence } = scanFences(body);
+    const headings = scanHeadings(body, inFence);
+    if (fm["type"] === "quiz") {
+        // Why this question now, Premise and How to answer; no recommendation, no badge on any option
+        const part = (names, key) => {
+            const sec = findSection(headings, body.length, names);
+            const text = sec ? body.slice(sec.start + 1, sec.end).join("\n").trim() : "";
+            return text ? `## ${t(lang, key)}\n\n${text}` : "";
+        };
+        const whySec = findSection(headings, body.length, SECTION.quizWhy);
+        const whyText = whySec ? body.slice(whySec.start + 1, whySec.end).join("\n").trim() : "";
+        // the labels stay exactly as given (no (Recommended) stripping)
+        const cards = q.options.map((o) => ({ ...rawCard(o, false), label: o.label }));
+        return {
+            ...base,
+            ...NO_RICH,
+            kind: "question",
+            quiz: true,
+            background: [part(SECTION.quizPremise, "sec_quiz_premise"), part(SECTION.quizHow, "sec_quiz_how"), part(SECTION.terms, "sec_quiz_terms")].filter(Boolean).join("\n\n"),
+            recommendation: null,
+            why: whyText ? { heading: t(lang, "sec_quiz_why"), text: whyText } : null,
+            question: { ...plainQuestion, cards, initialCursor: 0, v2: false },
+        };
+    }
+    const optSec = findSection(headings, body.length, SECTION.options);
+    let recSec = findSection(headings, body.length, SECTION.recommendation);
+    if (recSec && optSec && recSec.start === optSec.start)
+        recSec = null;
+    const table = optSec ? findTables(body, inFence, optSec.start + 1, optSec.end)[0] : undefined;
+    const parsed = table ? cardsFromTable(table, q.options, fm["recommended"]) : null;
+    if (!parsed) {
+        const cards = rawCards;
+        return {
+            ...base,
+            ...NO_RICH,
+            kind: "question",
+            background: body.join("\n"),
+            recommendation: null,
+            coinedTerms,
+            question: { ...plainQuestion, cards, initialCursor: pref(cards), v2: false },
+        };
+    }
+    const drop = [[optSec.start, optSec.end]];
+    const secBody = (names, dropIt) => {
+        const sec = findSection(headings, body.length, names);
+        if (!sec || sec.start === optSec.start || (recSec && sec.start === recSec.start))
+            return "";
+        if (dropIt)
+            drop.push([sec.start, sec.end]);
+        return body.slice(sec.start + 1, sec.end).join("\n").trim();
+    };
+    // The hook parsers read the whole Markdown; secBody is still called so the sections are dropped from the background.
+    const full = body.join("\n");
+    // Why leads the background column; a Why with footnotes stays in the background (renderMarkdown has no footnote definitions)
+    let why = null;
+    const whySec = findSection(headings, body.length, [...SECTION.why, ...SECTION.blockerWhy]);
+    if (whySec && whySec.start !== optSec.start && !(recSec && whySec.start === recSec.start)) {
+        const text = body.slice(whySec.start + 1, whySec.end).join("\n").trim();
+        if (text && !/\[\^/.test(text)) {
+            why = { heading: body[whySec.start].replace(/^\s*#+\s*/, "").trim(), text };
+            drop.push([whySec.start, whySec.end]);
+        }
+    }
+    const unknowns = secBody(SECTION.unknowns, true) ? parseBullets(full, SECTION.unknowns) : [];
+    const assumptions = secBody(SECTION.assumptions, true) ? parseBullets(full, SECTION.assumptions) : [];
+    const against = secBody(SECTION.against, true).replace(/\s*\n\s*/g, " ") || null;
+    const affects = secBody(SECTION.affects, true) ? parseBullets(full, SECTION.affects) : [];
+    const terms = secBody(SECTION.terms, false) ? parseTerms(full) : [];
+    let todo = null;
+    if (base.blocker) {
+        const todoSec = findSection(headings, body.length, SECTION.blockerTodo);
+        if (todoSec && todoSec.start !== optSec.start) {
+            const text = body.slice(todoSec.start + 1, todoSec.end).join("\n").trim();
+            if (text) {
+                todo = text;
+                drop.push([todoSec.start, todoSec.end]);
+            }
+        }
+    }
+    let recommendation = null;
+    if (recSec) {
+        const text = body.slice(recSec.start + 1, recSec.end).join("\n").trim();
+        if (text) {
+            recommendation = text;
+            drop.push([recSec.start, recSec.end]);
+        }
+    }
+    const kept = body.filter((_, i) => !drop.some(([s, e]) => i >= s && i < e));
+    const cards = [...parsed.cards, ...parsed.extras].map((c) => (plainQuestion.approval && DENY_RE.test(c.label) ? { ...c, heavy: false } : c));
+    const split = recommendation ? splitHeadline(recommendation) : null;
+    const fns = parseFootnotes(body.join("\n"));
+    return {
+        ...base,
+        kind: "question",
+        background: kept.join("\n").trim(),
+        recommendation,
+        why,
+        cond: recommendation ? condOf(recommendation) : null,
+        headline: split?.headline ?? null,
+        recRest: split?.rest || null,
+        unknowns,
+        assumptions,
+        against,
+        affects,
+        terms,
+        coinedTerms,
+        footnotes: fns.defs.map((x) => x.id),
+        todo,
+        todoCode: todo ? codeBlocks(todo) : [],
+        question: {
+            ...plainQuestion,
+            cards,
+            initialCursor: Math.max(0, cards.findIndex((c, i) => c.recommended || (i >= parsed.cards.length && SUFFIX_RE.test(c.value)))),
+            v2: true,
+        },
+    };
+}
+/** The screen model of a plan file shown as an item of its own: the PL1 folding view with no decision behind it */
+export function buildPlanFileModel(name, title, markdown, mtime) {
+    const outline = planOutline(markdown);
+    return {
+        ...NO_RICH,
+        id: planKeyOf(name),
+        kind: "plan",
+        title,
+        chips: [],
+        cwd: "",
+        createdAt: mtime,
+        background: markdown,
+        recommendation: null,
+        impact: null,
+        plan: outline.long ? { outline, text: markdown, extra: "" } : null,
+        readonly: { name },
+        blocker: false,
+        todo: null,
+        todoCode: [],
+        hasExplanation: false,
+        history: null,
+    };
+}
+//# sourceMappingURL=model.js.map

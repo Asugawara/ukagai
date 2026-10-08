@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<!-- The server injects lang / data-lang (and data-theme when pinned) into <html>; the form is built by settings.js -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ukagai · Settings</title>
+<link rel="icon" href="/public/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/public/favicon.png" type="image/png" sizes="32x32">
+<link rel="stylesheet" href="/public/app.css">
+</head>
+<body class="settings-page">
+<div class="set" role="main">
+  <a id="back" class="set-back" href="/"></a>
+  <h1 id="set-title"></h1>
+  <p id="set-lede" class="muted"></p>
+  <div id="form"></div>
+</div>
+<div id="status" class="set-status" role="status" aria-live="polite"></div>
+<script type="module" src="/public/settings.js"></script>
+</body>
+</html>

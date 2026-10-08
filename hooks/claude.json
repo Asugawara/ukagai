@@ -1,0 +1,235 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--budget",
+              "3590",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 3600,
+            "statusMessage": "ukagai: waiting for an answer in the GUI"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--checkpoint",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--plan-context",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--plan-context",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/ukagai",
+              "hook",
+              "--managed-by",
+              "ukagai"
+            ],
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

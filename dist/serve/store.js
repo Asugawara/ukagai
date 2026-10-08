@@ -1,0 +1,986 @@
+import { randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { CANCEL_WINDOW_MS, CHECKPOINT_TTL_MS, checkpointFingerprint, checkpointToolUseId, DENY_LINK_WINDOW_MS, HANDOFF_GRACE_MS, INSTRUCTION_MAX_CHARS, MODE_SWITCH_TTL_MS, bodyHash, canTransition, decisionFingerprint, parseCannotAnswer, } from "../contract.js";
+export class HttpError extends Error {
+    status;
+    issues;
+    constructor(status, message, issues) {
+        super(message);
+        this.status = status;
+        this.issues = issues;
+    }
+}
+export const SESSION_PANEL_OPEN_EVENT = "ukagai.session_panel_open";
+const READY = ["answer_submitted", "fallback"];
+const CLOSED = ["answered", "hook_disconnected", "answer_lost", "cancelled", "denied_explain"];
+const EVENT_KEYS = [
+    "session_id",
+    "cwd",
+    "transcript_path",
+    "hook_event_name",
+    "tool_name",
+    "tool_use_id",
+    "agent_id",
+    "agent_type",
+    "agent",
+    "received_at",
+    "escaped_question",
+    "wakeup",
+    "blocker_detected",
+    "observe",
+    "notification_type",
+];
+const LIVE = ["pending", "answer_submitted"];
+const FILE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+/** PostToolUse of a tool that changes files: the agent did something even in a wake-up turn */
+function isFileChange(ev) {
+    return ev.hook_event_name === "PostToolUse" && FILE_TOOLS.has(String(ev.tool_name ?? ""));
+}
+function stat(values) {
+    if (values.length === 0)
+        return { count: 0, median_ms: null, mean_ms: null };
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    const mean = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+    return { count: sorted.length, median_ms: median, mean_ms: mean };
+}
+function firstQuestion(d) {
+    const qs = d.request.questions;
+    return qs?.[0]?.question;
+}
+/** A running-subagent entry older than this is ignored (a lost SubagentStop or a killed task must not hide the plan forever) */
+export const SUBAGENT_TTL_MS = 60 * 60_000;
+/** A wake-up-due mark older than this is ignored */
+export const WAKEUP_DUE_TTL_MS = 2 * 60_000;
+export class Store {
+    opts;
+    decisions = new Map();
+    byToolUse = new Map();
+    sessions = new Map();
+    modeSwitches = new Map();
+    rewrites = new Map();
+    expiredAt = new Map();
+    waiters = new Map();
+    /** Answered checkpoints whose text has not reached the agent yet: one per session, newest wins */
+    instructions = new Map();
+    /** Claude Code sessions whose last delivered instruction was a stop and that have not had a UserPromptSubmit since */
+    stoppedSessions = new Set();
+    /** When the session's agent last did something (a hook event or a decision its hook registered), as epoch ms. Insertions of checkpoints, answers and settings do not count */
+    lastActivity = new Map();
+    /** Sessions whose last UserPromptSubmit was a harness wake-up: their events are not activity (see applyEvent) */
+    wakeupTurns = new Set();
+    /** session -> running background subagents (agent_id -> SubagentStart received_at, epoch ms) */
+    runningSubagents = new Map();
+    /** session -> when a SubagentStop arrived while the agent was idle (epoch ms): the harness starts a wake-up turn; cleared by the next UserPromptSubmit */
+    wakeupDue = new Map();
+    /** Called after each live hook event of a session (the recap watcher reads that session's transcript now) */
+    onSessionEvent;
+    /** Called after a checkpoint is answered (the Codex bridge delivers its answer in-process; Claude's hook polls the instruction instead) */
+    onCheckpointAnswered;
+    /** Claude Code checkpoints: an answered instruct that an idle agent will not pick up by itself (the terminal delivery types it) */
+    onCheckpointDeliverable;
+    /** A checkpoint was created for a session (the terminal delivery looks up where its terminal is) */
+    onCheckpointCreated;
+    /** Types a queued plan instruction into the idle agent's terminal; true when it went in (set by the terminal delivery) */
+    deliverPlanInstruction;
+    monitor;
+    // Aggregates rebuilt from events
+    escapedQuestions = 0;
+    /** Sessions whose last Stop was an escaped question (the agent asked in the terminal and waits there); cleared by the next UserPromptSubmit or the end of the session */
+    askedInTerminal = new Set();
+    blockersDetected = 0;
+    panelOpens = 0;
+    observeStarts = new Map();
+    baseline = [];
+    decisionsFile;
+    eventsFile;
+    constructor(opts) {
+        this.opts = opts;
+        mkdirSync(opts.dir, { recursive: true, mode: 0o700 });
+        this.decisionsFile = join(opts.dir, "decisions.jsonl");
+        this.eventsFile = join(opts.dir, "events.jsonl");
+    }
+    // ---- Persistence and restore ----
+    load() {
+        if (existsSync(this.decisionsFile)) {
+            for (const line of readFileSync(this.decisionsFile, "utf8").split("\n")) {
+                if (!line.trim())
+                    continue;
+                try {
+                    const d = JSON.parse(line);
+                    if (typeof d.id !== "string")
+                        continue;
+                    this.decisions.set(d.id, d);
+                    this.byToolUse.set(d.tool_use_id, d.id);
+                    if (d.kind !== "checkpoint")
+                        this.markActivity(d.session?.session_id, Date.parse(d.created_at));
+                    for (const prev of d.previous_tool_use_ids ?? [])
+                        this.byToolUse.set(prev, d.id);
+                }
+                catch {
+                    // Skip malformed lines
+                }
+            }
+        }
+        // After a restart live decisions stay live: the hook retries its wait (W2), so re-arm the lease with the default grace.
+        // If no hook comes back, the lease expires and checkLeases moves it to hook_disconnected / answer_lost as usual.
+        const lease = new Date(Date.now() + this.opts.leaseGraceMs).toISOString();
+        for (const d of this.decisions.values()) {
+            if (LIVE.includes(d.status) && d.kind !== "checkpoint")
+                d.lease_until = lease;
+        }
+        this.restoreInstructions();
+        if (existsSync(this.eventsFile)) {
+            for (const line of readFileSync(this.eventsFile, "utf8").split("\n")) {
+                if (!line.trim())
+                    continue;
+                try {
+                    this.applyEvent(JSON.parse(line), false);
+                }
+                catch {
+                    // Skip malformed lines
+                }
+            }
+        }
+    }
+    /** The newest undelivered instruction of each session (at most CHECKPOINT_TTL_MS old) is still waiting after a restart */
+    restoreInstructions() {
+        const now = Date.now();
+        for (const d of this.decisions.values()) {
+            const r = d.response;
+            if (d.kind !== "checkpoint" || d.status !== "answered" || !r || r.delivered_at || (r.kind !== "instruct" && r.kind !== "stop"))
+                continue;
+            if (now - Date.parse(r.decided_at) > CHECKPOINT_TTL_MS)
+                continue;
+            const cur = this.instructions.get(d.session.session_id);
+            if (cur && cur.created_at >= r.decided_at)
+                continue;
+            this.instructions.set(d.session.session_id, { decision_id: d.id, kind: r.kind, text: r.text ?? "", created_at: r.decided_at });
+        }
+    }
+    persist(d) {
+        appendFileSync(this.decisionsFile, JSON.stringify(d) + "\n");
+    }
+    emit(event, data) {
+        this.opts.broadcast?.(event, data);
+    }
+    /** The one place a status changes. `onTransition` runs before the caller emits */
+    setStatus(d, to) {
+        const from = d.status;
+        d.status = to;
+        try {
+            this.opts.onTransition?.(d, from, to);
+        }
+        catch {
+            // Read marks are a convenience
+        }
+    }
+    notify(id) {
+        const set = this.waiters.get(id);
+        if (!set)
+            return;
+        for (const fn of [...set])
+            fn();
+    }
+    // ---- Decisions ----
+    get(id) {
+        return this.decisions.get(id);
+    }
+    findByToolUse(toolUseId) {
+        const id = this.byToolUse.get(toolUseId);
+        return id ? this.decisions.get(id) : undefined;
+    }
+    list(status) {
+        const all = [...this.decisions.values()];
+        const filtered = status ? all.filter((d) => d.status === status) : all.filter((d) => d.status !== "denied_explain");
+        return filtered.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    }
+    create(req, context) {
+        const existing = this.findByToolUse(req.tool_use_id);
+        if (existing && !(existing.status === "denied_explain" && req.status !== "denied_explain")) {
+            return { decision: existing, created: false };
+        }
+        if (req.kind === "checkpoint")
+            return this.insertCheckpoint(req);
+        const denied = req.status === "denied_explain";
+        const fingerprint = decisionFingerprint(req.kind, req.request);
+        const now = Date.now();
+        const session = { ...req.session };
+        if (!session.title && context.ai_title)
+            session.title = context.ai_title;
+        const decision = {
+            id: randomUUID(),
+            kind: req.kind,
+            tool_use_id: req.tool_use_id,
+            session,
+            request: req.request,
+            context,
+            status: denied ? "denied_explain" : "pending",
+            created_at: new Date(now).toISOString(),
+            fingerprint,
+            handoffs: 0,
+        };
+        const planFilePath = req.kind === "approve_plan" ? req.request.planFilePath : undefined;
+        if (typeof planFilePath === "string" && planFilePath !== "") {
+            const planName = this.opts.planNameOf?.(planFilePath);
+            if (planName)
+                decision.plan_name = planName;
+        }
+        if (req.explanation)
+            decision.explanation = req.explanation;
+        if (denied && req.missing)
+            decision.missing = req.missing;
+        if (!denied) {
+            decision.lease_until = new Date(now + this.opts.leaseGraceMs).toISOString();
+            const denial = req.explanation?.attached_via === "after_deny" ? this.findRecentDenial(decision, now) : undefined;
+            if (denial)
+                decision.first_denied_at = denial.created_at;
+        }
+        // A new plan: the human decides again, so an approval left from the previous one no longer applies
+        if (!denied && req.kind === "approve_plan")
+            this.modeSwitches.delete(session.session_id);
+        this.decisions.set(decision.id, decision);
+        this.byToolUse.set(decision.tool_use_id, decision.id);
+        this.persist(decision);
+        this.markActivity(session.session_id, now);
+        // The agent reached ExitPlanMode: an instruction queued for the plan it was writing is stale (the human instructs on the approval card now)
+        const stale = this.instructions.get(session.session_id);
+        if (!denied && req.kind === "approve_plan" && stale?.about === "plan" && stale.decision_id === "") {
+            this.instructions.delete(session.session_id);
+            this.opts.log?.("plan_instruction_dropped", { session: session.session_id, decision: decision.id });
+        }
+        if (!denied) {
+            this.emit("decision.created", decision);
+            this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
+        }
+        return { decision, created: true };
+    }
+    /** A progress recap seen in the session's transcript: supersedes the session's pending checkpoint and never changes the session state */
+    createCheckpoint(session, recap, recapAt) {
+        if (session.agent !== "codex") {
+            // The human told the agent to stop: no more progress checks until they speak again (Claude Code only; the Codex bridge handles its own)
+            if (this.stoppedSessions.has(session.session_id))
+                return { created: false, skipped: "after_stop" };
+            // Claude Code rewrites its recap while idle: a new card needs the agent to have done something since the last one
+            if (!this.hasProgressSinceLastCheckpoint(session.session_id))
+                return { created: false, skipped: "no_progress" };
+        }
+        const ds = { session_id: session.session_id, cwd: session.cwd, transcript_path: session.transcript_path ?? "" };
+        if (session.agent)
+            ds.agent = session.agent;
+        if (session.title)
+            ds.title = session.title;
+        return this.insertCheckpoint({
+            tool_use_id: checkpointToolUseId(session.session_id, recapAt),
+            kind: "checkpoint",
+            session: ds,
+            request: { recap, recap_at: recapAt },
+        });
+    }
+    markActivity(sessionId, at) {
+        if (!sessionId || !Number.isFinite(at))
+            return;
+        if (at > (this.lastActivity.get(sessionId) ?? 0))
+            this.lastActivity.set(sessionId, at);
+    }
+    /** True when the session has no checkpoint yet, or its agent was active after the newest one was created */
+    hasProgressSinceLastCheckpoint(sessionId) {
+        let newest = -Infinity;
+        for (const d of this.decisions.values()) {
+            if (d.kind === "checkpoint" && d.session.session_id === sessionId)
+                newest = Math.max(newest, Date.parse(d.created_at));
+        }
+        if (!Number.isFinite(newest))
+            return true;
+        return (this.lastActivity.get(sessionId) ?? 0) > newest;
+    }
+    insertCheckpoint(req) {
+        const existing = this.findByToolUse(req.tool_use_id);
+        if (existing)
+            return { decision: existing, created: false };
+        const request = req.request;
+        const sid = req.session.session_id;
+        for (const d of this.decisions.values()) {
+            if (d.kind === "checkpoint" && d.session.session_id === sid && d.status === "pending")
+                this.closeCheckpoint(d, "superseded");
+        }
+        const decision = {
+            id: randomUUID(),
+            kind: "checkpoint",
+            tool_use_id: req.tool_use_id,
+            session: { ...req.session },
+            request,
+            context: {},
+            status: "pending",
+            created_at: new Date().toISOString(),
+            fingerprint: checkpointFingerprint(request.recap_at),
+        };
+        this.decisions.set(decision.id, decision);
+        this.byToolUse.set(decision.tool_use_id, decision.id);
+        this.persist(decision);
+        this.emit("decision.created", decision);
+        this.touchSession(sid, { cwd: req.session.cwd, title: req.session.title, transcript_path: req.session.transcript_path });
+        try {
+            this.onCheckpointCreated?.(decision);
+        }
+        catch {
+            // A subscriber must not break the checkpoint
+        }
+        return { decision, created: true };
+    }
+    /** The terminal the session's agent runs in (looked up when a checkpoint is created and again when it is answered); undefined = not found */
+    setTerminal(sessionId, terminal) {
+        const cur = this.sessions.get(sessionId);
+        if (!cur || cur.terminal === terminal)
+            return;
+        const { terminal: _old, ...rest } = cur;
+        const next = terminal ? { ...rest, terminal } : rest;
+        this.sessions.set(sessionId, next);
+        this.emit("session.updated", next);
+    }
+    /** pending checkpoint -> cancelled (no lease, no waiter) */
+    closeCheckpoint(d, reason) {
+        this.transition(d, "cancelled");
+        d.status_reason = reason;
+        this.persist(d);
+        this.emit("decision.updated", d);
+    }
+    /** The session's pending checkpoints are no longer wanted (its next turn started elsewhere): cancelled with `reason` */
+    cancelPendingCheckpoints(sessionId, reason) {
+        for (const d of this.decisions.values()) {
+            if (d.kind === "checkpoint" && d.session.session_id === sessionId && d.status === "pending")
+                this.closeCheckpoint(d, reason);
+        }
+    }
+    /** An answered checkpoint whose instruction could not be handed over (Codex bridge): answer_lost, and the queued instruction is dropped */
+    loseCheckpoint(id) {
+        const d = this.decisions.get(id);
+        if (!d)
+            throw new HttpError(404, "decision not found");
+        if (d.kind !== "checkpoint" || d.status !== "answered" || d.response?.delivered_at)
+            return d;
+        if (this.instructions.get(d.session.session_id)?.decision_id === id)
+            this.instructions.delete(d.session.session_id);
+        this.setStatus(d, "answer_lost");
+        this.persist(d);
+        this.emit("decision.updated", d);
+        return d;
+    }
+    /** The instruction waiting for the session's agent, or undefined. Consuming it marks the checkpoint delivered */
+    consumeInstruction(sessionId, via = "hook") {
+        const ins = this.instructions.get(sessionId);
+        if (!ins)
+            return undefined;
+        this.instructions.delete(sessionId);
+        this.markDelivered(ins.decision_id, via);
+        if (ins.kind === "stop" && this.decisions.get(ins.decision_id)?.session.agent !== "codex")
+            this.stoppedSessions.add(sessionId);
+        return ins;
+    }
+    markDelivered(decisionId, via) {
+        const d = this.decisions.get(decisionId);
+        if (!d?.response || d.response.delivered_at)
+            return;
+        d.response = { ...d.response, delivered_at: new Date().toISOString(), delivered_via: via };
+        this.persist(d);
+        this.emit("decision.updated", d);
+    }
+    /** The queued instruction of this checkpoint, taken off the queue for the terminal delivery (undefined when the hook took it first) */
+    claimInstruction(decisionId, maxAgeMs) {
+        for (const [sid, ins] of this.instructions) {
+            if (ins.decision_id !== decisionId)
+                continue;
+            // Typing starts a new turn: only for an agent that is still idle, and not for a reply the human gave long ago
+            if (this.sessions.get(sid)?.state !== "idle" || Date.now() - Date.parse(ins.created_at) > maxAgeMs)
+                return undefined;
+            this.instructions.delete(sid);
+            return ins;
+        }
+        return undefined;
+    }
+    /**
+     * An instruction from a plan file card: queued for the session's next tool call (newest wins, like a checkpoint reply). An idle
+     * Claude Code agent calls no tool, so it is offered to the terminal delivery, which resolves with how it went
+     */
+    async queuePlanInstruction(sessionId, text) {
+        const created_at = new Date().toISOString();
+        const queued = this.instructions.get(sessionId);
+        // A queued stop must still reach the agent; a queued reply or earlier plan instruction keeps its identity (so its checkpoint is marked delivered) and the texts are joined
+        if (queued?.kind === "stop")
+            throw new HttpError(409, "a stop is queued for this session");
+        // A queued reply with no text of its own would make the hook word the plan text as a recap reply: such a join is worded as a plan instruction
+        const ins = queued
+            ? queued.text.trim() === ""
+                ? { ...queued, text: text.slice(0, INSTRUCTION_MAX_CHARS), about: "plan" }
+                : { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
+            : { decision_id: "", kind: "instruct", text, created_at, about: "plan" };
+        this.instructions.set(sessionId, ins);
+        if (this.sessions.get(sessionId)?.state !== "idle" || !this.deliverPlanInstruction)
+            return "hook";
+        try {
+            return (await this.deliverPlanInstruction(sessionId, ins)) ? "terminal" : "hook";
+        }
+        catch {
+            return "hook";
+        }
+    }
+    /** A claimed instruction could not be typed: back on the queue for the hook, unless a newer one took its place */
+    requeueInstruction(sessionId, ins) {
+        if (!this.instructions.has(sessionId))
+            this.instructions.set(sessionId, ins);
+    }
+    /** The queued plan instruction of a session, taken off the queue for the terminal delivery (undefined when the hook took it first or the agent is not idle) */
+    claimPlanInstruction(sessionId, ins) {
+        if (this.instructions.get(sessionId) !== ins || this.sessions.get(sessionId)?.state !== "idle")
+            return undefined;
+        this.instructions.delete(sessionId);
+        return ins;
+    }
+    /** A claimed instruction reached the agent's terminal */
+    deliveredToTerminal(decisionId) {
+        this.markDelivered(decisionId, "terminal");
+    }
+    /** The newest decision of the session and agent that is still open (pending, or its hook went away) and asks the same thing */
+    findOpen(sessionId, agentId, fingerprint) {
+        let best;
+        for (const d of this.decisions.values()) {
+            if (d.kind === "checkpoint" || d.session.session_id !== sessionId || (d.session.agent_id ?? "") !== (agentId ?? "") || d.fingerprint !== fingerprint)
+                continue;
+            if (d.status !== "pending" && d.status !== "hook_disconnected")
+                continue;
+            if (!best || d.created_at > best.created_at)
+                best = d;
+        }
+        return best;
+    }
+    /** The tool was called again for an open decision: it takes the new tool_use_id and is waited for again (a lost hook is revived) */
+    reattach(d, toolUseId) {
+        if (d.status === "hook_disconnected") {
+            this.transition(d, "pending");
+            this.expiredAt.delete(d.id);
+        }
+        if (toolUseId !== d.tool_use_id) {
+            d.previous_tool_use_ids = [...(d.previous_tool_use_ids ?? []), d.tool_use_id];
+            d.tool_use_id = toolUseId;
+            this.byToolUse.set(toolUseId, d.id);
+        }
+        d.lease_until = new Date(Date.now() + this.opts.leaseGraceMs).toISOString();
+        this.persist(d);
+        this.emit("decision.updated", d);
+        this.touchSession(d.session.session_id, { state: "waiting_decision" });
+        return d;
+    }
+    /** The hook's budget for this leg ended: the decision stays pending and waits for the agent's next call. Memory and SSE only: the re-attach that follows persists the record, and a restart re-arms the lease */
+    handoff(id, sessionId) {
+        const d = this.decisions.get(id);
+        if (!d)
+            throw new HttpError(404, "decision not found");
+        if (d.session.session_id !== sessionId)
+            throw new HttpError(403, "decision belongs to another session");
+        if (d.status !== "pending")
+            throw new HttpError(409, `cannot hand off a ${d.status} decision`);
+        d.handoffs = (d.handoffs ?? 0) + 1;
+        d.lease_until = new Date(Date.now() + (this.opts.handoffGraceMs ?? HANDOFF_GRACE_MS)).toISOString();
+        this.emit("decision.updated", d);
+        return d;
+    }
+    findRecentDenial(d, now) {
+        const q = firstQuestion(d);
+        let best;
+        for (const c of this.decisions.values()) {
+            if (c.status !== "denied_explain")
+                continue;
+            if (c.session.session_id !== d.session.session_id)
+                continue;
+            if ((c.session.agent_id ?? "") !== (d.session.agent_id ?? ""))
+                continue;
+            if (firstQuestion(c) !== q)
+                continue;
+            if (now - Date.parse(c.created_at) > DENY_LINK_WINDOW_MS)
+                continue;
+            if (!best || c.created_at > best.created_at)
+                best = c;
+        }
+        return best;
+    }
+    transition(d, to) {
+        if (!canTransition(d.status, to)) {
+            throw new HttpError(409, `cannot transition ${d.status} -> ${to}`);
+        }
+        this.setStatus(d, to);
+    }
+    submitAnswer(id, patch) {
+        const d = this.decisions.get(id);
+        if (!d)
+            throw new HttpError(404, "decision not found");
+        const decided_at = new Date().toISOString();
+        if ((patch.kind === "checkpoint") !== (d.kind === "checkpoint"))
+            throw new HttpError(400, `this answer does not fit kind ${d.kind}`);
+        if (patch.kind === "checkpoint")
+            return this.answerCheckpoint(d, patch, decided_at);
+        const needsKind = patch.kind === "answers" ? "answer_question" : patch.kind === "fallback" ? undefined : "approve_plan";
+        if (needsKind && d.kind !== needsKind)
+            throw new HttpError(400, `this answer does not fit kind ${d.kind}`);
+        let response;
+        let to = "answer_submitted";
+        switch (patch.kind) {
+            case "answers":
+                response = { via: "gui", answers: patch.answers, decided_at };
+                break;
+            case "approve":
+                response = { via: "gui", approve: true, decided_at };
+                if (patch.set_mode_auto)
+                    response.set_mode_auto = true;
+                break;
+            case "reject":
+                response = { via: "gui", approve: false, decided_at };
+                if (patch.reason)
+                    response.reason = patch.reason;
+                break;
+            case "instruct_plan":
+                response = { via: "gui", instruct: true, text: patch.text, decided_at };
+                break;
+            case "fallback":
+                response = { via: "terminal", decided_at };
+                to = "fallback";
+                break;
+        }
+        this.transition(d, to);
+        d.response = response;
+        this.persist(d);
+        if (patch.kind === "approve" && patch.set_mode_auto) {
+            this.modeSwitches.set(d.session.session_id, { set_at: Date.now() });
+        }
+        if (patch.kind === "answers")
+            this.rememberCannotAnswer(d, patch.answers);
+        this.emit("decision.updated", d);
+        this.notify(d.id);
+        return d;
+    }
+    /** pending -> answered directly: nobody waits for a checkpoint, so there is no hook ack. instruct / stop queue an instruction */
+    answerCheckpoint(d, patch, decidedAt) {
+        if (d.status !== "pending")
+            throw new HttpError(409, `cannot answer a ${d.status} checkpoint`);
+        const text = patch.text?.trim() ? patch.text : undefined;
+        if (patch.answer === "instruct" && !text)
+            throw new HttpError(400, "text is required for instruct");
+        d.response = { via: "gui", kind: patch.answer, ...(text !== undefined && patch.answer !== "continue" ? { text } : {}), decided_at: decidedAt };
+        this.setStatus(d, "answered");
+        const claude = d.session.agent !== "codex";
+        // Nothing to stop in an idle Claude Code session: delivered at once, nothing queued
+        const noop = claude && patch.answer === "stop" && this.sessions.get(d.session.session_id)?.state === "idle";
+        if (noop) {
+            d.response = { ...d.response, delivered_at: decidedAt, delivered_via: "noop" };
+            this.stoppedSessions.add(d.session.session_id);
+        }
+        this.persist(d);
+        if (patch.answer !== "continue" && !noop) {
+            this.instructions.set(d.session.session_id, { decision_id: d.id, kind: patch.answer, text: d.response.text ?? "", created_at: decidedAt });
+        }
+        this.emit("decision.updated", d);
+        try {
+            this.onCheckpointAnswered?.(d);
+            if (claude && patch.answer === "instruct" && this.sessions.get(d.session.session_id)?.state === "idle")
+                this.onCheckpointDeliverable?.(d);
+        }
+        catch {
+            // A subscriber must not break the answer
+        }
+        return d;
+    }
+    /** "Cannot answer — ..." keeps one memo per session (overwritten) for the hook to enforce on the next explanation */
+    rememberCannotAnswer(d, answers) {
+        for (const [question, value] of Object.entries(answers)) {
+            const c = parseCannotAnswer(value);
+            if (!c)
+                continue;
+            this.rewrites.set(d.session.session_id, {
+                question: firstQuestion(d) ?? question,
+                reason: c.reason,
+                terms: c.terms,
+                body_hash: bodyHash(d.explanation?.markdown ?? ""),
+                at: Date.now(),
+            });
+            return;
+        }
+    }
+    /** Notification when the hook exits on SIGTERM / SIGINT / SIGHUP. pending becomes cancelled, answer_submitted becomes answer_lost */
+    cancel(id, reason) {
+        const d = this.decisions.get(id);
+        if (!d)
+            throw new HttpError(404, "decision not found");
+        this.transition(d, d.status === "answer_submitted" ? "answer_lost" : "cancelled");
+        if (reason)
+            d.status_reason = reason;
+        delete d.lease_until;
+        this.persist(d);
+        this.emit("decision.updated", d);
+        this.notify(d.id);
+        return d;
+    }
+    ack(id) {
+        const d = this.decisions.get(id);
+        if (!d)
+            throw new HttpError(404, "decision not found");
+        this.transition(d, "answered");
+        d.response = { ...d.response, delivered_at: new Date().toISOString() };
+        delete d.lease_until;
+        this.persist(d);
+        this.emit("decision.updated", d);
+        this.touchSession(d.session.session_id, { state: "working" });
+        return d;
+    }
+    extendLease(d, timeoutMs) {
+        if (!LIVE.includes(d.status))
+            return;
+        d.lease_until = new Date(Date.now() + timeoutMs + this.opts.leaseGraceMs).toISOString();
+    }
+    /** Wait until the decision becomes answer_submitted / fallback or times out. A timeout yields undefined */
+    async wait(id, timeoutMs, signal) {
+        const d = this.decisions.get(id);
+        if (!d)
+            throw new HttpError(404, "decision not found");
+        this.extendLease(d, timeoutMs);
+        const settled = () => READY.includes(d.status) || CLOSED.includes(d.status);
+        if (!settled() && !signal?.aborted) {
+            await new Promise((resolve) => {
+                const set = this.waiters.get(id) ?? new Set();
+                this.waiters.set(id, set);
+                const onChange = () => {
+                    if (settled())
+                        finish();
+                };
+                const finish = () => {
+                    clearTimeout(timer);
+                    signal?.removeEventListener("abort", finish);
+                    set.delete(onChange);
+                    if (set.size === 0)
+                        this.waiters.delete(id);
+                    resolve();
+                };
+                const timer = setTimeout(finish, timeoutMs);
+                set.add(onChange);
+                signal?.addEventListener("abort", finish, { once: true });
+            });
+        }
+        this.extendLease(d, timeoutMs);
+        return READY.includes(d.status) ? d : undefined;
+    }
+    // ---- Lease monitoring ----
+    startMonitor() {
+        const interval = Math.min(1000, Math.max(20, Math.floor(this.opts.leaseGraceMs / 2)));
+        this.monitor = setInterval(() => this.checkLeases(), interval);
+        this.monitor.unref();
+    }
+    checkLeases(now = Date.now()) {
+        for (const d of this.decisions.values()) {
+            if (d.kind === "checkpoint") {
+                if (d.status === "pending" && now - Date.parse(d.created_at) > CHECKPOINT_TTL_MS)
+                    this.closeCheckpoint(d, "expired");
+                continue;
+            }
+            if (!LIVE.includes(d.status) || !d.lease_until || Date.parse(d.lease_until) > now)
+                continue;
+            const to = d.status === "pending" ? "hook_disconnected" : "answer_lost";
+            this.setStatus(d, to);
+            this.persist(d);
+            if (to === "hook_disconnected")
+                this.expiredAt.set(d.id, now);
+            this.emit("decision.updated", d);
+            this.notify(d.id);
+        }
+    }
+    close() {
+        if (this.monitor)
+            clearInterval(this.monitor);
+        this.monitor = undefined;
+    }
+    // ---- Sessions and events ----
+    touchSession(sessionId, patch, live = true, at = new Date().toISOString()) {
+        const cur = this.sessions.get(sessionId);
+        const next = {
+            session_id: sessionId,
+            state: patch.state ?? cur?.state ?? "working",
+            last_event_at: at,
+            cwd: patch.cwd ?? cur?.cwd ?? "",
+        };
+        const title = patch.title ?? cur?.title;
+        if (title)
+            next.title = title;
+        const transcript = patch.transcript_path || cur?.transcript_path;
+        if (transcript)
+            next.transcript_path = transcript;
+        if (cur?.terminal)
+            next.terminal = cur.terminal;
+        this.sessions.set(sessionId, next);
+        if (live)
+            this.emit("session.updated", next);
+    }
+    /** The session's last Stop ended with a question put in the terminal: the human is being asked there */
+    isAskedInTerminal(sessionId) {
+        return this.askedInTerminal.has(sessionId);
+    }
+    /** The session's Stop is not final: a background subagent still runs, or the wake-up turn its end triggers has not started. Stale marks are ignored */
+    isWaitingOnSubagents(sessionId, now = Date.now()) {
+        const due = this.wakeupDue.get(sessionId);
+        if (due !== undefined && now - due <= WAKEUP_DUE_TTL_MS)
+            return true;
+        for (const at of this.runningSubagents.get(sessionId)?.values() ?? [])
+            if (now - at <= SUBAGENT_TTL_MS)
+                return true;
+        return false;
+    }
+    listSessions() {
+        return [...this.sessions.values()].sort((a, b) => b.last_event_at.localeCompare(a.last_event_at));
+    }
+    addEvent(ev) {
+        // Raw hook input (tool_input / tool_response / prompt, etc.) is not stored
+        const src = ev;
+        const kept = {};
+        for (const k of EVENT_KEYS)
+            if (src[k] !== undefined)
+                kept[k] = src[k];
+        appendFileSync(this.eventsFile, JSON.stringify(kept) + "\n");
+        this.applyEvent(ev, true);
+    }
+    applyEvent(ev, live) {
+        if (ev.hook_event_name === SESSION_PANEL_OPEN_EVENT) {
+            this.panelOpens++;
+            return;
+        }
+        if (ev.hook_event_name === "UserPromptSubmit") {
+            if (ev.wakeup)
+                this.wakeupTurns.add(ev.session_id);
+            else
+                this.wakeupTurns.delete(ev.session_id);
+        }
+        // A wake-up turn is the harness polling the agent: only a change to files counts as progress
+        if (!this.wakeupTurns.has(ev.session_id) || isFileChange(ev))
+            this.markActivity(ev.session_id, Date.parse(ev.received_at));
+        this.trackSubagents(ev);
+        if (ev.escaped_question)
+            this.escapedQuestions++;
+        if (ev.hook_event_name === "Stop" && ev.escaped_question)
+            this.askedInTerminal.add(ev.session_id);
+        else if (ev.hook_event_name === "Stop" || ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "SessionEnd")
+            this.askedInTerminal.delete(ev.session_id);
+        if (ev.blocker_detected)
+            this.blockersDetected++;
+        const at = Date.parse(ev.received_at);
+        if (ev.observe && Number.isFinite(at)) {
+            const toolUseId = ev.tool_use_id;
+            const key = typeof toolUseId === "string"
+                ? toolUseId
+                : `${ev.session_id}|${ev.agent_id ?? ""}|${String(ev.tool_name ?? "")}`;
+            if (ev.observe.phase === "start")
+                this.observeStarts.set(key, at);
+            else {
+                const start = this.observeStarts.get(key);
+                if (start !== undefined) {
+                    this.baseline.push(Math.max(0, at - start));
+                    this.observeStarts.delete(key);
+                }
+            }
+        }
+        const state = {
+            SessionStart: "working",
+            UserPromptSubmit: "working",
+            Stop: "idle",
+            SessionEnd: "ended",
+        }[ev.hook_event_name];
+        this.touchSession(ev.session_id, { state, cwd: ev.cwd, transcript_path: ev.transcript_path }, live, Number.isFinite(at) ? ev.received_at : undefined);
+        if (live && (ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "Stop")) {
+            this.cancelRecentlyDisconnected(ev.session_id);
+        }
+        // A wake-up prompt is the harness, not the human: it neither cancels pending cards nor lifts / drops a stop
+        if (live && ev.hook_event_name === "UserPromptSubmit" && !ev.wakeup) {
+            this.cancelPending(ev.session_id);
+            this.stoppedSessions.delete(ev.session_id);
+            this.dropQueuedStop(ev.session_id);
+        }
+        if (live && ev.hook_event_name === "Stop")
+            this.offerQueuedInstruction(ev.session_id);
+        if (ev.hook_event_name === "SessionEnd")
+            this.endCheckpoints(ev.session_id, live);
+        if (live)
+            this.onSessionEvent?.(ev.session_id, ev.hook_event_name);
+    }
+    trackSubagents(ev) {
+        const sid = ev.session_id;
+        const at = Date.parse(ev.received_at);
+        if (ev.hook_event_name === "SubagentStart" && ev.agent_id && Number.isFinite(at)) {
+            let m = this.runningSubagents.get(sid);
+            if (!m)
+                this.runningSubagents.set(sid, (m = new Map()));
+            m.set(ev.agent_id, at);
+        }
+        else if (ev.hook_event_name === "SubagentStop") {
+            this.runningSubagents.get(sid)?.delete(ev.agent_id ?? "");
+            // The agent already stopped: the harness wakes it with a task notification
+            if (this.sessions.get(sid)?.state === "idle" && Number.isFinite(at))
+                this.wakeupDue.set(sid, at);
+        }
+        else if (ev.hook_event_name === "UserPromptSubmit") {
+            this.wakeupDue.delete(sid);
+        }
+        else if (ev.hook_event_name === "SessionEnd") {
+            this.wakeupDue.delete(sid);
+            this.runningSubagents.delete(sid);
+        }
+    }
+    /** The session ended: its pending checkpoints and the instruction nobody can receive any more are dropped */
+    endCheckpoints(sessionId, live) {
+        this.instructions.delete(sessionId);
+        this.wakeupTurns.delete(sessionId);
+        this.stoppedSessions.delete(sessionId);
+        this.modeSwitches.delete(sessionId);
+        if (!live)
+            return;
+        for (const d of this.decisions.values()) {
+            if (d.kind === "checkpoint" && d.session.session_id === sessionId && d.status === "pending")
+                this.closeCheckpoint(d, "session_end");
+        }
+    }
+    /** The human typed a new prompt: a queued stop would deny the first tool call of that prompt. A queued instruct stays */
+    dropQueuedStop(sessionId) {
+        const ins = this.instructions.get(sessionId);
+        if (ins?.kind !== "stop")
+            return;
+        this.instructions.delete(sessionId);
+        this.markDelivered(ins.decision_id, "noop"); // nothing left to stop
+    }
+    /** The agent went idle without calling a tool: an instruct still queued for it goes to the terminal delivery */
+    offerQueuedInstruction(sessionId) {
+        const ins = this.instructions.get(sessionId);
+        if (!ins)
+            return;
+        // A plan instruction has no decision behind it: type it now that the agent is idle
+        if (ins.about === "plan" && ins.decision_id === "") {
+            void Promise.resolve(this.deliverPlanInstruction?.(sessionId, ins)).catch(() => { });
+            return;
+        }
+        const d = this.decisions.get(ins.decision_id);
+        if (!d || d.session.agent === "codex")
+            return;
+        if (ins.kind === "stop") {
+            // The agent stopped on its own before the deny could reach it: nothing to stop
+            this.instructions.delete(sessionId);
+            this.markDelivered(ins.decision_id, "noop");
+            this.stoppedSessions.add(sessionId);
+            return;
+        }
+        try {
+            this.onCheckpointDeliverable?.(d);
+        }
+        catch {
+            // A subscriber must not break the event
+        }
+    }
+    /** The human spoke next in the terminal = the pending decision is no longer being waited for */
+    cancelPending(sessionId) {
+        for (const d of this.decisions.values()) {
+            if (d.session.session_id !== sessionId || d.status !== "pending")
+                continue;
+            this.transition(d, "cancelled");
+            if (d.kind === "checkpoint")
+                d.status_reason = "new_prompt";
+            delete d.lease_until;
+            this.persist(d);
+            this.emit("decision.updated", d);
+            this.notify(d.id);
+        }
+    }
+    cancelRecentlyDisconnected(sessionId) {
+        const now = Date.now();
+        for (const d of this.decisions.values()) {
+            if (d.session.session_id !== sessionId || d.status !== "hook_disconnected")
+                continue;
+            const expired = this.expiredAt.get(d.id);
+            if (expired === undefined || now - expired > CANCEL_WINDOW_MS)
+                continue;
+            this.setStatus(d, "cancelled");
+            this.persist(d);
+            this.emit("decision.updated", d);
+        }
+    }
+    // ---- "Approve and auto" ----
+    getModeSwitch(sessionId) {
+        const m = this.modeSwitches.get(sessionId);
+        if (!m)
+            return { pending: false };
+        if (Date.now() - m.set_at > MODE_SWITCH_TTL_MS) {
+            this.modeSwitches.delete(sessionId);
+            return { pending: false };
+        }
+        return {
+            pending: true,
+            set_at: new Date(m.set_at).toISOString(),
+            expires_at: new Date(m.set_at + MODE_SWITCH_TTL_MS).toISOString(),
+        };
+    }
+    consumeModeSwitch(sessionId) {
+        const pending = this.getModeSwitch(sessionId).pending;
+        if (pending)
+            this.modeSwitches.delete(sessionId);
+        return pending;
+    }
+    // ---- "Cannot answer" ----
+    getRewrite(sessionId) {
+        return this.rewrites.get(sessionId) ?? null;
+    }
+    consumeRewrite(sessionId) {
+        return this.rewrites.delete(sessionId);
+    }
+    // ---- Aggregation ----
+    metrics() {
+        const count = { answered: 0, fallback: 0, hook_disconnected: 0, answer_lost: 0, cancelled: 0 };
+        const human = [];
+        const agent = [];
+        const d = { first_call: 0, after_deny: 0, none: 0 };
+        let cannot = 0;
+        let handoffs = 0;
+        let reattached = 0;
+        const cp = { created: 0, answered: 0, delivered: 0 };
+        for (const x of this.decisions.values()) {
+            if (x.kind === "checkpoint") {
+                cp.created++;
+                if (x.status === "answered")
+                    cp.answered++;
+                if (x.response?.delivered_at)
+                    cp.delivered++;
+                continue;
+            }
+            if (x.status === "denied_explain")
+                continue;
+            handoffs += x.handoffs ?? 0;
+            reattached += x.previous_tool_use_ids?.length ?? 0;
+            if (x.status in count)
+                count[x.status]++;
+            if (x.response?.answers && Object.values(x.response.answers).some((v) => parseCannotAnswer(v)))
+                cannot++;
+            if (x.response?.via === "gui") {
+                human.push(Math.max(0, Date.parse(x.response.decided_at) - Date.parse(x.created_at)));
+            }
+            if (x.first_denied_at)
+                agent.push(Math.max(0, Date.parse(x.created_at) - Date.parse(x.first_denied_at)));
+            const e = x.explanation;
+            if (e?.none_reason === "plan_mode")
+                continue;
+            if (!e || e.attached_via === "none")
+                d.none++;
+            else
+                d[e.attached_via]++;
+        }
+        const total = count.answered + count.fallback + count.hook_disconnected + count.answer_lost + count.cancelled + this.escapedQuestions;
+        const dTotal = d.first_call + d.after_deny + d.none;
+        return {
+            a: { ...count, escaped_question: this.escapedQuestions, blocker_detected: this.blockersDetected, handoffs, reattached, cannot_answer: cannot, total, rate: total === 0 ? null : count.answered / total },
+            b: { human: stat(human), agent: stat(agent), baseline: stat(this.baseline) },
+            c: { session_panel_opens: this.panelOpens, checkpoints: cp },
+            d: { ...d, total: dTotal, attach_rate: dTotal === 0 ? null : (d.first_call + d.after_deny) / dTotal },
+        };
+    }
+}
+//# sourceMappingURL=store.js.map

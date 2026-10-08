@@ -1,0 +1,1421 @@
+import { MULTI_SELECT_SEPARATOR } from "../contract.js";
+import { interpret } from "./keys.js";
+import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf } from "./model.js";
+import { parseFrontMatterFields } from "./util.js";
+import { t } from "./i18n.js";
+import { NONE_TYPES, noneAnswer } from "./none.js";
+import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
+import { historyItems } from "./history.js";
+import { initialPlanState, remapState, setOpen, toggleAll } from "./plan.js";
+export const TOAST_MS = 2000;
+/** How long the first Enter of a two-step confirmation stays valid */
+export const CONFIRM_MS = 3000;
+/** Rows per wheel notch */
+export const WHEEL_LINES = 3;
+/** Columns per ← → horizontal scroll */
+export const HSCROLL_STEP = 8;
+/** How long the "f for full width" hint stays up */
+export const FULL_HINT_MS = 6000;
+/** A plan is new (shown by itself, counted) while unread and written within this long */
+export const NEW_PLAN_MS = 24 * 3600_000;
+/** A progress checkpoint has three cards: continue, instruct, stop */
+const CHECKPOINT_CARDS = 3;
+const STATUS_KEY = {
+    answer_submitted: "status_answer_submitted",
+    answered: "status_answered",
+    answer_lost: "status_answer_lost",
+    hook_disconnected: "status_hook_disconnected",
+    fallback: "status_fallback",
+    cancelled: "status_cancelled",
+};
+export class App {
+    /** Display language (set by index.ts) */
+    lang = "en";
+    /** `--lang` was given: the settings page does not change the language of this TUI */
+    langLocked = false;
+    decisions = new Map();
+    shownId = null;
+    mode = "normal";
+    /** First row of the background (the whole screen in the stacked layout) */
+    scroll = 0;
+    /** First row of the decision column; null follows the cursor */
+    rscroll = null;
+    focus = "decision";
+    /** Horizontal position of a too-wide diagram (columns) */
+    hscroll = 0;
+    /** Show the background at full width (hides the decision column) */
+    full = false;
+    /** Dimensions of the last drawn screen (used for scroll amounts and ranges) */
+    frame = {
+        wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0, footRows: [], secRows: [],
+    };
+    /** The "f for full width" hint is shown once per decision: which decisions have had it, and until when */
+    hinted = new Set();
+    hintUntil = 0;
+    /** Whether copying to the clipboard is possible (whether pbcopy exists; decided by index.ts) */
+    copySupported = true;
+    /** Fetches a session's instructions (set by index.ts; absent in tests that do not need it) and is told when one arrives */
+    fetchHistory = null;
+    onHistory = () => { };
+    /** Instructions by session_id; a failed fetch leaves no entry (the next time the session is shown tries again) */
+    histories = new Map();
+    histLoading = new Set();
+    /** The `s` overlay cursor, and the instruction shown in full in the background column (index into the items) */
+    hist = { index: 0 };
+    histDetail = null;
+    /** Plans are items like decisions: the summaries (GET /api/plans, plan.updated), the files read so far and the screen models built from them */
+    plans = new Map();
+    files = new Map();
+    planModels = new Map();
+    /** The plan file shown as an item of its own (shownId is null then) */
+    shownPlan = null;
+    /** Fetches one plan file (set by index.ts; absent in tests that do not need it) and is told when a screen should be redrawn */
+    fetchPlan = null;
+    onPlans = () => { };
+    /** Fetches the versions of a session's plan (set by index.ts; absent in tests that do not need it) */
+    fetchVersions = null;
+    /** Plan versions by `current` ref: the data, the tab picked (null = the last), whether to refetch, and the screens built for the earlier versions */
+    versions = new Map();
+    verLoading = new Set();
+    /** Refs whose fetch failed: not retried on every paint, only once something arrives that may add a version */
+    verFailed = new Set();
+    models = new Map();
+    drafts = new Map();
+    input = null;
+    /** Instruction presets (settings plans.instruction_presets) */
+    presets = [];
+    /** The "None of these" picker (index into NONE_TYPES, optional note) */
+    none = null;
+    /** The "Can't answer this" picker: `pos` is the row (0-2 the reasons, then the terms checklist), `index` the reason in force */
+    cannot = null;
+    /** First Enter of a two-step confirmation; `prior` is the one in force when the current key arrived */
+    confirm = null;
+    prior = null;
+    footIdx = -1;
+    /** A long plan's open / read sections and contents cursor, by decision (by plan file when the decision names one, so a plan keeps its state when its approval arrives) */
+    planStates = new Map();
+    /** The section (contents row) the background should scroll to once the next frame has told where it is */
+    reveal = null;
+    /** The reveal only brings the heading into view (moving the selection) instead of putting it at the top (opening a section) */
+    revealNear = false;
+    listIndex = 0;
+    lastG = 0;
+    /** Decisions showing a long recommendation in full */
+    recFull = new Set();
+    toast = null;
+    sending = new Set();
+    sent = new Set();
+    /** Server address (shown in the footer "cannot connect" message; set by index.ts) */
+    server = "";
+    /** The SSE stream is down (the safety poll then refetches the plans too) */
+    down = false;
+    restoredUntil = 0;
+    // ---- Data ----
+    /** Screen order: blockers, then questions and plans, then progress checkpoints (each group oldest first); the plan files come after all of them */
+    pending() {
+        const rank = (d) => (d.kind === "checkpoint" ? 2 : isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation.markdown) : {}) ? 0 : 1);
+        return [...this.decisions.values()]
+            .filter((d) => d.status === "pending")
+            .sort((a, b) => rank(a) - rank(b) || a.created_at.localeCompare(b.created_at));
+    }
+    /** The state of every session (GET /api/sessions, `session.updated`): a checkpoint's idle note reads it */
+    sessions = new Map();
+    setSessions(list) {
+        this.sessions = new Map(list.map((s) => [s.session_id, s]));
+    }
+    /** The settings changed (GET /api/settings, `settings.updated`): the language (unless `--lang` pinned it) */
+    settingsUpdated(s) {
+        if (!this.langLocked)
+            this.lang = s.lang;
+        this.presets = s.plans?.instruction_presets ?? [];
+        this.models.clear();
+    }
+    sessionUpdated(s) {
+        this.sessions.set(s.session_id, s);
+    }
+    idle(d) {
+        return !!d && this.sessions.get(d.session.session_id)?.state === "idle";
+    }
+    /** The idle session of a checkpoint runs in a terminal the reply can be typed into */
+    hasTerminal(d) {
+        return !!d && !!this.sessions.get(d.session.session_id)?.terminal;
+    }
+    /** The list at startup / refetch (pending only). Decisions still pending locally but missing from the list are returned to be re-fetched */
+    replacePending(list, now) {
+        const seen = new Set();
+        const fresh = [];
+        for (const d of list) {
+            seen.add(d.id);
+            if (!this.decisions.has(d.id))
+                fresh.push(d);
+            this.decisions.set(d.id, d);
+        }
+        const stale = [...this.decisions.values()].filter((d) => d.status === "pending" && !seen.has(d.id)).map((d) => d.id);
+        if (this.shownPlan) {
+            // A plan on screen stays (it may have been picked on purpose); a decision seen for the first time takes the screen
+            const first = fresh.filter((d) => d.status === "pending").sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+            if (first)
+                this.show(first.id, planNameOf(first) === this.shownPlan);
+        }
+        else {
+            const cur = this.shownId ? this.decisions.get(this.shownId) : undefined;
+            if (!cur || cur.status !== "pending")
+                this.advance(now);
+        }
+        return stale;
+    }
+    upsert(d, now) {
+        const prev = this.decisions.get(d.id);
+        this.decisions.set(d.id, d);
+        if (d.kind === "approve_plan")
+            this.staleVersions();
+        if (d.status !== "pending" && this.sent.has(d.id)) {
+            const key = d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[d.status];
+            if (key)
+                this.showToast(t(this.lang, key), now);
+            if (d.status !== "answer_submitted")
+                this.sent.delete(d.id);
+        }
+        if (d.kind === "checkpoint" && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) {
+            this.showToast(t(this.lang, "checkpoint_delivered"), now);
+        }
+        if (d.id === this.shownId) {
+            if (d.status !== "pending")
+                this.advance(now);
+        }
+        else if (this.shownId == null && d.status === "pending") {
+            // A decision needs an answer, a plan does not: it takes the screen. Its own plan on screen turns into the approval in place
+            this.show(d.id, planNameOf(d) !== null && planNameOf(d) === this.shownPlan);
+        }
+        else if (!prev && d.status === "pending" && d.kind !== "checkpoint" && this.shownId && this.decisions.get(this.shownId)?.kind === "checkpoint" && !this.drafts.get(this.shownId)?.free.text.trim() && this.mode === "normal") {
+            // A question or a plan approval outranks a checkpoint on screen (unless an instruction is half typed)
+            this.show(d.id);
+        }
+    }
+    // ---- Plans ----
+    /** A plan is new while unread and written in the last 24 hours */
+    isNew(p, now) {
+        return !p.read && now - Date.parse(p.mtime) < NEW_PLAN_MS;
+    }
+    /** Plans with an approval decision pending are shown as that decision, not as a row of their own */
+    hiddenPlans() {
+        const out = new Set();
+        for (const d of this.pending()) {
+            const n = planNameOf(d);
+            if (n)
+                out.add(n);
+        }
+        return out;
+    }
+    /** The plans to list: newest first, minus the ones that are an approval decision */
+    visiblePlans() {
+        const hidden = this.hiddenPlans();
+        return [...this.plans.values()].filter((p) => !hidden.has(p.name)).sort((a, b) => b.mtime.localeCompare(a.mtime));
+    }
+    newPlans(now) {
+        return this.visiblePlans().filter((p) => this.isNew(p, now));
+    }
+    /** The new plans that flow in by themselves: only a `ready` one (the server: complete, session known, not working, no decision pending); one still being written sits in the list (`b`) as "Writing" until it is */
+    queuedPlans(now) {
+        return this.newPlans(now).filter((p) => p.ready);
+    }
+    /** The Instruct card of a plan file needs a session that is known and not working */
+    planCanInstruct(name) {
+        const sid = this.files.get(name)?.session_id;
+        return !!sid && this.sessions.get(sid)?.state !== "working";
+    }
+    /** What `Pending N` counts: the decisions waiting plus the queued new plans */
+    count(now) {
+        return this.pending().length + this.queuedPlans(now).length;
+    }
+    /** The list at startup / refetch. A plan on screen that is gone leaves the screen; with nothing on screen a new plan comes up by itself */
+    replacePlans(list, now) {
+        const seen = new Set(list.map((p) => p.name));
+        for (const name of [...this.plans.keys()])
+            if (!seen.has(name))
+                this.forgetPlan(name);
+        for (const p of list)
+            this.plans.set(p.name, p);
+        if (this.shownPlan && !this.plans.has(this.shownPlan))
+            this.advance(now);
+        this.autoShow(now);
+        this.onPlans();
+    }
+    /** `plan.updated`: a file was written or its read mark changed */
+    planUpdated(p, now) {
+        this.plans.set(p.name, p);
+        this.staleVersions();
+        if (p.name === this.shownPlan) {
+            const have = this.files.get(p.name);
+            if (!have || have.mtime !== p.mtime || have.session_id !== p.session_id)
+                this.refreshShown(p.name);
+            return;
+        }
+        this.autoShow(now);
+    }
+    planRemoved(name, now) {
+        this.forgetPlan(name);
+        if (name === this.shownPlan)
+            this.advance(now);
+    }
+    forgetPlan(name) {
+        this.plans.delete(name);
+        this.files.delete(name);
+        this.planModels.delete(name);
+        this.planStates.delete(planKeyOf(name));
+    }
+    /** With nothing on screen, the newest new plan comes up by itself (once its text is here) */
+    autoShow(now) {
+        if (this.shownId !== null || this.shownPlan !== null)
+            return;
+        const next = this.queuedPlans(now)[0];
+        if (next)
+            this.openPlan(next.name, true);
+    }
+    /** Show a plan file: at once when its text is here, else after fetching it. `auto`: only if nothing is on screen by then */
+    openPlan(name, auto = false) {
+        const sum = this.plans.get(name);
+        if (!sum)
+            return;
+        const have = this.files.get(name);
+        if (have && have.mtime === sum.mtime && have.session_id === sum.session_id) {
+            this.showPlan(name);
+            return;
+        }
+        if (!this.fetchPlan)
+            return;
+        void this.fetchPlan(name).then((file) => {
+            if (auto && (this.shownId !== null || this.shownPlan !== null))
+                return;
+            this.files.set(name, file);
+            this.planModels.delete(name);
+            this.showPlan(name);
+            this.onPlans();
+        }, () => { });
+    }
+    /** A plan on screen was written again: fetch it and rebuild; the folding state follows the section hashes (see `planState`), the scroll stays */
+    refreshShown(name) {
+        if (!this.fetchPlan)
+            return;
+        void this.fetchPlan(name).then((file) => {
+            if (this.shownPlan !== name)
+                return;
+            this.files.set(name, file);
+            this.planModels.delete(name);
+            this.staleVersions();
+            this.onPlans();
+        }, () => { });
+    }
+    /** Done reading: mark the plan read at the mtime that was read (no effect when it already is). The server marks an approved plan read itself */
+    markRead(name, mtime) {
+        const sum = this.plans.get(name);
+        if (!sum || sum.read)
+            return [];
+        if (sum.mtime === mtime)
+            this.plans.set(name, { ...sum, read: true });
+        return [{ type: "read", name, mtime }];
+    }
+    /** SSE connection state: "cannot connect" while down, and "reconnected" for 2 seconds after it comes back */
+    setConnected(ok, now) {
+        if (!ok)
+            this.down = true;
+        else if (this.down) {
+            this.down = false;
+            this.restoredUntil = now + TOAST_MS;
+        }
+    }
+    /** Remove a decision the server no longer has */
+    drop(id, now) {
+        this.decisions.delete(id);
+        this.models.delete(id);
+        this.drafts.delete(id);
+        this.planStates.delete(id);
+        this.recFull.delete(id);
+        this.hinted.delete(id);
+        this.sending.delete(id);
+        this.sent.delete(id);
+        if (id === this.shownId)
+            this.advance(now);
+    }
+    showToast(text, now) {
+        this.toast = { text, until: now + TOAST_MS };
+    }
+    show(id, keepView = false) {
+        this.shownId = id;
+        this.shownPlan = null;
+        this.resetView(keepView);
+        this.loadHistory(id);
+    }
+    showPlan(name) {
+        this.shownPlan = name;
+        this.shownId = null;
+        this.resetView(false);
+    }
+    /** `keepView`: the same plan turned into its approval, so the reader keeps their place */
+    resetView(keepView) {
+        if (!keepView) {
+            // Focus does not carry over between items (left on the background, j / Enter would scroll it and cause wrong answers)
+            this.focus = "decision";
+            this.scroll = 0;
+            this.rscroll = null;
+            this.hscroll = 0;
+            this.full = false;
+        }
+        this.hintUntil = 0;
+        this.input = null;
+        this.none = null;
+        this.cannot = null;
+        this.confirm = null;
+        this.footIdx = -1;
+        this.reveal = null;
+        this.histDetail = null;
+        if (this.mode === "input" || this.mode === "none" || this.mode === "cannot" || this.mode === "history" || this.mode === "list")
+            this.mode = "normal";
+    }
+    /** Lazily fetch the session's instructions the first time a decision of that session is shown. Failures are ignored */
+    loadHistory(id) {
+        const d = id ? this.decisions.get(id) : undefined;
+        const sid = d?.session.session_id;
+        if (!d || !sid || !this.fetchHistory || this.histories.has(sid) || this.histLoading.has(sid))
+            return;
+        this.histLoading.add(sid);
+        this.fetchHistory(d.id).then((h) => {
+            this.histLoading.delete(sid);
+            this.histories.set(sid, h);
+            for (const x of this.decisions.values())
+                if (x.session.session_id === sid)
+                    this.models.delete(x.id);
+            this.onHistory();
+        }, () => this.histLoading.delete(sid));
+    }
+    items() {
+        const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
+        if (!d)
+            return [];
+        const replies = [...this.decisions.values()]
+            .filter((x) => x.kind === "checkpoint" && x.session.session_id === d.session.session_id && x.status === "answered" && x.response && x.response.kind !== "continue")
+            .map((x) => ({ first: false, at: x.response.decided_at, text: x.response.text || t(this.lang, "checkpoint_stop"), delivered: !!x.response.delivered_at }));
+        return historyItems(this.histories.get(d.session.session_id) ?? null, replies);
+    }
+    /** Next item: a pending decision, else the newest new plan, else the idle screen */
+    advance(now) {
+        const d = this.pending()[0];
+        if (d)
+            return this.show(d.id);
+        this.show(null);
+        this.autoShow(now);
+    }
+    // ---- Accessors ----
+    /** The screen model of what is shown: the earlier version picked on a plan with versions, else the item itself */
+    model() {
+        const m = this.baseModel();
+        const vs = m ? this.verState(m) : null;
+        if (!m || !vs || vs.idx === vs.last)
+            return m;
+        if (vs.rec.base !== m) {
+            vs.rec.base = m;
+            vs.rec.models.clear();
+        }
+        let old = vs.rec.models.get(vs.idx);
+        // An earlier version is a flat read-only document (the folding state belongs to the version being decided); the id stays so the typed text does too
+        if (!old)
+            vs.rec.models.set(vs.idx, (old = { ...m, background: vs.rec.data.versions[vs.idx].plan, plan: null, impact: null }));
+        return old;
+    }
+    baseModel() {
+        if (this.shownPlan) {
+            let pm = this.planModels.get(this.shownPlan);
+            const file = this.files.get(this.shownPlan);
+            if (!pm && file)
+                this.planModels.set(this.shownPlan, (pm = buildPlanFileModel(file.name, file.title, file.markdown, file.mtime)));
+            return pm ?? null;
+        }
+        const d = this.shownId ? this.decisions.get(this.shownId) : undefined;
+        if (!d)
+            return null;
+        let m = this.models.get(d.id);
+        if (!m)
+            this.models.set(d.id, (m = buildModel(d, this.lang, this.histories.get(d.session.session_id) ?? null)));
+        return m;
+    }
+    /** Where the versions of a plan item are fetched from: its session and the `current` ref the server appends */
+    verRef(m) {
+        if (m.kind !== "plan")
+            return null;
+        if (m.readonly) {
+            const sid = this.files.get(m.readonly.name)?.session_id;
+            return sid ? { sid, current: `plan:${m.readonly.name}` } : null;
+        }
+        const d = this.decisions.get(m.id);
+        return d?.kind === "approve_plan" ? { sid: d.session.session_id, current: `decision:${d.id}` } : null;
+    }
+    /** The versions of the shown plan (2 or more), and the one on screen */
+    verState(m) {
+        const ref = this.verRef(m);
+        const rec = ref && this.versions.get(ref.current);
+        if (!rec || rec.data.versions.length < 2)
+            return null;
+        const last = rec.data.versions.length - 1;
+        return { rec, idx: rec.sel == null || rec.sel > last ? last : rec.sel, last };
+    }
+    /** Fetch the versions of the shown plan when they are not here yet or went stale (a decision or plan arrived). Failures are ignored */
+    ensureVersions(m) {
+        const ref = m ? this.verRef(m) : null;
+        if (!ref || !this.fetchVersions)
+            return;
+        const have = this.versions.get(ref.current);
+        if ((have && !have.stale) || this.verLoading.has(ref.current) || this.verFailed.has(ref.current))
+            return;
+        this.verLoading.add(ref.current);
+        this.fetchVersions(ref.sid, ref.current).then((data) => {
+            this.verLoading.delete(ref.current);
+            const sig = JSON.stringify(data.versions.map((v) => [v.n, v.at, v.plan.length, v.instruction?.text ?? null]));
+            const old = this.versions.get(ref.current);
+            if (old && old.sig === sig)
+                old.stale = false;
+            else {
+                this.versions.set(ref.current, { data, sig, sel: old && old.sel != null && old.sel < data.versions.length ? old.sel : null, stale: false, base: null, models: new Map() });
+                this.onPlans();
+            }
+        }, () => {
+            this.verLoading.delete(ref.current);
+            this.verFailed.add(ref.current);
+            if (have)
+                have.stale = false;
+        });
+    }
+    /** Something arrived that may add a version: refetch them the next time the plan is painted */
+    staleVersions() {
+        this.verFailed.clear();
+        for (const r of this.versions.values())
+            r.stale = true;
+    }
+    /** `< >`: the previous / next version */
+    verStep(delta) {
+        const m = this.baseModel();
+        const vs = m ? this.verState(m) : null;
+        if (!vs)
+            return;
+        const next = Math.max(0, Math.min(vs.last, vs.idx + delta));
+        if (next === vs.idx)
+            return;
+        vs.rec.sel = next === vs.last ? null : next;
+        this.scroll = 0;
+        this.reveal = null;
+    }
+    /** The version line, summary and note of the shown plan (null with fewer than 2 versions) */
+    verView(m) {
+        const vs = m ? this.verState(m) : null;
+        if (!m || !vs)
+            return null;
+        const { rec, idx, last } = vs;
+        const vers = rec.data.versions;
+        const lang = this.lang;
+        const tabs = vers.map((v) => `v${v.n}`);
+        const diff = rec.data.diffs[idx] ?? null;
+        const count = (key, n) => (n ? t(lang, n === 1 ? `${key}_one` : key, { n }) : "");
+        let head;
+        let body;
+        let ins = null;
+        if (idx === 0 || !diff) {
+            head = `v${vers[idx].n}:`;
+            body = t(lang, "ver_first");
+        }
+        else {
+            head = `v${vers[idx - 1].n} → v${vers[idx].n}:`;
+            body = [count("ver_added", diff.summary.added), count("ver_changed", diff.summary.changed), count("ver_removed", diff.summary.removed)].filter(Boolean).join(" · ") || t(lang, "ver_nochange");
+            const i = vers[idx - 1].instruction;
+            if (i)
+                ins = { label: t(lang, i.kind === "reject" ? "ver_rejection" : "ver_instruction"), text: i.text };
+        }
+        // Markers only when the diff is of the text on screen
+        const shownText = m.plan?.text ?? m.background ?? "";
+        const marks = idx > 0 && !!diff && (idx !== last || vers[idx].plan === shownText);
+        return { tabs, idx, head, body, ins, note: idx !== last ? t(lang, "ver_showing", { n: vers[idx].n, last: vers[last].n }) : null, diff: marks ? diff : null };
+    }
+    draft(m) {
+        let dr = this.drafts.get(m.id);
+        if (!dr) {
+            const q = m.question;
+            dr = { cursor: q?.initialCursor ?? 0, sel: new Set(), free: { on: false, text: "" }, reason: "", instruct: "" };
+            // Single select: moving = selecting. Pre-select the initial position (the recommended option, else the first)
+            if (q && !q.multi && q.cards[dr.cursor])
+                dr.sel.add(q.cards[dr.cursor].value);
+            this.drafts.set(m.id, dr);
+        }
+        return dr;
+    }
+    view(now) {
+        const m = this.model();
+        this.ensureVersions(this.baseModel());
+        const dr = m ? this.draft(m) : null;
+        const count = this.count(now);
+        const list = this.mode === "list"
+            ? {
+                index: this.listIndex,
+                items: this.listItems(now).map((it) => {
+                    if (it.plan) {
+                        const p = it.plan;
+                        return { blocker: false, title: p.title, chips: [], kindLabel: t(this.lang, "plan_kind"), createdAt: p.mtime, noExplanation: false, current: p.name === this.shownPlan, plan: { sections: p.sections, lines: p.lines, isNew: this.isNew(p, now), writing: !p.ready } };
+                    }
+                    const d = it.decision;
+                    return {
+                        blocker: isBlocker(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation.markdown) : {}),
+                        title: titleOf(d, d.kind === "answer_question" && hasExplanation(d) ? parseFrontMatterFields(d.explanation.markdown) : {}, this.lang),
+                        chips: chipsOf(d),
+                        kindLabel: t(this.lang, d.kind === "approve_plan" ? "kind_plan" : d.kind === "checkpoint" ? "checkpoint_kind" : "kind_question"),
+                        createdAt: d.created_at,
+                        noExplanation: d.kind === "answer_question" && !hasExplanation(d),
+                        current: d.id === this.shownId,
+                    };
+                }),
+            }
+            : null;
+        return {
+            model: m,
+            cursor: dr?.cursor ?? 0,
+            selected: dr?.sel ?? new Set(),
+            free: dr?.free ?? { on: false, text: "" },
+            input: this.input,
+            none: this.none,
+            cannot: this.cannot ? { index: this.cannot.index, pos: this.cannot.pos, terms: this.cannot.terms, checked: this.cannot.checked, text: this.cannot.text } : null,
+            notice: this.notice(now),
+            reason: dr?.reason ?? "",
+            instruct: dr?.instruct ?? "",
+            presets: this.presets,
+            canInstruct: !!m?.readonly && this.planCanInstruct(m.readonly.name),
+            pending: count,
+            toast: this.toast && this.toast.until > now ? this.toast.text : null,
+            lang: this.lang,
+            conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
+            list,
+            history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
+            histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
+            idle: m?.checkpoint ? this.idle(this.decisions.get(m.id)) : false,
+            terminal: m?.checkpoint ? this.hasTerminal(this.decisions.get(m.id)) : false,
+            copy: this.copySupported,
+            recFull: this.shownId !== null && this.recFull.has(this.shownId),
+            plan: m?.plan ? this.planState(m) : null,
+            ver: this.verView(m),
+            scroll: this.scroll,
+            rscroll: this.rscroll,
+            focus: this.effectiveFocus(m),
+            hscroll: this.hscroll,
+            full: this.full,
+            fullHint: this.hintUntil > now,
+            now,
+        };
+    }
+    /** The prompt shown in the footer: "Press Enter again" */
+    notice(now) {
+        if (!this.confirm || this.confirm.until < now)
+            return null;
+        return t(this.lang, "confirm_again");
+    }
+    /**
+     * The folding state of a long plan. It lives under the plan file's name when there is one (the plan file and its approval are one item), else under
+     * the decision id. When the text changed since the state was made, the section hashes (`PlanEntry.hash`) decide what carries over (`remapState`).
+     */
+    planState(m) {
+        const key = m.planKey ?? m.id;
+        const o = m.plan.outline;
+        const memo = this.planStates.get(key);
+        // The outline is rebuilt only when the text changes, so the same outline is the same text
+        if (memo?.outline === o)
+            return memo.st;
+        const st = memo ? remapState(o, memo) : initialPlanState(o);
+        this.planStates.set(key, { st, outline: o });
+        return st;
+    }
+    /** Take the drawn screen dimensions and clamp the scroll positions. Returns true when a hint just started (redraw) */
+    syncFrame(f, now = Date.now()) {
+        this.frame = f;
+        this.scroll = Math.max(0, Math.min(this.scroll, f.scrollMax));
+        if (this.reveal !== null) {
+            // The section the contents / [ ] / Enter asked for: its heading row is only known now. One more frame puts it at the top
+            const row = f.secRows[this.reveal];
+            this.reveal = null;
+            const near = this.revealNear && f.wide;
+            this.revealNear = false;
+            if (near && row !== undefined) {
+                // Moving the selection: scroll only as far as the heading needs to be on screen
+                const win = Math.max(1, f.bodyRows - 1);
+                const to = row < this.scroll ? row : row > this.scroll + win - 2 ? row - win + 3 : this.scroll;
+                if (to !== this.scroll) {
+                    this.scroll = Math.max(0, Math.min(to, f.scrollMax));
+                    return true;
+                }
+            }
+            else if (row !== undefined && row !== this.scroll) {
+                this.scroll = Math.max(0, Math.min(row, f.scrollMax));
+                return true;
+            }
+        }
+        if (this.rscroll != null)
+            this.rscroll = Math.max(0, Math.min(this.rscroll, f.rightMax));
+        this.hscroll = Math.max(0, Math.min(this.hscroll, f.hMax));
+        if (f.figOver && this.shownId && !this.hinted.has(this.shownId)) {
+            this.hinted.add(this.shownId);
+            this.hintUntil = now + FULL_HINT_MS;
+            return true;
+        }
+        return false;
+    }
+    /** Focus matters only in the side-by-side layout. At full width it is the background. On a long plan it is the zone (plan zone = background, options zone = decision) */
+    effectiveFocus(m = this.model()) {
+        if (!this.frame.wide)
+            return "decision";
+        if (this.full)
+            return "background";
+        return m?.plan ? (this.zoneOf(m) === "plan" ? "background" : "decision") : this.focus;
+    }
+    /** A long plan has a plan zone and an options zone; everything else is always in the options */
+    zoneOf(m) {
+        return m?.plan ? this.planState(m).zone : "opts";
+    }
+    /** Whether the options zone has anything to act on: a plan file needs a session for its Instruct card */
+    hasOptions(m) {
+        return !m.readonly || this.planCanInstruct(m.readonly.name);
+    }
+    /** ← → on a long plan: the plan zone, or the options zone where the cursor's card takes over (Instruct opens its box, Reject its reason box) */
+    setZone(m, dr, zone, now) {
+        if (!m.plan)
+            return [];
+        if (zone === "opts" && !this.hasOptions(m))
+            return [];
+        this.planState(m).zone = zone;
+        this.rscroll = null;
+        return zone === "opts" ? this.landOnText(m, dr, -1, now) : [];
+    }
+    /** Move the background (the whole screen in the stacked layout) to `to`. For relative moves from the current view `cur`, the caller computes the target */
+    setScroll(to) {
+        this.scroll = Math.max(0, Math.min(this.frame.scrollMax, to));
+    }
+    wheel(dir, x) {
+        const d = (dir === "down" ? 1 : -1) * WHEEL_LINES;
+        const f = this.frame;
+        if (f.wide && x - 1 >= f.split) {
+            if (f.rightMax <= 0)
+                return;
+            this.rscroll = Math.max(0, Math.min(f.rightMax, (this.rscroll ?? f.rightOff) + d));
+        }
+        else if (f.wide) {
+            this.setScroll(this.scroll + d);
+        }
+        else {
+            // In the stacked layout 0 follows the cursor; move from the position currently visible
+            this.setScroll((this.scroll || f.off) + d);
+        }
+    }
+    // ---- Keys ----
+    handle(key, now) {
+        const m = this.model();
+        if (key.name !== "hwheel" && key.name !== "wheel") {
+            this.prior = this.confirm;
+            this.confirm = null;
+        }
+        if (key.name === "hwheel") {
+            if (this.mode === "normal")
+                this.apply({ type: "hscroll", delta: key.dir === "right" ? 1 : -1 }, m, now);
+            return [];
+        }
+        if (key.name === "wheel") {
+            if (this.mode === "normal")
+                this.wheel(key.dir, key.x);
+            return [];
+        }
+        const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(m), zone: m?.plan ? this.planState(m).zone : undefined, inputEmpty: this.input?.text === "", histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now, presets: this.mode === "input" && this.input?.kind === "instruct" && this.input.text === "" ? Math.min(9, this.presets.length) : 0 });
+        this.lastG = lastG;
+        return action ? this.apply(action, m, now) : [];
+    }
+    apply(a, m, now) {
+        switch (a.type) {
+            case "quit": return [{ type: "quit" }];
+            case "prev":
+                this.cycle(-1, now);
+                return [];
+            case "next":
+                this.cycle(1, now);
+                return [];
+            case "list":
+                if (this.listItems(now).length) {
+                    this.mode = "list";
+                    this.listIndex = Math.max(0, this.listItems(now).findIndex((it) => this.isShown(it)));
+                }
+                return [];
+            case "list-move":
+                this.listIndex = clamp(this.listIndex + a.delta, this.listItems(now).length);
+                return [];
+            case "list-pick": {
+                const it = this.listItems(now)[clamp(this.listIndex, this.listItems(now).length)];
+                this.mode = "normal";
+                if (it?.plan)
+                    this.openPlan(it.plan.name);
+                else if (it?.decision)
+                    this.show(it.decision.id);
+                return [];
+            }
+            case "list-close":
+                this.mode = "normal";
+                return [];
+            case "history": {
+                const n = this.items().length;
+                if (n) {
+                    this.mode = "history";
+                    this.hist.index = this.histDetail ?? n - 1;
+                }
+                return [];
+            }
+            case "history-move":
+                this.hist.index = clamp(this.hist.index + a.delta, this.items().length);
+                return [];
+            case "history-pick":
+                if (this.items()[this.hist.index]) {
+                    this.histDetail = this.hist.index;
+                    this.focus = "background";
+                    this.scroll = 0;
+                }
+                this.mode = "normal";
+                return [];
+            case "history-close":
+                this.mode = "normal";
+                return [];
+            case "plan-done": return this.planDone(now);
+            case "ver":
+                this.verStep(a.delta);
+                return [];
+            case "history-back": {
+                this.histDetail = null;
+                this.focus = "decision";
+                this.scroll = 0;
+                if (this.items().length)
+                    this.mode = "history";
+                return [];
+            }
+            case "scroll": {
+                const n = a.unit === "half" ? Math.max(1, Math.floor(this.frame.bodyRows / 2)) : 1;
+                // In the stacked layout 0 follows the cursor; move from the position currently visible
+                this.setScroll((this.frame.wide ? this.scroll : this.scroll || this.frame.off) + a.delta * n);
+                return [];
+            }
+            case "scroll-edge":
+                this.setScroll(a.to === "top" ? 0 : this.frame.scrollMax);
+                return [];
+            case "hscroll":
+                this.hscroll = Math.max(0, Math.min(this.frame.hMax, this.hscroll + a.delta * HSCROLL_STEP));
+                return [];
+            case "hscroll-edge":
+                this.hscroll = a.to === "start" ? 0 : this.frame.hMax;
+                return [];
+            case "full":
+                this.full = !this.full;
+                this.scroll = 0;
+                return [];
+            case "focus": {
+                // On a long plan Tab switches the zone (the zone is the focus); with no options to go to it stays
+                if (m?.plan)
+                    return this.setZone(m, this.draft(m), this.zoneOf(m) === "plan" ? "opts" : "plan", now);
+                this.focus = this.focus === "decision" ? "background" : "decision";
+                return [];
+            }
+            case "input-char":
+                if (this.input)
+                    this.input.text += a.ch;
+                return [];
+            case "input-backspace":
+                if (this.input)
+                    this.input.text = Array.from(this.input.text).slice(0, -1).join("");
+                return [];
+            case "input-cancel": {
+                // Esc leaves the box and keeps the text (a note box keeps its own text on Enter, as before)
+                if (this.input?.kind === "instruct" && m)
+                    this.draft(m).instruct = this.input.text;
+                if (this.input?.kind === "reason" && m)
+                    this.draft(m).reason = this.input.text;
+                if (this.input?.kind === "free" && m) {
+                    const dr = this.draft(m);
+                    dr.free.text = this.input.text;
+                    if (!dr.free.text.trim() && !m.checkpoint)
+                        dr.free.on = false;
+                }
+                this.mode = this.input?.kind === "note" && this.none ? "none" : this.input?.kind === "note" && this.cannot ? "cannot" : "normal";
+                this.input = null;
+                return [];
+            }
+            case "footnote": {
+                const rows = this.frame.footRows;
+                if (!rows.length)
+                    return [];
+                this.footIdx = (this.footIdx + 1) % rows.length;
+                this.setScroll(rows[this.footIdx]);
+                return [];
+            }
+        }
+        if (!m)
+            return [];
+        const dr = this.draft(m);
+        switch (a.type) {
+            case "input-confirm": return this.confirmInput(m, dr, now);
+            case "instruct": return this.startInstruct(m, dr, now);
+            case "preset":
+                if (this.input?.kind === "instruct" && this.presets[a.n - 1] !== undefined)
+                    this.input.text = this.presets[a.n - 1];
+                return [];
+            case "none": return this.openNone(m, dr);
+            case "none-move":
+                if (this.none)
+                    this.none.index = clamp(this.none.index + a.delta, NONE_TYPES.length);
+                return [];
+            case "none-cancel":
+                this.none = null;
+                this.mode = "normal";
+                return [];
+            case "none-note":
+                if (this.none) {
+                    this.input = { kind: "note", text: this.none.text };
+                    this.mode = "input";
+                }
+                return [];
+            case "none-confirm": {
+                const n = this.none;
+                if (!n)
+                    return [];
+                this.none = null;
+                this.mode = "normal";
+                return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id))]: noneAnswer(n.index, n.text) } });
+            }
+            case "cannot": return this.openCannot(m, dr);
+            case "pick": return this.pick(m, dr, a.n - 1, now);
+            case "cannot-move": return this.cannotMove(a.delta);
+            case "cannot-cancel":
+                this.cannot = null;
+                this.mode = "normal";
+                return [];
+            case "cannot-toggle": {
+                const c = this.cannot;
+                const row = c ? cannotRows(c.index, c.terms.length)[c.pos] : undefined;
+                const term = c && row?.kind === "term" ? c.terms[row.index] : undefined;
+                if (c && term !== undefined) {
+                    if (c.checked.has(term))
+                        c.checked.delete(term);
+                    else
+                        c.checked.add(term);
+                }
+                return [];
+            }
+            case "cannot-note":
+                if (this.cannot) {
+                    this.input = { kind: "note", text: this.cannot.text };
+                    this.mode = "input";
+                }
+                return [];
+            case "cannot-confirm": {
+                const c = this.cannot;
+                if (!c)
+                    return [];
+                const body = cannotAnswer(c.index, c.terms.filter((x) => c.checked.has(x)), c.text);
+                if (body === null) {
+                    this.showToast(t(this.lang, "cannot_need_term"), now);
+                    return [];
+                }
+                this.cannot = null;
+                this.mode = "normal";
+                return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id))]: body } });
+            }
+            case "move": {
+                const was = dr.cursor;
+                this.moveCursor(m, dr, dr.cursor + a.delta);
+                return this.landOnText(m, dr, was, now);
+            }
+            case "top":
+                this.moveCursor(m, dr, 0);
+                return this.landOnText(m, dr);
+            case "bottom":
+                this.moveCursor(m, dr, this.slots(m) - 1);
+                return this.landOnText(m, dr);
+            case "input-move": {
+                // ↑↓ in an empty free-text box walk to the neighbouring card; with text they do nothing (a one-line box)
+                const inp = this.input;
+                if (inp?.kind === "instruct" || inp?.kind === "reason") {
+                    // The instruction / reason box of a plan: an empty box leaves (the cursor moves on where the arrows move it; the plan file's one card stays)
+                    if (inp.text !== "")
+                        return [];
+                    if (inp.kind === "instruct")
+                        dr.instruct = "";
+                    else
+                        dr.reason = "";
+                    this.input = null;
+                    this.mode = "normal";
+                    const was = dr.cursor;
+                    if (!m.readonly)
+                        this.moveCursor(m, dr, dr.cursor + a.delta);
+                    return this.landOnText(m, dr, was, now);
+                }
+                if (inp?.kind !== "free" || inp.text !== "")
+                    return [];
+                dr.free.text = "";
+                if (!m.checkpoint)
+                    dr.free.on = false;
+                this.input = null;
+                this.mode = "normal";
+                this.moveCursor(m, dr, dr.cursor + a.delta);
+                return this.landOnText(m, dr);
+            }
+            case "toggle": return this.toggle(m, dr);
+            case "free": return this.startFree(m, dr);
+            case "copy": {
+                const text = m.todoCode[0];
+                return text ? [{ type: "copy", text }] : [];
+            }
+            case "rec": {
+                if (this.recFull.has(m.id))
+                    this.recFull.delete(m.id);
+                else
+                    this.recFull.add(m.id);
+                return [];
+            }
+            case "submit": return this.submit(m, dr, now);
+            case "approve":
+                dr.cursor = 0;
+                this.toOptions(m);
+                return this.approve(m);
+            case "reject":
+                dr.cursor = 2;
+                this.toOptions(m);
+                this.startReason(dr);
+                return [];
+            case "zone": return this.setZone(m, dr, a.to, now);
+            case "input-zone": {
+                // ← in an empty instruction / reason box leaves it for the plan zone
+                const inp = this.input;
+                if (!m.plan || (inp?.kind !== "instruct" && inp?.kind !== "reason") || inp.text !== "")
+                    return [];
+                if (inp.kind === "instruct")
+                    dr.instruct = "";
+                else
+                    dr.reason = "";
+                this.input = null;
+                this.mode = "normal";
+                return this.setZone(m, dr, "plan", now);
+            }
+            case "toc-move": {
+                if (!m.plan)
+                    return [];
+                const st = this.planState(m);
+                st.cur = clamp(st.cur + a.delta, m.plan.outline.entries.length);
+                this.reveal = st.cur;
+                this.revealNear = true;
+                this.rscroll = null;
+                return [];
+            }
+            case "toc-edge": {
+                if (!m.plan)
+                    return [];
+                const st = this.planState(m);
+                st.cur = a.to === "first" ? 0 : m.plan.outline.entries.length - 1;
+                this.reveal = st.cur;
+                this.revealNear = true;
+                return [];
+            }
+            case "toc-toggle": {
+                if (!m.plan)
+                    return [];
+                const st = this.planState(m);
+                setOpen(m.plan.outline, st, st.cur, !st.open.has(st.cur));
+                if (st.open.has(st.cur))
+                    this.reveal = st.cur;
+                return [];
+            }
+            case "toc-all": {
+                if (m.plan)
+                    toggleAll(m.plan.outline, this.planState(m));
+                return [];
+            }
+            default: return [];
+        }
+    }
+    // ---- Items ----
+    /** The list (`b`): pending decisions first, then the new plans newest first (a plan that is a pending approval is its decision's row) */
+    listItems(now) {
+        return [...this.pending().map((decision) => ({ decision })), ...this.newPlans(now).map((plan) => ({ plan }))];
+    }
+    isShown(it) {
+        return it.plan ? it.plan.name === this.shownPlan : it.decision.id === this.shownId;
+    }
+    cycle(step, now) {
+        const items = this.listItems(now);
+        const i = items.findIndex((it) => this.isShown(it));
+        if (!items.length || (items.length === 1 && i === 0))
+            return;
+        // A plan on screen that is no longer an item (it was read meanwhile) steps to the first / last
+        const from = i >= 0 ? i : step > 0 ? -1 : items.length;
+        const next = items[(from + step + items.length) % items.length];
+        if (next.plan)
+            this.openPlan(next.plan.name);
+        else
+            this.show(next.decision.id);
+    }
+    /** Done reading: mark the plan read (unless it already is), then the next item or the idle screen */
+    planDone(now) {
+        const name = this.shownPlan;
+        if (!name)
+            return [];
+        const file = this.files.get(name);
+        const effects = file ? this.markRead(name, file.mtime) : [];
+        this.advance(now);
+        return effects;
+    }
+    /** Number of positions the cursor can rest on: cards + "None of these" + "Can't answer this" + free text for a question, Approve, the instruction card and Reject for a plan */
+    slots(m) {
+        if (m.kind === "plan")
+            return 3;
+        if (m.checkpoint)
+            return CHECKPOINT_CARDS;
+        return m.question ? m.question.cards.length + 3 : 0;
+    }
+    /** Approve a plan: one press, always with the auto mode (unread sections are shown above the buttons, never a gate) */
+    approve(m) {
+        return this.emit(m.id, { approve: true, set_mode_auto: true });
+    }
+    /** The first press of a heavy action only arms it; the same action on the very next key (within 3s) goes through */
+    guard(m, kind, heavy, now) {
+        if (!heavy)
+            return true;
+        const c = this.prior;
+        if (c && c.id === m.id && c.kind === kind && c.until >= now)
+            return true;
+        this.confirm = { id: m.id, kind, until: now + CONFIRM_MS };
+        return false;
+    }
+    openNone(m, dr) {
+        const q = m.question;
+        if (!q || !q.cards.length)
+            return [];
+        dr.cursor = q.cards.length;
+        if (!q.multi) {
+            dr.sel.clear();
+            dr.free.on = false;
+        }
+        this.none = this.none ?? { index: 0, text: "" };
+        this.mode = "none";
+        return [];
+    }
+    /** `1`-`9`: send the card at once. A heavy card (irreversible) first moves the cursor there and asks for the same key (or Enter) again */
+    pick(m, dr, i, now) {
+        if (m.kind === "plan") {
+            // 1 Approve (auto) · 2 Instruct · 3 Reject: the cursor goes there and the card does its thing at once
+            if (m.readonly)
+                return [];
+            this.toOptions(m);
+            dr.cursor = i;
+            if (i === 0)
+                return this.approve(m);
+            if (i === 1)
+                return this.startInstruct(m, dr, now);
+            this.startReason(dr);
+            return [];
+        }
+        if (m.checkpoint)
+            return this.checkpointCard(m, dr, i);
+        const q = m.question;
+        if (!q || q.multi || i >= q.cards.length)
+            return [];
+        const heavy = m.reversibility === "irreversible" || !!q.cards[i].heavy;
+        if (dr.cursor !== i) {
+            this.moveCursor(m, dr, i);
+            if (heavy) {
+                this.confirm = { id: m.id, kind: "answer", until: now + CONFIRM_MS };
+                return [];
+            }
+        }
+        else if (!this.guard(m, "answer", heavy, now))
+            return [];
+        return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id))]: q.cards[i].value } });
+    }
+    openCannot(m, dr) {
+        const q = m.question;
+        if (!q || !q.cards.length)
+            return [];
+        dr.cursor = q.cards.length + 1;
+        if (!q.multi) {
+            dr.sel.clear();
+            dr.free.on = false;
+        }
+        if (!this.cannot) {
+            const index = defaultCannotReason(m.coinedTerms);
+            this.cannot = { index, pos: cannotRows(index, m.coinedTerms.length).findIndex((r) => r.kind === "reason" && r.index === index), terms: [...m.coinedTerms], checked: new Set(m.coinedTerms), text: "" };
+        }
+        this.mode = "cannot";
+        return [];
+    }
+    cannotMove(delta) {
+        const c = this.cannot;
+        if (!c)
+            return [];
+        const before = cannotRows(c.index, c.terms.length);
+        const row = before[clamp(c.pos + delta, before.length)];
+        // Landing on a reason makes it the one in force (the terms list opens or closes); the row is found again in the new layout
+        if (row.kind === "reason")
+            c.index = row.index;
+        const after = cannotRows(c.index, c.terms.length);
+        c.pos = after.findIndex((r) => r.kind === row.kind && r.index === row.index);
+        return [];
+    }
+    moveCursor(m, dr, to) {
+        const n = this.slots(m);
+        if (!n)
+            return;
+        // With no options the cursor never rests on the hidden None of these / Can't answer rows (slots 0 and 1)
+        dr.cursor = m.question && !m.question.cards.length ? Math.max(2, clamp(to, n)) : clamp(to, n);
+        if (!(m.plan && this.frame.wide))
+            this.scroll = 0; // a long plan keeps its place while the options change
+        this.rscroll = null;
+        const q = m.question;
+        if (!q || q.multi)
+            return;
+        // Single select: moving = selecting
+        if (dr.cursor < q.cards.length) {
+            dr.sel = new Set([q.cards[dr.cursor].value]);
+            dr.free.on = false;
+        }
+        else {
+            dr.sel.clear();
+            dr.free.on = dr.cursor > q.cards.length + 1;
+        }
+    }
+    toggle(m, dr) {
+        const q = m.question;
+        if (!q?.multi)
+            return [];
+        if (dr.cursor === q.cards.length)
+            return this.openNone(m, dr);
+        if (dr.cursor === q.cards.length + 1)
+            return this.openCannot(m, dr);
+        if (dr.cursor > q.cards.length + 1) {
+            dr.free.on = !dr.free.on;
+            if (dr.free.on && !dr.free.text.trim())
+                this.startFree(m, dr);
+            return [];
+        }
+        const v = q.cards[dr.cursor].value;
+        if (dr.sel.has(v))
+            dr.sel.delete(v);
+        else
+            dr.sel.add(v);
+        return [];
+    }
+    /** A checkpoint's three cards, one press each: continue and stop send at once, the instruction card opens the text box (Enter there sends it) */
+    checkpointCard(m, dr, i) {
+        dr.cursor = i;
+        if (i === 0)
+            return this.emit(m.id, { kind: "continue" });
+        if (i === 2)
+            return this.emit(m.id, { kind: "stop" });
+        return this.startFree(m, dr);
+    }
+    /** The cursor landing on a card with a text box (the checkpoint's instruction card, the free-text card) opens the box at once; `i` still does too */
+    landOnText(m, dr, was, now = 0) {
+        if (this.mode !== "normal")
+            return [];
+        // A plan: the Instruct card (slot 1; the plan file's only card) and the Reject card (slot 2, its reason box) open their box when the cursor lands on them
+        if (m.kind === "plan") {
+            if (dr.cursor === was)
+                return [];
+            if (m.readonly)
+                return this.startInstruct(m, dr, now);
+            if (dr.cursor === 1)
+                return this.startInstruct(m, dr, now);
+            if (dr.cursor === 2)
+                this.startReason(dr);
+            return [];
+        }
+        const onText = m.checkpoint ? dr.cursor === 1 : !!m.question && dr.cursor === m.question.cards.length + 2;
+        return onText ? this.startFree(m, dr) : [];
+    }
+    startFree(m, dr) {
+        if (m.checkpoint) {
+            dr.cursor = 1;
+            this.input = { kind: "free", text: dr.free.text };
+            this.mode = "input";
+            return [];
+        }
+        const q = m.question;
+        if (!q)
+            return [];
+        dr.cursor = q.cards.length + 2;
+        if (!q.multi)
+            dr.sel.clear();
+        dr.free.on = true;
+        this.input = { kind: "free", text: dr.free.text };
+        this.mode = "input";
+        return [];
+    }
+    startReason(dr) {
+        this.input = { kind: "reason", text: dr.reason };
+        this.mode = "input";
+    }
+    /** `i` on a plan: the approval card, or a plan file whose session is known. The text typed earlier comes back */
+    startInstruct(m, dr, now) {
+        if (m.kind !== "plan")
+            return [];
+        if (m.readonly && !this.planCanInstruct(m.readonly.name)) {
+            this.showToast(t(this.lang, this.files.get(m.readonly.name)?.session_id ? "plan_agent_working" : "plan_no_session"), now);
+            return [];
+        }
+        dr.cursor = m.readonly ? 0 : 1;
+        this.toOptions(m);
+        this.input = { kind: "instruct", text: dr.instruct };
+        this.mode = "input";
+        return [];
+    }
+    /** Whatever picks an option (y n i 1-3) puts a long plan in the options zone */
+    toOptions(m) {
+        if (m.plan)
+            this.planState(m).zone = "opts";
+    }
+    confirmInput(m, dr, now) {
+        const inp = this.input;
+        if (!inp)
+            return [];
+        if (inp.kind === "instruct") {
+            dr.instruct = inp.text;
+            const text = inp.text.trim();
+            if (!text)
+                return [];
+            this.input = null;
+            this.mode = "normal";
+            if (m.readonly) {
+                // The text stays in the draft until the server took it (a failed send keeps it)
+                if (this.sending.has(m.id))
+                    return [];
+                this.sending.add(m.id);
+                return [{ type: "instruct_plan", name: m.readonly.name, text }];
+            }
+            return this.emit(m.id, { instruct: true, text });
+        }
+        if (inp.kind === "note" && this.cannot) {
+            this.cannot.text = inp.text;
+            this.input = null;
+            this.mode = "cannot";
+            return [];
+        }
+        if (inp.kind === "note") {
+            if (this.none)
+                this.none.text = inp.text;
+            this.input = null;
+            this.mode = "none";
+            return [];
+        }
+        if (inp.kind === "reason") {
+            dr.reason = inp.text;
+            const reason = inp.text.trim();
+            this.input = null;
+            this.mode = "normal";
+            return this.emit(m.id, reason ? { approve: false, reason } : { approve: false });
+        }
+        dr.free.text = inp.text;
+        if (m.checkpoint) {
+            this.input = null;
+            this.mode = "normal";
+            // Enter on typed text sends it as the instruction; an empty box sends nothing
+            return inp.text.trim() ? this.emit(m.id, { kind: "instruct", text: inp.text.trim() }) : [];
+        }
+        if (!inp.text.trim())
+            dr.free.on = false;
+        this.input = null;
+        this.mode = "normal";
+        // Single select: Enter on the typed text sends it (an empty text sends nothing). Multi select only confirms: the ticked options go with it on the next Enter
+        return m.question && !m.question.multi && inp.text.trim() ? this.submit(m, dr, now) : [];
+    }
+    complete(m, dr) {
+        const q = m.question;
+        if (!q)
+            return false;
+        if (dr.free.on && !q.multi)
+            return dr.free.text.trim() !== "";
+        if (dr.free.on && dr.free.text.trim())
+            return true;
+        return dr.sel.size > 0;
+    }
+    submit(m, dr, now) {
+        if (m.checkpoint)
+            return dr.cursor === 1 && dr.free.text.trim() ? this.emit(m.id, { kind: "instruct", text: dr.free.text.trim() }) : this.checkpointCard(m, dr, dr.cursor);
+        if (m.kind === "plan") {
+            if (dr.cursor === 0)
+                return this.approve(m);
+            if (dr.cursor === 1)
+                return this.startInstruct(m, dr, now);
+            // Reject: a reason left in the box goes at once, else the box opens
+            if (dr.reason.trim())
+                return this.emit(m.id, { approve: false, reason: dr.reason.trim() });
+            this.startReason(dr);
+            return [];
+        }
+        const q = m.question;
+        if (!q)
+            return [];
+        if (dr.cursor === q.cards.length)
+            return this.openNone(m, dr);
+        if (dr.cursor === q.cards.length + 1)
+            return this.openCannot(m, dr);
+        if (dr.cursor === q.cards.length + 2 && !dr.free.text.trim())
+            return this.startFree(m, dr);
+        if (!this.complete(m, dr))
+            return [];
+        // The answer uses the original option.label
+        const picked = q.cards.map((c) => c.value).filter((v) => dr.sel.has(v));
+        if (dr.free.on && !q.multi)
+            picked.length = 0;
+        if (dr.free.on && dr.free.text.trim())
+            picked.push(dr.free.text.trim());
+        const heavy = m.reversibility === "irreversible" || q.cards.some((c) => c.heavy && dr.sel.has(c.value) && !(dr.free.on && !q.multi));
+        if (!this.guard(m, "answer", heavy, now))
+            return [];
+        return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id))]: picked.join(MULTI_SELECT_SEPARATOR) } });
+    }
+    emit(id, body) {
+        if (this.sending.has(id))
+            return [];
+        this.sending.add(id);
+        return [{ type: "answer", id, body }];
+    }
+    // ---- Submission results ----
+    answered(updated, now) {
+        this.sending.delete(updated.id);
+        this.sent.add(updated.id);
+        this.decisions.set(updated.id, updated);
+        const key = updated.kind === "checkpoint" && updated.status === "answered" && updated.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[updated.status];
+        this.showToast(t(this.lang, key ?? "sent"), now);
+        if (updated.id === this.shownId)
+            this.advance(now);
+    }
+    /** The server's answer to an instruction sent from a plan file */
+    planInstructed(name, via, now) {
+        this.staleVersions(); // the instruction took a snapshot of the plan
+        const key = planKeyOf(name);
+        this.sending.delete(key);
+        const dr = this.drafts.get(key);
+        if (dr)
+            dr.instruct = "";
+        this.showToast(t(this.lang, via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), now);
+    }
+    planInstructFailed(name, message, now) {
+        this.sending.delete(planKeyOf(name));
+        this.showToast(t(this.lang, "send_failed", { message }), now);
+    }
+    failed(id, message, now) {
+        this.sending.delete(id);
+        this.showToast(t(this.lang, "send_failed", { message }), now);
+    }
+    note(text, now) {
+        this.showToast(text, now);
+    }
+}
+function clamp(i, n) {
+    return Math.max(0, Math.min(n - 1, i));
+}
+function questionText(d) {
+    const qs = d.request.questions;
+    return qs?.[0]?.question ?? "";
+}
+//# sourceMappingURL=app.js.map

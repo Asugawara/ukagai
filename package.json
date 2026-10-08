@@ -1,0 +1,42 @@
+{
+  "name": "ukagai",
+  "version": "0.1.0",
+  "description": "Hooks + GUI that gather a coding agent's decisions in one place, with the agent's own explanation.",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Asugawara/ukagai.git"
+  },
+  "homepage": "https://github.com/Asugawara/ukagai#readme",
+  "type": "module",
+  "bin": {
+    "ukagai": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "UKAGAI_TERMINAL=none node --import tsx --test \"test/**/*.test.ts\"",
+    "dev:serve": "tsx src/cli.ts serve",
+    "vendor": "cp node_modules/mermaid/dist/mermaid.min.js node_modules/marked/lib/marked.umd.js public/vendor/",
+    "release:stage": "sh scripts/build-release.sh"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.3",
+    "beautiful-mermaid": "^1.1.3",
+    "hono": "^4.13.12",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
+    "marked": "^18.0.14",
+    "mermaid": "^12.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

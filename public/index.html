@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<!-- The server injects lang / data-lang into <html>; static text is replaced at startup by i18n.js (applyStatic). -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ukagai</title>
+<link rel="icon" id="favicon" href="/public/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/public/favicon.png" type="image/png" sizes="32x32">
+<link rel="stylesheet" href="/public/app.css">
+<!-- highlight.js from cdnjs (optional: without network the code stays plain). Light/dark themes follow prefers-color-scheme -->
+<link rel="stylesheet" data-hljs="light" media="(prefers-color-scheme: light)" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<link rel="stylesheet" data-hljs="dark" media="(prefers-color-scheme: dark)" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+<div id="live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+<div id="live-urgent" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
+<button id="pending-btn" class="pending-btn" type="button" aria-controls="drawer" aria-expanded="false" data-i18n-aria-label="pending_list" aria-label="Pending decisions" hidden><span aria-hidden="true">☰</span> <span id="pending-count">0</span></button>
+<a id="settings-link" class="settings-link floating" href="/settings"><span data-i18n="settings">Settings</span></a>
+<div id="banner" class="banner" hidden></div>
+<header id="head" class="hd" hidden></header>
+<main id="main" hidden>
+  <section id="background" aria-label="Background" data-i18n-aria-label="aria_background"></section>
+  <section id="decision" aria-label="Decision" data-i18n-aria-label="aria_decision"></section>
+</main>
+<div id="empty" class="empty">
+  <div id="empty-title" class="empty-title">Nothing to decide</div>
+  <div id="empty-sub" class="empty-sub">Decisions from the agent will appear here</div>
+</div>
+<footer id="foot" class="foot" hidden></footer>
+<span id="build" class="build"></span>
+<div id="backdrop" class="backdrop" hidden></div>
+<aside id="drawer" class="drawer" aria-label="Pending decisions" data-i18n-aria-label="pending_list" inert>
+  <h2 data-i18n="pending_list">Pending decisions</h2>
+  <div id="drawer-keys" class="keys"></div>
+  <ul id="pending-list"></ul>
+</aside>
+<script src="/public/vendor/marked.umd.js"></script>
+<script src="/public/vendor/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" defer></script>
+<script type="module" src="/public/app.js"></script>
+</body>
+</html>

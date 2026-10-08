@@ -1,0 +1,6 @@
+{
+  "name": "ukagai",
+  "version": "0.1.0",
+  "description": "Answer Claude Code's and Codex's questions and plan approvals together with your team in a GUI.",
+  "hooks": "./hooks/codex.json"
+}

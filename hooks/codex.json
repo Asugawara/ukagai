@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "request_user_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/ukagai\" hook --agent codex --budget 3590 --managed-by ukagai",
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/ukagai\" hook --agent codex --budget 3590 --managed-by ukagai",
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/ukagai\" hook --agent codex --budget 3590 --managed-by ukagai",
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/ukagai\" hook --agent codex --managed-by ukagai",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/ukagai\" hook --agent codex --managed-by ukagai",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}
