@@ -425,7 +425,7 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   assert.ok(!hint.includes("j/k"), hint);
   assert.equal(count("kbd"), 0);
   assert.equal(count("#decision .keys"), 0); // the "↑↓ Move · Enter Answer" row above the cards is gone
-  assert.equal(ev<string>(`document.getElementById("pending-btn").textContent`), "Pending 2"); // no ← → badges
+  assert.equal(ev<string>(`document.getElementById("pending-btn").textContent`), "☰ 2"); // the count only, no word, no ← → badges
   press("b");
   assert.equal(count("kbd"), 0); // the drawer neither
   press("Escape");
@@ -792,10 +792,11 @@ gui("ja: main UI strings are Japanese after data-lang is set to ja", async () =>
   await seedQuestion();
   await reopen();
   assert.equal(ev<string>(`document.querySelector("#foot .hint-full").textContent`).includes("Send"), true);
-  assert.equal(ev<string>(`document.getElementById("pending-btn").textContent`).startsWith("Pending"), true);
+  assert.equal(ev<string>(`document.getElementById("pending-btn").textContent`), "☰ 2"); // the count only; the language changes nothing here
   try {
     await setLang("ja", `document.querySelector("#foot .hint-full")?.textContent.includes("送信")`);
-    assert.equal(ev<boolean>(`document.getElementById("pending-btn").textContent.startsWith("保留")`), true);
+    assert.equal(ev<string>(`document.getElementById("pending-btn").textContent`), "☰ 2");
+    assert.equal(ev<string>(`document.getElementById("pending-btn").getAttribute("aria-label")`), "保留一覧");
     assert.equal(ev<boolean>(`document.getElementById("drawer").getAttribute("aria-label") === "保留一覧"`), true);
     assert.equal(ev<boolean>(`document.querySelector("#decision .rec-badge").textContent === "★ 推奨"`), true);
     assert.equal(ev<boolean>(`document.querySelector("#foot .hint").textContent.includes("次へ")`), true);
