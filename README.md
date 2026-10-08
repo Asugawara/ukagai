@@ -22,7 +22,9 @@ Requirements: Node.js >= 22, macOS or Linux (Windows is not supported), Claude C
 curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh -s -- --lang en
 ```
 
-Then start `claude`. The server starts by itself and the GUI opens on your first session of the day; from then on every `AskUserQuestion` and plan approval lands there. Use `--lang ja` for a Japanese GUI, and add `--codex` for Codex CLI.
+Then start `claude`. The server starts by itself and the GUI opens on your first session of the day; from then on every `AskUserQuestion` and plan approval lands there. Use `--lang ja` for a Japanese GUI, and add `--codex --claude` to register Codex CLI as well (`--codex` alone registers Codex only).
+
+Right after installing, `ukagai doctor` reports the server and the token as "not started yet"; after your first `claude` session it prints `no problems`.
 
 ![A plan approval](docs/images/plan.png)
 
@@ -64,7 +66,7 @@ Then start `claude`. The server starts by itself and the GUI opens on your first
 
 A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. If you also ran `install.sh`, `ukagai install` removes its own registration so the hooks run once.
 
-**Update**: run the install command again; a running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first, `--codex` for Codex too), then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
+**Update**: run the install command again; a running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first; `--codex --claude` when Codex is registered too) removes the hooks and the skill and stops the server once no hooks remain, then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
 
 Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troubleshooting)).
 

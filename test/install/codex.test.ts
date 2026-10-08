@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -338,6 +338,8 @@ test("launcher form: the Codex commands run the launcher; re-install from the no
   }
   const state = readState(readFileSync(join(e.codex, "config.toml"), "utf8"));
   assert.equal(state.size, CODEX_SPECS.length, "only the new keys stay trusted");
+  mkdirSync(join(e.dir, "data"), { recursive: true });
+  writeFileSync(join(e.dir, "data", "token"), "t"); // the server has run before, so its absence is a problem
   const d = await ukagai(e, ["doctor", "--codex", "--codex-home", e.codex, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")], { UKAGAI_LAUNCHER: launcher });
   // the exit code is 1 only because the server at 127.0.0.1:1 is unreachable; the hook rows are what is asserted
   assert.equal(d.code, 1, d.err);

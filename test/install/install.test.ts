@@ -6,6 +6,7 @@ import { mkdtemp, readFile, writeFile, readdir, stat, mkdir } from "node:fs/prom
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { symlink, chmod } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 
 const CLI = resolve("src/cli.ts");
 const TSX = import.meta.resolve("tsx");
@@ -197,17 +198,135 @@ test("broken JSON is not rewritten and exits 1", async () => {
   assert.equal(await readFile(e.settings, "utf8"), "{ not json");
 });
 
-test("doctor: installed + no server -> hook ○, server ×, exit 1", async () => {
+test("doctor: installed, server never started -> ○ \"not started yet\", no problems, exit 0", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings]);
   const r = await ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")]);
-  assert.equal(r.code, 1);
+  assert.equal(r.code, 0, r.out);
   assert.match(r.out, /○ +hook PreToolUse/);
   assert.match(r.out, /○ +hook PreToolUse \(plan context\)/);
   assert.match(r.out, /○ +hook UserPromptSubmit \(plan context\)/);
-  assert.match(r.out, /× +server/);
-  assert.match(r.out, /× +token/);
+  assert.match(r.out, /○ +server .*not started yet/);
+  assert.match(r.out, /○ +token .*not created yet/);
+  assert.match(r.out, /no problems/);
   assert.match(r.out, /○ +skill ukagai-explain +not handled/);
+});
+
+test("doctor: the token exists but no server answers -> server × with the start hint, exit 1", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const data = join(e.dir, "data");
+  await mkdir(data);
+  await writeFile(join(data, "token"), "t");
+  const r = await ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", data]);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /× +server .*cannot connect \(.*\); start a claude session or run: ukagai serve/);
+  assert.match(r.out, /○ +token/);
+  assert.match(r.out, /1 problem\(s\) found/);
+});
+
+interface Stub { server: Server; url: string; shutdowns: number; up: () => boolean }
+/** A server that answers /healthz and stops on POST /api/shutdown with the right bearer */
+async function stubServer(token: string): Promise<Stub> {
+  const stub = { shutdowns: 0 } as Stub;
+  let up = true;
+  stub.server = createServer((req, res) => {
+    if (req.url === "/healthz") return void res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+    if (req.method === "POST" && req.url === "/api/shutdown" && req.headers.authorization === `Bearer ${token}`) {
+      stub.shutdowns++;
+      res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+      up = false;
+      stub.server.close();
+      stub.server.closeAllConnections();
+      return;
+    }
+    res.writeHead(401).end();
+  });
+  await new Promise<void>((r) => stub.server.listen(0, "127.0.0.1", r));
+  stub.url = `http://127.0.0.1:${(stub.server.address() as { port: number }).port}`;
+  stub.up = () => up;
+  return stub;
+}
+
+async function serverSetup(args: string[] = []): Promise<{ e: Env; stub: Stub; flags: string[]; codex: string }> {
+  const e = await setup();
+  const data = join(e.dir, "data");
+  await mkdir(data);
+  await writeFile(join(data, "token"), "secret\n");
+  const stub = await stubServer("secret");
+  const codex = join(e.dir, "codex");
+  await mkdir(codex);
+  const flags = ["--server", stub.url, "--data-dir", data, "--codex-home", codex];
+  const r = await ukagai(e, ["install", ...flags, ...args]);
+  assert.equal(r.code, 0, r.err);
+  return { e, stub, flags, codex };
+}
+
+test("uninstall stops the server when no ukagai hook remains", async () => {
+  const { e, stub, flags } = await serverSetup();
+  try {
+    const r = await ukagai(e, ["uninstall", ...flags]);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(stub.shutdowns, 1);
+    assert.ok(!stub.up());
+    assert.match(r.out, new RegExp(`server: +stopped ${stub.url}`));
+  } finally {
+    stub.server.close();
+  }
+});
+
+test("uninstall of Claude only while Codex hooks exist leaves the server running", async () => {
+  const { e, stub, flags } = await serverSetup(["--codex", "--claude"]);
+  try {
+    const r = await ukagai(e, ["uninstall", ...flags]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /server: +left running \(ukagai hooks are still registered for Codex CLI\)/);
+    assert.equal(stub.shutdowns, 0);
+    assert.ok(stub.up());
+    const r2 = await ukagai(e, ["uninstall", "--codex", ...flags]);
+    assert.match(r2.out, /server: +stopped/);
+    assert.equal(stub.shutdowns, 1);
+  } finally {
+    stub.server.close();
+  }
+});
+
+test("uninstall --dry-run says it would stop the server and stops nothing", async () => {
+  const { e, stub, flags } = await serverSetup();
+  try {
+    const r = await ukagai(e, ["uninstall", "--dry-run", ...flags]);
+    assert.match(r.out, new RegExp(`server: +would stop ${stub.url}`));
+    assert.equal(stub.shutdowns, 0);
+    assert.ok(stub.up());
+  } finally {
+    stub.server.close();
+  }
+});
+
+test("uninstall --settings <file> (a development target) does not touch the server", async () => {
+  const { e, stub, flags } = await serverSetup();
+  try {
+    await ukagai(e, ["install", "--settings", e.settings, ...flags]);
+    const r = await ukagai(e, ["uninstall", "--settings", e.settings, ...flags]);
+    assert.equal(r.code, 0, r.err);
+    assert.doesNotMatch(r.out, /server:/);
+    assert.equal(stub.shutdowns, 0);
+    assert.ok(stub.up());
+  } finally {
+    stub.server.close();
+  }
+});
+
+test("uninstall reports a server that refuses to stop (wrong token) and still exits 0", async () => {
+  const { e, stub, flags } = await serverSetup();
+  try {
+    await writeFile(join(e.dir, "data", "token"), "wrong");
+    const r = await ukagai(e, ["uninstall", ...flags]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /server: +still running at .*stop it yourself/);
+  } finally {
+    stub.server.close();
+  }
 });
 
 test("doctor --skill: detects whether the skill exists", async () => {

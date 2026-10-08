@@ -99,6 +99,8 @@ ukagai install --codex --dry-run   # preview the changes to ~/.codex/hooks.json 
 ukagai install --codex             # Codex only; add --claude to register Claude Code too
 ```
 
+`ukagai uninstall` stops the server once no ukagai hooks remain (after a Claude-only or Codex-only uninstall it is left running while the other agent still has hooks); `<data-dir>` (`~/.ukagai`: config, history, logs) stays until you `rm -rf` it.
+
 `install --codex` merges ukagai's handlers (PreToolUse `request_user_input`, PermissionRequest, Stop, SessionStart, SessionEnd; re-run `install --codex` after upgrading to pick up SessionEnd). SessionEnd arrives when Codex shuts the session down (possibly minutes after the TUI quit); the bridge then cancels the thread's pending progress card and forgets the thread.
 
 The handlers go into `$CODEX_HOME/hooks.json` (default `~/.codex`; `--codex-home <dir>` overrides) without touching other hooks, and the matching `[hooks.state."…"]` trust hashes go into `config.toml`, so Codex does not show "Hooks need review". Only those tables are edited: an existing `hooks.json` keeps its indentation (tabs / spaces), final-newline state and key order, and both files get a `.bak-<time>` copy. `uninstall --codex` restores the original bytes (files `install` created are deleted again; what install did is recorded in `<CODEX_HOME>/.ukagai-codex.json`, without that record nothing is deleted). `install` never touches Codex without `--codex`; `uninstall --codex` and `doctor --codex` mirror it.
@@ -134,6 +136,7 @@ Every abnormal exit (and each retry) is recorded as one JSON line in `<data-dir>
 ## Troubleshooting
 
 - **First step: `ukagai doctor`.** It diagnoses the hook registration and the connection to the server (`--server <url>`, `--data-dir <dir>` point it elsewhere; add `--codex` for Codex CLI) and shows the last lines of `hook.log`. A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. It also reports a double registration (`install.sh` plus the plugin) as a problem.
+- **Doctor says "not started yet".** The server only starts at your first `claude` session (or run `ukagai serve`), so before that `ukagai doctor` reports the server and token lines as "not started yet" and still prints `no problems`; once the token exists, an unreachable server is a problem.
 - **`hook.log`.** `<data-dir>/hook.log` (default `~/.ukagai/hook.log`) holds one JSON line per abnormal exit or retry: ids, status and error text, never the question or the answer.
 - **"Pending N" never appears.** The hook did not register a decision: check that `ukagai doctor` shows the hooks registered, that `UKAGAI_DISABLE=1` is not set in that shell, and that you restarted `claude` after installing. For a plan file, remember it pops up only when its session is known and the agent has stopped; otherwise it waits in the list under `b` (see Settings, Plans). The tab title and icon only count decisions that are pending.
 - **The server did not start.** Run `ukagai serve` in a terminal and read the error (the port 4818 may be taken). Auto-start can be turned off with `ukagai install --no-autostart`. A server left over from an old version is replaced at the next session start; `pkill -f "cli.js serve"` stops it by hand.
