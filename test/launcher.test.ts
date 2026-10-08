@@ -9,12 +9,17 @@ const LAUNCHER_SRC = resolve("bin/ukagai");
 const SH = "/bin/sh";
 
 /** A throwaway install tree: <root>/bin/ukagai (the real launcher, with the fixed system node paths removed) + a fake dist/cli.js */
-function tree(): { root: string; launcher: string; home: string; tools: string; dir: string } {
+function tree(): { root: string; launcher: string; home: string; tools: string; dir: string; noShell: string } {
   const dir = mkdtempSync(join(tmpdir(), "ukagai-launcher-"));
   const root = join(dir, "root");
   const home = join(dir, "home");
   const tools = join(dir, "tools");
   for (const d of [join(root, "bin"), join(root, "dist"), home, tools]) mkdirSync(d, { recursive: true });
+  // The launcher's last resort is `$SHELL -lc 'command -v node'`. bash (macOS /bin/sh) sets SHELL to the user's login
+  // shell when the environment has none, and a login shell on a CI runner finds the machine's node; a fake SHELL that
+  // prints nothing keeps the "no node" cases deterministic (the fallback itself is tested with its own fake shell).
+  const noShell = join(dir, "noshell");
+  writeFileSync(noShell, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   // the machine's own /opt/homebrew or /usr/local node must not make "no node" cases find one
   const src = readFileSync(LAUNCHER_SRC, "utf8").replace("/opt/homebrew/bin/node /usr/local/bin/node", "/nonexistent/node");
   assert.ok(src.includes("/nonexistent/node"));
@@ -30,7 +35,7 @@ function tree(): { root: string; launcher: string; home: string; tools: string; 
     }
   }
   symlinkSync(SH, join(tools, "sh"));
-  return { root, launcher, home, tools, dir };
+  return { root, launcher, home, tools, dir, noShell };
 }
 
 function run(t: ReturnType<typeof tree>, args: string[], o: { env?: Record<string, string>; input?: string; launcher?: string; cwd?: string } = {}) {
@@ -38,7 +43,7 @@ function run(t: ReturnType<typeof tree>, args: string[], o: { env?: Record<strin
     cwd: o.cwd ?? t.dir,
     input: o.input ?? "",
     encoding: "utf8",
-    env: { PATH: t.tools, HOME: t.home, ...o.env },
+    env: { PATH: t.tools, HOME: t.home, SHELL: t.noShell, ...o.env },
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
