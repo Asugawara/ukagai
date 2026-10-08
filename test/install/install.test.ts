@@ -317,6 +317,36 @@ test("uninstall --settings <file> (a development target) does not touch the serv
   }
 });
 
+test("uninstall --project (a development target) does not touch the server", async () => {
+  const { e, stub, flags } = await serverSetup();
+  try {
+    const cwd = join(e.dir, "proj");
+    await mkdir(cwd);
+    await ukagai(e, ["install", "--project", ...flags], cwd);
+    const r = await ukagai(e, ["uninstall", "--project", ...flags], cwd);
+    assert.equal(r.code, 0, r.err);
+    assert.doesNotMatch(r.out, /server:/);
+    assert.equal(stub.shutdowns, 0);
+    assert.ok(stub.up());
+  } finally {
+    stub.server.close();
+  }
+});
+
+test("uninstall: when the hook check itself fails and no server answers, it says not running", async () => {
+  const e = await setup();
+  const data = join(e.dir, "data");
+  await mkdir(data);
+  const notADir = join(e.dir, "codex-file");
+  await writeFile(notADir, "");
+  await ukagai(e, ["install", "--server", "http://127.0.0.1:1", "--data-dir", data]);
+  // --codex-home pointing at a file makes the Codex hook check throw (ENOTDIR), the catch path
+  const r = await ukagai(e, ["uninstall", "--server", "http://127.0.0.1:1", "--data-dir", data, "--codex-home", notADir]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /server: +not running/);
+  assert.doesNotMatch(r.out, /still running/);
+});
+
 test("uninstall reports a server that refuses to stop (wrong token) and still exits 0", async () => {
   const { e, stub, flags } = await serverSetup();
   try {
