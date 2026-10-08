@@ -22,7 +22,9 @@ ukagai は、コーディングエージェントが人間に求める判断（C
 curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh -s -- --lang ja
 ```
 
-そのあと `claude` を起動してください。サーバーは自動で起動し、その日の最初のセッションで GUI が開きます。以降は `AskUserQuestion` とプラン承認がすべてそこに届きます。GUI を英語にするには `--lang en`、Codex CLI も使うなら `--codex` を追加します。
+そのあと `claude` を起動してください。サーバーは自動で起動し、その日の最初のセッションで GUI が開きます。以降は `AskUserQuestion` とプラン承認がすべてそこに届きます。GUI を英語にするには `--lang en`、Codex CLI も使うなら `--codex --claude` を追加します（`--codex` だけでは Codex にしか登録されません）。
+
+インストール直後の `ukagai doctor` は server と token を "not started yet" と表示し、最初の `claude` セッションのあとは `no problems` になります。
 
 ![プラン承認の画面](docs/images/ja/plan.png)
 
@@ -66,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 プラグインだけを使っている場合、シェルで `ukagai` は打てません。Claude Code ではエージェントの Bash ツール経由で `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` を実行してください。`install.sh` も実行済みの場合は、`ukagai install` が自身の登録を外し、hooks が二重に動かないようにします。
 
-**更新**: インストールのコマンドをもう一度実行します。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`、Codex も外すなら `--codex`）を実行し、そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
+**更新**: インストールのコマンドをもう一度実行します。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`、Codex にも登録しているなら `--codex --claude`）で hooks と skill を外します。hooks が残らなくなればサーバーも止まります。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
 
 うまく動かないときは `ukagai doctor` を実行してください（[トラブルシューティング](docs/guide.md#troubleshooting)）。
 

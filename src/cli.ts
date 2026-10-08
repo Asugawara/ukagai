@@ -106,8 +106,8 @@ Options:
 ${CODEX_OPTIONS}${SERVER_OPTIONS}${SETTINGS_OPTIONS}`,
   uninstall: `Usage: ukagai uninstall [options]
 
-Remove only the hooks and skill that install registered. Arguments other than those that locate the settings are ignored.
-<data-dir>/config.json is kept.
+Remove the hooks and skill that install registered, and stop the server when no ukagai hooks remain. <data-dir> (config.json, history, logs) is kept.
+Arguments other than those that locate the settings are ignored.
 
 Options:
   --dry-run          Print the diff only; write nothing
