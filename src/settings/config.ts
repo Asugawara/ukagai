@@ -6,7 +6,7 @@ import { CODEX_DELAY_MAX_S, CODEX_DELAY_MIN_S, DEFAULT_SETTINGS, INSTRUCTION_PRE
 export const LANGS = ["en", "ja"] as const;
 export type Lang = (typeof LANGS)[number];
 
-/** Everything in `<data-dir>/config.json`: the language `install --lang` sets plus the settings page's values */
+/** Everything in `<data-dir>/config.json`: the language (set on the Settings page) plus the settings page's values */
 export type UkagaiConfig = Settings;
 
 export const DEFAULT_CONFIG: UkagaiConfig = DEFAULT_SETTINGS;
@@ -17,6 +17,12 @@ export function configPath(dataDir: string): string {
 
 export function isLang(v: unknown): v is Lang {
   return typeof v === "string" && (LANGS as readonly string[]).includes(v);
+}
+
+/** `ja` when the first non-empty of LC_ALL, LC_MESSAGES, LANG starts with `ja`, else `en` (the language a first install starts with) */
+export function localeLang(env: NodeJS.ProcessEnv = process.env): Lang {
+  const v = [env["LC_ALL"], env["LC_MESSAGES"], env["LANG"]].find((x) => x !== undefined && x !== "");
+  return v !== undefined && v.startsWith("ja") ? "ja" : "en";
 }
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});

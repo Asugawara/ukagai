@@ -305,7 +305,8 @@ async function backup(file: string): Promise<string | null> {
 export async function apply(home: string, p: CodexPlan): Promise<string[]> {
   const baks: string[] = [];
   const made: { hooks?: string; config?: string } = {};
-  await mkdir(home, { recursive: true });
+  // Only a write needs the directory: uninstall must not create the home of someone who does not use Codex
+  const ensureHome = (): Promise<string | undefined> => mkdir(home, { recursive: true });
   for (const [key, file, before, after, del] of [
     ["hooks", join(home, "hooks.json"), p.hooksBefore, p.hooksAfter, p.hooksDelete],
     ["config", p.configFile, p.configBefore, p.configAfter, p.configDelete],
@@ -320,6 +321,7 @@ export async function apply(home: string, p: CodexPlan): Promise<string[]> {
       baks.push(bak);
       made[key] = basename(bak);
     }
+    await ensureHome();
     await writeFile(file, after);
   }
   const recFile = join(home, RECORD);
@@ -332,7 +334,10 @@ export async function apply(home: string, p: CodexPlan): Promise<string[]> {
     const rec: CodexRecord = { ...p.record, backups: { ...p.record.backups } };
     if (p.fresh) rec.backups = made;
     const text = JSON.stringify(rec, null, 2) + "\n";
-    if (text !== p.recordBefore) await writeFile(recFile, text);
+    if (text !== p.recordBefore) {
+      await ensureHome();
+      await writeFile(recFile, text);
+    }
   }
   return baks;
 }

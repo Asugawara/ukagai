@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Settings } from "../../src/contract.js";
-import { DEFAULT_CONFIG, configPath, readConfig, writeConfig } from "../../src/settings/config.js";
+import { DEFAULT_CONFIG, configPath, localeLang, readConfig, writeConfig } from "../../src/settings/config.js";
 
 test("readConfig: missing or malformed file yields the defaults", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ukagai-cfg-"));
@@ -42,4 +42,16 @@ test("readConfig: unknown keys are stripped, and a repo_colors key from an older
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("localeLang: the first non-empty of LC_ALL, LC_MESSAGES, LANG decides; ja prefix → ja, anything else → en", () => {
+  assert.equal(localeLang({ LANG: "ja_JP.UTF-8" }), "ja");
+  assert.equal(localeLang({ LANG: "ja" }), "ja");
+  assert.equal(localeLang({ LANG: "en_US.UTF-8" }), "en");
+  assert.equal(localeLang({ LANG: "C" }), "en");
+  assert.equal(localeLang({}), "en");
+  assert.equal(localeLang({ LC_ALL: "en_US.UTF-8", LC_MESSAGES: "ja_JP.UTF-8", LANG: "ja_JP.UTF-8" }), "en");
+  assert.equal(localeLang({ LC_ALL: "", LC_MESSAGES: "ja_JP.UTF-8", LANG: "en_US.UTF-8" }), "ja");
+  assert.equal(localeLang({ LC_ALL: "", LC_MESSAGES: "", LANG: "ja_JP.UTF-8" }), "ja");
+  assert.equal(localeLang({ LANG: "fr_FR.UTF-8" }), "en");
 });

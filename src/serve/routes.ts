@@ -253,7 +253,7 @@ export function createApp(deps: AppDeps): Hono {
   app.put("/api/settings", auth("any"), jsonOnly, async (c) => {
     if (!deps.settings) return c.json({ error: "settings unavailable" }, 503);
     let next = await parse(c, Settings);
-    // `install --lang` may have rewritten config.json while serve runs: a PUT that does not change the language keeps the file's
+    // `install` creates config.json (language from the locale) only when it is missing, which can happen while serve runs: a PUT that does not change the language keeps the file's
     if (next.lang === deps.settings.get().lang) next = { ...next, lang: await deps.settings.fileLang() };
     await deps.settings.update(next);
     hub.broadcast("settings.updated", next);

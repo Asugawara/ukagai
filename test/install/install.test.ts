@@ -248,7 +248,7 @@ async function stubServer(token: string): Promise<Stub> {
   return stub;
 }
 
-async function serverSetup(args: string[] = []): Promise<{ e: Env; stub: Stub; flags: string[]; codex: string }> {
+async function serverSetup(args: string[] = ["--claude"]): Promise<{ e: Env; stub: Stub; flags: string[]; codex: string }> {
   const e = await setup();
   const data = join(e.dir, "data");
   await mkdir(data);
@@ -278,7 +278,7 @@ test("uninstall stops the server when no ukagai hook remains", async () => {
 test("uninstall of Claude only while Codex hooks exist leaves the server running", async () => {
   const { e, stub, flags } = await serverSetup(["--codex", "--claude"]);
   try {
-    const r = await ukagai(e, ["uninstall", ...flags]);
+    const r = await ukagai(e, ["uninstall", "--claude", ...flags]);
     assert.equal(r.code, 0, r.err);
     assert.match(r.out, /server: +left running \(ukagai hooks are still registered for Codex CLI\)/);
     assert.equal(stub.shutdowns, 0);
@@ -339,9 +339,9 @@ test("uninstall: when the hook check itself fails and no server answers, it says
   await mkdir(data);
   const notADir = join(e.dir, "codex-file");
   await writeFile(notADir, "");
-  await ukagai(e, ["install", "--server", "http://127.0.0.1:1", "--data-dir", data]);
-  // --codex-home pointing at a file makes the Codex hook check throw (ENOTDIR), the catch path
-  const r = await ukagai(e, ["uninstall", "--server", "http://127.0.0.1:1", "--data-dir", data, "--codex-home", notADir]);
+  await ukagai(e, ["install", "--claude", "--server", "http://127.0.0.1:1", "--data-dir", data]);
+  // --codex-home pointing at a file makes the Codex hook check throw (ENOTDIR), the catch path; --claude keeps Codex out of the run itself
+  const r = await ukagai(e, ["uninstall", "--claude", "--server", "http://127.0.0.1:1", "--data-dir", data, "--codex-home", notADir]);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /server: +not running/);
   assert.doesNotMatch(r.out, /still running/);

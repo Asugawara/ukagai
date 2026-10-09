@@ -420,9 +420,9 @@ test("PUT: a __proto__ key is dropped, nothing is polluted, and the file holds o
   assert.equal(Object.hasOwn(file, "__proto__"), false);
 });
 
-test("PUT keeps the language install --lang wrote to config.json meanwhile (unless the client changes it)", async () => {
+test("PUT keeps the language config.json got meanwhile (unless the client changes it)", async () => {
   const env = await boot();
-  writeFileSync(configPath(env.dir), JSON.stringify({ ...DEFAULT_SETTINGS, lang: "ja" })); // what install --lang ja does
+  writeFileSync(configPath(env.dir), JSON.stringify({ ...DEFAULT_SETTINGS, lang: "ja" })); // the file changed behind the server's back
   const r = await put(env, change((s) => (s.hints = false))); // the page still thinks "en" and does not change it
   assert.equal(((await r.json()) as Settings).lang, "ja");
   assert.equal(JSON.parse(readFileSync(configPath(env.dir), "utf8")).lang, "ja");
