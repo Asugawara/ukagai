@@ -368,6 +368,25 @@ test("doctor --skill: detects whether the skill exists", async () => {
   assert.match((await ukagai(e, args)).out, /× +skill ukagai-explain/);
 });
 
+test("doctor: a saved custom skill version is reported, and 'the default changed' once the base differs (no failure either way)", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const data = join(e.dir, "data");
+  const args = ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", data];
+  assert.doesNotMatch((await ukagai(e, args)).out, /skill \(your version\)/);
+  const { readSkill, writeSkill } = await import("../../src/settings/skill.js");
+  const def = (await readSkill(data)).default!;
+  await writeSkill(data, "my version\n", def);
+  let r = await ukagai(e, args);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /○ +skill \(your version\) +custom version in use \(\S*skill\/SKILL\.md\)\n/);
+  assert.doesNotMatch(r.out, /default changed/);
+  await writeFile(join(data, "skill", "base.md"), "an older default\n");
+  r = await ukagai(e, args);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /skill \(your version\) +custom version in use \(\S*skill\/SKILL\.md\); the default changed since you started editing/);
+});
+
 test("upgrade in place: a settings file from before the plan-context group gains it, user hooks stay, no duplicates", async () => {
   const e = await setup();
   await writeFile(e.settings, JSON.stringify(OTHER));

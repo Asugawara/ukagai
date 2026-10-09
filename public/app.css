@@ -469,10 +469,47 @@ pre code.hljs { background: none; padding: 0; }
 
 /* Settings page (/settings): one column of fieldsets; each control saves on change */
 body.settings-page { display: block; height: auto; min-height: 100dvh; overflow: auto; }
-.set { max-width: 720px; margin: 0 auto; padding: 20px 16px 80px; }
+/* Nothing is shown until settings.js has built the sidebar and the pane head: painted empty first, the page would jump when they arrive (the animation shows it anyway after 2 s if the script never runs) */
+body.settings-page:not(.ready) .set { visibility: hidden; animation: set-reveal 0s 2s forwards; }
+@keyframes set-reveal { to { visibility: visible; } }
+/* The scrollbar's room is always reserved: the long Skill pane must not push the centred layout sideways when it appears */
+html:has(> body.settings-page) { scrollbar-gutter: stable; }
+.set { max-width: 1040px; margin: 0 auto; padding: 20px 16px 80px; }
 .set h1 { font-size: 22px; font-weight: 600; margin: 8px 0 4px; }
-.set-back { color: var(--fg); font-size: 13px; text-underline-offset: 2px; }
-.set fieldset { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin: 18px 0 0; padding: 4px 16px 12px; min-width: 0; }
+.set-back { display: inline-flex; align-items: center; gap: 2px; color: var(--fg); font-size: 13px; text-underline-offset: 2px; }
+.set-back svg { width: 14px; height: 14px; flex: none; }
+.set-back:focus-visible, .set-nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.set-head { margin: 4px 0 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.set-head h1 { margin: 0; }
+.set-head p { margin: 0; font-size: 12px; color: var(--fg); }
+.set-layout { display: grid; grid-template-columns: 196px minmax(0, 1fr); gap: 28px; align-items: start; }
+.set-main { min-width: 0; }
+#form { max-width: 720px; }
+.set-nav { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 1px; }
+.set-nav-group { font-size: 12px; font-weight: 600; margin: 14px 8px 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.set-nav-item { position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px; color: var(--fg); text-decoration: none; }
+.set-nav-item:hover { background: var(--code); }
+.set-nav-item svg { width: 16px; height: 16px; flex: none; }
+.set-nav-item[aria-current="page"] { background: var(--accent-bg); font-weight: 600; }
+.set-nav-item[aria-current="page"]::before { content: ""; position: absolute; left: -8px; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--accent); }
+.set-main h2 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+.set-titlerow { display: flex; align-items: center; flex-wrap: wrap; gap: 0 10px; margin: 0 0 4px; min-height: 32px; }
+.set-titlerow h2 { margin: 0; }
+.set-pane-lede { margin: 0 0 14px; font-size: 13px; color: var(--fg); text-wrap: pretty; }
+/* All ledes share one grid cell: the head is as tall as the tallest one, so the first box sits at the same place in every pane */
+.set-pane-ledes { display: grid; }
+.set-pane-ledes > .set-pane-lede { grid-area: 1 / 1; visibility: hidden; }
+.set-pane-ledes > .set-pane-lede.on { visibility: visible; }
+/* The active label is bold: a hidden bold copy (from data-text) keeps the width the same either way */
+.set-nav-item > span::after, .set-tabs button > span::after, #skill-reset-label::after { content: attr(data-text); display: block; height: 0; overflow: hidden; visibility: hidden; font-weight: 600; }
+@media (max-width: 600px) {
+  .set-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .set-nav { position: static; flex-direction: row; overflow-x: auto; gap: 4px; padding: 2px 2px 6px; border-bottom: 1px solid var(--line); }
+  .set-nav-group { display: none; }
+  .set-nav-item { white-space: nowrap; }
+  .set-nav-item[aria-current="page"]::before { display: none; }
+}
+.set fieldset { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin: 0 0 16px; padding: 4px 16px 12px; min-width: 0; }
 .set legend { font-size: 13px; font-weight: 600; padding: 0 6px; }
 .set-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 0; border-top: 1px solid var(--line); }
 .set-row:first-of-type { border-top: 0; }
@@ -556,3 +593,47 @@ body.settings-page { display: block; height: auto; min-height: 100dvh; overflow:
 .md .ver-old { color: var(--fg); font-size: 0.95em; }
 .md .ver-old s { text-decoration: line-through; text-decoration-thickness: 1px; }
 .md .ver-old::before { content: "−"; margin-right: 6px; font-weight: 700; }
+
+/* Skill pane (Settings): file line, tabs, editor / preview / diff, actions */
+.set-badge { font-size: 11px; font-weight: 600; color: var(--fg); border: 1px solid var(--yellow); background: var(--yellow-bg); border-radius: 999px; padding: 0 8px; line-height: 20px; }
+/* Every slot of the file line exists from the first paint (empty, or ghost text) so the fetched path, "Last saved" and the newer-version notice never move the editor */
+.set-filebar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--fg); padding: 4px 0 8px; }
+.set-filebar code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border-radius: 4px; padding: 0 4px; }
+.set-filebar #skill-path { flex: 1 1 100%; min-width: 0; min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-filebar #skill-path:empty { background: none; }
+.set-filebar #skill-lines { min-width: 8ch; }
+.set-filebar .ghost { visibility: hidden; }
+.set-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+.set .set-tabs button { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 6px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: none; margin-bottom: -1px; }
+.set .set-tabs button[aria-selected="true"] { background: var(--panel); border-color: var(--line); font-weight: 600; }
+.set-tabs svg, .set-actions svg { width: 14px; height: 14px; flex: none; }
+.set-tabs button:focus-visible, .set-actions button:focus-visible, #skill-text:focus-visible, .set-view:focus-visible, .set-newer button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* One height for the three views (they scroll inside): switching tabs, or a long preview, never moves the buttons below or toggles the page scrollbar */
+#pane-skill { --skill-h: clamp(320px, 62vh, 640px); }
+.set-view { height: var(--skill-h); overflow: auto; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: var(--panel); min-width: 0; }
+.set-view[hidden] { display: none; }
+.set .set-mono, .set-diff { font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.set textarea.set-mono { display: block; box-sizing: border-box; width: 100%; height: 100%; border: 0; border-radius: 0 0 8px 8px; background: var(--panel); padding: 10px 12px; resize: none; }
+.set-preview { padding: 4px 18px 12px; font-size: 13px; overflow-wrap: anywhere; }
+.set-preview h1 { font-size: 18px; margin: 10px 0 4px; }
+.set-preview h2 { font-size: 15px; margin: 14px 0 4px; border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.set-preview pre { overflow-x: auto; background: var(--code); border-radius: 6px; padding: 6px 10px; }
+.set-preview table { border-collapse: collapse; }
+.set-preview th, .set-preview td { border: 1px solid var(--line); padding: 2px 8px; }
+.set-view > .set-help { padding: 8px 12px 0; }
+.set-diff { padding: 6px 0; overflow-x: auto; }
+.set-diff > div { padding: 0 12px; white-space: pre; }
+.set-diff-add { background: var(--add); }
+.set-diff-del { background: var(--del); }
+.set-diff-gap { background: var(--hunk); }
+.set-newer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; font-size: 12px; padding: 2px 12px; border-left: 3px solid var(--yellow); background: var(--yellow-bg); border-radius: 0 6px 6px 0; }
+/* Hidden but still laid out (the global [hidden] rule says display: none !important): the slot stays, only the notice goes */
+.set-newer[hidden] { display: flex !important; visibility: hidden; }
+.set-unsaved[hidden] { display: block !important; visibility: hidden; }
+.set-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.set-actions button { display: inline-flex; align-items: center; gap: 6px; }
+.set .set-actions button.primary { border-color: var(--accent); font-weight: 600; }
+.set .set-actions button.danger { border-color: var(--red); }
+.set .set-actions button.danger.armed { font-weight: 600; box-shadow: inset 0 0 0 1px var(--red); }
+.set-unsaved { margin-right: auto; font-size: 12px; color: var(--fg); }
+.set-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); margin-right: 6px; vertical-align: 1px; }

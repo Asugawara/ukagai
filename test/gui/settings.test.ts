@@ -3,7 +3,7 @@
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -155,7 +155,8 @@ before(async () => {
     await sleep(100);
   }
   token = readFileSync(join(dataDir, "token"), "utf8").trim();
-  ab("open", base + "/settings", "--viewport", "1280x800");
+  writeFileSync(join(home, "slow-api.js"), SLOW_API_SCRIPT);
+  ab("open", base + "/settings", "--viewport", "1280x800", "--init-script", join(home, "slow-api.js"));
   opened = true;
 });
 
@@ -174,13 +175,343 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   });
 }
 
+const PANE_IDS = ["general", "notifications", "plans", "checkpoints", "skill"];
+const FIELDSET_PANE: Record<string, string> = { general: "Display", notifications: "Notifications", plans: "Plans", checkpoints: "Progress checkpoints (recap)" };
+/** Which panes are visible: the visible fieldset legends plus whether the skill section shows */
+const visiblePane = () => ev<{ legends: string[]; skill: boolean; hash: string; current: string | null }>(`JSON.stringify({
+  legends: [...document.querySelectorAll("#form fieldset")].filter((f) => !f.hidden).map((f) => f.querySelector("legend").textContent),
+  skill: !document.getElementById("pane-skill").hidden,
+  hash: location.hash,
+  current: document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane ?? null,
+})`);
+
+gui("the sidebar: items in order, each with a Lucide icon; clicking one shows only its pane and sets the hash", async () => {
+  await openSettings();
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#set-nav .set-nav-item")].map((a) => a.dataset.pane))`), PANE_IDS);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#set-nav .set-nav-item")].map((a) => a.textContent))`), ["General", "Notifications", "Plans", "Progress checkpoints", "Skill"]);
+  assert.equal(text("#set-nav .set-nav-group"), "Agent");
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#set-nav .set-nav-item")].map((a) => a.querySelector("svg")?.dataset.icon))`), ["settings", "bell", "file-text", "clock", "book-open"]);
+  assert.equal(ev<string>(`document.querySelector("#back svg")?.dataset.icon`), "chevron-left");
+  // General is the default pane, and the other fieldsets stay in the DOM
+  assert.deepEqual(visiblePane(), { legends: ["Display"], skill: false, hash: "", current: "general" });
+  assert.equal(ev<number>(`document.querySelectorAll("#form fieldset").length`), 4);
+  for (const id of PANE_IDS) {
+    clickEl(`#set-nav [data-pane="${id}"]`);
+    await waitFor(`hash #${id}`, `location.hash === "#${id}"`);
+    assert.deepEqual(visiblePane(), { legends: id === "skill" ? [] : [FIELDSET_PANE[id]!], skill: id === "skill", hash: `#${id}`, current: id });
+    assert.ok(text("#pane-title") !== "" || id === "skill");
+  }
+  // The pane survives a re-render (a save re-renders #form)
+  clickEl(`#set-nav [data-pane="plans"]`);
+  await waitFor("plans pane", `location.hash === "#plans"`);
+  clickEl("#opt-0");
+  await waitFor("saved", `document.querySelector("#status").textContent === "Saved"`);
+  assert.deepEqual(visiblePane().legends, ["Plans"]);
+});
+
+gui("/settings#skill opens the Skill pane, a reload keeps it, and an unknown hash falls back to General", async () => {
+  ab("open", base + "/settings#skill");
+  await waitFor("settings page", SET_READY);
+  assert.deepEqual(visiblePane(), { legends: [], skill: true, hash: "#skill", current: "skill" });
+  assert.equal(text("#pane-title"), "Skill");
+  ab("reload");
+  await waitFor("settings page after reload", SET_READY);
+  assert.deepEqual(visiblePane(), { legends: [], skill: true, hash: "#skill", current: "skill" });
+  ab("open", base + "/settings#nope");
+  await waitFor("settings page", SET_READY);
+  assert.deepEqual(visiblePane(), { legends: ["Display"], skill: false, hash: "#nope", current: "general" });
+  // Back/forward (hashchange) follows too
+  ev(`(location.hash = "#checkpoints", "ok")`);
+  await waitFor("checkpoints pane", `document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane === "checkpoints"`);
+  assert.deepEqual(visiblePane().legends, ["Progress checkpoints (recap)"]);
+  ab("open", base + "/settings");
+});
+
+// ---- layout shift ----
+// A slow link: the settings GETs answer late (opt-in per tab through sessionStorage, set by slowApi()), so the fetched content really arrives after the first paint
+const SLOW_API_SCRIPT = `(() => {
+  const f = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    const ms = Number(sessionStorage.getItem("slow-api") || 0);
+    if (ms && /\\/api\\/(settings|skill)(\\?|$)/.test(url) && (!init || !init.method || init.method === "GET")) return new Promise((r) => setTimeout(r, ms)).then(() => f(input, init));
+    return f(input, init);
+  };
+})();`;
+const slowApi = (ms: number) => ev(`(sessionStorage.setItem("slow-api", "${ms}"), "ok")`);
+/** Start collecting layout-shift entries (the buffered ones since the navigation included); `hadRecentInput` ones are ignored */
+async function watchShifts() {
+  ev(`(() => {
+    window.__ls = [];
+    new PerformanceObserver((list) => { for (const e of list.getEntries()) if (!e.hadRecentInput) window.__ls.push({ value: e.value, nodes: e.sources.map((s) => (s.node && (s.node.id || s.node.className || s.node.tagName)) || "?") }); }).observe({ type: "layout-shift", buffered: true });
+    return "ok";
+  })()`);
+  await sleep(400); // the buffered entries arrive in a task of their own
+}
+const shiftScore = () => ev<{ score: number; entries: { value: number; nodes: string[] }[] }>(`JSON.stringify({ score: window.__ls.reduce((a, e) => a + e.value, 0), entries: window.__ls })`);
+const headBox = () => ev<number[]>(`JSON.stringify((() => { const b = (document.getElementById("pane-title")).getBoundingClientRect(); return [b.left, b.top]; })())`);
+
+gui("layout shift: loading /settings and /settings#skill (slow link) and switching through every pane shifts nothing; every pane's title sits at the same place", async () => {
+  try {
+    ab("open", base + "/settings");
+    await waitFor("settings page", SET_READY);
+    slowApi(300);
+    for (const hash of ["", "#skill"]) {
+      ab("open", "about:blank"); // a real load each time, not a hash change
+      ab("open", base + "/settings" + hash);
+      await waitFor("settings page loaded", `${hash ? SKILL_READY : SET_READY}`);
+      await watchShifts();
+      await sleep(500);
+      const r = shiftScore();
+      assert.ok(r.score < 0.001, `load of /settings${hash}: layout shift ${r.score} ${JSON.stringify(r.entries)}`);
+    }
+    slowApi(0);
+    // Switching panes: the title (h2) stays put, and nothing moves while the panes change
+    ab("open", base + "/settings");
+    await waitFor("settings page", SET_READY);
+    await watchShifts();
+    const pos: Record<string, number[]> = {};
+    for (const id of [...PANE_IDS, ...[...PANE_IDS].reverse()]) {
+      clickEl(`#set-nav [data-pane="${id}"]`);
+      await waitFor(`pane ${id}`, `document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane === "${id}"`);
+      await sleep(250);
+      pos[id] = headBox();
+      const first = Object.values(pos)[0]!;
+      assert.deepEqual(pos[id], first, `the title of the ${id} pane sits where the General title does`);
+    }
+    const r = shiftScore();
+    assert.ok(r.score < 0.001, `switching panes: layout shift ${r.score} ${JSON.stringify(r.entries)}`);
+  } finally {
+    try { slowApi(0); } catch {}
+  }
+});
+
+// ---- the Skill pane ----
+const SKILL_FILE = () => join(dataDir, "skill", "SKILL.md");
+const SKILL_READY = `(() => { const a = document.getElementById("skill-text"); return !!a && !a.disabled && a.value.length > 0; })()`;
+async function openSkill() {
+  ab("open", base + "/settings#skill");
+  await waitFor("skill pane loaded", SKILL_READY);
+}
+/** Type into the editor the way a user does: set the value and fire `input` */
+const typeSkill = (v: string) => setControl("#skill-text", v, "input");
+const skillVisible = (sel: string) => ev<boolean>(`!document.querySelector(${JSON.stringify(sel)}).hidden`);
+/** Leave no draft and no saved version behind: a dirty page would stop the next navigation with a beforeunload prompt */
+async function cleanSkill() {
+  try { ev(`(document.getElementById("skill-discard")?.click(), "ok")`); } catch {}
+  await api("/api/skill", undefined, "DELETE");
+}
+
+gui("Skill pane: edit and save writes <data-dir>/skill/SKILL.md; the unsaved indicator appears and clears; the badge shows; Ctrl+S saves too", async () => {
+  try {
+    await openSkill();
+    assert.equal(skillVisible("#skill-unsaved"), false);
+    assert.equal(skillVisible("#skill-badge"), false);
+    assert.equal(ev<boolean>(`document.getElementById("skill-save").disabled`), true);
+    const def = ev<string>(`document.getElementById("skill-text").value`);
+    assert.match(def, /ukagai-explain/);
+    typeSkill(def + "\nExtra line from the test.\n");
+    assert.equal(skillVisible("#skill-unsaved"), true);
+    assert.equal(text("#skill-unsaved"), "Unsaved changes");
+    clickEl("#skill-save");
+    await waitFor("file written", `!document.getElementById("skill-save") || document.getElementById("skill-unsaved").hidden`);
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), def + "\nExtra line from the test.\n");
+    assert.equal(skillVisible("#skill-badge"), true);
+    assert.match(text("#skill-badge"), /^Changed from default · \d+ lines$/);
+    assert.match(text("#skill-file"), /SKILL\.md/);
+    assert.match(text("#skill-file"), /Last saved/);
+    // Ctrl+S saves while the pane is shown (and the browser's own save is prevented)
+    typeSkill(def + "\nSecond edit.\n");
+    const prevented = ev<boolean>(`(() => { const e = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }); document.dispatchEvent(e); return e.defaultPrevented; })()`);
+    assert.equal(prevented, true);
+    await waitFor("second save", `document.getElementById("skill-unsaved").hidden`);
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), def + "\nSecond edit.\n");
+    // Discard restores the last loaded text
+    typeSkill("scribble");
+    assert.equal(skillVisible("#skill-unsaved"), true);
+    clickEl("#skill-discard");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), def + "\nSecond edit.\n");
+    assert.equal(skillVisible("#skill-unsaved"), false);
+    // an empty text is refused by the server and kept as a draft
+    typeSkill("   ");
+    clickEl("#skill-save");
+    await waitFor("save error", `document.getElementById("skill-error").textContent !== ""`);
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), def + "\nSecond edit.\n");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: Reset to default asks twice, then removes <data-dir>/skill/", async () => {
+  try {
+    await openSkill();
+    assert.equal(ev<boolean>(`document.getElementById("skill-reset").disabled`), true, "nothing to reset yet");
+    const def = ev<string>(`document.getElementById("skill-text").value`);
+    typeSkill(def + "\nmine\n");
+    clickEl("#skill-save");
+    await waitFor("saved", `document.getElementById("skill-unsaved").hidden && !document.getElementById("skill-badge").hidden`);
+    assert.ok(existsSync(SKILL_FILE()));
+    clickEl("#skill-reset");
+    assert.equal(text("#skill-reset-label"), "Click again to reset");
+    assert.ok(existsSync(SKILL_FILE()), "one click does not reset");
+    clickEl("#skill-reset");
+    await waitFor("reset", `document.getElementById("skill-badge").hidden`);
+    assert.equal(existsSync(join(dataDir, "skill")), false);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), def);
+    assert.equal(text("#skill-reset-label"), "Reset to default");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: a settings change from another client (theme, SSE settings.updated) does not touch the draft", async () => {
+  try {
+    await openSkill();
+    typeSkill("a draft the test typed");
+    await putSettings((s) => { s.theme = "dark"; });
+    await waitFor("dark theme applied", `document.documentElement.dataset.theme === "dark"`);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "a draft the test typed");
+    assert.equal(skillVisible("#skill-unsaved"), true);
+    // the form was rebuilt meanwhile and the pane is still the Skill one
+    assert.equal(ev<string>("location.hash"), "#skill");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: a PUT /api/skill from another client reloads a clean editor; a dirty draft stays and offers 'Load it'", async () => {
+  try {
+    await openSkill();
+    const r1 = await api("/api/skill", { text: "saved elsewhere 1\n" }, "PUT");
+    assert.equal(r1.custom, "saved elsewhere 1\n");
+    await waitFor("clean editor follows", `document.getElementById("skill-text").value === ${JSON.stringify("saved elsewhere 1\n")}`);
+    assert.equal(skillVisible("#skill-badge"), true);
+    typeSkill("my unsaved draft");
+    await api("/api/skill", { text: "saved elsewhere 2\n" }, "PUT");
+    await waitFor("newer notice", `!document.getElementById("skill-newer").hidden`);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "my unsaved draft");
+    clickEl("#skill-load-newer");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "saved elsewhere 2\n");
+    assert.equal(skillVisible("#skill-unsaved"), false);
+    assert.equal(skillVisible("#skill-newer"), false);
+    // a reset from elsewhere brings the default back
+    await api("/api/skill", undefined, "DELETE");
+    await waitFor("default again", `document.getElementById("skill-badge").hidden && /ukagai-explain/.test(document.getElementById("skill-text").value)`);
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: tabs have tab semantics and arrow keys; Preview renders a heading and drops images; Diff shows the saved diff", async () => {
+  try {
+    await openSkill();
+    assert.equal(ev<string>(`document.getElementById("skill-tabs").getAttribute("role")`), "tablist");
+    assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#skill-tabs [role=tab]")].map((b) => b.getAttribute("aria-selected") + ":" + b.dataset.icon + ":" + b.querySelector("svg").dataset.icon))`), ["true:undefined:square-pen", "false:undefined:eye", "false:undefined:git-compare"]);
+    ev(`document.getElementById("skill-tab-edit").focus(), "ok"`);
+    // arrow keys act on the focused tab: dispatch on it
+    ev(`(document.getElementById("skill-tab-edit").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })), "ok")`);
+    await waitFor("preview tab", `document.getElementById("skill-tab-preview").getAttribute("aria-selected") === "true"`);
+    assert.equal(skillVisible("#skill-view-preview"), true);
+    assert.equal(skillVisible("#skill-view-edit"), false);
+    assert.equal(ev<boolean>(`document.activeElement === document.getElementById("skill-tab-preview")`), true);
+    // switch back, type markdown, preview it
+    clickEl("#skill-tab-edit");
+    typeSkill("# Heading from the test\n\nSome **bold** text ![pic](http://example.invalid/x.png) and <script>window.__x = 1</script>\n");
+    clickEl("#skill-tab-preview");
+    assert.equal(text("#skill-view-preview h1"), "Heading from the test");
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-view-preview img").length`), 0);
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-view-preview script").length`), 0);
+    assert.equal(ev<boolean>(`window.__x === undefined`), true);
+    // Diff: nothing saved, no difference; after a save the changed lines show
+    clickEl("#skill-tab-diff");
+    assert.match(text("#skill-diff"), /No difference/);
+    assert.ok(text("#skill-diff-note").length > 0);
+    clickEl("#skill-save");
+    await waitFor("saved", `document.getElementById("skill-unsaved").hidden && !document.getElementById("skill-badge").hidden`);
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-diff .set-diff-add").length`) > 0, true);
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-diff .set-diff-del").length`) > 0, true);
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: the file path shown is the one under this server's data directory", async () => {
+  try {
+    await openSkill();
+    assert.equal(text("#skill-file code"), SKILL_FILE());
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: beforeunload asks only while the draft is dirty", async () => {
+  try {
+    await openSkill();
+    const asks = () => ev<boolean>(`(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; })()`);
+    assert.equal(asks(), false, "clean");
+    typeSkill("changed");
+    assert.equal(asks(), true, "dirty");
+    clickEl("#skill-discard");
+    assert.equal(asks(), false, "clean again after Discard");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: text typed while the save is in flight stays as the draft; the saved text becomes the baseline", async () => {
+  try {
+    await openSkill();
+    // hold the PUT response back so there is time to type
+    ev(`(() => { const f = window.fetch; window.fetch = async (u, o) => { const r = await f(u, o); if (o?.method === "PUT" && String(u).includes("/api/skill")) await new Promise((x) => setTimeout(x, 700)); return r; }; return "ok"; })()`);
+    typeSkill("first text\n");
+    clickEl("#skill-save");
+    typeSkill("first text\nand more typed meanwhile\n");
+    await waitFor("save finished", `document.getElementById("skill-badge") && !document.getElementById("skill-badge").hidden`);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "first text\nand more typed meanwhile\n");
+    assert.equal(skillVisible("#skill-unsaved"), true, "the extra text is still unsaved");
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), "first text\n");
+    clickEl("#skill-discard");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "first text\n", "Discard goes back to what was saved");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: after the stream reconnects the skill is fetched again, and an unchanged one raises no 'newer version' notice", async () => {
+  try {
+    await openSkill();
+    // count the page's GET /api/skill: a refetch is the proof that the reconnect (the stream's `open`) ran
+    ev(`(() => { window.__skillGets = 0; const f = window.fetch; window.fetch = (u, o) => { if (String(u).includes("/api/skill") && (!o || !o.method || o.method === "GET")) window.__skillGets++; return f(u, o); }; return "ok"; })()`);
+    // pageshow with persisted = the page came back from the back/forward cache: the stream is opened again, like after a drop
+    const reconnect = () => ev(`(window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })), "ok")`);
+    typeSkill("my draft");
+    reconnect();
+    await waitFor("the skill was fetched again", `window.__skillGets >= 1`);
+    await sleep(500);
+    assert.equal(skillVisible("#skill-newer"), false, "nothing changed elsewhere, so no notice");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "my draft");
+    // something saved elsewhere before the reconnect: the refetch finds it, the draft stays, the notice offers it
+    await api("/api/skill", { text: "saved elsewhere\n" }, "PUT");
+    await waitFor("the SSE event already offered it", `!document.getElementById("skill-newer").hidden`);
+    clickEl("#skill-load-newer");
+    typeSkill("another draft");
+    const before = ev<number>("window.__skillGets");
+    reconnect();
+    await waitFor("fetched again", `window.__skillGets > ${before}`);
+    await sleep(500);
+    assert.equal(skillVisible("#skill-newer"), false, "the same version again is not news");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "another draft");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane in ja: labels, badge and the reset confirmation are Japanese", async () => {
+  try {
+    await putSettings((s) => { s.lang = "ja"; });
+    await openSkill();
+    assert.equal(text("#pane-title"), "スキル");
+    assert.equal(text("#skill-tab-edit"), "編集");
+    assert.equal(text("#skill-save"), "保存");
+    typeSkill("日本語の版\n");
+    assert.equal(text("#skill-unsaved"), "保存していない変更があります");
+    clickEl("#skill-save");
+    await waitFor("saved", `document.getElementById("skill-unsaved").hidden && !document.getElementById("skill-badge").hidden`);
+    assert.match(text("#skill-badge"), /^既定から変更あり · \d+ 行$/);
+    clickEl("#skill-reset");
+    assert.equal(text("#skill-reset-label"), "もう一度押すと既定に戻します");
+  } finally { await cleanSkill(); await putSettings(); }
+});
+
 gui("the page renders in en and ja; the language select re-renders it and saves", async () => {
   await openSettings();
   assert.equal(ev<string>("document.documentElement.dataset.lang"), "en");
   assert.equal(text("#set-title"), "Settings");
   assert.equal(ev<string>("document.title"), "ukagai · Settings");
   assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["Display", "Progress checkpoints (recap)", "Plans", "Notifications"]);
-  assert.equal(text("#back"), "← Back");
+  assert.equal(text("#back"), "Back");
   assert.equal(ev<string>(`document.querySelector("#back").getAttribute("href")`), "/");
   setControl("#lang", "ja", "change");
   await waitFor("page in ja", `document.querySelector("#set-title").textContent === "設定"`);

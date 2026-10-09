@@ -750,6 +750,35 @@ export const DEFAULT_SETTINGS: Settings = {
   notify: { sound: false, browser: false, title_badge: true },
 };
 
+// ---- The user's version of the skill (GET / PUT / DELETE /api/skill) ----
+
+/** PUT /api/skill: the whole text, at most this many UTF-8 bytes */
+export const SKILL_MAX_BYTES = 256 * 1024;
+export const SkillPut = z.object({
+  text: z
+    .string()
+    .refine((t) => t.trim() !== "", "text must not be empty")
+    .refine((t) => Buffer.byteLength(t, "utf8") <= SKILL_MAX_BYTES, `text must be at most ${SKILL_MAX_BYTES} bytes`),
+});
+
+/** What /api/skill returns, and what SSE `skill.updated` carries */
+export type SkillView = {
+  /** The shipped text; null when it cannot be read (the GUI shows an error and does not edit) */
+  default: string | null;
+  /** The user's version; null when there is none */
+  custom: string | null;
+  /** The default has changed since the user started editing */
+  stale: boolean;
+  /** The ukagai version the user's version started from */
+  baseVersion: string | null;
+  /** Where the user's version is (or would be) kept: <data-dir>/skill/SKILL.md; absent when the server has no data directory */
+  path?: string;
+  /** Line diff, default → (custom ?? default); empty when the default is unreadable or the text is too big to diff */
+  diff: DiffLine[];
+  /** Added + removed lines of `diff` */
+  changed: number;
+};
+
 // ---- plan versions (GET /api/sessions/:id/plan-versions) ----
 
 export const PlanInstruction = z.object({

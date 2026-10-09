@@ -47,7 +47,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 - **Progress checkpoints**: answer the agent's session recap with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
 - **TUI**: the same screen in the terminal, `ukagai tui`. [Guide](docs/guide.md#the-tui)
 - **Codex CLI**: hooks plus a bridge for plan approval. [Guide](docs/guide.md#codex-cli)
-- **Settings page**: language, theme, notifications, plan auto-show. [Guide](docs/guide.md#settings)
+- **Settings page**: language, theme, notifications, plan auto-show, and the skill text the agent follows. [Guide](docs/guide.md#settings)
 - **Rich Markdown**: callouts, Mermaid, diffs, task lists and more in explanations and plans. [Guide](docs/guide.md#rich-markdown)
 
 ![The same decision in the terminal UI](docs/images/tui.png)

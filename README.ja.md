@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 - **進捗チェックポイント**: エージェントのセッション要約に、指示または停止で返答できます。[ガイド](docs/guide.md#progress-checkpoints)
 - **TUI**: 同じ画面をターミナルで。`ukagai tui`。[ガイド](docs/guide.md#the-tui)
 - **Codex CLI**: hooks とプラン承認用のブリッジ。[ガイド](docs/guide.md#codex-cli)
-- **設定ページ**: 言語、テーマ、通知、プランの自動表示。[ガイド](docs/guide.md#settings)
+- **設定ページ**: 言語、テーマ、通知、プランの自動表示、エージェントが従うスキルの本文。[ガイド](docs/guide.md#settings)
 - **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
 
 ![ターミナルでの同じ判断](docs/images/ja/tui.png)
