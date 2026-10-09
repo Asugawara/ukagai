@@ -16,7 +16,11 @@ let base: string;
 let requests: string[] = [];
 const files = new Map<string, Buffer>();
 
-/** A release tarball whose bin/ukagai is a sh script printing the version read from ../package.json (and recording `install` argv) */
+/**
+ * A release tarball whose bin/ukagai is a sh script printing the version read from ../package.json.
+ * `install` records its argv; `install --help` mentions --refresh unless UKAGAI_TEST_OLD=1 (an old version);
+ * `install` exits 1 when UKAGAI_TEST_FAIL=1.
+ */
 function addRelease(version: string, o: { corruptSums?: boolean } = {}): void {
   const work = mkdtempSync(join(root, "tar-"));
   const top = join(work, `ukagai-${version}`);
@@ -28,7 +32,16 @@ function addRelease(version: string, o: { corruptSums?: boolean } = {}): void {
       "#!/bin/sh",
       'self=$0; while [ -h "$self" ]; do self=$(readlink "$self"); done',
       'root=$(cd "$(dirname "$self")/.." && pwd)',
-      'if [ "${1:-}" = install ]; then echo "$*" >> "${UKAGAI_TEST_ARGV:-/dev/null}"; exit 0; fi',
+      'if [ "${1:-}" = install ] && [ "${2:-}" = --help ]; then',
+      '  echo "usage: ukagai install [--timeout <s>] [--force]"',
+      '  [ "${UKAGAI_TEST_OLD:-}" = 1 ] || echo "       --refresh   re-register the registered agents"',
+      "  exit 0",
+      "fi",
+      'if [ "${1:-}" = install ]; then',
+      '  echo "$*" >> "${UKAGAI_TEST_ARGV:-/dev/null}"',
+      '  [ "${UKAGAI_TEST_FAIL:-}" != 1 ] || { echo "boom" >&2; exit 1; }',
+      "  exit 0",
+      "fi",
       "sed -n 's/.*\"version\": *\"\\([^\"]*\\)\".*/\\1/p' \"$root/package.json\"",
       "",
     ].join("\n"),
@@ -116,7 +129,9 @@ function runInstall(e: Env, args: string[] = [], extra: Record<string, string> =
 
 const versions = (e: Env): string[] => (existsSync(join(e.libdir, "versions")) ? readdirSync(join(e.libdir, "versions")).sort() : []);
 
-test("fresh install: symlink to the version, node-path (absolute, resolved), --version smoke, Next: hint", async () => {
+const argvLines = (e: Env): string[] => (existsSync(e.argv) ? readFileSync(e.argv, "utf8").split("\n").filter(Boolean) : []);
+
+test("fresh install: symlink to the version, node-path (absolute, resolved), --version smoke, no Next: lines", async () => {
   const e = sandbox();
   addRelease("1.0.0");
   const r = await runInstall(e);
@@ -127,7 +142,7 @@ test("fresh install: symlink to the version, node-path (absolute, resolved), --v
   assert.equal(readFileSync(join(e.datadir, "node-path"), "utf8").trim(), realpathSync(process.execPath));
   const v = spawnSync(link, ["--version"], { encoding: "utf8", env: { PATH: SYSTEM_PATH, HOME: e.home } });
   assert.equal(v.stdout.trim(), "1.0.0");
-  assert.match(r.err, /Next:/);
+  assert.doesNotMatch(r.err, /Next:/);
   assert.match(r.err, /not on your PATH/);
 });
 
@@ -194,12 +209,93 @@ test("a relative UKAGAI_NODE is recorded as an absolute path", async () => {
   assert.equal(recorded, realpathSync(process.execPath));
 });
 
-test("--lang ja with UKAGAI_DATA_DIR set: `ukagai install --lang ja --data-dir <dir>` is run", async () => {
+test("first install runs `ukagai install --data-dir <dir>`; a non-default UKAGAI_DATA_DIR is forwarded", async () => {
   const e = sandbox();
   addRelease("1.0.0");
-  const r = await runInstall(e, ["--lang", "ja"]);
+  const r = await runInstall(e);
   assert.equal(r.code, 0, r.err);
-  assert.equal(readFileSync(e.argv, "utf8").trim(), `install --lang ja --data-dir ${e.datadir}`);
+  assert.deepEqual(argvLines(e), [`install --data-dir ${e.datadir}`]);
+});
+
+test("the default data dir ($HOME/.ukagai) is not forwarded", async () => {
+  const e = sandbox();
+  addRelease("1.0.0");
+  const r = await runInstall(e, [], { UKAGAI_DATA_DIR: join(e.home, ".ukagai") });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(argvLines(e), ["install"]);
+});
+
+test("a second run (same version) and an upgrade run `ukagai install --refresh --data-dir <dir>`", async () => {
+  const e = sandbox();
+  addRelease("1.0.0");
+  addRelease("1.1.0");
+  assert.equal((await runInstall(e, ["--version", "1.0.0"])).code, 0);
+  assert.equal((await runInstall(e, ["--version", "1.0.0"])).code, 0);
+  const up = await runInstall(e, ["--version", "1.1.0"]);
+  assert.equal(up.code, 0, up.err);
+  assert.deepEqual(argvLines(e), [
+    `install --data-dir ${e.datadir}`,
+    `install --refresh --data-dir ${e.datadir}`,
+    `install --refresh --data-dir ${e.datadir}`,
+  ]);
+  assert.match(up.err, /upgraded 1\.0\.0 -> 1\.1\.0/);
+});
+
+test("a version whose `install --help` lacks --refresh registers nothing and prints the hint", async () => {
+  const e = sandbox();
+  addRelease("0.1.0");
+  const r = await runInstall(e, [], { UKAGAI_TEST_OLD: "1" });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(argvLines(e), []);
+  assert.match(r.err, /registers hooks with: ukagai install --claude \/ --codex/);
+  assert.ok(lstatSync(join(e.bindir, "ukagai")).isSymbolicLink());
+});
+
+test("a failing `ukagai install` is a warning naming the command; exit 0 and the upgrade note still appear", async () => {
+  const e = sandbox();
+  addRelease("1.0.0");
+  addRelease("1.1.0");
+  const first = await runInstall(e, ["--version", "1.0.0"], { UKAGAI_TEST_FAIL: "1" });
+  assert.equal(first.code, 0, first.err);
+  assert.match(first.err, /boom/);
+  assert.match(first.err, new RegExp(`warning: hook registration failed; fix the above and run: ukagai install --data-dir ${e.datadir}`));
+  assert.match(first.err, /ukagai 1\.0\.0 installed/);
+
+  const up = await runInstall(e, ["--version", "1.1.0"], { UKAGAI_TEST_FAIL: "1" });
+  assert.equal(up.code, 0, up.err);
+  assert.match(up.err, new RegExp(`run: ukagai install --refresh --data-dir ${e.datadir}`));
+  assert.match(up.err, /upgraded 1\.0\.0 -> 1\.1\.0/);
+});
+
+for (const args of [["--lang", "ja"], ["--lang=ja"], ["--lang", "--force"], ["--codex"], ["--claude"], ["--lang", "ja", "--codex", "--claude"]]) {
+  test(`old flag ${args.join(" ")}: a warning, ignored; install goes on with no extra arguments`, async () => {
+    const e = sandbox();
+    addRelease("1.0.0");
+    const r = await runInstall(e, args);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.err, /warning: --(lang|codex|claude) is ignored/);
+    assert.deepEqual(argvLines(e), [`install --data-dir ${e.datadir}`]);
+  });
+}
+
+test("`--lang --force`: --force is still honoured (the value is not swallowed when it starts with -)", async () => {
+  const e = sandbox();
+  addRelease("1.0.0");
+  mkdirSync(e.bindir, { recursive: true });
+  const link = join(e.bindir, "ukagai");
+  writeFileSync(link, "#!/bin/sh\necho mine\n", { mode: 0o755 });
+  const r = await runInstall(e, ["--lang", "--force"]);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(lstatSync(link).isSymbolicLink());
+});
+
+test("an unknown argument: usage and exit 2, nothing downloaded", async () => {
+  const e = sandbox();
+  addRelease("1.0.0");
+  const r = await runInstall(e, ["--bogus"]);
+  assert.equal(r.code, 2);
+  assert.match(r.err, /usage: install\.sh/);
+  assert.deepEqual(requests, []);
 });
 
 test("an unwritable data dir is a warning, not a failure", async () => {
@@ -230,12 +326,13 @@ test("prune keeps the current and the previous version, removes an older one; a 
   assert.match(r.err, /upgraded 1\.1\.0 -> 1\.2\.0/);
 });
 
-test("--help prints the usage to stdout (exit 0) and says --codex is Codex only", async () => {
+test("--help prints the usage to stdout (exit 0): only --version and --force, and where the language is set", async () => {
   const e = sandbox();
   const r = await runInstall(e, ["--help"]);
   assert.equal(r.code, 0);
-  assert.match(r.out, /usage: install\.sh/);
-  assert.match(r.out, /--codex +register the Codex CLI hooks \(Codex only; add --claude for Claude Code too\)/);
+  assert.match(r.out, /usage: install\.sh \[--version vX\.Y\.Z\] \[--force\]/);
+  assert.doesNotMatch(r.out, /--codex|--claude|--lang +/);
+  assert.match(r.out, /Settings page/);
   assert.match(r.out, /real ~\/\.claude and ~\/\.codex/);
   assert.deepEqual(requests, []);
 });

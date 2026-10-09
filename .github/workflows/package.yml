@@ -69,6 +69,9 @@ jobs:
       - name: install.sh twice
         run: |
           set -eux
+          # a temp HOME: install.sh registers hooks for the agents it finds, and must never touch the runner's real home
+          export HOME="$RUNNER_TEMP/user-home"
+          mkdir -p "$HOME"
           export UKAGAI_HOME="$RUNNER_TEMP/home" UKAGAI_BIN_DIR="$RUNNER_TEMP/bin" UKAGAI_DATA_DIR="$RUNNER_TEMP/data" UKAGAI_BASE_URL=http://127.0.0.1:8765
           sh install.sh
           sh install.sh >"$RUNNER_TEMP/second.log" 2>&1
@@ -76,18 +79,22 @@ jobs:
           if ! grep -q 'already installed' "$RUNNER_TEMP/second.log"; then echo "second run did not report 'already installed'"; exit 1; fi
           got="$("$RUNNER_TEMP/bin/ukagai" --version)"
           if [ "$got" != "$V" ]; then echo "version mismatch: got $got, want $V"; exit 1; fi
+          if [ -e "$HOME/.claude/settings.json" ]; then echo "install.sh wrote $HOME/.claude/settings.json"; exit 1; fi
       - name: install.sh with wget
         if: runner.os == 'Linux'
         run: |
           set -eux
+          export HOME="$RUNNER_TEMP/user-home-wget"
+          mkdir -p "$HOME"
           export UKAGAI_HOME="$RUNNER_TEMP/home-wget" UKAGAI_BIN_DIR="$RUNNER_TEMP/bin-wget" UKAGAI_DATA_DIR="$RUNNER_TEMP/data-wget" UKAGAI_BASE_URL=http://127.0.0.1:8765 UKAGAI_DOWNLOADER=wget
           sh install.sh
           got="$("$RUNNER_TEMP/bin-wget/ukagai" --version)"
           if [ "$got" != "$V" ]; then echo "version mismatch (wget): got $got, want $V"; exit 1; fi
+          if [ -e "$HOME/.claude/settings.json" ]; then echo "install.sh wrote $HOME/.claude/settings.json"; exit 1; fi
       - name: ukagai install writes launcher hooks
         run: |
           set -eux
-          "$RUNNER_TEMP/bin/ukagai" install --settings "$RUNNER_TEMP/s.json" --data-dir "$RUNNER_TEMP/data" --lang en
+          "$RUNNER_TEMP/bin/ukagai" install --settings "$RUNNER_TEMP/s.json" --data-dir "$RUNNER_TEMP/data"
           bad="$(jq -r --arg cmd "$RUNNER_TEMP/bin/ukagai" '[.hooks[][] | .hooks[]? | select((.command == $cmd and .args[0] == "hook") | not)] | length' "$RUNNER_TEMP/s.json")"
           total="$(jq -r '[.hooks[][] | .hooks[]?] | length' "$RUNNER_TEMP/s.json")"
           if [ "$total" -eq 0 ]; then echo "no hooks written"; exit 1; fi
