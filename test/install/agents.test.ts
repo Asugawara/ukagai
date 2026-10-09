@@ -2,7 +2,7 @@ import { cleanEnv } from "./clean-env.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -399,4 +399,43 @@ test("shellSplit reads back what hookCommand writes: bare words, 'quoted', \"plu
   assert.deepEqual(shellSplit("'/a b/ukagai' hook --data-dir 'it'\\''s here'"), ["/a b/ukagai", "hook", "--data-dir", "it's here"]);
   assert.deepEqual(shellSplit('"${PLUGIN_ROOT}/bin/ukagai" hook'), ["${PLUGIN_ROOT}/bin/ukagai", "hook"]);
   assert.deepEqual(shellSplit("a '' b"), ["a", "", "b"]);
+});
+
+// ---- fixes from the review ----
+
+test("a first Codex install into a missing home under a symlinked parent: the trust keys and doctor agree", async () => {
+  const e = await setup();
+  const real = join(e.dir, "real");
+  await mkdir(real);
+  await symlink(real, join(e.dir, "link"));
+  const codex = join(e.dir, "link", ".codex"); // does not exist yet
+  const flags = ["--codex", "--codex-home", codex, "--data-dir", e.data, "--server", "http://127.0.0.1:9"];
+  const r = await ukagai(e, ["install", ...flags]);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(await exists(join(real, ".codex", "hooks.json")));
+  const d = await ukagai(e, ["doctor", ...flags]);
+  assert.match(d.out, /codex hook SessionStart[^\n]*trusted/);
+  assert.doesNotMatch(d.out, /untrusted/);
+  assert.doesNotMatch(d.out, /codex hook [^\n]*(not registered|modified|untrusted)/);
+});
+
+test("--refresh without --data-dir: config.json goes to the data dir the hooks point at, not the default one", async () => {
+  const e = await setup();
+  await registerBoth(e); // --data-dir e.data
+  const r = await ukagai(e, ["install", "--refresh", "--codex-home", e.codex]);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(await exists(join(e.data, "config.json")));
+  assert.ok(!(await exists(join(e.home, ".ukagai", "config.json"))), "the default data dir stays empty");
+  assert.match(r.out, new RegExp(`^lang: .*\\(${e.data}/config\\.json\\)`, "m"));
+});
+
+test("when every agent fails, no config.json is created and there is no lang: or next: line", async () => {
+  const e = await setup();
+  await markCodex(e);
+  await writeFile(join(e.codex, "hooks.json"), "{ not json");
+  const r = await ukagai(e, ["install", "--codex-home", e.codex, "--data-dir", e.data, "--server", "http://127.0.0.1:9"], withBin(e));
+  assert.equal(r.code, 1);
+  assert.match(r.err, /codex: error:/);
+  assert.ok(!(await exists(join(e.data, "config.json"))));
+  assert.doesNotMatch(r.out, /^(lang|next):/m);
 });

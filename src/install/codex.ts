@@ -1,6 +1,6 @@
 /** `install --codex` / `uninstall --codex` / doctor: Codex CLI's hooks.json plus the trust hashes in config.toml */
 import { copyFile, mkdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { MANAGED_FLAG, MANAGED_VALUE } from "../settings/hooks-spec.js";
 import { CODEX_EVENT_LABEL, editState, hookHash, readState, stateKey, type CodexHandler } from "./codex-trust.js";
@@ -212,15 +212,20 @@ async function parseHooks(file: string, text: string): Promise<Json> {
   return v as Json;
 }
 
-/** The hooks.json path as Codex spells it (symlinks resolved, e.g. /private/tmp on macOS) */
+/** The hooks.json path as Codex spells it (symlinks resolved, e.g. /private/tmp on macOS; a missing home resolves through its nearest existing ancestor) */
 async function codexPath(home: string, name: string): Promise<string> {
+  const rest: string[] = [];
   let dir = home;
-  try {
-    dir = await realpath(home);
-  } catch {
-    // does not exist yet: the spelling given is all there is
+  for (;;) {
+    try {
+      return join(await realpath(dir), ...rest, name);
+    } catch {
+      const up = dirname(dir);
+      if (up === dir) return join(home, name);
+      rest.unshift(basename(dir));
+      dir = up;
+    }
   }
-  return join(dir, name);
 }
 
 export async function plan(o: CodexInstallOptions, mode: "install" | "uninstall"): Promise<CodexPlan> {

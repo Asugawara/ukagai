@@ -34,7 +34,7 @@ async function isRegistered(t: Target, agent: Agent): Promise<boolean> {
 }
 
 /** Register (or, with the plugin enabled, unregister) the hooks and the skill in Claude Code's settings */
-async function installClaude(t: Target, inv: Invocation, emit: (s: string) => void): Promise<void> {
+async function installClaude(t: Target, inv: Invocation, emit: (s: string) => void): Promise<string> {
   // An enabled plugin brings the hooks and the skill: installing them here too would run every hook twice
   const plugin = !t.force && !t.settingsGiven ? await enabledClaudePlugin(t.pluginSettingsFiles) : undefined;
   const before = await readSettings(t.settingsFile);
@@ -51,7 +51,7 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
     if (plugin !== undefined) {
       if (t.handleSkill && (await exists(skillDest))) emit(`skill: remove ${skillDest}\n`);
     } else if (t.handleSkill) emit(`skill: ${SKILL_SOURCE} -> ${skillDest}\n`);
-    return;
+    return o.dataDir;
   }
   if (plugin !== undefined) {
     if ((await exists(t.settingsFile)) && changed) {
@@ -65,7 +65,7 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
       emit(`skill:    removed ${skillDest}\n`);
     }
     emit(pluginLine(plugin) + "\n");
-    return;
+    return o.dataDir;
   }
   // The same content is not written again: every write leaves a .bak-* next to the file
   const bak = changed ? await writeSettings(t.settingsFile, after) : null;
@@ -81,10 +81,11 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
   emit(`events:   ${HOOK_EVENTS.join(", ")}\n`);
   emit(o.noAutostart ? "autostart: off (--no-autostart)\n" : "autostart: on\n");
   emit((t.handleSkill ? `skill:    ${skillDest}` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)") + "\n");
+  return o.dataDir;
 }
 
 /** Register (or, with the plugin enabled, unregister) the hooks in Codex CLI's hooks.json and trust them in config.toml */
-async function installCodex(t: Target, inv: Invocation, emit: (s: string) => void): Promise<void> {
+async function installCodex(t: Target, inv: Invocation, emit: (s: string) => void): Promise<string> {
   const pluginKey = t.force ? undefined : await enabledCodexPlugin(t.codexHome);
   const o = resolveOptions(t, pluginKey === undefined && (await registeredCodex(t.codexHome)) ? await codexOptions(t.codexHome) : undefined);
   const cx: CodexInstallOptions = { home: t.codexHome, invocation: inv, timeout: o.timeout, hookArgs: o.hookArgs, noAutostart: o.noAutostart };
@@ -98,7 +99,7 @@ async function installCodex(t: Target, inv: Invocation, emit: (s: string) => voi
       const diff = unifiedDiff(a, b, file, `${file} (after)`);
       emit(diff === "" ? `codex: ${file}: no changes\n` : diff);
     }
-    return;
+    return o.dataDir;
   }
   const baks = await applyCodex(t.codexHome, p);
   if (pluginKey !== undefined) emit(pluginLine(pluginKey) + "\n");
@@ -107,6 +108,7 @@ async function installCodex(t: Target, inv: Invocation, emit: (s: string) => voi
     emit(`trust:    ${p.managed.size} hook(s) trusted in ${p.configFile}\n`);
   }
   for (const b of baks) emit(`backup:   ${b}\n`);
+  return o.dataDir;
 }
 
 export async function run(argv: string[]): Promise<number> {
@@ -144,11 +146,11 @@ export async function run(argv: string[]): Promise<number> {
     // Detection and --refresh keep one agent's failure from stopping the others
     const isolate = t.refresh || !t.agentsExplicit;
     let failed = false;
-    let done = 0;
+    let dataDir: string | undefined;
     for (const [agent] of picked) {
       try {
-        await (agent === "claude" ? installClaude : installCodex)(t, inv, (s) => void out.push(s));
-        done++;
+        const dir = await (agent === "claude" ? installClaude : installCodex)(t, inv, (s) => void out.push(s));
+        dataDir ??= dir;
       } catch (err) {
         if (!isolate) throw err;
         failed = true;
@@ -156,10 +158,11 @@ export async function run(argv: string[]): Promise<number> {
       }
     }
     if (t.dryRun) out.push("(--dry-run: nothing was written)\n");
-    else {
-      const lang = await ensureConfig(t.dataDir);
-      out.push(`lang:     ${lang} (${configPath(t.dataDir)}); change it on the Settings page: ${t.server}/settings\n`);
-      if (done > 0) out.push("next:     start claude or codex; the GUI opens on your first session\n");
+    else if (dataDir !== undefined) {
+      // The data dir the first registered agent's hooks point at (read back from the registration, else the argument)
+      const lang = await ensureConfig(dataDir);
+      out.push(`lang:     ${lang} (${configPath(dataDir)}); change it on the Settings page: ${t.server}/settings\n`);
+      out.push("next:     start claude or codex; the GUI opens on your first session\n");
     }
     process.stdout.write(out.join(""));
     return failed ? 1 : 0;
