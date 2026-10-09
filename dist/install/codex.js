@@ -1,6 +1,6 @@
 /** `install --codex` / `uninstall --codex` / doctor: Codex CLI's hooks.json plus the trust hashes in config.toml */
 import { copyFile, mkdir, readFile, realpath, rm, rmdir, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { MANAGED_FLAG, MANAGED_VALUE } from "../settings/hooks-spec.js";
 import { CODEX_EVENT_LABEL, editState, hookHash, readState, stateKey } from "./codex-trust.js";
@@ -151,16 +151,22 @@ async function parseHooks(file, text) {
         throw new Error(`${file} does not contain a JSON object at the top level`);
     return v;
 }
-/** The hooks.json path as Codex spells it (symlinks resolved, e.g. /private/tmp on macOS) */
+/** The hooks.json path as Codex spells it (symlinks resolved, e.g. /private/tmp on macOS; a missing home resolves through its nearest existing ancestor) */
 async function codexPath(home, name) {
+    const rest = [];
     let dir = home;
-    try {
-        dir = await realpath(home);
+    for (;;) {
+        try {
+            return join(await realpath(dir), ...rest, name);
+        }
+        catch {
+            const up = dirname(dir);
+            if (up === dir)
+                return join(home, name);
+            rest.unshift(basename(dir));
+            dir = up;
+        }
     }
-    catch {
-        // does not exist yet: the spelling given is all there is
-    }
-    return join(dir, name);
 }
 export async function plan(o, mode) {
     const hooksFile = await codexPath(o.home, "hooks.json");
@@ -257,7 +263,8 @@ async function backup(file) {
 export async function apply(home, p) {
     const baks = [];
     const made = {};
-    await mkdir(home, { recursive: true });
+    // Only a write needs the directory: uninstall must not create the home of someone who does not use Codex
+    const ensureHome = () => mkdir(home, { recursive: true });
     for (const [key, file, before, after, del] of [
         ["hooks", join(home, "hooks.json"), p.hooksBefore, p.hooksAfter, p.hooksDelete],
         ["config", p.configFile, p.configBefore, p.configAfter, p.configDelete],
@@ -273,6 +280,7 @@ export async function apply(home, p) {
             baks.push(bak);
             made[key] = basename(bak);
         }
+        await ensureHome();
         await writeFile(file, after);
     }
     const recFile = join(home, RECORD);
@@ -288,8 +296,10 @@ export async function apply(home, p) {
         if (p.fresh)
             rec.backups = made;
         const text = JSON.stringify(rec, null, 2) + "\n";
-        if (text !== p.recordBefore)
+        if (text !== p.recordBefore) {
+            await ensureHome();
             await writeFile(recFile, text);
+        }
     }
     return baks;
 }

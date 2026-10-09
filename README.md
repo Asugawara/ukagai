@@ -31,10 +31,10 @@ Coding agents stop and ask a question mid-task, and those questions scatter acro
 Requirements: Node.js >= 22, macOS or Linux (Windows is not supported), Claude Code and / or Codex CLI.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh -s -- --lang en
+curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
 ```
 
-Then start `claude`. The server starts by itself and the GUI opens on your first session of the day; from then on every `AskUserQuestion` and plan approval lands there. Use `--lang ja` for a Japanese GUI, and add `--codex --claude` to register Codex CLI as well (`--codex` alone registers Codex only).
+Then start `claude` (or `codex`). The server starts by itself and the GUI opens on your first session of the day; from then on every `AskUserQuestion` and plan approval lands there. `install.sh` registers the hooks for every agent it finds, Claude Code and Codex CLI (see below). The GUI language starts from your locale (`ja` if `LC_ALL`, `LC_MESSAGES` or `LANG` starts with `ja`, otherwise `en`); change it on the Settings page (`,` key in the GUI).
 
 Right after installing, `ukagai doctor` reports the server and the token as "not started yet"; after your first `claude` session it prints `no problems`.
 
@@ -47,7 +47,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 - **Progress checkpoints**: answer the agent's session recap with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
 - **TUI**: the same screen in the terminal, `ukagai tui`. [Guide](docs/guide.md#the-tui)
 - **Codex CLI**: hooks plus a bridge for plan approval. [Guide](docs/guide.md#codex-cli)
-- **Settings page**: language, theme, notifications, plan auto-show. [Guide](docs/guide.md#settings)
+- **Settings page**: language, theme, notifications, plan auto-show, and the skill text the agent follows. [Guide](docs/guide.md#settings)
 - **Rich Markdown**: callouts, Mermaid, diffs, task lists and more in explanations and plans. [Guide](docs/guide.md#rich-markdown)
 
 ![The same decision in the terminal UI](docs/images/tui.png)
@@ -58,15 +58,21 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 
 ## Install options
 
-`install.sh` only installs the binary unless you pass `--lang`, `--codex` or `--claude`; then it also runs `ukagai install`, which registers the hooks and the skill (and backs up your settings first). `wget` works too.
+`install.sh` installs the binary and then runs `ukagai install`, which registers the hooks and the skill for every agent it finds (and backs up your settings first). `wget` works too.
+
+An agent counts as found when:
+
+- Claude Code: an executable `claude` is on `PATH`, or `~/.claude.json` or `~/.claude/projects/` exists (a bare `~/.claude` does not count).
+- Codex CLI: an executable `codex` is on `PATH`, or `<Codex home>/sessions/` exists (Codex home is `$CODEX_HOME`, default `~/.codex`).
+
+If neither is found, `ukagai install` says so and exits 0; install an agent and run `ukagai install` again.
 
 | Flag | Meaning |
 |---|---|
-| `--lang en\|ja` | GUI / TUI language, passed to `ukagai install` (stored in `<data-dir>/config.json`) |
-| `--codex` | Register the Codex CLI hooks (Codex only; add `--claude` for Claude Code too) |
-| `--claude` | Register the Claude Code hooks |
 | `--version vX.Y.Z` | Install this version (default: latest release) |
 | `--force` | Replace a non-ukagai file at the bin path |
+
+The old `--lang`, `--codex` and `--claude` are ignored with a warning, and `ukagai install`, `uninstall` and `doctor` ignore `--lang` the same way. The language is set on the Settings page. To register one agent only, run `ukagai install --claude` or `ukagai install --codex` yourself.
 
 | Environment | Meaning |
 |---|---|
@@ -82,7 +88,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 
 A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. If you also ran `install.sh`, `ukagai install` removes its own registration so the hooks run once.
 
-**Update**: run the install command again; a running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first; `--codex --claude` when Codex is registered too) removes the hooks and the skill and stops the server once no hooks remain, then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
+**Update**: run the install command again. It re-registers only the agents that are already registered, and keeps their options (`--timeout`, `--observe`, `--no-autostart`, `--server`, `--data-dir`); to put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. A running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first) removes the hooks and the skill from both Claude Code and Codex CLI (`--claude` or `--codex` picks one) and stops the server once no hooks remain (if one agent fails, the other is still removed, the command exits 1 and the server is left running), then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
 
 Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troubleshooting)).
 
@@ -96,7 +102,7 @@ Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troublesho
 | `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
 | `docs/spec/markdown.md` | The Markdown dialect explanations and plans are written in |
 | `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 wake-up turns and the progress check) |
-| `skills/ukagai-explain/SKILL.md` | The skill that teaches Claude how to write explanations |
+| `skills/ukagai-explain/` | The skill (`SKILL.md`) that teaches Claude how to write explanations, plus the `reference/` files it reads when needed |
 
 ## Development
 
@@ -105,8 +111,8 @@ git clone https://github.com/Asugawara/ukagai.git && cd ukagai
 npm ci
 npm run build
 npm run vendor                              # bundle marked / mermaid into public/vendor/
-node dist/cli.js install --dry-run          # preview the changes to ~/.claude/settings.json
-node dist/cli.js install --lang en          # register hooks + skill
+node dist/cli.js install --dry-run          # preview the changes to the agents found
+node dist/cli.js install                    # register hooks + skill
 npm run typecheck
 npm test              # GUI tests (test/gui/) run only when agent-browser is available
 npm run dev:serve
@@ -115,7 +121,7 @@ npm run dev:serve
 To try it without touching your real settings, write to a separate file and start a test session with it (the skill is left alone; add `--skill` to place it too):
 
 ```sh
-node dist/cli.js install --settings /tmp/ukagai-settings.json --data-dir /tmp/ukagai-data --lang en
+node dist/cli.js install --settings /tmp/ukagai-settings.json --data-dir /tmp/ukagai-data
 claude --settings /tmp/ukagai-settings.json
 ```
 

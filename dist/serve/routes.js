@@ -4,7 +4,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { AnswerRequest, DEFAULT_SETTINGS, CheckpointRequest, PlanReadRequest, PlanInstructRequest, Settings, CreateDecisionRequest, DecisionStatus, EventInput, POLL_TIMEOUT_MS, PLAN_BLOCK_SUFFIX, isAllowedExplanationPath, isPlanFile, plansDir, isAllowedTranscriptPath, } from "../contract.js";
+import { AnswerRequest, DEFAULT_SETTINGS, CheckpointRequest, PlanReadRequest, PlanInstructRequest, Settings, SkillPut, CreateDecisionRequest, DecisionStatus, EventInput, POLL_TIMEOUT_MS, PLAN_BLOCK_SUFFIX, isAllowedExplanationPath, isPlanFile, plansDir, isAllowedTranscriptPath, } from "../contract.js";
 import { VERSION } from "../version.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
@@ -13,6 +13,10 @@ import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./
 import { PlanSessions } from "./plan-session.js";
 import { PlanReady } from "./plan-ready.js";
 import { PlanVersionStore, buildPlanVersions } from "./plan-versions.js";
+import { diffLines, MAX_DIFF_CELLS } from "./plan-diff.js";
+import { customSkillPath, readSkill, resetSkill, writeSkill } from "../settings/skill.js";
+import { SKILL_SOURCE } from "../settings/target.js";
+import { toLines } from "../hook/explain.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT } from "./store.js";
 export const COOKIE_NAME = "ukagai_session";
 const MAX_WAIT_MS = 600000;
@@ -196,12 +200,44 @@ export function createApp(deps) {
         if (!deps.settings)
             return c.json({ error: "settings unavailable" }, 503);
         let next = await parse(c, Settings);
-        // `install --lang` may have rewritten config.json while serve runs: a PUT that does not change the language keeps the file's
+        // `install` creates config.json (language from the locale) only when it is missing, which can happen while serve runs: a PUT that does not change the language keeps the file's
         if (next.lang === deps.settings.get().lang)
             next = { ...next, lang: await deps.settings.fileLang() };
         await deps.settings.update(next);
         hub.broadcast("settings.updated", next);
         return c.json(next);
+    });
+    // The user's version of the skill (<dataDir>/skill/): read, replace, and go back to the default. Each answers with the same view and tells the other UIs
+    const skillView = async () => {
+        const st = await readSkill(deps.dataDir ?? "", deps.skillSource ?? SKILL_SOURCE);
+        const path = deps.dataDir === undefined ? {} : { path: customSkillPath(deps.dataDir) };
+        if (st.default === null)
+            return { default: null, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, ...path, diff: [], changed: 0 };
+        const a = toLines(st.default);
+        const b = toLines(st.custom ?? st.default);
+        const diff = (a.length + 1) * (b.length + 1) > MAX_DIFF_CELLS ? [] : diffLines(a, b);
+        return { default: st.default, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, ...path, diff, changed: diff.filter((d) => d.kind !== "same").length };
+    };
+    app.get("/api/skill", auth("any"), async (c) => c.json(await skillView()));
+    app.put("/api/skill", auth("any"), jsonOnly, async (c) => {
+        if (deps.dataDir === undefined)
+            return c.json({ error: "skill unavailable" }, 503);
+        const { text } = await parse(c, SkillPut);
+        const def = (await readSkill(deps.dataDir, deps.skillSource ?? SKILL_SOURCE)).default;
+        if (def === null)
+            return c.json({ error: "the default skill cannot be read" }, 503);
+        await writeSkill(deps.dataDir, text, def);
+        const view = await skillView();
+        hub.broadcast("skill.updated", view);
+        return c.json(view);
+    });
+    app.delete("/api/skill", auth("any"), async (c) => {
+        if (deps.dataDir === undefined)
+            return c.json({ error: "skill unavailable" }, 503);
+        await resetSkill(deps.dataDir);
+        const view = await skillView();
+        hub.broadcast("skill.updated", view);
+        return c.json(view);
     });
     // Images of the document being shown (explanation file or plan file): see docs/spec/markdown.md 2.12. Missing and forbidden are both 404
     const filesAuth = auth("any");
@@ -219,10 +255,13 @@ export function createApp(deps) {
         if (decisionId !== undefined) {
             const d = store.get(decisionId);
             const p = d?.explanation?.path;
+            // a plan document's relative paths also try the session's <scratchpad>/ukagai after the plans dir (the plan cannot sit next to its mockups)
+            const sp = d?.session.scratchpad_dir;
+            const fallbackDirs = sp ? [join(sp, "ukagai")] : undefined;
             if (p)
-                scope = p.endsWith(PLAN_BLOCK_SUFFIX) ? { baseDir: documentDir(p) } : { baseDir: documentDir(p), root: documentDir(p) };
+                scope = p.endsWith(PLAN_BLOCK_SUFFIX) ? { baseDir: documentDir(p), fallbackDirs } : { baseDir: documentDir(p), root: documentDir(p) };
             else if (d?.kind === "approve_plan" && d.plan_name)
-                scope = { baseDir: plansDir(deps.home) }; // plan_name is set only for a plan file inside the plans dir
+                scope = { baseDir: plansDir(deps.home), fallbackDirs }; // plan_name is set only for a plan file inside the plans dir
         }
         else if (planName !== undefined && isPlanFile(planName))
             scope = { baseDir: plansDir(deps.home) };

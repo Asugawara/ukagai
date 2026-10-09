@@ -7,7 +7,7 @@ Usage: ukagai <command> [options]
 Commands:
   serve      Start the GUI and API server
   hook       Called from Claude Code hooks (JSON on stdin)
-  install    Register the hooks and skill in Claude Code settings
+  install    Register the hooks (and the skill) in Claude Code and Codex CLI
   uninstall  Remove only what install registered
   doctor     Diagnose registration and connectivity
   tui        Answer decisions in the terminal (same screen as the GUI, vim-style keys)
@@ -23,9 +23,8 @@ const SETTINGS_OPTIONS = `  --settings <file>  Target settings file (default: ~/
   --no-skill         Leave the skill alone
   -h, --help         Show this help
 `;
-const CODEX_OPTIONS = `  --codex            Handle Codex CLI's hooks.json / config.toml (Claude Code is left alone unless --claude,
-                     --settings or --project is also given)
-  --claude           With --codex: handle Claude Code too
+const CODEX_OPTIONS = `  --claude           Handle Claude Code only (default: every agent that is found; uninstall: both)
+  --codex            Handle Codex CLI's hooks.json / config.toml only (default: every agent that is found; uninstall: both)
   --codex-home <dir> Codex home (default: $CODEX_HOME, else ~/.codex)
 `;
 const SERVER_OPTIONS = `  --server <url>     Server URL (passed to the hook too when not the default)
@@ -86,12 +85,12 @@ Options:
 `,
     install: `Usage: ukagai install [options]
 
-Register the hooks in Claude Code settings and place the skill.
-With --codex, register the hooks in Codex CLI's hooks.json and trust them in config.toml.
+Register the hooks in every agent that is found: Claude Code (settings.json and the skill) and Codex CLI (hooks.json,
+trusted in config.toml). An agent that already has ukagai hooks keeps the options it was registered with unless you pass them again.
+The display language is not an option: <data-dir>/config.json is created from the locale when it is missing; change it on the Settings page.
 
 Options:
-  --lang <en|ja>     Display language of the GUI / TUI, written to <data-dir>/config.json
-                     (asked interactively on a TTY when omitted; an existing config is kept otherwise)
+  --refresh          Re-register only the agents that already have ukagai hooks (what an upgrade runs)
   --observe          Install observe-only hooks
   --no-autostart     Install hooks that do not auto-start the server on SessionStart
   --timeout <sec>    PreToolUse timeout (15 or more, default: 3600)
@@ -99,7 +98,7 @@ Options:
 ${CODEX_OPTIONS}${SERVER_OPTIONS}${SETTINGS_OPTIONS}`,
     uninstall: `Usage: ukagai uninstall [options]
 
-Remove the hooks and skill that install registered, and stop the server when no ukagai hooks remain. <data-dir> (config.json, history, logs) is kept.
+Remove the hooks and skill that install registered from both Claude Code and Codex CLI, and stop the server when no ukagai hooks remain. <data-dir> (config.json, history, logs) is kept.
 Arguments other than those that locate the settings are ignored.
 
 Options:

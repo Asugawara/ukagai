@@ -3,9 +3,18 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCodexHome } from "../serve/codex-bridge/index.js";
-import { LANGS, isLang } from "./config.js";
-const DEFAULT_SERVER = "http://127.0.0.1:4818";
-export function parseTarget(argv) {
+export const DEFAULT_SERVER = "http://127.0.0.1:4818";
+export const defaultDataDir = () => join(homedir(), ".ukagai");
+/** The args that point a hook at a non-default server / data dir */
+export function hookArgsOf(dataDir, server) {
+    const args = [];
+    if (dataDir !== defaultDataDir())
+        args.push("--data-dir", dataDir);
+    if (server !== DEFAULT_SERVER)
+        args.push("--server", server);
+    return args;
+}
+export function parseTarget(argv, command = "doctor") {
     let settings;
     let project = false;
     let skill = false;
@@ -13,7 +22,9 @@ export function parseTarget(argv) {
     let codex = false;
     let claude = false;
     let codexHome;
-    let lang;
+    let refresh = false;
+    const warnings = [];
+    const given = { timeout: false, observe: false, noAutostart: false, server: false, dataDir: false };
     const t = {
         timeout: 3600,
         observe: false,
@@ -21,9 +32,8 @@ export function parseTarget(argv) {
         noSkill: false,
         noAutostart: false,
         server: DEFAULT_SERVER,
-        dataDir: join(homedir(), ".ukagai"),
+        dataDir: defaultDataDir(),
     };
-    const defaultDataDir = t.dataDir;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         const val = () => {
@@ -39,7 +49,7 @@ export function parseTarget(argv) {
         else if (a === "--dry-run")
             t.dryRun = true;
         else if (a === "--observe")
-            t.observe = true;
+            t.observe = given.observe = true;
         else if (a === "--no-skill")
             t.noSkill = true;
         else if (a === "--skill")
@@ -53,39 +63,45 @@ export function parseTarget(argv) {
         else if (a === "--codex-home")
             codexHome = resolve(val());
         else if (a === "--no-autostart")
-            t.noAutostart = true;
+            t.noAutostart = given.noAutostart = true;
+        else if (a === "--refresh" && command === "install")
+            refresh = true;
         else if (a === "--timeout") {
             const n = Number(val());
             if (!Number.isInteger(n) || n < 15)
                 throw new Error("--timeout must be an integer of 15 or more (seconds)");
             t.timeout = n;
+            given.timeout = true;
         }
-        else if (a === "--server")
+        else if (a === "--server") {
             t.server = val().replace(/\/+$/, "");
-        else if (a === "--lang") {
-            const v = val();
-            if (!isLang(v))
-                throw new Error(`--lang must be one of: ${LANGS.join(", ")}`);
-            lang = v;
+            given.server = true;
         }
-        else if (a === "--data-dir")
+        else if (a === "--lang" || a.startsWith("--lang=")) {
+            // The language is chosen on the Settings page now; skip the value too (not validated)
+            if (a === "--lang" && argv[i + 1] !== undefined && !argv[i + 1].startsWith("-"))
+                i++;
+            warnings.push("--lang is ignored: change the language on the Settings page");
+        }
+        else if (a === "--data-dir") {
             t.dataDir = resolve(val());
+            given.dataDir = true;
+        }
         else
             throw new Error(`unknown argument: ${a}`);
     }
     const base = project ? join(process.cwd(), ".claude") : join(homedir(), ".claude");
-    const hookArgs = [];
-    if (t.dataDir !== defaultDataDir)
-        hookArgs.push("--data-dir", t.dataDir);
-    if (t.server !== DEFAULT_SERVER)
-        hookArgs.push("--server", t.server);
+    const agentsExplicit = codex || claude || settings !== undefined || project;
     return {
         ...t,
-        lang,
-        codex,
-        claude: !codex || claude || settings !== undefined || project,
+        given,
+        refresh,
+        warnings,
+        agentsExplicit,
+        codex: !agentsExplicit || codex,
+        claude: !agentsExplicit || claude || settings !== undefined || project,
         codexHome: resolve(resolveCodexHome(codexHome)),
-        hookArgs,
+        hookArgs: hookArgsOf(t.dataDir, t.server),
         force,
         settingsGiven: settings !== undefined,
         projectGiven: project,
@@ -99,7 +115,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Repository root (two levels up from both src/settings and dist/settings) */
 export const REPO_ROOT = resolve(here, "../..");
 export const CLI_PATH = join(REPO_ROOT, "dist", "cli.js");
-export const SKILL_SOURCE = join(REPO_ROOT, "skills", "ukagai-explain", "SKILL.md");
+export const SKILL_DIR = join(REPO_ROOT, "skills", "ukagai-explain");
+/** The shipped SKILL.md itself: the default text the settings page shows and the human may edit */
+export const SKILL_SOURCE = join(SKILL_DIR, "SKILL.md");
 /**
  * The launcher form when this process was started through this tree's bin/ukagai (UKAGAI_LAUNCHER is the path as invoked,
  * symlinks not resolved, so hooks keep pointing at the stable path); otherwise node + dist/cli.js. Never throws.

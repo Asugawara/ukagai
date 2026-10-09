@@ -5,19 +5,39 @@ import { CHECKPOINT_FLAG, HOOK_EVENTS, PLAN_CONTEXT_FLAG } from "../settings/hoo
 import { findManaged, readSettings } from "../settings/merge.js";
 import { enabledClaudePlugin, enabledCodexPlugin } from "../settings/plugins.js";
 import { status as codexStatus } from "../install/codex.js";
+import { hasSkill, missingSkillFiles } from "../skill/files.js";
 import { REPO_ROOT, parseTarget } from "../settings/target.js";
+import { detectClaude, detectCodex, registeredClaude, registeredCodex } from "../settings/agents.js";
 import { VERSION } from "../version.js";
+import { customSkillPath, readSkill } from "../settings/skill.js";
 const exists = (p) => stat(p).then(() => true, () => false);
 const executable = (p) => access(p, constants.X_OK).then(() => true, () => false);
+/**
+ * Without an explicit agent flag: the agents that have ukagai hooks or an enabled plugin; when there are none, the agents that are
+ * found; when there are none, Claude Code. An agent whose registration cannot be read is included, so the rows show the error.
+ */
+async function autoAgents(t) {
+    const ok = (f) => f().catch(() => true);
+    const claude = await ok(async () => registeredClaude(await readSettings(t.settingsFile)) || (await enabledClaudePlugin(t.pluginSettingsFiles)) !== undefined);
+    const codex = await ok(async () => (await registeredCodex(t.codexHome)) || (await enabledCodexPlugin(t.codexHome)) !== undefined);
+    if (claude || codex)
+        return { claude, codex };
+    const found = { claude: (await detectClaude()) !== undefined, codex: (await detectCodex(t.codexHome)) !== undefined };
+    return found.claude || found.codex ? found : { claude: true, codex: false };
+}
 export async function run(argv) {
     let t;
     try {
-        t = parseTarget(argv);
+        t = parseTarget(argv, "doctor");
+        if (!t.agentsExplicit)
+            t = { ...t, ...(await autoAgents(t)) };
     }
     catch (err) {
         process.stderr.write(`ukagai doctor: ${err.message}\n`);
         return 2;
     }
+    for (const w of t.warnings)
+        process.stderr.write(`ukagai doctor: warning: ${w}\n`);
     const rows = [];
     const add = (ok, name, note = "") => void rows.push([ok, name, note]);
     add(true, "version", `${VERSION} (${REPO_ROOT})`);
@@ -41,7 +61,7 @@ export async function run(argv) {
             const cs = await codexStatus(t.codexHome);
             const codexViaPlugin = codexPlugin !== undefined && !cs.rows.some((r) => r.installed);
             for (const r of codexViaPlugin ? [] : cs.rows) {
-                add(r.installed && r.trusted === "trusted", `codex hook ${r.event}`, !r.installed ? "not registered" : r.trusted === "trusted" ? "trusted" : `${r.trusted} (run: ukagai install --codex)`);
+                add(r.installed && r.trusted === "trusted", `codex hook ${r.event}`, !r.installed ? "not registered (run: ukagai install --codex)" : r.trusted === "trusted" ? "trusted" : `${r.trusted} (run: ukagai install --codex)`);
             }
             const cmd = cs.rows.find((r) => r.command !== undefined)?.command;
             if (cmd !== undefined)
@@ -54,12 +74,12 @@ export async function run(argv) {
     if (t.claude) {
         add(true, "plugin", claudePlugin !== undefined ? `${claudePlugin} enabled` : "no plugin");
         if (claudePlugin !== undefined && managedInSettings)
-            add(false, "hooks registered twice", "plugin and settings.json: run ukagai install");
+            add(false, "hooks registered twice", "plugin and settings.json: run: ukagai install --claude");
     }
     if (t.codex) {
         add(true, "codex plugin", codexPlugin !== undefined ? `${codexPlugin} enabled` : "no plugin");
         if (codexPlugin !== undefined && (await codexStatus(t.codexHome).then((c) => c.rows.some((r) => r.installed), () => false)))
-            add(false, "codex hooks registered twice", "plugin and hooks.json: run ukagai install --codex");
+            add(false, "codex hooks registered twice", "plugin and hooks.json: run: ukagai install --codex");
     }
     let node;
     let cli;
@@ -78,16 +98,16 @@ export async function run(argv) {
     if (t.claude && !viaPlugin) {
         const c = findManaged(settings, "PreToolUse", (h) => Array.isArray(h["args"]) && h["args"].includes(CHECKPOINT_FLAG));
         const observing = Array.isArray(findManaged(settings, "PreToolUse")?.["args"]) && findManaged(settings, "PreToolUse")["args"].includes("--observe");
-        add(c !== undefined || observing, "hook PreToolUse (checkpoint)", c ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
+        add(c !== undefined || observing, "hook PreToolUse (checkpoint)", c ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install --claude)");
         const p = findManaged(settings, "PreToolUse", (h) => Array.isArray(h["args"]) && h["args"].includes(PLAN_CONTEXT_FLAG));
-        add(p !== undefined || observing, "hook PreToolUse (plan context)", p ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
+        add(p !== undefined || observing, "hook PreToolUse (plan context)", p ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install --claude)");
         const u = findManaged(settings, "UserPromptSubmit", (h) => Array.isArray(h["args"]) && h["args"].includes(PLAN_CONTEXT_FLAG));
-        add(u !== undefined || observing, "hook UserPromptSubmit (plan context)", u ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install)");
+        add(u !== undefined || observing, "hook UserPromptSubmit (plan context)", u ? "" : observing ? "off (--observe)" : "not registered (run: ukagai install --claude)");
     }
     if (node !== undefined && launcher) {
         const ok = await executable(node);
         const real = ok ? await realpath(node).catch(() => node) : undefined;
-        add(ok, "launcher", ok ? (real !== node ? `${node} -> ${real}` : node) : `${node} is missing or not executable (run: ukagai install)`);
+        add(ok, "launcher", ok ? (real !== node ? `${node} -> ${real}` : node) : `${node} is missing or not executable (run: ukagai install --claude)`);
         const np = join(t.dataDir, "node-path");
         let target;
         try {
@@ -132,10 +152,17 @@ export async function run(argv) {
     if (t.claude) {
         if (viaPlugin)
             add(true, "skill ukagai-explain", "from the plugin");
-        else if (t.handleSkill)
-            add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
+        else if (t.handleSkill) {
+            const missing = hasSkill(t.skillDir) ? missingSkillFiles(t.skillDir) : ["SKILL.md"];
+            add(missing.length === 0, "skill ukagai-explain", missing.length === 0 ? join(t.skillDir, "SKILL.md") : `missing ${missing.join(", ")} (run ukagai install)`);
+        }
         else
             add(true, "skill ukagai-explain", "not handled");
+    }
+    // The human's own version of the skill (settings page, Skill): the hooks point the agent at it, so say so; stale = the shipped text changed since editing began
+    const mine = await readSkill(t.dataDir);
+    if (mine.custom !== null) {
+        add(true, "skill (your version)", `custom version in use (${customSkillPath(t.dataDir)})${mine.stale ? "; the default changed since you started editing: compare on the Skill page (Diff from default)" : ""}`);
     }
     const ss = findManaged(settings, "SessionStart");
     const off = Array.isArray(ss?.["args"]) && ss["args"].includes("--no-autostart");

@@ -58,17 +58,19 @@ function inScratchpad(file) {
 export function resolveDocumentFile(written, scope, home, dataDir) {
     if (!written || written.includes("\0") || !FILE_TYPES[extname(written).toLowerCase()])
         return null;
-    const candidate = isAbsolute(written) ? written : resolve(scope.baseDir, written);
+    const candidates = isAbsolute(written) ? [written] : [resolve(scope.baseDir, written), ...(scope.fallbackDirs ?? []).map((d) => resolve(d, written))];
     const roots = [...(scope.root ? [scope.root] : []), plansDir(home), ...(dataDir ? [dataDir] : [])];
-    for (const r of roots) {
-        const root = real(r);
-        const file = root && realFileUnder(root, candidate);
-        if (file && FILE_TYPES[extname(file).toLowerCase()] && usable(file))
+    for (const candidate of candidates) {
+        for (const r of roots) {
+            const root = real(r);
+            const file = root && realFileUnder(root, candidate);
+            if (file && FILE_TYPES[extname(file).toLowerCase()] && usable(file))
+                return file;
+        }
+        const file = real(candidate);
+        if (file && inScratchpad(file) && FILE_TYPES[extname(file).toLowerCase()] && usable(file))
             return file;
     }
-    const file = real(candidate);
-    if (file && inScratchpad(file) && FILE_TYPES[extname(file).toLowerCase()] && usable(file))
-        return file;
     return null;
 }
 // A sandboxed frame has an opaque origin, so the SameSite=Strict session cookie is not sent for the page's own images. Each rewritten URL therefore carries

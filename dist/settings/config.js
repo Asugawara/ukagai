@@ -10,6 +10,11 @@ export function configPath(dataDir) {
 export function isLang(v) {
     return typeof v === "string" && LANGS.includes(v);
 }
+/** `ja` when the first non-empty of LC_ALL, LC_MESSAGES, LANG starts with `ja`, else `en` (the language a first install starts with) */
+export function localeLang(env = process.env) {
+    const v = [env["LC_ALL"], env["LC_MESSAGES"], env["LANG"]].find((x) => x !== undefined && x !== "");
+    return v !== undefined && v.startsWith("ja") ? "ja" : "en";
+}
 const obj = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
 const bool = (v, d) => (typeof v === "boolean" ? v : d);
 /** Presets from anything: strings only, trimmed, blanks and over-long ones dropped, capped */

@@ -1,143 +1,177 @@
-import { copyFile, mkdir, rm, rmdir, stat } from "node:fs/promises";
-import { createInterface } from "node:readline/promises";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { buildHookEntries, HOOK_EVENTS } from "../settings/hooks-spec.js";
 import { unifiedDiff } from "../settings/diff.js";
-import { LANGS, configPath, isLang, readConfig, writeConfig } from "../settings/config.js";
+import { configPath, localeLang, readConfig, writeConfig } from "../settings/config.js";
 import { mergeHooks, readSettings, removeHooks, serialize, writeSettings } from "../settings/merge.js";
 import { enabledClaudePlugin, enabledCodexPlugin } from "../settings/plugins.js";
 import { CODEX_SPECS, apply as applyCodex, plan } from "./codex.js";
-import { SKILL_SOURCE, hookInvocation, parseTarget } from "../settings/target.js";
+import { hasSkill, placeSkill, removeSkill } from "../skill/files.js";
+import { SKILL_DIR, hookInvocation, parseTarget } from "../settings/target.js";
+import { claudeOptions, codexOptions, detectClaude, detectCodex, registeredClaude, registeredCodex, resolveOptions, tilde } from "../settings/agents.js";
 const exists = (p) => stat(p).then(() => true, () => false);
 const pluginLine = (key) => `plugin ${key} is enabled: hooks and skill come from the plugin (use --force to register them in settings.json as well)`;
-async function askLang() {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-        for (;;) {
-            const answer = (await rl.question(`Language for the GUI / TUI [${LANGS.join("/")}] (en): `)).trim().toLowerCase();
-            if (answer === "")
-                return "en";
-            if (isLang(answer))
-                return answer;
-        }
-    }
-    finally {
-        rl.close();
-    }
-}
-/** Decide the display language and write config.json. `--lang` wins; otherwise an existing config is kept; otherwise ask on a TTY, else en. */
-async function resolveLang(dataDir, flag) {
-    if (flag !== undefined) {
-        await writeConfig(dataDir, { ...(await readConfig(dataDir)), lang: flag });
-        return flag;
-    }
+const LABEL = { claude: "Claude Code", codex: "Codex CLI" };
+/** The language of the first install: config.json is created from the locale only when it is missing, and never touched otherwise */
+async function ensureConfig(dataDir) {
     if (await exists(configPath(dataDir)))
         return (await readConfig(dataDir)).lang;
-    const lang = process.stdin.isTTY && process.stdout.isTTY ? await askLang() : "en";
+    const lang = localeLang();
     await writeConfig(dataDir, { ...(await readConfig(dataDir)), lang });
     return lang;
+}
+/** Whether the agent already has ukagai hooks. A registration that cannot be read counts as registered: the run reports the error */
+async function isRegistered(t, agent) {
+    try {
+        return agent === "claude" ? registeredClaude(await readSettings(t.settingsFile)) : await registeredCodex(t.codexHome);
+    }
+    catch {
+        return true;
+    }
+}
+/** Register (or, with the plugin enabled, unregister) the hooks and the skill in Claude Code's settings */
+async function installClaude(t, inv, emit) {
+    // An enabled plugin brings the hooks and the skill: installing them here too would run every hook twice
+    const plugin = !t.force && !t.settingsGiven ? await enabledClaudePlugin(t.pluginSettingsFiles) : undefined;
+    const before = await readSettings(t.settingsFile);
+    const o = resolveOptions(t, registeredClaude(before) ? claudeOptions(before) : undefined);
+    const entries = buildHookEntries({ invocation: inv, timeout: o.timeout, observe: o.observe, hookArgs: o.hookArgs, autostart: !o.noAutostart });
+    const after = plugin !== undefined ? removeHooks(before) : mergeHooks(before, entries);
+    const changed = serialize(before) !== serialize(after);
+    if (t.dryRun) {
+        if (plugin !== undefined)
+            emit(pluginLine(plugin) + "\n");
+        const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
+        emit(diff === "" ? "settings: no changes\n" : diff);
+        if (plugin !== undefined) {
+            if (t.handleSkill && hasSkill(t.skillDir))
+                emit(`skill: remove ${t.skillDir}/\n`);
+        }
+        else if (t.handleSkill)
+            emit(`skill: ${SKILL_DIR}/ -> ${t.skillDir}/\n`);
+        return o.dataDir;
+    }
+    if (plugin !== undefined) {
+        if ((await exists(t.settingsFile)) && changed) {
+            const bak = await writeSettings(t.settingsFile, after);
+            emit(`settings: removed the ukagai hooks from ${t.settingsFile}\n`);
+            if (bak)
+                emit(`backup:   ${bak}\n`);
+        }
+        if (t.handleSkill && existsSync(t.skillDir)) {
+            const removed = removeSkill(t.skillDir);
+            if (removed.length > 0)
+                emit(`skill:    removed ${removed.join(", ")} from ${t.skillDir}/\n`);
+        }
+        emit(pluginLine(plugin) + "\n");
+        return o.dataDir;
+    }
+    // The same content is not written again: every write leaves a .bak-* next to the file
+    const bak = changed ? await writeSettings(t.settingsFile, after) : null;
+    if (t.handleSkill)
+        placeSkill(t.skillDir);
+    emit(`settings: ${t.settingsFile}${changed ? "" : " (unchanged)"}\n`);
+    if (bak)
+        emit(`backup:   ${bak}\n`);
+    emit(`hook:     ${[inv.command, ...inv.prefix, "hook"].join(" ")}${inv.launcher ? "" : " (dev checkout: hooks run node + dist/cli.js)"}\n`);
+    if (inv.launcher && inv.command.includes("/versions/"))
+        emit("note:     hooks point at a versioned path; run the ukagai on PATH instead\n");
+    emit(`timeout:  ${o.timeout}s (PreToolUse --budget ${o.timeout - 10})${o.observe ? " [observe]" : ""}\n`);
+    emit(`events:   ${HOOK_EVENTS.join(", ")}\n`);
+    emit(o.noAutostart ? "autostart: off (--no-autostart)\n" : "autostart: on\n");
+    emit((t.handleSkill ? `skill:    ${t.skillDir}/` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)") + "\n");
+    return o.dataDir;
+}
+/** Register (or, with the plugin enabled, unregister) the hooks in Codex CLI's hooks.json and trust them in config.toml */
+async function installCodex(t, inv, emit) {
+    const pluginKey = t.force ? undefined : await enabledCodexPlugin(t.codexHome);
+    const o = resolveOptions(t, pluginKey === undefined && (await registeredCodex(t.codexHome)) ? await codexOptions(t.codexHome) : undefined);
+    const cx = { home: t.codexHome, invocation: inv, timeout: o.timeout, hookArgs: o.hookArgs, noAutostart: o.noAutostart };
+    const p = await plan(cx, pluginKey !== undefined ? "uninstall" : "install");
+    if (t.dryRun) {
+        if (pluginKey !== undefined)
+            emit(pluginLine(pluginKey) + "\n");
+        for (const [file, a, b] of [
+            [p.hooksFile, p.hooksBefore, p.hooksAfter],
+            [p.configFile, p.configBefore, p.configAfter],
+        ]) {
+            const diff = unifiedDiff(a, b, file, `${file} (after)`);
+            emit(diff === "" ? `codex: ${file}: no changes\n` : diff);
+        }
+        return o.dataDir;
+    }
+    const baks = await applyCodex(t.codexHome, p);
+    if (pluginKey !== undefined)
+        emit(pluginLine(pluginKey) + "\n");
+    else {
+        emit(`codex:    ${p.hooksFile} (${CODEX_SPECS.map((c) => c.event).join(", ")})\n`);
+        emit(`trust:    ${p.managed.size} hook(s) trusted in ${p.configFile}\n`);
+    }
+    for (const b of baks)
+        emit(`backup:   ${b}\n`);
+    return o.dataDir;
 }
 export async function run(argv) {
     let t;
     try {
-        t = parseTarget(argv);
+        t = parseTarget(argv, "install");
     }
     catch (err) {
         process.stderr.write(`ukagai install: ${err.message}\n`);
         return 2;
     }
+    for (const w of t.warnings)
+        process.stderr.write(`ukagai install: warning: ${w}\n`);
     try {
-        const inv = hookInvocation();
-        const cx = {
-            home: t.codexHome,
-            invocation: inv,
-            timeout: t.timeout,
-            hookArgs: t.hookArgs,
-            noAutostart: t.noAutostart,
-        };
-        // An enabled plugin brings the hooks and the skill: installing them here too would run every hook twice
-        const claudePlugin = t.claude && !t.force && !t.settingsGiven ? await enabledClaudePlugin(t.pluginSettingsFiles) : undefined;
-        const codexPluginKey = t.codex && !t.force ? await enabledCodexPlugin(t.codexHome) : undefined;
-        const codexPlan = t.codex ? await plan(cx, codexPluginKey !== undefined ? "uninstall" : "install") : undefined;
-        const before = await readSettings(t.settingsFile);
-        const entries = buildHookEntries({ invocation: inv, timeout: t.timeout, observe: t.observe, hookArgs: t.hookArgs, autostart: !t.noAutostart });
-        const after = claudePlugin !== undefined ? removeHooks(before) : mergeHooks(before, entries);
-        const skillDest = join(t.skillDir, "SKILL.md");
-        if (t.dryRun) {
-            if (claudePlugin !== undefined)
-                process.stdout.write(pluginLine(claudePlugin) + "\n");
-            if (codexPluginKey !== undefined)
-                process.stdout.write(pluginLine(codexPluginKey) + "\n");
-            if (t.claude) {
-                const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
-                process.stdout.write(diff === "" ? "settings: no changes\n" : diff);
-                if (claudePlugin !== undefined) {
-                    if (t.handleSkill && (await exists(skillDest)))
-                        process.stdout.write(`skill: remove ${skillDest}\n`);
-                }
-                else if (t.handleSkill)
-                    process.stdout.write(`skill: ${SKILL_SOURCE} -> ${skillDest}\n`);
+        const candidates = [...(t.claude ? ["claude"] : []), ...(t.codex ? ["codex"] : [])];
+        const picked = [];
+        for (const agent of candidates) {
+            if (t.refresh) {
+                if (await isRegistered(t, agent))
+                    picked.push([agent, "registered"]);
             }
-            if (codexPlan) {
-                for (const [file, a, b] of [
-                    [codexPlan.hooksFile, codexPlan.hooksBefore, codexPlan.hooksAfter],
-                    [codexPlan.configFile, codexPlan.configBefore, codexPlan.configAfter],
-                ]) {
-                    const diff = unifiedDiff(a, b, file, `${file} (after)`);
-                    process.stdout.write(diff === "" ? `codex: ${file}: no changes\n` : diff);
-                }
+            else if (t.agentsExplicit)
+                picked.push([agent, "requested"]);
+            else {
+                const why = agent === "claude" ? await detectClaude() : await detectCodex(t.codexHome);
+                if (why !== undefined)
+                    picked.push([agent, why]);
             }
-            process.stdout.write("(--dry-run: nothing was written)\n");
+        }
+        if (picked.length === 0) {
+            process.stdout.write((t.refresh
+                ? "no ukagai hooks are registered; nothing to refresh (run: ukagai install)"
+                : `no agent found (looked for claude on PATH, ~/.claude.json, ~/.claude/projects, codex on PATH, ${tilde(t.codexHome)}/sessions): install Claude Code or Codex CLI, then run: ukagai install`) + "\n");
             return 0;
         }
-        const lang = await resolveLang(t.dataDir, t.lang);
-        const out = [];
-        if (claudePlugin !== undefined) {
-            const had = await exists(t.settingsFile);
-            if (had && serialize(before) !== serialize(after)) {
-                const bak = await writeSettings(t.settingsFile, after);
-                out.push(`settings: removed the ukagai hooks from ${t.settingsFile}`);
-                if (bak)
-                    out.push(`backup:   ${bak}`);
+        const inv = hookInvocation();
+        const out = [`agents:   ${picked.map(([a, why]) => `${LABEL[a]} (${why})`).join(", ")}\n`];
+        // Detection and --refresh keep one agent's failure from stopping the others
+        const isolate = t.refresh || !t.agentsExplicit;
+        let failed = false;
+        let dataDir;
+        for (const [agent] of picked) {
+            try {
+                const dir = await (agent === "claude" ? installClaude : installCodex)(t, inv, (s) => void out.push(s));
+                dataDir ??= dir;
             }
-            if (t.handleSkill && (await exists(skillDest))) {
-                await rm(skillDest);
-                await rmdir(t.skillDir).catch(() => undefined);
-                out.push(`skill:    removed ${skillDest}`);
+            catch (err) {
+                if (!isolate)
+                    throw err;
+                failed = true;
+                process.stderr.write(`${agent}: error: ${err.message}\n`);
             }
-            out.push(pluginLine(claudePlugin));
         }
-        else if (t.claude) {
-            const bak = await writeSettings(t.settingsFile, after);
-            if (t.handleSkill) {
-                await mkdir(t.skillDir, { recursive: true });
-                await copyFile(SKILL_SOURCE, skillDest);
-            }
-            out.push(`settings: ${t.settingsFile}`);
-            if (bak)
-                out.push(`backup:   ${bak}`);
-            out.push(`hook:     ${[inv.command, ...inv.prefix, "hook"].join(" ")}${inv.launcher ? "" : " (dev checkout: hooks run node + dist/cli.js)"}`);
-            if (inv.launcher && inv.command.includes("/versions/"))
-                out.push("note:     hooks point at a versioned path; run the ukagai on PATH instead");
-            out.push(`timeout:  ${t.timeout}s (PreToolUse --budget ${t.timeout - 10})${t.observe ? " [observe]" : ""}`);
-            out.push(`events:   ${HOOK_EVENTS.join(", ")}`);
-            out.push(t.noAutostart ? "autostart: off (--no-autostart)" : "autostart: on");
-            out.push(t.handleSkill ? `skill:    ${skillDest}` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)");
+        if (t.dryRun)
+            out.push("(--dry-run: nothing was written)\n");
+        else if (dataDir !== undefined) {
+            // The data dir the first registered agent's hooks point at (read back from the registration, else the argument)
+            const lang = await ensureConfig(dataDir);
+            out.push(`lang:     ${lang} (${configPath(dataDir)}); change it on the Settings page: ${t.server}/settings\n`);
+            out.push("next:     start claude or codex; the GUI opens on your first session\n");
         }
-        if (codexPlan) {
-            const baks = await applyCodex(t.codexHome, codexPlan);
-            if (codexPluginKey !== undefined)
-                out.push(pluginLine(codexPluginKey));
-            else {
-                out.push(`codex:    ${codexPlan.hooksFile} (${CODEX_SPECS.map((c) => c.event).join(", ")})`);
-                out.push(`trust:    ${codexPlan.managed.size} hook(s) trusted in ${codexPlan.configFile}`);
-            }
-            for (const b of baks)
-                out.push(`backup:   ${b}`);
-        }
-        out.push(`lang:     ${lang} (${configPath(t.dataDir)})`);
-        process.stdout.write(out.join("\n") + "\n");
-        return 0;
+        process.stdout.write(out.join(""));
+        return failed ? 1 : 0;
     }
     catch (err) {
         process.stderr.write(`ukagai install: ${err.message}\n`);

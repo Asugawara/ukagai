@@ -6,6 +6,7 @@ import { findPlanFile, readBlockFor } from "./plan-file.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hookLog } from "./log.js";
 import { readConfig } from "../settings/config.js";
+import { resolveSkillRef } from "./skill-ref.js";
 /** Upper bound for waiting on cancel after a signal */
 const CANCEL_TIMEOUT_MS = 300;
 /** Retry backoff for a failed wait: 1 s, 2 s, 4 s ... capped at 30 s */
@@ -73,6 +74,11 @@ async function denyAndRecord(c, reason, missing) {
         return null;
     }
     return deny(reason);
+}
+/** The human's edited skill as the deny reasons should name it (nothing when there is none or it cannot be read: fail open) */
+function skillRefParam(c) {
+    const skillRef = resolveSkillRef(c.opts.dataDir, c.input.scratchpad_dir);
+    return skillRef === undefined ? {} : { skillRef };
 }
 const sameAgent = (d, agentId) => (d.session.agent_id ?? "") === (agentId ?? "");
 async function explainQuestion(c, data) {
@@ -161,6 +167,7 @@ async function explainQuestion(c, data) {
         ],
         codes,
         agent: input.agent,
+        ...skillRefParam(c),
         blocker: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "blocker" : false,
         quiz: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "quiz" : false,
     });
@@ -189,7 +196,7 @@ async function explainPlan(c, plan) {
     }
     if (prior.length > 0)
         return { explanation: noExplanation("loop_guard") };
-    const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => MISSING_LABELS[m]), agent: input.agent });
+    const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => MISSING_LABELS[m]), agent: input.agent, ...skillRefParam(c) });
     return { out: await denyAndRecord(c, reason, v.missing) };
 }
 /** First sight of a question: validate its explanation (deny when it is missing or unfit) and register the decision */

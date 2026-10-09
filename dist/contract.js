@@ -622,6 +622,15 @@ export const DEFAULT_SETTINGS = {
     plans: { auto_show: true, instruction_presets: [] },
     notify: { sound: false, browser: false, title_badge: true },
 };
+// ---- The user's version of the skill (GET / PUT / DELETE /api/skill) ----
+/** PUT /api/skill: the whole text, at most this many UTF-8 bytes */
+export const SKILL_MAX_BYTES = 256 * 1024;
+export const SkillPut = z.object({
+    text: z
+        .string()
+        .refine((t) => t.trim() !== "", "text must not be empty")
+        .refine((t) => Buffer.byteLength(t, "utf8") <= SKILL_MAX_BYTES, `text must be at most ${SKILL_MAX_BYTES} bytes`),
+});
 // ---- plan versions (GET /api/sessions/:id/plan-versions) ----
 export const PlanInstruction = z.object({
     text: z.string(),

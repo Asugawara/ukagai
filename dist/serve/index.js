@@ -97,6 +97,7 @@ export async function start(opts = {}) {
         dataDir,
         lang,
         settings,
+        ...(opts.skillSource !== undefined ? { skillSource: opts.skillSource } : {}),
         publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
         getPort: () => port,
         cliPath: ((p) => (existsSync(p) ? p : undefined))(opts.cliPath ?? fileURLToPath(new URL("../cli.js", import.meta.url))),

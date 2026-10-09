@@ -31,10 +31,10 @@ ukagai は、コーディングエージェントが人間に求める判断（C
 必要なもの: Node.js 22 以上、macOS または Linux（Windows は非対応）、Claude Code と Codex CLI のどちらか（または両方）。
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh -s -- --lang ja
+curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
 ```
 
-そのあと `claude` を起動してください。サーバーは自動で起動し、その日の最初のセッションで GUI が開きます。以降は `AskUserQuestion` とプラン承認がすべてそこに届きます。GUI を英語にするには `--lang en`、Codex CLI も使うなら `--codex --claude` を追加します（`--codex` だけでは Codex にしか登録されません）。
+そのあと `claude`（または `codex`）を起動してください。サーバーは自動で起動し、その日の最初のセッションで GUI が開きます。以降は `AskUserQuestion` とプラン承認がすべてそこに届きます。`install.sh` は見つかったエージェントすべて（Claude Code と Codex CLI、詳細は下記）に hooks を登録します。GUI の言語は最初はロケールで決まり（`LC_ALL`、`LC_MESSAGES`、`LANG` のうち最初の空でない値が `ja` で始まれば `ja`、それ以外は `en`）、設定ページ（GUI で `,` キー）で変えられます。
 
 インストール直後の `ukagai doctor` は server と token を "not started yet" と表示し、最初の `claude` セッションのあとは `no problems` になります。
 
@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 - **進捗チェックポイント**: エージェントのセッション要約に、指示または停止で返答できます。[ガイド](docs/guide.md#progress-checkpoints)
 - **TUI**: 同じ画面をターミナルで。`ukagai tui`。[ガイド](docs/guide.md#the-tui)
 - **Codex CLI**: hooks とプラン承認用のブリッジ。[ガイド](docs/guide.md#codex-cli)
-- **設定ページ**: 言語、テーマ、通知、プランの自動表示。[ガイド](docs/guide.md#settings)
+- **設定ページ**: 言語、テーマ、通知、プランの自動表示、エージェントが従うスキルの本文。[ガイド](docs/guide.md#settings)
 - **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
 
 ![ターミナルでの同じ判断](docs/images/ja/tui.png)
@@ -60,15 +60,21 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 ## インストールのオプション
 
-`install.sh` は、`--lang`、`--codex`、`--claude` のいずれかを渡さない限りバイナリを入れるだけです。渡すと `ukagai install` も実行し、hooks とスキルを登録します（先に設定のバックアップを取ります）。`wget` でも実行できます。
+`install.sh` はバイナリを入れたあと `ukagai install` を実行し、見つかったエージェントすべてに hooks とスキルを登録します（先に設定のバックアップを取ります）。`wget` でも実行できます。
+
+次の条件で、そのエージェントが見つかったとみなします。
+
+- Claude Code: 実行可能な `claude` が `PATH` にある、または `~/.claude.json` か `~/.claude/projects/` がある（`~/.claude` があるだけでは数えません）。
+- Codex CLI: 実行可能な `codex` が `PATH` にある、または `<Codex home>/sessions/` がある（Codex home は `$CODEX_HOME`、既定は `~/.codex`）。
+
+どちらも見つからなければ、`ukagai install` はそう表示して終了コード 0 で終わります。エージェントを入れてから、もう一度 `ukagai install` を実行してください。
 
 | フラグ | 意味 |
 |---|---|
-| `--lang en\|ja` | GUI / TUI の言語。`ukagai install` に渡され、`<data-dir>/config.json` に保存されます |
-| `--codex` | Codex CLI の hooks を登録（Codex のみ。Claude Code も登録するには `--claude` を追加） |
-| `--claude` | Claude Code の hooks を登録 |
 | `--version vX.Y.Z` | このバージョンを入れる（既定は最新リリース） |
 | `--force` | bin パスにある ukagai 以外のファイルを置き換える |
+
+古い `--lang`、`--codex`、`--claude` は警告を出して無視されます。`ukagai install`、`uninstall`、`doctor` も `--lang` を同じように無視します。言語は設定ページで変えます。片方のエージェントだけに登録するなら、自分で `ukagai install --claude` または `ukagai install --codex` を実行してください。
 
 | 環境変数 | 意味 |
 |---|---|
@@ -84,7 +90,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 プラグインだけを使っている場合、シェルで `ukagai` は打てません。Claude Code ではエージェントの Bash ツール経由で `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` を実行してください。`install.sh` も実行済みの場合は、`ukagai install` が自身の登録を外し、hooks が二重に動かないようにします。
 
-**更新**: インストールのコマンドをもう一度実行します。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`、Codex にも登録しているなら `--codex --claude`）で hooks と skill を外します。hooks が残らなくなればサーバーも止まります。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
+**更新**: インストールのコマンドをもう一度実行します。登録済みのエージェントだけを登録し直し、オプション（`--timeout`、`--observe`、`--no-autostart`、`--server`、`--data-dir`）はそのまま引き継がれます。オプションを既定に戻すには、`ukagai uninstall` のあとに `ukagai install` を実行してください。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`）で Claude Code と Codex CLI の両方から hooks と skill を外します（片方だけなら `--claude` または `--codex`）。hooks が残らなくなればサーバーも止まります（片方が失敗しても、もう片方は外れます。終了コードは 1 で、サーバーは止まらずに残ります）。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
 
 うまく動かないときは `ukagai doctor` を実行してください（[トラブルシューティング](docs/guide.md#troubleshooting)）。
 
@@ -98,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 | `docs/spec/explain.md` | エージェントが書く説明ファイルと、hook の検証ルール |
 | `docs/spec/markdown.md` | 説明とプランを書くための Markdown 方言 |
 | `docs/verification/` | 実環境での検証記録（01 質問の注入、02 Codex の hooks と hook の限界、03 E2E、04 プラン作成時の文脈、05 プランの指示と approve-and-auto、06 起こされたターンと進捗チェック） |
-| `skills/ukagai-explain/SKILL.md` | Claude に説明の書き方を教えるスキル |
+| `skills/ukagai-explain/` | Claude に説明の書き方を教えるスキル（`SKILL.md`）と、必要なときに読む `reference/` のファイル |
 
 ## 開発
 
@@ -107,8 +113,8 @@ git clone https://github.com/Asugawara/ukagai.git && cd ukagai
 npm ci
 npm run build
 npm run vendor                              # marked / mermaid を public/vendor/ にバンドル
-node dist/cli.js install --dry-run          # ~/.claude/settings.json への変更をプレビュー
-node dist/cli.js install --lang en          # hooks + スキルを登録
+node dist/cli.js install --dry-run          # 見つかったエージェントへの変更をプレビュー
+node dist/cli.js install                    # hooks + スキルを登録
 npm run typecheck
 npm test              # GUI テスト（test/gui/）は agent-browser があるときだけ実行
 npm run dev:serve
@@ -117,7 +123,7 @@ npm run dev:serve
 実際の設定に触れずに試すには、別ファイルに書き込み、それを使ってテストセッションを起動します（スキルには触れません。スキルも置くなら `--skill` を追加）。
 
 ```sh
-node dist/cli.js install --settings /tmp/ukagai-settings.json --data-dir /tmp/ukagai-data --lang en
+node dist/cli.js install --settings /tmp/ukagai-settings.json --data-dir /tmp/ukagai-data
 claude --settings /tmp/ukagai-settings.json
 ```
 
