@@ -257,8 +257,9 @@ test("a plan document's relative path also resolves against the session's <scrat
 
   assert.equal((await e.fileOf(block, "../../../../../../out.png")).status, 404);
   assert.equal((await e.fileOf(block, outside)).status, 404);
-  assert.equal((await e.fileOf(block, "../../../../../etc/hosts.png")).status, 404);
-  assert.equal((await e.fileOf(block, "missing.png")).status, 404);
+  assert.equal((await e.fileOf(block, "../secret.png")).status, 200); // above ukagai/ but inside the scratchpad: the same reach as its absolute path
+  assert.equal((await e.fileOf(block, join(e.scratch, "secret.png"))).status, 200);
+  assert.equal((await e.fileOf(block, "../../../../../../etc/hosts.png")).status, 404); // leaves the scratchpad: no root
 
   // no scratchpad_dir on the decision: nothing to fall back to
   const bare = await fetch(`${e.url}/api/decisions`, {
@@ -277,6 +278,9 @@ test("a plan document's relative path also resolves against the session's <scrat
 
   // the plan= drawer has no session: unchanged
   assert.equal((await e.get(`plan=p.md&path=${encodeURIComponent("shot.png")}`)).status, 404);
-  // a standalone explanation file is unchanged too (its own dir is the root)
-  assert.equal((await e.file("shot.png")).status, 200);
+  // a standalone explanation file gets no fallback: its session has a scratchpad_dir, but shot.png exists only under <scratch>/ukagai, not next to this file
+  put(join(e.dataDir, "explain", "sa", "own.png"));
+  const standalone = await e.explained(join(e.dataDir, "explain", "sa", "ex.md"), "sa");
+  assert.equal((await e.fileOf(standalone, "own.png")).status, 200); // its own dir is the root
+  assert.equal((await e.fileOf(standalone, "shot.png")).status, 404);
 });

@@ -289,7 +289,7 @@ A plan has these sections, in this order. Nothing but "Scope and reversibility" 
 
 ### Screenshots
 
-For a UI decision show, do not describe. Take the picture with agent-browser into the document's own folder, then reference it with a relative path from an explanation file, or with the absolute path from a plan file (a relative path in a plan resolves against `~/.claude/plans/`), and alt text the TUI reader can use on its own:
+For a UI decision show, do not describe. Take the picture with agent-browser into `<scratchpad_dir>/ukagai/` (the document's own folder, for an explanation file), then reference it with a relative path from an explanation file, or with the absolute path from a plan file (a relative path in a plan resolves against `~/.claude/plans/`), and alt text the TUI reader can use on its own:
 
 `<scratchpad_dir>/ukagai` is the folder the SessionStart context names (the explanation files live there). It stays writable in plan mode: when a plan hinges on a visual choice (UI variants, layouts), build the candidates there and ask with AskUserQuestion before ExitPlanMode; never schedule "make the mockups" as a step after approval. Reference a file only once it exists.
 
