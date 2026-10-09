@@ -8,6 +8,7 @@ import { status as codexStatus } from "../install/codex.js";
 import { REPO_ROOT, parseTarget, type Target } from "../settings/target.js";
 import { detectClaude, detectCodex, registeredClaude, registeredCodex } from "../settings/agents.js";
 import { VERSION } from "../version.js";
+import { customSkillPath, readSkill } from "../settings/skill.js";
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
 const executable = (p: string): Promise<boolean> => access(p, constants.X_OK).then(() => true, () => false);
@@ -138,6 +139,12 @@ export async function run(argv: string[]): Promise<number> {
     if (viaPlugin) add(true, "skill ukagai-explain", "from the plugin");
     else if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
     else add(true, "skill ukagai-explain", "not handled");
+  }
+
+  // The human's own version of the skill (settings page, Skill): the hooks point the agent at it, so say so; stale = the shipped text changed since editing began
+  const mine = await readSkill(t.dataDir);
+  if (mine.custom !== null) {
+    add(true, "skill (your version)", `custom version in use (${customSkillPath(t.dataDir)})${mine.stale ? "; the default changed since you started editing: compare on the Skill page (Diff from default)" : ""}`);
   }
 
   const ss = findManaged(settings, "SessionStart");
