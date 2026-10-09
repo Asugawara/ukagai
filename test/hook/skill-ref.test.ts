@@ -10,13 +10,15 @@ import { planContext, planContextText } from "../../src/hook/plan-context.js";
 import { denyReason, findExplanation } from "../../src/hook/explain.js";
 import { resolveSkillRef } from "../../src/hook/skill-ref.js";
 import { NO_OPEN } from "../../src/hook/context-hooks.js";
-import { runHook } from "./helpers.js";
+import { fileURLToPath } from "node:url";
+import { dataDirWithToken, fakeServer, runHook } from "./helpers.js";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "ukagai-skillref-"));
 function dataWithSkill(text = "# my skill\n"): string {
   const d = tmp();
   mkdirSync(join(d, "skill"), { recursive: true });
   writeFileSync(join(d, "skill", "SKILL.md"), text);
+  writeFileSync(join(d, "token"), "test-token\n"); // the deny tests below talk to a fake server
   return d;
 }
 const REF = "/x/ukagai/skill/SKILL.md";
@@ -112,9 +114,38 @@ for (const template of ["A", "B"] as const) {
         assert.ok(!t.includes("AskUserQuestion") && t.includes("request_user_input"));
         assert.ok(plain.includes("request_user_input"));
       } else {
-        assert.ok(t.includes("do not read skill ukagai-explain"));
         assert.ok(t.includes("AskUserQuestion"));
       }
+    });
+  }
+}
+
+// A real scratchpad path is ~150 characters; the reasons are capped at 1000 / 1600, so the wording around the path must stay short
+const LONG_SCRATCH = "/private/tmp/claude-673691001/-Users-a14628--herdr-worktrees-ukagai-feat-settings-skill/6b1a91b9-ff5b-4b2d-bb23-1976482b32bf/scratchpad";
+const LONG_REF = `${LONG_SCRATCH}/ukagai/skill/SKILL.md`;
+for (const template of ["A", "B"] as const) {
+  for (const agent of ["claude", "codex"] as const) {
+    test(`deny reason ${template} / ${agent} with a ~150-character path: Missing names the item, the closing request survives, within the limit`, () => {
+      assert.ok(LONG_REF.length >= 140 && LONG_REF.length <= 170, String(LONG_REF.length));
+      const p = { path: `${LONG_SCRATCH}/ukagai/explain.md`, question: "Which do you choose, A or B?", missing: ["a file"], codes: ["file" as const], agent };
+      const t = denyReason(template, { ...p, skillRef: LONG_REF });
+      const plain = denyReason(template, p);
+      assert.ok(t.length <= 1600, `${t.length} chars`);
+      assert.ok(t.includes("Missing: a file."), "Missing still names the item (not '... and 1 more')");
+      assert.ok(!t.includes("and 1 more"));
+      const call = agent === "codex" ? "request_user_input again" : "AskUserQuestion again";
+      assert.ok(t.includes(call), `the closing sentence survives: ${t.slice(-160)}`);
+      assert.equal(t.split(LONG_REF).length - 1, 1, "the file is named once");
+      assert.ok(plain.includes(call));
+      // the only extra is the path itself (it replaces "skill ukagai-explain"): no explanatory words are added around it
+      assert.ok(t.length - plain.length <= LONG_REF.length + 10, `${t.length} vs ${plain.length}`);
+    });
+    test(`deny reason ${template} / ${agent} with a ~150-character path and no template (a missing section only): same guarantees under the 1000 limit`, () => {
+      const p = { path: `${LONG_SCRATCH}/ukagai/explain.md`, question: "Which do you choose, A or B?", missing: ["the Options table"], codes: [] as never[], agent };
+      const t = denyReason(template, { ...p, skillRef: LONG_REF });
+      assert.ok(t.length <= 1000, `${t.length} chars`);
+      assert.ok(t.includes("Missing: the Options table."));
+      assert.ok(t.includes(agent === "codex" ? "request_user_input again" : "AskUserQuestion again"));
     });
   }
 }
@@ -182,8 +213,81 @@ test("hook SessionStart: an unreadable SKILL.md (a directory) leaves today's tex
   assert.match(ctx, /following skill ukagai-explain\./);
 });
 
-test("hook: a failing run still prints nothing on stdout and exits 0 (invalid stdin)", async () => {
+test("hook: invalid stdin prints nothing on stdout and exits 0, with a saved version too (the unreadable / unwritable cases are the tests above and below)", async () => {
   const r = await runHook(["--data-dir", dataWithSkill(), "--no-autostart"], "not json");
   assert.equal(r.code, 0);
   assert.equal(r.stdout, "");
+});
+
+// ---- the deny path of the real hook (decision.ts): AskUserQuestion without an explanation file, ExitPlanMode with a defective plan ----
+
+const fx = (n: string) => JSON.parse(readFileSync(fileURLToPath(new URL(`../fixtures/${n}`, import.meta.url)), "utf8"));
+const codexRui = () =>
+  readFileSync(fileURLToPath(new URL("../fixtures/codex/rui-default-hooks.jsonl", import.meta.url)), "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("{") && l.includes('"hook_event_name"'))
+    .map((l) => JSON.parse(l))
+    .find((e) => e.hook_event_name === "PreToolUse");
+const reasonOf = (stdout: string): string => JSON.parse(stdout).hookSpecificOutput.permissionDecisionReason;
+
+async function denyRun(input: unknown, d: string, ...extra: string[]) {
+  const f = await fakeServer();
+  try {
+    const r = await runHook(["--server", f.url, "--data-dir", d, ...extra], JSON.stringify(input));
+    return { r, f };
+  } finally {
+    await f.close();
+  }
+}
+
+test("hook deny, AskUserQuestion without an explanation file (Claude): the reason names the copy in <scratchpad>/ukagai/skill/ once and not the skill", async () => {
+  const d = dataWithSkill("# mine\n");
+  const sp = tmp();
+  const { r } = await denyRun({ ...fx("t1-stdin.json"), scratchpad_dir: sp }, d);
+  assert.equal(r.code, 0);
+  const reason = reasonOf(r.stdout);
+  const copy = join(sp, "ukagai", "skill", "SKILL.md");
+  assert.equal(reason.split(copy).length - 1, 1, reason);
+  assert.ok(!reason.includes("read skill ukagai-explain (if"));
+  assert.ok(reason.includes(join(sp, "ukagai", "explain.md")), "the save path is still there");
+  assert.ok(reason.includes("AskUserQuestion again"));
+  assert.equal(readFileSync(copy, "utf8"), "# mine\n");
+});
+
+test("hook deny, ExitPlanMode with a defective plan (Claude): the reason names the copy once", async () => {
+  const d = dataWithSkill("# mine\n");
+  const sp = tmp();
+  const input = { ...fx("t5-stdin.json"), scratchpad_dir: sp, tool_input: { ...fx("t5-stdin.json").tool_input, plan: "# Plan\n\nnothing else\n" } };
+  const { r } = await denyRun(input, d);
+  assert.equal(r.code, 0);
+  const reason = reasonOf(r.stdout);
+  assert.equal(reason.split(join(sp, "ukagai", "skill", "SKILL.md")).length - 1, 1, reason);
+  assert.ok(reason.includes("ExitPlanMode"));
+  assert.ok(!/skill ukagai-explain\b/.test(reason), reason);
+});
+
+test("hook deny (Codex): the reason names <data-dir>/skill/SKILL.md once, says request_user_input and never AskUserQuestion", async () => {
+  const d = dataWithSkill("# mine\n");
+  const { r } = await denyRun(codexRui(), d, "--agent", "codex");
+  assert.equal(r.code, 0);
+  const reason = reasonOf(r.stdout);
+  assert.equal(reason.split(join(d, "skill", "SKILL.md")).length - 1, 1, reason);
+  assert.ok(reason.includes("request_user_input"));
+  assert.ok(!reason.includes("AskUserQuestion"));
+  assert.ok(!reason.includes("skill ukagai-explain"));
+});
+
+test("hook deny without a saved version, or with an unwritable scratchpad: today's text, the deny is still printed, exit 0", async () => {
+  const sp = tmp();
+  const none = await denyRun({ ...fx("t1-stdin.json"), scratchpad_dir: sp }, dataDirWithToken());
+  assert.equal(none.r.code, 0);
+  assert.match(reasonOf(none.r.stdout), /read skill ukagai-explain \(if you have not\)/);
+  assert.ok(!existsSync(join(sp, "ukagai", "skill")));
+  // a saved version, but a scratchpad where ukagai/ is a file: the copy fails and the texts stay as they were
+  const blocked = tmp();
+  writeFileSync(join(blocked, "ukagai"), "a file where the directory should be");
+  const bad = await denyRun({ ...fx("t1-stdin.json"), scratchpad_dir: blocked }, dataWithSkill());
+  assert.equal(bad.r.code, 0);
+  assert.equal(JSON.parse(bad.r.stdout).hookSpecificOutput.permissionDecision, "deny");
+  assert.match(reasonOf(bad.r.stdout), /read skill ukagai-explain \(if you have not\)/);
 });

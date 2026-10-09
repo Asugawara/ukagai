@@ -40,7 +40,7 @@ import { PlanVersionStore, buildPlanVersions } from "./plan-versions.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
 import { diffLines, MAX_DIFF_CELLS } from "./plan-diff.js";
-import { readSkill, resetSkill, writeSkill } from "../settings/skill.js";
+import { customSkillPath, readSkill, resetSkill, writeSkill } from "../settings/skill.js";
 import { SKILL_SOURCE } from "../settings/target.js";
 import { toLines } from "../hook/explain.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
@@ -271,11 +271,12 @@ export function createApp(deps: AppDeps): Hono {
   // The user's version of the skill (<dataDir>/skill/): read, replace, and go back to the default. Each answers with the same view and tells the other UIs
   const skillView = async (): Promise<SkillView> => {
     const st = await readSkill(deps.dataDir ?? "", deps.skillSource ?? SKILL_SOURCE);
-    if (st.default === null) return { default: null, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, diff: [], changed: 0 };
+    const path = deps.dataDir === undefined ? {} : { path: customSkillPath(deps.dataDir) };
+    if (st.default === null) return { default: null, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, ...path, diff: [], changed: 0 };
     const a = toLines(st.default);
     const b = toLines(st.custom ?? st.default);
     const diff = (a.length + 1) * (b.length + 1) > MAX_DIFF_CELLS ? [] : diffLines(a, b);
-    return { default: st.default, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, diff, changed: diff.filter((d) => d.kind !== "same").length };
+    return { default: st.default, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, ...path, diff, changed: diff.filter((d) => d.kind !== "same").length };
   };
   app.get("/api/skill", auth("any"), async (c) => c.json(await skillView()));
   app.put("/api/skill", auth("any"), jsonOnly, async (c) => {

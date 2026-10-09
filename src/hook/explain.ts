@@ -1247,9 +1247,10 @@ function composeReason(template: DenyTemplate, p: DenyParams, missingText: strin
 
 function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
   const sk = skillName(process.env, p.agent);
-  // The skill as the texts below name it: the plain skill, or (the human edited it) the file once, which replaces the skill
+  // The skill as the texts below name it: the plain skill, or (the human edited it) just the file, once, which replaces the skill. No explanatory
+  // parenthesis here: a reason is capped at 1000 / 1600 characters and a real scratchpad path is ~150, so every extra word pushes "Missing" or the closing request out
   const ref = p.skillRef;
-  const what = ref === undefined ? `skill ${sk}` : p.agent === "codex" ? `${ref} (the human's edited rules)` : `${ref} (the human's edited version of skill ${sk}; do not read skill ${sk})`;
+  const what = ref === undefined ? `skill ${sk}` : ref;
   const thatFile = ref === undefined ? `skill ${sk}` : "that file";
   if (p.planFile !== undefined) {
     const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";

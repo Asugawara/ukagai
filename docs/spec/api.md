@@ -312,12 +312,13 @@ The user's own version of the skill text (`skills/ukagai-explain/SKILL.md` is th
 `GET` returns
 
 ```json
-{ "default": "...", "custom": null, "stale": false, "baseVersion": null, "diff": [{ "kind": "same", "text": "..." }], "changed": 0 }
+{ "default": "...", "custom": null, "stale": false, "baseVersion": null, "path": "/home/me/.ukagai/skill/SKILL.md", "diff": [{ "kind": "same", "text": "..." }], "changed": 0 }
 ```
 
 - `default`: the shipped text, or `null` when it cannot be read (then `diff` is `[]`); `custom`: the user's version or `null`.
 - `stale`: there is a user's version and `base.md` differs from today's default.
 - `baseVersion`: the ukagai version of `base.md` (`null` without one).
+- `path`: where the user's version is kept (`<data-dir>/skill/SKILL.md`, absolute; the same path `ukagai doctor` prints); absent when the server has no data directory. The Skill pane shows it.
 - `diff`: line diff `default` → `custom ?? default` (`kind` is `same` / `add` / `del`, same shape as the plan diff); `[]` when the pair is larger than the diff limit (4,000,000 table cells). `changed` is the number of `add` + `del` lines.
 
 `PUT` (`Content-Type: application/json`, 415 otherwise) takes `{ "text": string }`: 400 `{ "error": "invalid request", "issues": [...] }` when the text is empty after trimming or larger than 256 KiB (UTF-8 bytes), 503 when the default cannot be read (or the server has no data directory). It writes `SKILL.md` (and `base.md` + `meta.json` only if they do not exist yet), broadcasts SSE `skill.updated` with the `GET` shape and returns it. `DELETE` removes `<data-dir>/skill/` (a missing directory is fine), broadcasts `skill.updated` and returns the `GET` shape.
@@ -398,7 +399,7 @@ Bearer only (a cookie is 401), `Content-Type: application/json`, body `{}`. Repl
 
 ### GET /api/stream
 
-SSE. A client that connects with the cookie (the GUI) counts as a browser tab for `POST /api/gui/open`; one that uses the Bearer token (the TUI) does not. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`, `format_ok`, `ready` and, when known, `session_id`), `plan.removed` (data is `{ "name" }`) `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`) and `skill.updated` (data is the `GET /api/skill` shape after a `PUT` or `DELETE /api/skill`).
+SSE. A client that connects with the cookie (the GUI) counts as a browser tab for `POST /api/gui/open`; one that uses the Bearer token (the TUI) does not. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`, `format_ok`, `ready` and, when known, `session_id`), `plan.removed` (data is `{ "name" }`), `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`) and `skill.updated` (data is the `GET /api/skill` shape after a `PUT` or `DELETE /api/skill`).
 
 `plan.updated` fires when a `*.md` file in `~/.claude/plans` is created or modified (debounced 400 ms per file: a burst of writes gives one event with the final state; files that are dotfiles, escape the directory by symlink, or exceed 1 MB are skipped silently) when the read mark of a plan changes, and when `ready` flips with no file change (see `ready` above). `plan.removed` fires when a plan is deleted or renamed away. Plans already present when the server starts are not announced; use `GET /api/plans`. The server watches with `fs.watch` plus a 10 s listing poll (`name → mtime + size`), and polls until the directory exists if it is missing.
 

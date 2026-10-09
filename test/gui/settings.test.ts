@@ -365,6 +365,69 @@ gui("Skill pane: tabs have tab semantics and arrow keys; Preview renders a headi
   } finally { await cleanSkill(); }
 });
 
+gui("Skill pane: the file path shown is the one under this server's data directory", async () => {
+  try {
+    await openSkill();
+    assert.equal(text("#skill-file code"), SKILL_FILE());
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: beforeunload asks only while the draft is dirty", async () => {
+  try {
+    await openSkill();
+    const asks = () => ev<boolean>(`(() => { const e = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; })()`);
+    assert.equal(asks(), false, "clean");
+    typeSkill("changed");
+    assert.equal(asks(), true, "dirty");
+    clickEl("#skill-discard");
+    assert.equal(asks(), false, "clean again after Discard");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: text typed while the save is in flight stays as the draft; the saved text becomes the baseline", async () => {
+  try {
+    await openSkill();
+    // hold the PUT response back so there is time to type
+    ev(`(() => { const f = window.fetch; window.fetch = async (u, o) => { const r = await f(u, o); if (o?.method === "PUT" && String(u).includes("/api/skill")) await new Promise((x) => setTimeout(x, 700)); return r; }; return "ok"; })()`);
+    typeSkill("first text\n");
+    clickEl("#skill-save");
+    typeSkill("first text\nand more typed meanwhile\n");
+    await waitFor("save finished", `document.getElementById("skill-badge") && !document.getElementById("skill-badge").hidden`);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "first text\nand more typed meanwhile\n");
+    assert.equal(skillVisible("#skill-unsaved"), true, "the extra text is still unsaved");
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), "first text\n");
+    clickEl("#skill-discard");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "first text\n", "Discard goes back to what was saved");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: after the stream reconnects the skill is fetched again, and an unchanged one raises no 'newer version' notice", async () => {
+  try {
+    await openSkill();
+    // count the page's GET /api/skill: a refetch is the proof that the reconnect (the stream's `open`) ran
+    ev(`(() => { window.__skillGets = 0; const f = window.fetch; window.fetch = (u, o) => { if (String(u).includes("/api/skill") && (!o || !o.method || o.method === "GET")) window.__skillGets++; return f(u, o); }; return "ok"; })()`);
+    // pageshow with persisted = the page came back from the back/forward cache: the stream is opened again, like after a drop
+    const reconnect = () => ev(`(window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })), "ok")`);
+    typeSkill("my draft");
+    reconnect();
+    await waitFor("the skill was fetched again", `window.__skillGets >= 1`);
+    await sleep(500);
+    assert.equal(skillVisible("#skill-newer"), false, "nothing changed elsewhere, so no notice");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "my draft");
+    // something saved elsewhere before the reconnect: the refetch finds it, the draft stays, the notice offers it
+    await api("/api/skill", { text: "saved elsewhere\n" }, "PUT");
+    await waitFor("the SSE event already offered it", `!document.getElementById("skill-newer").hidden`);
+    clickEl("#skill-load-newer");
+    typeSkill("another draft");
+    const before = ev<number>("window.__skillGets");
+    reconnect();
+    await waitFor("fetched again", `window.__skillGets > ${before}`);
+    await sleep(500);
+    assert.equal(skillVisible("#skill-newer"), false, "the same version again is not news");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "another draft");
+  } finally { await cleanSkill(); }
+});
+
 gui("Skill pane in ja: labels, badge and the reset confirmation are Japanese", async () => {
   try {
     await putSettings((s) => { s.lang = "ja"; });
