@@ -34,7 +34,8 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/config` | GUI (cookie or Bearer) | Returns `{ "lang": "en" \| "ja", "build": string }`: the display language (the live `lang` setting, see `GET /api/settings`) and the current `app.js` version (the `?v=` value). The GUI reloads itself when `build` differs from its own |
 | `GET /api/settings` / `PUT /api/settings` | GUI / TUI (cookie or Bearer) | The settings kept in `<data-dir>/config.json`: read, and replace as a whole (validated, applied live, broadcast as `settings.updated`). See below |
 | `POST /api/gui/open` | hook (Bearer only) | Body `{}`. Asks the server to open the GUI once a day: returns `{ "result": "opened_today" \| "connected" \| "pending" }`. See below |
-| `GET /api/stream` | GUI / TUI | SSE. `decision.created` / `decision.updated` / `session.updated` / `plan.updated` / `plan.removed` / `settings.updated` |
+| `GET /api/skill` / `PUT /api/skill` / `DELETE /api/skill` | GUI / TUI (cookie or Bearer) | The human's edited version of the `ukagai-explain` skill kept in `<data-dir>/skill/`: read, replace, go back to the default (broadcast as `skill.updated`). See below |
+| `GET /api/stream` | GUI / TUI | SSE. `decision.created` / `decision.updated` / `session.updated` / `plan.updated` / `plan.removed` / `settings.updated` / `skill.updated` |
 | `GET /healthz` | hook | Connectivity check and identity: `{ "ok": true, "version": "<package version>", "cli": "<absolute path of this process's dist/cli.js>" }` |
 | `POST /api/shutdown` | hook (Bearer only) | Body `{}`. Replies `{ "ok": true }`, then stops the server gracefully. See below |
 
@@ -304,6 +305,23 @@ Returns the GUI display language: the `lang` of the live settings (below), which
 
 `build` is the mtime-based version of `app.js` (the same value as the `?v=` in index.html), read on every request. The GUI compares it with its own on every SSE `open` and calls `location.reload()` when they differ.
 
+### GET /api/skill / PUT /api/skill / DELETE /api/skill
+
+The user's own version of the skill text (`skills/ukagai-explain/SKILL.md` is the default; the hooks point the agent at the user's version when there is one, see `docs/spec/explain.md`). Cookie or Bearer. Files under `<data-dir>/skill/`: `SKILL.md` (the user's version), `base.md` (the default as it was when the user first saved, kept until a reset), `meta.json` (`{ "version": "<ukagai version>" }` of that moment). Every write is tmp + rename, one after another.
+
+`GET` returns
+
+```json
+{ "default": "...", "custom": null, "stale": false, "baseVersion": null, "diff": [{ "kind": "same", "text": "..." }], "changed": 0 }
+```
+
+- `default`: the shipped text, or `null` when it cannot be read (then `diff` is `[]`); `custom`: the user's version or `null`.
+- `stale`: there is a user's version and `base.md` differs from today's default.
+- `baseVersion`: the ukagai version of `base.md` (`null` without one).
+- `diff`: line diff `default` → `custom ?? default` (`kind` is `same` / `add` / `del`, same shape as the plan diff); `[]` when the pair is larger than the diff limit (4,000,000 table cells). `changed` is the number of `add` + `del` lines.
+
+`PUT` (`Content-Type: application/json`, 415 otherwise) takes `{ "text": string }`: 400 `{ "error": "invalid request", "issues": [...] }` when the text is empty after trimming or larger than 256 KiB (UTF-8 bytes), 503 when the default cannot be read (or the server has no data directory). It writes `SKILL.md` (and `base.md` + `meta.json` only if they do not exist yet), broadcasts SSE `skill.updated` with the `GET` shape and returns it. `DELETE` removes `<data-dir>/skill/` (a missing directory is fine), broadcasts `skill.updated` and returns the `GET` shape.
+
 ### GET /api/settings / PUT /api/settings
 
 The settings page (`/settings`) edits `<data-dir>/config.json` through these two calls. Cookie or Bearer. `GET` returns the whole object with every default filled in. `PUT` (`Content-Type: application/json`, 415 otherwise) takes the **whole** object, validates it with the zod schema `Settings` in `src/contract.ts` (400 `{ "error": "invalid request", "issues": [...] }` on failure, nothing is saved), writes `config.json` (tmp + rename, writes one after another), applies it live, broadcasts SSE `settings.updated` with the new object and returns it.
@@ -380,7 +398,7 @@ Bearer only (a cookie is 401), `Content-Type: application/json`, body `{}`. Repl
 
 ### GET /api/stream
 
-SSE. A client that connects with the cookie (the GUI) counts as a browser tab for `POST /api/gui/open`; one that uses the Bearer token (the TUI) does not. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`, `format_ok`, `ready` and, when known, `session_id`), `plan.removed` (data is `{ "name" }`) and `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`).
+SSE. A client that connects with the cookie (the GUI) counts as a browser tab for `POST /api/gui/open`; one that uses the Bearer token (the TUI) does not. The event names are `decision.created` / `decision.updated` (data is `Decision`), `session.updated` (data is `SessionSummary`), `plan.updated` (data is `PlanSummary`, including `read`, `format_ok`, `ready` and, when known, `session_id`), `plan.removed` (data is `{ "name" }`) `settings.updated` (data is the full `Settings` object after a `PUT /api/settings`) and `skill.updated` (data is the `GET /api/skill` shape after a `PUT` or `DELETE /api/skill`).
 
 `plan.updated` fires when a `*.md` file in `~/.claude/plans` is created or modified (debounced 400 ms per file: a burst of writes gives one event with the final state; files that are dotfiles, escape the directory by symlink, or exceed 1 MB are skipped silently) when the read mark of a plan changes, and when `ready` flips with no file change (see `ready` above). `plan.removed` fires when a plan is deleted or renamed away. Plans already present when the server starts are not announced; use `GET /api/plans`. The server watches with `fs.watch` plus a 10 s listing poll (`name → mtime + size`), and polls until the directory exists if it is missing.
 
@@ -456,7 +474,7 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 | Authorization | Endpoints |
 |---|---|
 | Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `POST /api/decisions/:id/handoff`, `GET /api/sessions/:id/open`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
-| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `GET /api/sessions/:id/plan-versions`, `GET /api/files`, `POST /api/plans/:name/instruct`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/settings`, `PUT /api/settings`, `GET /api/stream` |
+| cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `GET /api/sessions/:id/plan-versions`, `GET /api/files`, `POST /api/plans/:name/instruct`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/settings`, `PUT /api/settings`, `GET /api/skill`, `PUT /api/skill`, `DELETE /api/skill`, `GET /api/stream` |
 | none | `GET /healthz`, `GET /`, `GET /settings` (and `/settings/`), `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
 - **Content-Type**: **every POST** (including ack / consume, which have no body) requires `application/json` (otherwise 415). If there is no body, send `{}`. The order of checks is Host (400) → authorization (401) → Content-Type (415) → body (400).

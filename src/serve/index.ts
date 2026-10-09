@@ -55,6 +55,8 @@ export type ServeOptions = {
   onShutdown?: () => void;
   /** How often a working agent's status is re-read before a reply is left for the hook (default 500 ms; tests shorten it) */
   terminalPollMs?: number;
+  /** The shipped skill text served by GET /api/skill (default: this tree's skills/ukagai-explain/SKILL.md; tests point it elsewhere) */
+  skillSource?: string;
 };
 
 export type ServeHandle = {
@@ -141,6 +143,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     dataDir,
     lang,
     settings,
+    ...(opts.skillSource !== undefined ? { skillSource: opts.skillSource } : {}),
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
     cliPath: ((p) => (existsSync(p) ? p : undefined))(opts.cliPath ?? fileURLToPath(new URL("../cli.js", import.meta.url))),

@@ -11,6 +11,8 @@ import {
   PlanReadRequest,
   PlanInstructRequest,
   Settings,
+  SkillPut,
+  type SkillView,
   CreateDecisionRequest,
   DecisionStatus,
   EventInput,
@@ -37,6 +39,10 @@ import { PlanReady } from "./plan-ready.js";
 import { PlanVersionStore, buildPlanVersions } from "./plan-versions.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
+import { diffLines, MAX_DIFF_CELLS } from "./plan-diff.js";
+import { readSkill, resetSkill, writeSkill } from "../settings/skill.js";
+import { SKILL_SOURCE } from "../settings/target.js";
+import { toLines } from "../hook/explain.js";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
@@ -58,6 +64,8 @@ export type AppDeps = {
   lang?: Lang;
   /** Live settings (<dataDir>/config.json). Without it GET /api/settings serves the defaults and PUT is refused */
   settings?: SettingsStore;
+  /** The shipped skill text (default: skills/ukagai-explain/SKILL.md of this tree; tests point it elsewhere) */
+  skillSource?: string;
   getPort: () => number;
   /** This process's dist/cli.js (reported by /healthz so a hook can tell the files were replaced) */
   cliPath?: string;
@@ -258,6 +266,34 @@ export function createApp(deps: AppDeps): Hono {
     await deps.settings.update(next);
     hub.broadcast("settings.updated", next);
     return c.json(next);
+  });
+
+  // The user's version of the skill (<dataDir>/skill/): read, replace, and go back to the default. Each answers with the same view and tells the other UIs
+  const skillView = async (): Promise<SkillView> => {
+    const st = await readSkill(deps.dataDir ?? "", deps.skillSource ?? SKILL_SOURCE);
+    if (st.default === null) return { default: null, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, diff: [], changed: 0 };
+    const a = toLines(st.default);
+    const b = toLines(st.custom ?? st.default);
+    const diff = (a.length + 1) * (b.length + 1) > MAX_DIFF_CELLS ? [] : diffLines(a, b);
+    return { default: st.default, custom: st.custom, stale: st.stale, baseVersion: st.baseVersion, diff, changed: diff.filter((d) => d.kind !== "same").length };
+  };
+  app.get("/api/skill", auth("any"), async (c) => c.json(await skillView()));
+  app.put("/api/skill", auth("any"), jsonOnly, async (c) => {
+    if (deps.dataDir === undefined) return c.json({ error: "skill unavailable" }, 503);
+    const { text } = await parse(c, SkillPut);
+    const def = (await readSkill(deps.dataDir, deps.skillSource ?? SKILL_SOURCE)).default;
+    if (def === null) return c.json({ error: "the default skill cannot be read" }, 503);
+    await writeSkill(deps.dataDir, text, def);
+    const view = await skillView();
+    hub.broadcast("skill.updated", view);
+    return c.json(view);
+  });
+  app.delete("/api/skill", auth("any"), async (c) => {
+    if (deps.dataDir === undefined) return c.json({ error: "skill unavailable" }, 503);
+    await resetSkill(deps.dataDir);
+    const view = await skillView();
+    hub.broadcast("skill.updated", view);
+    return c.json(view);
   });
 
   // Images of the document being shown (explanation file or plan file): see docs/spec/markdown.md 2.12. Missing and forbidden are both 404
