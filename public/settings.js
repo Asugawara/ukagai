@@ -183,6 +183,27 @@ function render() {
   if (focused) $(focused)?.focus?.();
 }
 
+/** Text plus a copy in data-text: CSS reserves the bold width from it, so the active (bold) item or tab never changes its width */
+function setLabel(e, text) {
+  e.textContent = text;
+  e.dataset.text = text;
+}
+
+/** Every pane's lede sits in one grid cell (only the active one is visible), so the head is as tall as the tallest lede and the first box never moves between panes */
+function paintLedes() {
+  const box = $("pane-lede");
+  if (!box.childElementCount) box.append(...PANES.filter((p) => p.id).map((p) => el("p", { class: "set-pane-lede", "data-lede": p.id })));
+  for (const l of box.children) l.textContent = t(paneOf(l.dataset.lede).lede);
+}
+
+/** The "changed from default" badge belongs to the Skill title only */
+function paintBadge() {
+  const badge = $("skill-badge");
+  const changed = sk.view?.custom != null;
+  badge.hidden = !(changed && pane === "skill");
+  if (changed) badge.textContent = t("skill_badge", { n: sk.view.changed });
+}
+
 // ---- sidebar ----
 // Built once (the links keep their focus across renders); chrome() only refreshes the labels
 function buildNav() {
@@ -198,9 +219,9 @@ function showPane() {
   const p = paneOf(pane);
   for (const f of document.querySelectorAll("#form fieldset")) f.hidden = f.dataset.pane !== pane;
   $("pane-skill").hidden = pane !== "skill";
-  $("pane-head").hidden = pane === "skill";
   $("pane-title").textContent = t(p.label);
-  $("pane-lede").textContent = t(p.lede);
+  for (const l of $("pane-lede").children) l.classList.toggle("on", l.dataset.lede === pane);
+  paintBadge();
   for (const a of document.querySelectorAll("#set-nav .set-nav-item")) {
     if (a.dataset.pane === pane) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
@@ -243,12 +264,15 @@ function buildSkillPane() {
   const reset = el("button", { type: "button", id: "skill-reset", class: "danger", onclick: resetSkillClick }, icon("rotate-ccw"), el("span", { id: "skill-reset-label" }));
   $("pane-skill").append(
     el("p", { class: "set-err", id: "skill-error", role: "alert" }),
-    el("div", { class: "set-filebar", id: "skill-file" }),
+    el("div", { class: "set-filebar", id: "skill-file" },
+      el("code", { id: "skill-path" }),
+      el("span", { id: "skill-lines" }),
+      el("span", { id: "skill-saved" }),
+      el("span", { class: "set-newer", id: "skill-newer" }, el("span", { "data-l": "skill_newer" }), " ", el("button", { type: "button", id: "skill-load-newer", onclick: () => { if (sk.newer) applySkill(sk.newer, true); } }, el("span", { "data-l": "skill_load_newer" })))),
     tabs,
     el("div", { class: "set-view", id: "skill-view-edit", role: "tabpanel", "aria-labelledby": "skill-tab-edit" }, area),
     el("div", { class: "set-view set-preview", id: "skill-view-preview", role: "tabpanel", "aria-labelledby": "skill-tab-preview", tabindex: "0" }),
     el("div", { class: "set-view", id: "skill-view-diff", role: "tabpanel", "aria-labelledby": "skill-tab-diff", tabindex: "0" }, diffNote, el("div", { class: "set-diff", id: "skill-diff" })),
-    el("div", { class: "set-newer", id: "skill-newer" }, el("span", { "data-l": "skill_newer" }), " ", el("button", { type: "button", id: "skill-load-newer", onclick: () => { if (sk.newer) applySkill(sk.newer, true); } }, el("span", { "data-l": "skill_load_newer" }))),
     el("div", { class: "set-actions" }, el("span", { class: "set-unsaved", id: "skill-unsaved" }, el("span", { class: "set-dot", "aria-hidden": "true" }), el("span", { "data-l": "skill_unsaved" })), reset, discard, save));
 }
 
@@ -261,18 +285,18 @@ function selectTab(id) {
 function paintSkill() {
   if (!sk.built) return;
   const lang = currentLocale();
-  for (const e of document.querySelectorAll("#pane-skill [data-l]")) e.textContent = t(e.dataset.l);
+  for (const e of document.querySelectorAll("#pane-skill [data-l]")) setLabel(e, t(e.dataset.l));
   const v = sk.view;
-  const badge = $("skill-badge");
-  const changed = v?.custom != null;
-  badge.hidden = !changed;
-  if (changed) badge.textContent = t("skill_badge", { n: v.changed });
+  paintBadge();
   $("skill-error").textContent = sk.loadError ? t("skill_load_failed", { message: sk.loadError }) : v && v.default === null ? t("skill_default_missing") : "";
-  const bits = [];
-  if (v?.path) bits.push(el("code", { text: v.path }));
-  bits.push(el("span", { text: t("skill_lines", { n: countLines(sk.draft) }) }));
-  if (sk.savedAt) bits.push(el("span", { text: t("skill_saved_at", { time: sk.savedAt.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) }) }));
-  $("skill-file").replaceChildren(...bits);
+  // The file line keeps its slots from the first paint (the path arrives with the fetch, "Last saved" after a save): empty or ghost text instead of missing elements
+  const path = $("skill-path");
+  path.textContent = v?.path ?? "";
+  if (v?.path) path.title = v.path; else path.removeAttribute("title");
+  $("skill-lines").textContent = t("skill_lines", { n: countLines(sk.draft) });
+  const saved = $("skill-saved");
+  saved.textContent = t("skill_saved_at", { time: (sk.savedAt ?? new Date(0)).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) });
+  saved.classList.toggle("ghost", !sk.savedAt);
   for (const id of SKILL_TABS) {
     const tab = $(`skill-tab-${id}`);
     tab.setAttribute("aria-selected", String(id === sk.tab));
@@ -290,7 +314,9 @@ function paintSkill() {
   $("skill-save").disabled = !skillEditable() || !dirty;
   $("skill-discard").disabled = !dirty;
   $("skill-reset").disabled = !skillEditable() || (v?.custom == null);
-  $("skill-reset-label").textContent = t(sk.resetArmed ? "skill_reset_confirm" : "skill_reset");
+  const resetLabel = $("skill-reset-label");
+  resetLabel.textContent = t(sk.resetArmed ? "skill_reset_confirm" : "skill_reset");
+  resetLabel.dataset.text = t("skill_reset_confirm"); // the longer text: the button keeps the width of the armed state
   $("skill-reset").classList.toggle("armed", sk.resetArmed);
 }
 
@@ -422,9 +448,8 @@ function chrome() {
   $("set-lede").textContent = t("set_lede");
   buildNav();
   $("set-nav").setAttribute("aria-label", t("set_nav_aria"));
-  for (const e of document.querySelectorAll("#set-nav [data-label]")) e.textContent = t(e.dataset.label);
-  $("skill-title").textContent = t("set_nav_skill");
-  $("skill-lede").textContent = t("set_lede_skill");
+  for (const e of document.querySelectorAll("#set-nav [data-label]")) setLabel(e, t(e.dataset.label));
+  paintLedes();
   buildSkillPane();
   paintSkill();
   const back = $("back");
@@ -485,4 +510,5 @@ function start() {
   loadSkill();
 }
 chrome();
+document.body.classList.add("ready");
 start();

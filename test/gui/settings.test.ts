@@ -155,7 +155,8 @@ before(async () => {
     await sleep(100);
   }
   token = readFileSync(join(dataDir, "token"), "utf8").trim();
-  ab("open", base + "/settings", "--viewport", "1280x800");
+  writeFileSync(join(home, "slow-api.js"), SLOW_API_SCRIPT);
+  ab("open", base + "/settings", "--viewport", "1280x800", "--init-script", join(home, "slow-api.js"));
   opened = true;
 });
 
@@ -212,7 +213,7 @@ gui("/settings#skill opens the Skill pane, a reload keeps it, and an unknown has
   ab("open", base + "/settings#skill");
   await waitFor("settings page", SET_READY);
   assert.deepEqual(visiblePane(), { legends: [], skill: true, hash: "#skill", current: "skill" });
-  assert.equal(text("#skill-title"), "Skill");
+  assert.equal(text("#pane-title"), "Skill");
   ab("reload");
   await waitFor("settings page after reload", SET_READY);
   assert.deepEqual(visiblePane(), { legends: [], skill: true, hash: "#skill", current: "skill" });
@@ -224,6 +225,65 @@ gui("/settings#skill opens the Skill pane, a reload keeps it, and an unknown has
   await waitFor("checkpoints pane", `document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane === "checkpoints"`);
   assert.deepEqual(visiblePane().legends, ["Progress checkpoints (recap)"]);
   ab("open", base + "/settings");
+});
+
+// ---- layout shift ----
+// A slow link: the settings GETs answer late (opt-in per tab through sessionStorage, set by slowApi()), so the fetched content really arrives after the first paint
+const SLOW_API_SCRIPT = `(() => {
+  const f = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    const ms = Number(sessionStorage.getItem("slow-api") || 0);
+    if (ms && /\\/api\\/(settings|skill)(\\?|$)/.test(url) && (!init || !init.method || init.method === "GET")) return new Promise((r) => setTimeout(r, ms)).then(() => f(input, init));
+    return f(input, init);
+  };
+})();`;
+const slowApi = (ms: number) => ev(`(sessionStorage.setItem("slow-api", "${ms}"), "ok")`);
+/** Start collecting layout-shift entries (the buffered ones since the navigation included); `hadRecentInput` ones are ignored */
+async function watchShifts() {
+  ev(`(() => {
+    window.__ls = [];
+    new PerformanceObserver((list) => { for (const e of list.getEntries()) if (!e.hadRecentInput) window.__ls.push({ value: e.value, nodes: e.sources.map((s) => (s.node && (s.node.id || s.node.className || s.node.tagName)) || "?") }); }).observe({ type: "layout-shift", buffered: true });
+    return "ok";
+  })()`);
+  await sleep(400); // the buffered entries arrive in a task of their own
+}
+const shiftScore = () => ev<{ score: number; entries: { value: number; nodes: string[] }[] }>(`JSON.stringify({ score: window.__ls.reduce((a, e) => a + e.value, 0), entries: window.__ls })`);
+const headBox = () => ev<number[]>(`JSON.stringify((() => { const b = (document.getElementById("pane-title")).getBoundingClientRect(); return [b.left, b.top]; })())`);
+
+gui("layout shift: loading /settings and /settings#skill (slow link) and switching through every pane shifts nothing; every pane's title sits at the same place", async () => {
+  try {
+    ab("open", base + "/settings");
+    await waitFor("settings page", SET_READY);
+    slowApi(300);
+    for (const hash of ["", "#skill"]) {
+      ab("open", "about:blank"); // a real load each time, not a hash change
+      ab("open", base + "/settings" + hash);
+      await waitFor("settings page loaded", `${hash ? SKILL_READY : SET_READY}`);
+      await watchShifts();
+      await sleep(500);
+      const r = shiftScore();
+      assert.ok(r.score < 0.001, `load of /settings${hash}: layout shift ${r.score} ${JSON.stringify(r.entries)}`);
+    }
+    slowApi(0);
+    // Switching panes: the title (h2) stays put, and nothing moves while the panes change
+    ab("open", base + "/settings");
+    await waitFor("settings page", SET_READY);
+    await watchShifts();
+    const pos: Record<string, number[]> = {};
+    for (const id of [...PANE_IDS, ...[...PANE_IDS].reverse()]) {
+      clickEl(`#set-nav [data-pane="${id}"]`);
+      await waitFor(`pane ${id}`, `document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane === "${id}"`);
+      await sleep(250);
+      pos[id] = headBox();
+      const first = Object.values(pos)[0]!;
+      assert.deepEqual(pos[id], first, `the title of the ${id} pane sits where the General title does`);
+    }
+    const r = shiftScore();
+    assert.ok(r.score < 0.001, `switching panes: layout shift ${r.score} ${JSON.stringify(r.entries)}`);
+  } finally {
+    try { slowApi(0); } catch {}
+  }
 });
 
 // ---- the Skill pane ----
@@ -432,7 +492,7 @@ gui("Skill pane in ja: labels, badge and the reset confirmation are Japanese", a
   try {
     await putSettings((s) => { s.lang = "ja"; });
     await openSkill();
-    assert.equal(text("#skill-title"), "スキル");
+    assert.equal(text("#pane-title"), "スキル");
     assert.equal(text("#skill-tab-edit"), "編集");
     assert.equal(text("#skill-save"), "保存");
     typeSkill("日本語の版\n");
