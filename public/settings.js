@@ -268,7 +268,9 @@ function paintSkill() {
   badge.hidden = !changed;
   if (changed) badge.textContent = t("skill_badge", { n: v.changed });
   $("skill-error").textContent = sk.loadError ? t("skill_load_failed", { message: sk.loadError }) : v && v.default === null ? t("skill_default_missing") : "";
-  const bits = [el("code", { text: t("skill_path") }), el("span", { text: t("skill_lines", { n: countLines(sk.draft) }) })];
+  const bits = [];
+  if (v?.path) bits.push(el("code", { text: v.path }));
+  bits.push(el("span", { text: t("skill_lines", { n: countLines(sk.draft) }) }));
   if (sk.savedAt) bits.push(el("span", { text: t("skill_saved_at", { time: sk.savedAt.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) }) }));
   $("skill-file").replaceChildren(...bits);
   for (const id of SKILL_TABS) {
@@ -323,6 +325,8 @@ function paintDiff() {
 
 /** Take a server view. `force` (or a clean editor) replaces the draft; a dirty draft is kept and `newer` is remembered */
 function applySkill(view, force = false) {
+  // The same view again (the reconnect refetch, the echo of our own save): nothing new, so no "newer version" notice
+  if (!force && JSON.stringify(view) === JSON.stringify(sk.view)) return;
   const clean = !skillDirty();
   if (!force && !clean) {
     sk.newer = view;
@@ -350,10 +354,19 @@ async function loadSkill() {
 async function saveSkill() {
   if (!skillEditable() || !skillDirty()) return;
   status(t("set_saving"));
+  const sent = sk.draft;
   try {
-    const view = await api("/api/skill", { method: "PUT", body: JSON.stringify({ text: sk.draft }) });
+    const view = await api("/api/skill", { method: "PUT", body: JSON.stringify({ text: sent }) });
     sk.savedAt = new Date();
-    applySkill(view, true);
+    if (sk.draft === sent) applySkill(view, true);
+    else {
+      // Typed while the request was in flight: the saved text becomes the baseline, the newer draft stays
+      sk.view = view;
+      sk.newer = null;
+      sk.loadError = null;
+      sk.loaded = view.custom ?? view.default ?? "";
+      paintSkill();
+    }
     status(t("set_saved"));
   } catch (e) {
     const msg = e.issues?.length ? e.issues.map((i) => i.message).join("; ") : e.message;

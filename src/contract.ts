@@ -771,6 +771,8 @@ export type SkillView = {
   stale: boolean;
   /** The ukagai version the user's version started from */
   baseVersion: string | null;
+  /** Where the user's version is (or would be) kept: <data-dir>/skill/SKILL.md; absent when the server has no data directory */
+  path?: string;
   /** Line diff, default → (custom ?? default); empty when the default is unreadable or the text is too big to diff */
   diff: DiffLine[];
   /** Added + removed lines of `diff` */

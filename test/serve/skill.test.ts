@@ -14,6 +14,12 @@ after(async () => {
   for (const d of roots) rmSync(d, { recursive: true, force: true });
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until(cond: () => boolean, what: string, ms = 3000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!cond() && Date.now() < end) await sleep(20);
+  assert.ok(cond(), `not in time: ${what}`);
+}
+const skillEvent = (env: { sse: string[] }) => env.sse.join("").split("\n\n").find((b) => b.startsWith("event: skill.updated"));
 
 type Env = { h: ServeHandle; url: string; dir: string; source: string; sse: string[] };
 async function boot(def: string | null = "line one\nline two\n"): Promise<Env> {
@@ -35,7 +41,7 @@ async function boot(def: string | null = "line one\nline two\n"): Promise<Env> {
       sse.push(dec.decode(value));
     }
   })();
-  await sleep(50);
+  await until(() => sse.join("").includes(": connected"), "the stream is connected"); // the hub's first line: the client is registered
   return { h, url: `http://127.0.0.1:${h.port}`, dir, source, sse };
 }
 const call = (env: Env, method: string, body?: unknown, o: { raw?: string; type?: string; auth?: boolean } = {}) =>
@@ -62,6 +68,7 @@ test("GET with no custom version: the default, an empty diff of unchanged lines"
   assert.equal(v.baseVersion, null);
   assert.equal(v.changed, 0);
   assert.ok(v.diff.every((d) => d.kind === "same"));
+  assert.equal(v.path, join(env.dir, "skill", "SKILL.md"), "the absolute path under --data-dir (shown by the Skill pane)");
 });
 
 test("PUT: 415 for a non-JSON body, 400 for empty / blank / missing / too big text; nothing is saved", async () => {
@@ -86,11 +93,12 @@ test("round trip: PUT saves the files and returns the view with a diff; GET retu
   assert.ok(v.baseVersion);
   assert.deepEqual(v.diff.filter((d) => d.kind !== "same").map((d) => `${d.kind}:${d.text}`), ["del:line two", "add:line 2", "add:line three"]);
   assert.equal(v.changed, v.diff.filter((d) => d.kind !== "same").length);
+  assert.equal(v.path, join(env.dir, "skill", "SKILL.md"));
   assert.equal(readFileSync(join(env.dir, "skill", "SKILL.md"), "utf8"), v.custom);
   assert.equal(readFileSync(join(env.dir, "skill", "base.md"), "utf8"), "line one\nline two\n");
   assert.deepEqual(await view(await call(env, "GET")), v);
-  await sleep(50);
-  const ev = env.sse.join("").split("\n\n").find((b) => b.startsWith("event: skill.updated"));
+  await until(() => skillEvent(env) !== undefined, "skill.updated after PUT");
+  const ev = skillEvent(env);
   assert.ok(ev, "skill.updated was broadcast");
   assert.deepEqual(JSON.parse(ev.split("data: ")[1]!), v);
 });
@@ -105,17 +113,15 @@ test("stale: the shipped skill changed after the first save", async () => {
 test("DELETE goes back to the default, removes the directory, broadcasts skill.updated", async () => {
   const env = await boot();
   await call(env, "PUT", { text: "mine\n" });
-  await sleep(100);
+  await until(() => skillEvent(env) !== undefined, "skill.updated after the first PUT");
   env.sse.length = 0;
   const r = await call(env, "DELETE");
   assert.equal(r.status, 200);
   const v = await view(r);
   assert.equal(v.custom, null);
   assert.equal(existsSync(join(env.dir, "skill")), false);
-  await sleep(50);
-  const ev = env.sse.join("").split("\n\n").find((b) => b.startsWith("event: skill.updated"));
-  assert.ok(ev);
-  assert.equal(JSON.parse(ev.split("data: ")[1]!).custom, null);
+  await until(() => skillEvent(env) !== undefined, "skill.updated after DELETE");
+  assert.equal(JSON.parse(skillEvent(env)!.split("data: ")[1]!).custom, null);
   assert.equal((await call(env, "DELETE")).status, 200); // nothing to remove is fine
 });
 
@@ -123,6 +129,7 @@ test("an unreadable default: GET says default null with an empty diff; PUT is re
   const env = await boot(null);
   const v = await view(await call(env, "GET"));
   assert.deepEqual({ default: v.default, custom: v.custom, diff: v.diff, changed: v.changed }, { default: null, custom: null, diff: [], changed: 0 });
+  assert.equal(v.path, join(env.dir, "skill", "SKILL.md"));
   assert.equal((await call(env, "PUT", { text: "mine\n" })).status, 503);
   assert.equal(existsSync(join(env.dir, "skill")), false);
 });
