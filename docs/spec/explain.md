@@ -399,6 +399,8 @@ The hook reads `lang` with `readConfig(dataDir)` (`<data-dir>/config.json`; defa
 - `en`: `Write the explanation file in English.`
 - `ja`: `Write the explanation file in Japanese (the human reads it in Japanese); section headings may be English or Japanese.`
 
+In Claude Code, when the hook input carries `scratchpad_dir`, the hook also copies the skill's `reference/` directory to `<scratchpad_dir>/ukagai/skill/reference/` (not directly under `ukagai/`, where every `*.md` counts as an explanation) and appends this sentence to line 2 (the text stays 5 lines): `The reference files of skill ukagai-explain are copied to <scratchpad_dir>/ukagai/skill/reference/ (read them there; the skill's own directory is outside the project and would ask for a permission).` The copy is fail open: when `reference/` is missing or the copy fails, nothing is copied and the sentence is not added. Codex gets neither the copy nor the sentence (`codexContextText` is unchanged).
+
 ```
 Before asking a human, read the code and verify with commands, and settle on one recommendation. If you cannot state in one sentence why only a human can decide (taste, external circumstances, an irreversible change, premises you cannot know), do not ask: proceed with the recommendation and report it.
 When you do ask, write the explanation the human reads as Markdown in {absolute location}/ following skill ukagai-explain. {language sentence}
@@ -430,6 +432,16 @@ The settings page can save an edited copy of `skills/ukagai-explain/SKILL.md` (`
 - **Plan context**: the two skill references point at the path (the first also says the skill is not to be read).
 - **Deny reasons** (section 7): `composeRaw` words the skill for the agent itself (it does not go through `forAgent`'s rewrite; only `AskUserQuestion` becomes `request_user_input` for Codex): `First read <path> (...)` and `The full format is in that file.`; the path is written once, and the 1000 / 1600 character limits apply as before.
 - The sentences about diagrams and about not opening files are in every text, with or without a version of the human's.
+
+### 8.3 The skill's reference files
+
+- Size gate: `test/skill/skill.test.ts` fails when `skills/ukagai-explain/SKILL.md` is over 8,000 UTF-8 bytes or 200 lines. Reason: Codex truncates a skill shipped by an agent plugin (root `plugin.json`) to 8,000 bytes when it is mentioned explicitly (`MAX_SKILL_PROMPT_BYTES` in openai/codex `codex-rs/ext/skills/src/render.rs`), and Claude Code keeps only the first 5,000 tokens of an invoked skill after auto-compaction.
+- SKILL.md keeps the hook-checked rules, the diagram rule and the "never open a file for the human" sentence verbatim, and no longer repeats what the SessionStart context already says. It does not teach standard Markdown or Mermaid syntax.
+- `skills/ukagai-explain/reference/` holds five files the agent reads only when needed: `checks.md` (every hook code with its limit, the exact word lists, the Japanese aliases), `writing.md`, `example.md` (a passing and a failing explanation), `blocker-and-quiz.md`, `plan-and-images.md`. SKILL.md links to them one level deep; they do not link further.
+- Install copies the whole skill directory (`SKILL.md` + `reference/`) to `~/.claude/skills/ukagai-explain/` (`.claude/skills/` with `--project`). `doctor` reports `missing <files> (run ukagai install)` when the copy is incomplete.
+- Uninstall removes the shipped entries and the directory when it is then empty. A file the human put there stays, and so does a `reference/` left by a newer version after a downgrade.
+- Scratchpad copy: section 8 (the SessionStart / SubagentStart sentence on line 2). It lands next to the human's edited `SKILL.md` of 8.2 (`<scratchpad_dir>/ukagai/skill/`), so the relative `reference/` links of an edited skill resolve as well.
+- Headless `claude -p`: the hook input has no `scratchpad_dir`, so there is no copy and no sentence. Reading `reference/` then needs `--add-dir ~/.claude/skills/ukagai-explain` or a `Read(~/.claude/skills/**)` allow rule. SKILL.md alone carries enough to write a first explanation (a skeleton and the check table).
 
 ## 9. ExitPlanMode
 
