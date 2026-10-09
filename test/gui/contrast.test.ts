@@ -345,6 +345,27 @@ gui("settings page (light, dark): all text in --fg or an accent, >= 7:1", async 
   }
 });
 
+gui("settings Skill pane (light, dark; edit, preview, diff, unsaved and reset armed): all text in --fg or an accent, >= 7:1", async () => {
+  const def = (await api("/api/skill")).default as string;
+  await api("/api/skill", { text: def + "\n# Heading\n\nA line the test added.\n" }, "PUT");
+  try {
+    for (const theme of ["light", "dark"] as const) {
+      ab("open", base + "/settings"); // a hash-only change would keep the page (and the armed reset button) of the previous round
+      await open("/settings#skill", "document.getElementById('skill-text') && !document.getElementById('skill-text').disabled && document.getElementById('skill-text').value.length > 0", theme);
+      // an unsaved edit shows the indicator and the newer-version notice is not needed here; arm the reset button too
+      ev(`(() => { const a = document.getElementById("skill-text"); a.value += " x"; a.dispatchEvent(new Event("input", { bubbles: true })); document.getElementById("skill-reset").click(); return "ok"; })()`);
+      for (const tab of ["edit", "preview", "diff"]) {
+        ev(`(document.getElementById("skill-tab-${tab}").click(), "ok")`);
+        await waitFor("status line gone", `!document.querySelector(".set-status.on") && getComputedStyle(document.querySelector(".set-status")).opacity === "0"`);
+        sweep(`skill ${tab} ${theme}`);
+      }
+      ev(`(document.getElementById("skill-discard").click(), "ok")`);
+    }
+  } finally {
+    await api("/api/skill", undefined, "DELETE");
+  }
+});
+
 gui("--muted is a readable tone (>= 6:1 on its panel) and only placeholders / disabled controls use it", async () => {
   await open("/settings", "document.querySelector('#form fieldset')", "light");
   const r = ev<{ muted: string; ratio: number }>(`(() => {

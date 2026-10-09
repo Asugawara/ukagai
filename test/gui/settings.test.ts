@@ -3,7 +3,7 @@
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -224,6 +224,162 @@ gui("/settings#skill opens the Skill pane, a reload keeps it, and an unknown has
   await waitFor("checkpoints pane", `document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane === "checkpoints"`);
   assert.deepEqual(visiblePane().legends, ["Progress checkpoints (recap)"]);
   ab("open", base + "/settings");
+});
+
+// ---- the Skill pane ----
+const SKILL_FILE = () => join(dataDir, "skill", "SKILL.md");
+const SKILL_READY = `(() => { const a = document.getElementById("skill-text"); return !!a && !a.disabled && a.value.length > 0; })()`;
+async function openSkill() {
+  ab("open", base + "/settings#skill");
+  await waitFor("skill pane loaded", SKILL_READY);
+}
+/** Type into the editor the way a user does: set the value and fire `input` */
+const typeSkill = (v: string) => setControl("#skill-text", v, "input");
+const skillVisible = (sel: string) => ev<boolean>(`!document.querySelector(${JSON.stringify(sel)}).hidden`);
+/** Leave no draft and no saved version behind: a dirty page would stop the next navigation with a beforeunload prompt */
+async function cleanSkill() {
+  try { ev(`(document.getElementById("skill-discard")?.click(), "ok")`); } catch {}
+  await api("/api/skill", undefined, "DELETE");
+}
+
+gui("Skill pane: edit and save writes <data-dir>/skill/SKILL.md; the unsaved indicator appears and clears; the badge shows; Ctrl+S saves too", async () => {
+  try {
+    await openSkill();
+    assert.equal(skillVisible("#skill-unsaved"), false);
+    assert.equal(skillVisible("#skill-badge"), false);
+    assert.equal(ev<boolean>(`document.getElementById("skill-save").disabled`), true);
+    const def = ev<string>(`document.getElementById("skill-text").value`);
+    assert.match(def, /ukagai-explain/);
+    typeSkill(def + "\nExtra line from the test.\n");
+    assert.equal(skillVisible("#skill-unsaved"), true);
+    assert.equal(text("#skill-unsaved"), "Unsaved changes");
+    clickEl("#skill-save");
+    await waitFor("file written", `!document.getElementById("skill-save") || document.getElementById("skill-unsaved").hidden`);
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), def + "\nExtra line from the test.\n");
+    assert.equal(skillVisible("#skill-badge"), true);
+    assert.match(text("#skill-badge"), /^Changed from default · \d+ lines$/);
+    assert.match(text("#skill-file"), /SKILL\.md/);
+    assert.match(text("#skill-file"), /Last saved/);
+    // Ctrl+S saves while the pane is shown (and the browser's own save is prevented)
+    typeSkill(def + "\nSecond edit.\n");
+    const prevented = ev<boolean>(`(() => { const e = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true }); document.dispatchEvent(e); return e.defaultPrevented; })()`);
+    assert.equal(prevented, true);
+    await waitFor("second save", `document.getElementById("skill-unsaved").hidden`);
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), def + "\nSecond edit.\n");
+    // Discard restores the last loaded text
+    typeSkill("scribble");
+    assert.equal(skillVisible("#skill-unsaved"), true);
+    clickEl("#skill-discard");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), def + "\nSecond edit.\n");
+    assert.equal(skillVisible("#skill-unsaved"), false);
+    // an empty text is refused by the server and kept as a draft
+    typeSkill("   ");
+    clickEl("#skill-save");
+    await waitFor("save error", `document.getElementById("skill-error").textContent !== ""`);
+    assert.equal(readFileSync(SKILL_FILE(), "utf8"), def + "\nSecond edit.\n");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: Reset to default asks twice, then removes <data-dir>/skill/", async () => {
+  try {
+    await openSkill();
+    assert.equal(ev<boolean>(`document.getElementById("skill-reset").disabled`), true, "nothing to reset yet");
+    const def = ev<string>(`document.getElementById("skill-text").value`);
+    typeSkill(def + "\nmine\n");
+    clickEl("#skill-save");
+    await waitFor("saved", `document.getElementById("skill-unsaved").hidden && !document.getElementById("skill-badge").hidden`);
+    assert.ok(existsSync(SKILL_FILE()));
+    clickEl("#skill-reset");
+    assert.equal(text("#skill-reset-label"), "Click again to reset");
+    assert.ok(existsSync(SKILL_FILE()), "one click does not reset");
+    clickEl("#skill-reset");
+    await waitFor("reset", `document.getElementById("skill-badge").hidden`);
+    assert.equal(existsSync(join(dataDir, "skill")), false);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), def);
+    assert.equal(text("#skill-reset-label"), "Reset to default");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: a settings change from another client (theme, SSE settings.updated) does not touch the draft", async () => {
+  try {
+    await openSkill();
+    typeSkill("a draft the test typed");
+    await putSettings((s) => { s.theme = "dark"; });
+    await waitFor("dark theme applied", `document.documentElement.dataset.theme === "dark"`);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "a draft the test typed");
+    assert.equal(skillVisible("#skill-unsaved"), true);
+    // the form was rebuilt meanwhile and the pane is still the Skill one
+    assert.equal(ev<string>("location.hash"), "#skill");
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: a PUT /api/skill from another client reloads a clean editor; a dirty draft stays and offers 'Load it'", async () => {
+  try {
+    await openSkill();
+    const r1 = await api("/api/skill", { text: "saved elsewhere 1\n" }, "PUT");
+    assert.equal(r1.custom, "saved elsewhere 1\n");
+    await waitFor("clean editor follows", `document.getElementById("skill-text").value === ${JSON.stringify("saved elsewhere 1\n")}`);
+    assert.equal(skillVisible("#skill-badge"), true);
+    typeSkill("my unsaved draft");
+    await api("/api/skill", { text: "saved elsewhere 2\n" }, "PUT");
+    await waitFor("newer notice", `!document.getElementById("skill-newer").hidden`);
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "my unsaved draft");
+    clickEl("#skill-load-newer");
+    assert.equal(ev<string>(`document.getElementById("skill-text").value`), "saved elsewhere 2\n");
+    assert.equal(skillVisible("#skill-unsaved"), false);
+    assert.equal(skillVisible("#skill-newer"), false);
+    // a reset from elsewhere brings the default back
+    await api("/api/skill", undefined, "DELETE");
+    await waitFor("default again", `document.getElementById("skill-badge").hidden && /ukagai-explain/.test(document.getElementById("skill-text").value)`);
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane: tabs have tab semantics and arrow keys; Preview renders a heading and drops images; Diff shows the saved diff", async () => {
+  try {
+    await openSkill();
+    assert.equal(ev<string>(`document.getElementById("skill-tabs").getAttribute("role")`), "tablist");
+    assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#skill-tabs [role=tab]")].map((b) => b.getAttribute("aria-selected") + ":" + b.dataset.icon + ":" + b.querySelector("svg").dataset.icon))`), ["true:undefined:square-pen", "false:undefined:eye", "false:undefined:git-compare"]);
+    ev(`document.getElementById("skill-tab-edit").focus(), "ok"`);
+    // arrow keys act on the focused tab: dispatch on it
+    ev(`(document.getElementById("skill-tab-edit").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })), "ok")`);
+    await waitFor("preview tab", `document.getElementById("skill-tab-preview").getAttribute("aria-selected") === "true"`);
+    assert.equal(skillVisible("#skill-view-preview"), true);
+    assert.equal(skillVisible("#skill-view-edit"), false);
+    assert.equal(ev<boolean>(`document.activeElement === document.getElementById("skill-tab-preview")`), true);
+    // switch back, type markdown, preview it
+    clickEl("#skill-tab-edit");
+    typeSkill("# Heading from the test\n\nSome **bold** text ![pic](http://example.invalid/x.png) and <script>window.__x = 1</script>\n");
+    clickEl("#skill-tab-preview");
+    assert.equal(text("#skill-view-preview h1"), "Heading from the test");
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-view-preview img").length`), 0);
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-view-preview script").length`), 0);
+    assert.equal(ev<boolean>(`window.__x === undefined`), true);
+    // Diff: nothing saved, no difference; after a save the changed lines show
+    clickEl("#skill-tab-diff");
+    assert.match(text("#skill-diff"), /No difference/);
+    assert.ok(text("#skill-diff-note").length > 0);
+    clickEl("#skill-save");
+    await waitFor("saved", `document.getElementById("skill-unsaved").hidden && !document.getElementById("skill-badge").hidden`);
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-diff .set-diff-add").length`) > 0, true);
+    assert.equal(ev<number>(`document.querySelectorAll("#skill-diff .set-diff-del").length`) > 0, true);
+  } finally { await cleanSkill(); }
+});
+
+gui("Skill pane in ja: labels, badge and the reset confirmation are Japanese", async () => {
+  try {
+    await putSettings((s) => { s.lang = "ja"; });
+    await openSkill();
+    assert.equal(text("#skill-title"), "スキル");
+    assert.equal(text("#skill-tab-edit"), "編集");
+    assert.equal(text("#skill-save"), "保存");
+    typeSkill("日本語の版\n");
+    assert.equal(text("#skill-unsaved"), "保存していない変更があります");
+    clickEl("#skill-save");
+    await waitFor("saved", `document.getElementById("skill-unsaved").hidden && !document.getElementById("skill-badge").hidden`);
+    assert.match(text("#skill-badge"), /^既定から変更あり · \d+ 行$/);
+    clickEl("#skill-reset");
+    assert.equal(text("#skill-reset-label"), "もう一度押すと既定に戻します");
+  } finally { await cleanSkill(); await putSettings(); }
 });
 
 gui("the page renders in en and ja; the language select re-renders it and saves", async () => {
