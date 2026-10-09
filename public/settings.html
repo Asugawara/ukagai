@@ -2,7 +2,7 @@
 <html lang="en" data-lang="en">
 <head>
 <meta charset="utf-8">
-<!-- The server injects lang / data-lang (and data-theme when pinned) into <html>; the form is built by settings.js -->
+<!-- The server injects lang / data-lang (and data-theme when pinned) into <html>; the sidebar and the form are built by settings.js -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ukagai · Settings</title>
 <link rel="icon" href="/public/favicon.svg" type="image/svg+xml">
@@ -12,9 +12,24 @@
 <body class="settings-page">
 <div class="set" role="main">
   <a id="back" class="set-back" href="/"></a>
-  <h1 id="set-title"></h1>
-  <p id="set-lede" class="muted"></p>
-  <div id="form"></div>
+  <div class="set-head">
+    <h1 id="set-title"></h1>
+    <p id="set-lede"></p>
+  </div>
+  <div class="set-layout">
+    <nav id="set-nav" class="set-nav"></nav>
+    <div class="set-main">
+      <div id="pane-head">
+        <h2 id="pane-title"></h2>
+        <p id="pane-lede" class="set-pane-lede"></p>
+      </div>
+      <div id="form"></div>
+      <section id="pane-skill" hidden>
+        <h2 id="skill-title"></h2>
+        <p id="skill-lede" class="set-pane-lede"></p>
+      </section>
+    </div>
+  </div>
 </div>
 <div id="status" class="set-status" role="status" aria-live="polite"></div>
 <script type="module" src="/public/settings.js"></script>
