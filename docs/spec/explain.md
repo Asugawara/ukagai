@@ -418,6 +418,18 @@ The Codex context (`codexContextText`) carries a shorter sentence on its format 
 - The launcher (`bin/ukagai`) covers the case where no Node.js 22+ is found. A SessionStart hook then prints one line to the agent, `ukagai: Node.js 22 or newer was not found; the ukagai hooks are inactive. Re-run install.sh or set UKAGAI_NODE.`, and exits 0. Other hook events print nothing.
 - With `--no-autostart` it does nothing (`install --no-autostart` puts it in the SessionStart args). SubagentStart does nothing. Failures are swallowed (fail open).
 
+### 8.2 The human's edited skill (`<data-dir>/skill/SKILL.md`)
+
+The settings page can save an edited copy of `skills/ukagai-explain/SKILL.md` (`GET/PUT/DELETE /api/skill`, `docs/spec/api.md`). The installed skill file is never touched (`ukagai install` overwrites it; the plugin cache is replaced on update). Instead the hook texts point at the human's file when it exists:
+
+- **Resolving** (`resolveSkillRef` in `src/hook/skill-ref.ts`, once per hook run, synchronous, fail open): when `<data-dir>/skill/SKILL.md` is a readable regular file, then with a `scratchpad_dir` in the hook input (Claude Code) it is copied (overwrite) to `<scratchpad_dir>/ukagai/skill/SKILL.md` and that path is used (a file under `~/.ukagai` is outside the project and asks for an approval in every mode but auto; the scratchpad is readable without one); without a scratchpad (Codex) the data-dir file itself is used. The copy is in `ukagai/skill/`, **not** directly in `ukagai/`, because `findExplanation` (section 5) takes every `*.md` directly under `ukagai/` for an explanation. Any error, a missing file or a directory in its place gives `undefined`: the texts are today's. It runs in SessionStart / SubagentStart, `--plan-context` and the AskUserQuestion / ExitPlanMode deny path, so a version saved mid-session reaches the next run.
+- **Passing**: the path is an explicit `skillRef?: string` of `contextText`, `codexContextText`, `planContextText` and `DenyParams`; the text builders never look it up themselves.
+- **Claude SessionStart**: line 2 says `following <path> (the human's edited version of skill <name>: read that file and do not read skill <name>; it replaces it)` and the palette reference in line 4 is the path. Still 5 lines.
+- **Codex SessionStart**: line 2 gets the sentence `The human edited these rules in <path>: read it before writing an explanation file; where it differs from the format above, the file wins.` No new line.
+- **Plan context**: the two skill references point at the path (the first also says the skill is not to be read).
+- **Deny reasons** (section 7): `composeRaw` words the skill for the agent itself (it does not go through `forAgent`'s rewrite; only `AskUserQuestion` becomes `request_user_input` for Codex): `First read <path> (...)` and `The full format is in that file.`; the path is written once, and the 1000 / 1600 character limits apply as before.
+- The sentences about diagrams and about not opening files are in every text, with or without a version of the human's.
+
 ## 9. ExitPlanMode
 
 - No separate file is required. `tool_input.plan` (the plan body) is checked.
