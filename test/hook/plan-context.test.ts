@@ -26,12 +26,20 @@ test("the text names every plan section and the palette, is English and at most 
   for (const s of ["# Title", "## Scope and reversibility", "Reversibility: reversible|costly|irreversible", "Scope: file|repo|machine|external", "## Steps", "bold title", "## Risks", "[!CAUTION]", "## Verification", "task list", "<!-- ukagai-explain -->", "<!-- /ukagai-explain -->"]) {
     assert.ok(t.includes(s), s);
   }
-  for (const s of ["callouts with titles", "task lists", "<details>", "Mermaid of any type", 'title="src/x.ts"', "```diff", "==mark==", "::: columns", "![meaningful alt](shots/x.png)", "next to the plan file"]) {
+  for (const s of ["callouts with titles", "task lists", "<details>", "Mermaid of any type", 'title="src/x.ts"', "```diff", "==mark==", "::: columns", "![meaningful alt](/…/scratchpad/ukagai/x.png)", "absolute path", "before ExitPlanMode"]) {
     assert.ok(t.includes(s), s);
   }
   assert.ok(t.includes('skill ukagai-explain, section "Rich Markdown (ukagai dialect)", or /repo/docs/spec/markdown.md.'));
   assert.ok(!planContextText(null).includes("/docs/spec/markdown.md"));
   assert.doesNotMatch(t, /[ぁ-んァ-ン一-龥]/);
+});
+
+test("plan mode may write the scratchpad: the old no-write wording is gone from the hook text and the skill", () => {
+  const skill = readFileSync(new URL("../../skills/ukagai-explain/SKILL.md", import.meta.url), "utf8");
+  for (const [name, text] of [["planContextText", planContextText(null)], ["SKILL.md", skill]] as const) {
+    for (const s of ["next to the plan file", "only file you may write", "write no image"]) assert.ok(!text.includes(s), `${name}: ${s}`);
+    assert.ok(text.includes("before ExitPlanMode"), name);
+  }
 });
 
 test("the default text names the repo's docs/spec/markdown.md when it exists", () => {
