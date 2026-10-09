@@ -37,14 +37,14 @@ export function placeSkill(dest: string): void {
 
 /**
  * Remove the shipped entries from dest, then the directory itself. A directory that is not empty stays: the human's own files, or
- * the extra reference/ of a newer version after a downgrade. Returns whether anything existed.
+ * the extra reference/ of a newer version after a downgrade. Returns the names of the entries that were removed.
  */
-export function removeSkill(dest: string): boolean {
-  if (sameDir(dest, SKILL_DIR)) return false;
-  let any = false;
+export function removeSkill(dest: string): string[] {
+  if (sameDir(dest, SKILL_DIR)) return [];
+  const removed: string[] = [];
   for (const e of shipped()) {
     const p = join(dest, e);
-    if (existsSync(p)) any = true;
+    if (existsSync(p)) removed.push(e);
     rmSync(p, { recursive: true, force: true });
   }
   try {
@@ -52,7 +52,7 @@ export function removeSkill(dest: string): boolean {
   } catch {
     // not empty or already gone
   }
-  return any;
+  return removed;
 }
 
 /** SKILL.md is the marker, so an old SKILL.md-only copy is still found */

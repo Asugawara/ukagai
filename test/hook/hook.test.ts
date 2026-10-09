@@ -668,12 +668,23 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
       assert.ok(!existsSync(dest));
       assert.doesNotMatch(ctx, /copied to/);
     }
-    const sp2 = mkdtempSync(join(tmpdir(), "ukagai-sp-"));
-    const none = await runHook(["--data-dir", tmpDir(), "--no-autostart"], input());
+    const dd = tmpDir();
+    const none = await runHook(["--data-dir", dd, "--no-autostart"], input());
     assert.doesNotMatch(JSON.parse(none.stdout).hookSpecificOutput.additionalContext, /copied to/);
-    assert.ok(!existsSync(join(sp2, "ukagai")));
+    assert.ok(!existsSync(join(dd, "explain", "s1", "skill")), "no scratchpad: nothing is copied under the data-dir fallback");
   });
 }
+
+test("Codex: no copy of reference/ and no sentence about it", async () => {
+  const sp = mkdtempSync(join(tmpdir(), "ukagai-sp-"));
+  const r = await runHook(
+    ["--agent", "codex", "--data-dir", tmpDir(), "--no-autostart"],
+    JSON.stringify({ session_id: "s1", transcript_path: "/t", cwd: "/c", scratchpad_dir: sp, hook_event_name: "SessionStart" }),
+  );
+  const ctx: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+  assert.doesNotMatch(ctx, /copied to/);
+  assert.ok(!existsSync(join(sp, "ukagai", "skill")));
+});
 
 test("copyReference copies a given source, skips dotfiles, and fails open on a missing source", () => {
   const src = mkdtempSync(join(tmpdir(), "ukagai-ref-"));

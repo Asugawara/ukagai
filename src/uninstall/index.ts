@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { unifiedDiff } from "../settings/diff.js";
@@ -80,9 +81,9 @@ async function uninstallClaude(t: Target, emit: (s: string) => void): Promise<vo
     emit(`settings: removed the ukagai hooks from ${t.settingsFile}\n`);
     if (bak) emit(`backup:   ${bak}\n`);
   } else emit("settings: no ukagai hooks are registered\n");
-  if (skillExists) {
-    removeSkill(t.skillDir);
-    emit(`skill:    removed ${t.skillDir}/\n`);
+  if (t.handleSkill && existsSync(t.skillDir)) {
+    const removed = removeSkill(t.skillDir);
+    if (removed.length > 0) emit(`skill:    removed ${removed.join(", ")} from ${t.skillDir}/\n`);
   }
 }
 

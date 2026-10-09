@@ -2,7 +2,7 @@ import { cleanEnv } from "./clean-env.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, writeFile, readdir, stat, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, readdir, stat, mkdir, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { symlink, chmod, rm } from "node:fs/promises";
@@ -610,4 +610,35 @@ test("doctor: a missing launcher is ×", async () => {
   await writeFile(e.settings, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: join(e.dir, "gone"), args: ["hook", "--managed-by", "ukagai"] }] }] } }));
   const r = await ukagai(e, ["doctor", "--settings", e.settings, "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")]);
   assert.match(r.out, /× +launcher .*missing or not executable/);
+});
+
+test("a skill dir that is a symlink to the checkout survives install and uninstall (sameDir guard)", async () => {
+  const e = await setup();
+  await mkdir(join(e.home, ".claude", "skills"), { recursive: true });
+  const link = SKILL_HOME(e);
+  await symlink(SKILL_DIR, link);
+  const files = await shippedFiles();
+  assert.ok(files.some((f) => f.startsWith("reference/")), "the checkout ships reference/ files");
+  const check = async (when: string): Promise<void> => {
+    for (const f of files) assert.ok(await exists(join(SKILL_DIR, f)), `${f} still exists ${when}`);
+    assert.ok((await lstat(link)).isSymbolicLink(), `the symlink still exists ${when}`);
+  };
+  const i = await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  assert.equal(i.code, 0, i.err);
+  await check("after install");
+  const u = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
+  assert.equal(u.code, 0, u.err);
+  await check("after uninstall");
+});
+
+test("uninstall removes an empty leftover skill directory, and prints no skill line when nothing was removed", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  const dir = SKILL_HOME(e);
+  for (const n of await readdir(dir)) await rm(join(dir, n), { recursive: true, force: true });
+  assert.ok(await exists(dir));
+  const r = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(!(await exists(dir)), "the empty directory is gone");
+  assert.doesNotMatch(r.out, /skill:/);
 });

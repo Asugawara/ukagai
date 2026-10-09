@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { buildHookEntries, HOOK_EVENTS } from "../settings/hooks-spec.js";
@@ -59,9 +60,9 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
       emit(`settings: removed the ukagai hooks from ${t.settingsFile}\n`);
       if (bak) emit(`backup:   ${bak}\n`);
     }
-    if (t.handleSkill && hasSkill(t.skillDir)) {
-      removeSkill(t.skillDir);
-      emit(`skill:    removed ${t.skillDir}/\n`);
+    if (t.handleSkill && existsSync(t.skillDir)) {
+      const removed = removeSkill(t.skillDir);
+      if (removed.length > 0) emit(`skill:    removed ${removed.join(", ")} from ${t.skillDir}/\n`);
     }
     emit(pluginLine(plugin) + "\n");
     return o.dataDir;
