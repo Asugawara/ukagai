@@ -17,7 +17,14 @@ The GUI reads the file in layers; write each piece so it works at its layer.
 - Honesty: if you checked nothing, say so in Why, not as a footnote. Mark guesses as guesses.
 - Affected: concrete names, not "the code" or "some files".
 
-## Headline (a real case: three English opening lines for a README)
+## Headline
+
+- Bad: "I recommend the first one." Which option is that? Denied (`recommend_name`).
+- Good: "I recommend the option that keeps the tagline 'Decisions made by humans, together'. Choose another if the tagline matters less than the install steps." The label is quoted and a condition follows.
+
+### (a Japanese-setting case)
+
+Three English opening lines for a README, explained in Japanese:
 
 - Bad: 「説明文の1つ目を勧める。」 Which card is that? Denied (`recommend_name`).
 - Good: 「『Decisions made by humans, together』の標語を残す案を勧める。標語の印象を優先するなら、この案。」 The label is quoted, so it matches one card, and the condition for another option follows.

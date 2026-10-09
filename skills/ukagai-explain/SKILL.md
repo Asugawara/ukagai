@@ -7,7 +7,7 @@ description: "Write an explanation file before asking a human to decide. Use it 
 
 Write the explanation a human needs to decide as Markdown, then ask the same question with AskUserQuestion. The SessionStart context gives the format, location and language; this file adds what the hook checks. A question is denied once, so the first file must pass.
 
-Reference files are under this skill's directory in `reference/`. Claude Code: read them from the directory the SessionStart context names (`<scratchpad>/ukagai/skill/reference/`); the `reference/` next to this file is outside the project and asks for a permission. Codex: read `reference/<name>.md` relative to this file; ask with `request_user_input` in Plan mode, else as the last sentence of the reply (the SessionStart context says which). Answer values `None of these — …` / `Cannot answer — …` stay English.
+Reference files are under this skill's directory in `reference/`. Claude Code: read them from the directory the SessionStart context names (`<scratchpad>/ukagai/skill/reference/`); the `reference/` next to this file is outside the project and asks for a permission. Codex: read `reference/<name>.md` relative to this file; ask with `request_user_input` in Plan mode, else as the last sentence of the reply (the context says which).
 
 ## Before you ask
 
@@ -45,7 +45,7 @@ Optional H2s: Counterargument, Affected, Terms, Diagram, Related diff; no others
 
 | Code | Limit |
 |---|---|
-| `front_matter` `question` `recommended` `table` | `ukagai: 1`; `question` equals the call's; `recommended` is a label; 2+ rows, no empty cell |
+| `front_matter` `question` `recommended` `table` | `ukagai: 1`; `question` equals the call's; `recommended` is a label; table: columns named like happens / risk, one row per option, no empty cell |
 | `recommend_long` `recommend_name` `recommend_cond` | 5 sentences / 400 characters (aim for 3 sentences); first sentence names the option (never "the first one"); needs "if …, B" / when / unless |
 | `cell_long` `undo` | 160 characters per cell (aim for 2 sentences); each risk cell says how to undo, or that it cannot be |
 | `why_long` `assumptions_long` `against_weak` | 600 characters; at most 3; Counterargument must not repeat the Recommendation |

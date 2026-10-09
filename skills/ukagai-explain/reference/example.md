@@ -63,10 +63,11 @@ Starting with SQLite avoids the later migration entirely, and a migration writte
 ## Diagram
 
 ```mermaid
-flowchart LR
-  S[serve] -->|append| J[decisions.jsonl]
-  J -->|restore pending at startup| S
-  J -.migrate when needed.-> Q[(SQLite)]
+sequenceDiagram
+  serve->>decisions.jsonl: append each decision
+  serve->>decisions.jsonl: read all lines at startup
+  decisions.jsonl-->>serve: pending decisions restored
+  serve->>SQLite: export lines later, if search is needed
 ```
 
 ## What I checked
@@ -109,4 +110,4 @@ What is wrong:
 - One row, pros / cons / cost columns, empty cells.
 - No reason a human must decide.
 - The question was paraphrased, so it cannot be matched.
-- The diagram is decoration that does not help the decision.
+- The diagram is decoration that does not help the decision (a flowchart of 3 nodes, 2 of them filler: `diagram_trivial`).
