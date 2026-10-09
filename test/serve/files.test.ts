@@ -229,3 +229,58 @@ test("html: 2 MB cap, .htm too, roots still enforced, a plan's page works throug
   assert.equal(plan.status, 200);
   assert.match(await plan.text(), /src="\/api\/files\?plan=p\.md&amp;path=/);
 });
+
+test("a plan document's relative path also resolves against the session's <scratchpad>/ukagai, after the plans dir; roots unchanged", async () => {
+  const e = await env();
+  const plans = join(e.home, ".claude", "plans");
+  put(join(plans, "p.md"), "# P\n");
+  put(join(e.scratch, "ukagai", "mock.html"), '<img src="shot.png">');
+  put(join(e.scratch, "ukagai", "shot.png"));
+  put(join(e.scratch, "secret.png")); // inside the scratchpad but above ukagai/: reachable by ../ from ukagai/, as the absolute path already is
+  const outside = put(join(tmp(), "out.png"));
+
+  const block = await e.explained(join(plans, "x.md#ukagai-explain"), "pb");
+  const page = await e.fileOf(block, "mock.html");
+  assert.equal(page.status, 200);
+  assert.ok(page.headers.get("content-security-policy")?.startsWith("sandbox"));
+  const html = await page.text();
+  const m = html.match(/src="(\/api\/files\?[^"]+)"/);
+  assert.ok(m, html);
+  assert.equal((await e.get(m[1]!.slice("/api/files?".length).replace(/&amp;/g, "&"), false)).status, 200); // the rewritten shot.png, authorised by its tag
+
+  const own = await e.approve(join(plans, "p.md"), "ap");
+  assert.equal((await e.fileOf(own, "mock.html")).status, 200);
+  assert.equal((await e.fileOf(own, "shot.png")).status, 200);
+
+  put(join(plans, "mock.html"), "<p>plans first</p>");
+  assert.equal(await (await e.fileOf(own, "mock.html")).text(), "<p>plans first</p>");
+
+  assert.equal((await e.fileOf(block, "../../../../../../out.png")).status, 404);
+  assert.equal((await e.fileOf(block, outside)).status, 404);
+  assert.equal((await e.fileOf(block, "../secret.png")).status, 200); // above ukagai/ but inside the scratchpad: the same reach as its absolute path
+  assert.equal((await e.fileOf(block, join(e.scratch, "secret.png"))).status, 200);
+  assert.equal((await e.fileOf(block, "../../../../../../etc/hosts.png")).status, 404); // leaves the scratchpad: no root
+
+  // no scratchpad_dir on the decision: nothing to fall back to
+  const bare = await fetch(`${e.url}/api/decisions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${e.h.token}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      tool_use_id: "tu-bare",
+      kind: "approve_plan",
+      session: { session_id: "sess-bare", cwd: "/nonexistent-ukagai-cwd", transcript_path: join(e.home, ".claude", "projects", "p", "sess-bare.jsonl") },
+      request: { plan: "# P\n", planFilePath: join(plans, "p.md") },
+    }),
+  });
+  assert.equal(bare.status, 201);
+  const bareId = ((await bare.json()) as { id: string }).id;
+  assert.equal((await e.fileOf(bareId, "shot.png")).status, 404);
+
+  // the plan= drawer has no session: unchanged
+  assert.equal((await e.get(`plan=p.md&path=${encodeURIComponent("shot.png")}`)).status, 404);
+  // a standalone explanation file gets no fallback: its session has a scratchpad_dir, but shot.png exists only under <scratch>/ukagai, not next to this file
+  put(join(e.dataDir, "explain", "sa", "own.png"));
+  const standalone = await e.explained(join(e.dataDir, "explain", "sa", "ex.md"), "sa");
+  assert.equal((await e.fileOf(standalone, "own.png")).status, 200); // its own dir is the root
+  assert.equal((await e.fileOf(standalone, "shot.png")).status, 404);
+});

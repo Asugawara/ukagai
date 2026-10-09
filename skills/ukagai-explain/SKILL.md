@@ -51,7 +51,7 @@ When asking several questions in order, read the answers to the earlier ones and
 
 ## In plan mode
 
-In plan mode the plan file (named in the plan-mode system message) is the only file you may write, so the explanation of an AskUserQuestion goes **into the plan file**: append one block per question, then call AskUserQuestion with the same question.
+In plan mode the explanation of an AskUserQuestion goes **into the plan file** (the only Markdown you write there; the session's scratchpad stays writable for mockups and screenshots, see Screenshots): append one block per question, then call AskUserQuestion with the same question.
 
 ```
 <!-- ukagai-explain -->
@@ -289,9 +289,9 @@ A plan has these sections, in this order. Nothing but "Scope and reversibility" 
 
 ### Screenshots
 
-For a UI decision show, do not describe. Take the picture with agent-browser into the document's own folder, then reference it with a relative path and alt text the TUI reader can use on its own:
+For a UI decision show, do not describe. Take the picture with agent-browser into `<scratchpad_dir>/ukagai/` (the document's own folder, for an explanation file), then reference it with a relative path from an explanation file, or with the absolute path from a plan file (a relative path in a plan resolves against `~/.claude/plans/`), and alt text the TUI reader can use on its own:
 
-`<scratchpad_dir>/ukagai` is the folder the SessionStart context names (the explanation files live there). In plan mode write no image: reference one only if the file already exists next to the plan file.
+`<scratchpad_dir>/ukagai` is the folder the SessionStart context names (the explanation files live there). It stays writable in plan mode: when a plan hinges on a visual choice (UI variants, layouts), build the candidates there and ask with AskUserQuestion before ExitPlanMode; never schedule "make the mockups" as a step after approval. Reference a file only once it exists.
 
 ```bash
 mkdir -p <scratchpad_dir>/ukagai/shots
@@ -302,6 +302,12 @@ agent-browser close
 
 ```markdown
 ![Settings page, dark theme: the Display group is selected](shots/settings-dark.png)
+```
+
+From a plan file use the absolute path:
+
+```markdown
+![Settings page, dark theme: the Display group is selected](/private/tmp/claude-…/scratchpad/ukagai/shots/settings-dark.png)
 ```
 
 Only `.png` / `.jpg` / `.jpeg` / `.gif` / `.webp` up to 10 MB, under the document's folder, `~/.claude/plans/` or the scratchpad, are shown; external `http(s)` images never are.

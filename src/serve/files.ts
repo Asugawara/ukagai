@@ -54,7 +54,12 @@ export function documentDir(docPath: string): string {
  * is a validated standalone explanation file (its directory is under <data-dir>/explain, a scratchpad or ~/.ukagai/explain); a plan-block explanation
  * (anywhere under $HOME) or a plan file never makes its own directory a root, so the result must lie under a fixed root.
  */
-export type DocumentScope = { baseDir: string; root?: string };
+export type DocumentScope = {
+  baseDir: string;
+  root?: string;
+  /** Tried in order when a relative path is not found against `baseDir`: for a plan document, the decision session's `<scratchpad_dir>/ukagai`. No root or scratchpad check is relaxed */
+  fallbackDirs?: string[];
+};
 
 function inScratchpad(file: string): boolean {
   for (const t of new Set(["/private/tmp", "/tmp", tmpdir()])) {
@@ -71,15 +76,17 @@ function inScratchpad(file: string): boolean {
  */
 export function resolveDocumentFile(written: string, scope: DocumentScope, home: string, dataDir: string | undefined): string | null {
   if (!written || written.includes("\0") || !FILE_TYPES[extname(written).toLowerCase()]) return null;
-  const candidate = isAbsolute(written) ? written : resolve(scope.baseDir, written);
+  const candidates = isAbsolute(written) ? [written] : [resolve(scope.baseDir, written), ...(scope.fallbackDirs ?? []).map((d) => resolve(d, written))];
   const roots = [...(scope.root ? [scope.root] : []), plansDir(home), ...(dataDir ? [dataDir] : [])];
-  for (const r of roots) {
-    const root = real(r);
-    const file = root && realFileUnder(root, candidate);
-    if (file && FILE_TYPES[extname(file).toLowerCase()] && usable(file)) return file;
+  for (const candidate of candidates) {
+    for (const r of roots) {
+      const root = real(r);
+      const file = root && realFileUnder(root, candidate);
+      if (file && FILE_TYPES[extname(file).toLowerCase()] && usable(file)) return file;
+    }
+    const file = real(candidate);
+    if (file && inScratchpad(file) && FILE_TYPES[extname(file).toLowerCase()] && usable(file)) return file;
   }
-  const file = real(candidate);
-  if (file && inScratchpad(file) && FILE_TYPES[extname(file).toLowerCase()] && usable(file)) return file;
   return null;
 }
 
