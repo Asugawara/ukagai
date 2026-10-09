@@ -135,7 +135,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Repository root (two levels up from both src/settings and dist/settings) */
 export const REPO_ROOT = resolve(here, "../..");
 export const CLI_PATH = join(REPO_ROOT, "dist", "cli.js");
-export const SKILL_SOURCE = join(REPO_ROOT, "skills", "ukagai-explain", "SKILL.md");
+export const SKILL_DIR = join(REPO_ROOT, "skills", "ukagai-explain");
+/** The shipped SKILL.md itself: the default text the settings page shows and the human may edit */
+export const SKILL_SOURCE = join(SKILL_DIR, "SKILL.md");
 
 /** How a hook command is spelled in the registered settings */
 export interface Invocation {

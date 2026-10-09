@@ -104,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 | `docs/spec/explain.md` | エージェントが書く説明ファイルと、hook の検証ルール |
 | `docs/spec/markdown.md` | 説明とプランを書くための Markdown 方言 |
 | `docs/verification/` | 実環境での検証記録（01 質問の注入、02 Codex の hooks と hook の限界、03 E2E、04 プラン作成時の文脈、05 プランの指示と approve-and-auto、06 起こされたターンと進捗チェック） |
-| `skills/ukagai-explain/SKILL.md` | Claude に説明の書き方を教えるスキル |
+| `skills/ukagai-explain/` | Claude に説明の書き方を教えるスキル（`SKILL.md`）と、必要なときに読む `reference/` のファイル |
 
 ## 開発
 

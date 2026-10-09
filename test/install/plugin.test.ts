@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { enabledClaudePlugin, enabledCodexPlugin } from "../../src/settings/plugins.js";
 
 const CLI = resolve("src/cli.ts");
@@ -62,7 +62,7 @@ test("install with the plugin enabled removes settings hooks and the skill copy,
   const after = JSON.parse(await readFile(e.settings, "utf8"));
   assert.equal(after.hooks, undefined);
   assert.deepEqual(after.enabledPlugins, PLUGIN.enabledPlugins);
-  assert.ok(!(await exists(e.skill)));
+  assert.ok(!(await exists(dirname(e.skill))), "the skill directory is gone");
   assert.match(await readFile(join(e.dir, "data", "config.json"), "utf8"), /"en"/);
 });
 

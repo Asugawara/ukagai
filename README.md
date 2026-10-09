@@ -102,7 +102,7 @@ Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troublesho
 | `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
 | `docs/spec/markdown.md` | The Markdown dialect explanations and plans are written in |
 | `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 wake-up turns and the progress check) |
-| `skills/ukagai-explain/SKILL.md` | The skill that teaches Claude how to write explanations |
+| `skills/ukagai-explain/` | The skill (`SKILL.md`) that teaches Claude how to write explanations, plus the `reference/` files it reads when needed |
 
 ## Development
 

@@ -132,7 +132,7 @@ Have the agent write "an explanation for the human to decide with". In place of 
 
 | Layer | Mechanism | Role |
 |---|---|---|
-| How to write | skill `ukagai-explain` (`skills/ukagai-explain/SKILL.md`. install places it in `~/.claude/skills/`) | The format of the explanation file, guidance on what to turn into a diagram and what into a table, good and bad examples |
+| How to write | skill `ukagai-explain` (the skill directory `skills/ukagai-explain/`: `SKILL.md` + `reference/`; install places it in `~/.claude/skills/`) | The format of the explanation file, guidance on what to turn into a diagram and what into a table, good and bad examples |
 | Advance instruction | SessionStart and SubagentStart hooks (both sync) put three lines of instruction and the absolute save path into `additionalContext` | Raises the rate at which the first call has an explanation and reduces deny round trips. Async would only reach the next turn, so sync |
 | Insurance | The PreToolUse hook looks for the explanation file, and if it is missing or malformed makes the agent rewrite it with `deny` + reason | A one-time insurance for when the instruction was not followed. That the round trip works is confirmed in E4 |
 
@@ -158,7 +158,7 @@ GUI rendering: Markdown (headings, tables, code blocks), Mermaid (`mermaid.min.j
 - The default is `~/.claude/settings.json`. `--project` for `.claude/settings.json`, `--settings <file>` for an arbitrary file (use this during development so hooks are not applied to my own sessions).
 - Merge without breaking existing hooks, and take `settings.json.bak-<timestamp>` before writing. `--dry-run` shows the diff. `ukagai uninstall` removes only its own registrations.
 - Write the command in exec form (no shell involved, so it does not break when the path has spaces): `{"type":"command","command":"<process.execPath>","args":["<repo>/dist/cli.js","hook","--budget","<timeout - 10>"],"timeout":<timeout>,"statusMessage":"ukagai: waiting for an answer in the GUI"}`. `--budget` is derived from the settings `timeout`.
-- Copy the skill `ukagai-explain` to `~/.claude/skills/ukagai-explain/SKILL.md` (`.claude/skills/` with `--project`). `uninstall` removes it.
+- Copy the skill directory to `~/.claude/skills/ukagai-explain/` (`SKILL.md` + `reference/`; `.claude/skills/` with `--project`). `uninstall` removes the shipped entries and the directory when it is then empty.
 - Registered hooks:
 
 | event | matcher | timeout (seconds) | sync / async |
