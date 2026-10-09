@@ -28,7 +28,7 @@ TypeScript (ESM, NodeNext), Node >= 22, npm, Hono + `@hono/node-server`, zod, `n
 
 ## Language
 
-English is the default for code, comments, tests, docs, the skill, CLI output and everything the hook says to the agent. Only the GUI / TUI display language is selectable (`en` | `ja`), stored in `<data-dir>/config.json` by `install --lang`.
+English is the default for code, comments, tests, docs, the skill, CLI output and everything the hook says to the agent. Only the GUI / TUI display language is selectable (`en` | `ja`), stored in `<data-dir>/config.json`. `install` creates it with a locale-derived value only when it is missing; the language is changed on the Settings page.
 
 ## Don'ts
 

@@ -12,7 +12,7 @@ You can also run the server yourself with `ukagai serve` (http://127.0.0.1:4818)
 
 `[` `]` and `Tab` switch pending decisions (`←` `→` do so only where there is no plan zone: questions, checkpoints, short plans). `b` opens the list of pending decisions.
 
-The `--lang` chosen at install time is stored in `<data-dir>/config.json` (default data dir: `~/.ukagai`). Without `--lang`, `ukagai install` asks on a TTY (Enter for `en`), uses `en` otherwise, and keeps an existing config. The agent writes its explanations in the same language. `ukagai install` backs up your settings before writing.
+The language is stored in `<data-dir>/config.json` (default data dir: `~/.ukagai`) and changed on the Settings page (below). When `ukagai install` finds no `config.json` it creates one whose language comes from your locale (`ja` if the first non-empty of `LC_ALL`, `LC_MESSAGES`, `LANG` starts with `ja`, otherwise `en`); an existing config is never touched. A plugin-only user never runs `install`, so they start in `en` and switch on the Settings page. The agent writes its explanations in the same language. `ukagai install` backs up your settings before writing.
 
 ## Plan approval
 
@@ -71,7 +71,7 @@ Typing goes to the terminal whatever is in the agent's composer: an unsent draft
 
 ## Settings
 
-Open <http://127.0.0.1:4818/settings> (the header's `Settings` link, or the `,` key in the GUI). Every control saves the moment you change it, to `<data-dir>/config.json` (default `~/.ukagai/config.json`, next to the `lang` that `install --lang` writes), and takes effect without restarting the server. `Esc` goes back.
+Open <http://127.0.0.1:4818/settings> (the header's `Settings` link, or the `,` key in the GUI). Every control saves the moment you change it, to `<data-dir>/config.json` (default `~/.ukagai/config.json`, next to the initial `lang` that `install` writes), and takes effect without restarting the server. `Esc` goes back.
 
 - **Display**: language (`en` / `ja`; the TUI follows it unless started with `--lang`), theme (system / light / dark), and whether the bottom key-hint line is shown.
 - **Progress checkpoints (recap)**: create them at all (off: no recap from Claude Code or Codex becomes a card; cards already waiting stay), how long Codex has to be quiet after a turn (30 to 3600 s), and whether replies are typed into the agent's herdr pane (off: they wait for the agent's next tool call).
@@ -95,15 +95,21 @@ The same hook can serve Codex CLI: `ukagai hook --agent codex` (default `--agent
 ### Install and uninstall
 
 ```sh
-ukagai install --codex --dry-run   # preview the changes to ~/.codex/hooks.json and ~/.codex/config.toml
-ukagai install --codex             # Codex only; add --claude to register Claude Code too
+ukagai install --dry-run      # preview: which agents were found and what would change
+ukagai install                # register the hooks and the skill for every agent found
+ukagai install --codex        # only Codex CLI (--claude: only Claude Code), found or not
+ukagai install --refresh      # re-register only the agents that are already registered
 ```
 
-`ukagai uninstall` stops the server once no ukagai hooks remain (after a Claude-only or Codex-only uninstall it is left running while the other agent still has hooks); `<data-dir>` (`~/.ukagai`: config, history, logs) stays until you `rm -rf` it.
+`ukagai install` registers every agent it finds: Claude Code when an executable `claude` is on `PATH`, or `~/.claude.json` or `~/.claude/projects/` exists (a bare `~/.claude` does not count: an old install or uninstall can leave it behind); Codex CLI when an executable `codex` is on `PATH`, or `<Codex home>/sessions/` exists (`--codex-home <dir>`, then `$CODEX_HOME`, then `~/.codex`). It prints an `agents:` line with what it found and why (for example `Claude Code (claude on PATH), Codex CLI (~/.codex/sessions)`; `registered` under `--refresh`, `requested` when you named the agent), a `lang:` line (not on `--dry-run`) that points at the Settings page, and a closing `next:` line once an agent was registered. If nothing is found it says so and exits 0. `--claude` / `--codex` (or `--settings` / `--project`) name the agents yourself and skip the detection. In the automatic mode and with `--refresh`, a failure in one agent is reported on stderr (`claude: error: …` / `codex: error: …`) and the other agent is still done; the exit code is then 1. With an explicit `--claude` / `--codex` an error stops the command as it always did (`ukagai install: …`, exit 1). A second `install` that would change nothing writes no file and makes no backup (the settings line says `(unchanged)`).
 
-`install --codex` merges ukagai's handlers (PreToolUse `request_user_input`, PermissionRequest, Stop, SessionStart, SessionEnd; re-run `install --codex` after upgrading to pick up SessionEnd). SessionEnd arrives when Codex shuts the session down (possibly minutes after the TUI quit); the bridge then cancels the thread's pending progress card and forgets the thread.
+An agent that is already registered keeps its options when `install` registers it again: `--timeout`, `--observe`, `--no-autostart`, `--server` and `--data-dir` are read back from the existing hooks, and only the options you pass override them. `install.sh` runs `ukagai install` the first time and `ukagai install --refresh` on an upgrade or a reinstall; `--refresh` touches only the agents that are already registered, found or not. To put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. `install.sh` ignores the old `--lang`, `--codex` and `--claude` with a warning, and `ukagai install`, `uninstall` and `doctor` ignore `--lang` with a warning too (the value is skipped unless it starts with `-`).
 
-The handlers go into `$CODEX_HOME/hooks.json` (default `~/.codex`; `--codex-home <dir>` overrides) without touching other hooks, and the matching `[hooks.state."…"]` trust hashes go into `config.toml`, so Codex does not show "Hooks need review". Only those tables are edited: an existing `hooks.json` keeps its indentation (tabs / spaces), final-newline state and key order, and both files get a `.bak-<time>` copy. `uninstall --codex` restores the original bytes (files `install` created are deleted again; what install did is recorded in `<CODEX_HOME>/.ukagai-codex.json`, without that record nothing is deleted). `install` never touches Codex without `--codex`; `uninstall --codex` and `doctor --codex` mirror it.
+`ukagai uninstall` removes both Claude Code and Codex CLI (`--claude` or `--codex` picks one; `--dry-run` previews). It stops the server once no ukagai hooks remain (after a one-agent uninstall it is left running while the other agent still has hooks). Without `--claude` / `--codex`, a failure in one agent (`codex: error: …`) does not stop the other from being removed; the exit code is 1 and the server is left running, with a `server:   left running (an agent failed above; …)` line, so run `uninstall` again once it is fixed; `<data-dir>` (`~/.ukagai`: config, history, logs) stays until you `rm -rf` it. It never creates `~/.codex` for a user without Codex.
+
+For Codex, `install` merges ukagai's handlers (PreToolUse `request_user_input`, PermissionRequest, Stop, SessionStart, SessionEnd; an upgrade re-registers them, which picks up new ones such as SessionEnd). SessionEnd arrives when Codex shuts the session down (possibly minutes after the TUI quit); the bridge then cancels the thread's pending progress card and forgets the thread.
+
+The handlers go into `$CODEX_HOME/hooks.json` (default `~/.codex`; `--codex-home <dir>` overrides) without touching other hooks, and the matching `[hooks.state."…"]` trust hashes go into `config.toml`, so Codex does not show "Hooks need review". Only those tables are edited: an existing `hooks.json` keeps its indentation (tabs / spaces), final-newline state and key order, and both files get a `.bak-<time>` copy. `uninstall --codex` restores the original bytes (files `install` created are deleted again; what install did is recorded in `<CODEX_HOME>/.ukagai-codex.json`, without that record nothing is deleted). `install` touches Codex only when it is found (or named with `--codex`); `uninstall --codex` and `doctor --codex` act on Codex alone.
 
 ### What Codex covers
 
@@ -135,7 +141,7 @@ Every abnormal exit (and each retry) is recorded as one JSON line in `<data-dir>
 
 ## Troubleshooting
 
-- **First step: `ukagai doctor`.** It diagnoses the hook registration and the connection to the server (`--server <url>`, `--data-dir <dir>` point it elsewhere; add `--codex` for Codex CLI) and shows the last lines of `hook.log`. A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. It also reports a double registration (`install.sh` plus the plugin) as a problem.
+- **First step: `ukagai doctor`.** It diagnoses the hook registration and the connection to the server (`--server <url>`, `--data-dir <dir>` point it elsewhere) and shows the last lines of `hook.log`. Without `--claude` / `--codex` it checks the agents that are registered or whose plugin is enabled; if there are none, the agents found; if still none, Claude Code. Each agent gets its own hint, for example `run: ukagai install --codex`. A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. It also reports a double registration (`install.sh` plus the plugin) as a problem.
 - **Doctor says "not started yet".** The server only starts at your first `claude` session (or run `ukagai serve`), so before that `ukagai doctor` reports the server and token lines as "not started yet" and still prints `no problems`; once the token exists, an unreachable server is a problem.
 - **`hook.log`.** `<data-dir>/hook.log` (default `~/.ukagai/hook.log`) holds one JSON line per abnormal exit or retry: ids, status and error text, never the question or the answer.
 - **"Pending N" never appears.** The hook did not register a decision: check that `ukagai doctor` shows the hooks registered, that `UKAGAI_DISABLE=1` is not set in that shell, and that you restarted `claude` after installing. For a plan file, remember it pops up only when its session is known and the agent has stopped; otherwise it waits in the list under `b` (see Settings, Plans). The tab title and icon only count decisions that are pending.
