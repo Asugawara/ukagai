@@ -174,13 +174,65 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   });
 }
 
+const PANE_IDS = ["general", "notifications", "plans", "checkpoints", "skill"];
+const FIELDSET_PANE: Record<string, string> = { general: "Display", notifications: "Notifications", plans: "Plans", checkpoints: "Progress checkpoints (recap)" };
+/** Which panes are visible: the visible fieldset legends plus whether the skill section shows */
+const visiblePane = () => ev<{ legends: string[]; skill: boolean; hash: string; current: string | null }>(`JSON.stringify({
+  legends: [...document.querySelectorAll("#form fieldset")].filter((f) => !f.hidden).map((f) => f.querySelector("legend").textContent),
+  skill: !document.getElementById("pane-skill").hidden,
+  hash: location.hash,
+  current: document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane ?? null,
+})`);
+
+gui("the sidebar: items in order, each with a Lucide icon; clicking one shows only its pane and sets the hash", async () => {
+  await openSettings();
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#set-nav .set-nav-item")].map((a) => a.dataset.pane))`), PANE_IDS);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#set-nav .set-nav-item")].map((a) => a.textContent))`), ["General", "Notifications", "Plans", "Progress checkpoints", "Skill"]);
+  assert.equal(text("#set-nav .set-nav-group"), "Agent");
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#set-nav .set-nav-item")].map((a) => a.querySelector("svg")?.dataset.icon))`), ["settings", "bell", "file-text", "clock", "book-open"]);
+  assert.equal(ev<string>(`document.querySelector("#back svg")?.dataset.icon`), "chevron-left");
+  // General is the default pane, and the other fieldsets stay in the DOM
+  assert.deepEqual(visiblePane(), { legends: ["Display"], skill: false, hash: "", current: "general" });
+  assert.equal(ev<number>(`document.querySelectorAll("#form fieldset").length`), 4);
+  for (const id of PANE_IDS) {
+    clickEl(`#set-nav [data-pane="${id}"]`);
+    await waitFor(`hash #${id}`, `location.hash === "#${id}"`);
+    assert.deepEqual(visiblePane(), { legends: id === "skill" ? [] : [FIELDSET_PANE[id]!], skill: id === "skill", hash: `#${id}`, current: id });
+    assert.ok(text("#pane-title") !== "" || id === "skill");
+  }
+  // The pane survives a re-render (a save re-renders #form)
+  clickEl(`#set-nav [data-pane="plans"]`);
+  await waitFor("plans pane", `location.hash === "#plans"`);
+  clickEl("#opt-0");
+  await waitFor("saved", `document.querySelector("#status").textContent === "Saved"`);
+  assert.deepEqual(visiblePane().legends, ["Plans"]);
+});
+
+gui("/settings#skill opens the Skill pane, a reload keeps it, and an unknown hash falls back to General", async () => {
+  ab("open", base + "/settings#skill");
+  await waitFor("settings page", SET_READY);
+  assert.deepEqual(visiblePane(), { legends: [], skill: true, hash: "#skill", current: "skill" });
+  assert.equal(text("#skill-title"), "Skill");
+  ab("reload");
+  await waitFor("settings page after reload", SET_READY);
+  assert.deepEqual(visiblePane(), { legends: [], skill: true, hash: "#skill", current: "skill" });
+  ab("open", base + "/settings#nope");
+  await waitFor("settings page", SET_READY);
+  assert.deepEqual(visiblePane(), { legends: ["Display"], skill: false, hash: "#nope", current: "general" });
+  // Back/forward (hashchange) follows too
+  ev(`(location.hash = "#checkpoints", "ok")`);
+  await waitFor("checkpoints pane", `document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane === "checkpoints"`);
+  assert.deepEqual(visiblePane().legends, ["Progress checkpoints (recap)"]);
+  ab("open", base + "/settings");
+});
+
 gui("the page renders in en and ja; the language select re-renders it and saves", async () => {
   await openSettings();
   assert.equal(ev<string>("document.documentElement.dataset.lang"), "en");
   assert.equal(text("#set-title"), "Settings");
   assert.equal(ev<string>("document.title"), "ukagai · Settings");
   assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["Display", "Progress checkpoints (recap)", "Plans", "Notifications"]);
-  assert.equal(text("#back"), "← Back");
+  assert.equal(text("#back"), "Back");
   assert.equal(ev<string>(`document.querySelector("#back").getAttribute("href")`), "/");
   setControl("#lang", "ja", "change");
   await waitFor("page in ja", `document.querySelector("#set-title").textContent === "設定"`);

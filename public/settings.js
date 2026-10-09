@@ -1,12 +1,27 @@
 // The settings page (/settings): every control saves at once with PUT /api/settings (the whole object, validated by the server).
 import { api } from "./api.js";
 import { t } from "./i18n.js";
+import { icon } from "./icons.js";
 
 const $ = (id) => document.getElementById(id);
 const DELAY_MIN = 30; // same limits as CODEX_DELAY_MIN_S / MAX_S in src/contract.ts
 const DELAY_MAX = 3600;
 
 let s = null; // the saved settings
+// The sidebar panes, in sidebar order. `fieldset` panes show one fieldset of #form (matched by data-pane); the skill pane is its own section.
+const PANES = [
+  { id: "general", icon: "settings", label: "set_nav_general", lede: "set_lede_general" },
+  { id: "notifications", icon: "bell", label: "set_nav_notifications", lede: "set_lede_notifications" },
+  { id: "plans", icon: "file-text", label: "set_nav_plans", lede: "set_lede_plans" },
+  { id: "checkpoints", icon: "clock", label: "set_nav_checkpoints", lede: "set_lede_checkpoints" },
+  { group: "set_nav_agent" },
+  { id: "skill", icon: "book-open", label: "set_nav_skill", lede: "set_lede_skill" },
+];
+const paneOf = (id) => PANES.find((p) => p.id === id);
+/** The pane named by the URL hash; an empty or unknown hash is General. Kept outside the DOM: render() rebuilds #form on every save / SSE / reconnect */
+const paneFromHash = () => (paneOf(location.hash.slice(1))?.id) ?? "general";
+let pane = paneFromHash();
+
 let idSeq = 0; // checkbox ids are stable across renders (the focused control keeps its focus)
 
 function el(tag, props = {}, ...children) {
@@ -85,8 +100,8 @@ function select(label, id, value, options, onChange) {
   return el("div", { class: "set-row" }, el("label", { for: id, text: label }), sel);
 }
 
-function fieldset(title, ...rows) {
-  return el("fieldset", {}, el("legend", { text: title }), ...rows);
+function fieldset(paneId, title, ...rows) {
+  return el("fieldset", { "data-pane": paneId }, el("legend", { text: title }), ...rows);
 }
 
 // ---- instruction presets: one per line, saved when the box loses focus (the server trims, drops blank lines and checks the limits) ----
@@ -145,33 +160,69 @@ function render() {
   });
 
   form.replaceChildren(
-    fieldset(t("set_g_display"),
+    fieldset("general", t("set_g_display"),
       select(t("set_lang"), "lang", s.lang, [["en", "English"], ["ja", "日本語"]], (v) => save((n) => { n.lang = v; })),
       select(t("set_theme"), "theme", s.theme, [["system", t("set_theme_system")], ["light", t("set_theme_light")], ["dark", t("set_theme_dark")]], (v) => save((n) => { n.theme = v; })),
       toggle(t("set_hints"), "", () => s.hints, (n, v) => { n.hints = v; })),
-    fieldset(t("set_g_checkpoints"),
+    fieldset("checkpoints", t("set_g_checkpoints"),
       toggle(t("set_cp_enabled"), t("set_cp_enabled_help"), () => s.checkpoints.enabled, (n, v) => { n.checkpoints.enabled = v; }),
       el("div", { class: "set-row" }, el("label", { for: delayId, text: t("set_cp_delay") }), delay, el("p", { class: "set-help", text: t("set_cp_delay_help") }), delayErr),
       toggle(t("set_cp_terminal"), t("set_cp_terminal_help"), () => s.checkpoints.terminal_delivery, (n, v) => { n.checkpoints.terminal_delivery = v; })),
-    fieldset(t("set_g_plans"),
+    fieldset("plans", t("set_g_plans"),
       toggle(t("set_plans_auto"), t("set_plans_auto_help"), () => s.plans.auto_show, (n, v) => { n.plans.auto_show = v; }),
       presetsBox()),
-    fieldset(t("set_g_notify"),
+    fieldset("notifications", t("set_g_notify"),
       toggle(t("set_n_sound"), t("set_n_sound_help"), () => s.notify.sound, (n, v) => { n.notify.sound = v; }),
       toggle(t("set_n_browser"), t("set_n_browser_help"), () => s.notify.browser, (n, v) => { n.notify.browser = v; }, {
         before: browserToggle,
         note: () => el("p", { class: "set-help", id: "perm-state", text: permText() }),
       }),
       toggle(t("set_n_badge"), "", () => s.notify.title_badge, (n, v) => { n.notify.title_badge = v; })));
+  showPane();
   if (focused) $(focused)?.focus?.();
 }
+
+// ---- sidebar ----
+// Built once (the links keep their focus across renders); chrome() only refreshes the labels
+function buildNav() {
+  const nav = $("set-nav");
+  if (nav.childElementCount) return;
+  nav.append(...PANES.map((p) => p.group
+    ? el("div", { class: "set-nav-group", "data-label": p.group })
+    : el("a", { class: "set-nav-item", href: `#${p.id}`, "data-pane": p.id }, icon(p.icon), el("span", { "data-label": p.label }))));
+}
+
+/** Show the active pane only: its fieldset (the others stay in the DOM, hidden), or the skill section; mark it in the sidebar */
+function showPane() {
+  const p = paneOf(pane);
+  for (const f of document.querySelectorAll("#form fieldset")) f.hidden = f.dataset.pane !== pane;
+  $("pane-skill").hidden = pane !== "skill";
+  $("pane-head").hidden = pane === "skill";
+  $("pane-title").textContent = t(p.label);
+  $("pane-lede").textContent = t(p.lede);
+  for (const a of document.querySelectorAll("#set-nav .set-nav-item")) {
+    if (a.dataset.pane === pane) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
+}
+
+window.addEventListener("hashchange", () => {
+  pane = paneFromHash();
+  showPane();
+});
 
 // ---- start ----
 // The static chrome (back link, title) is filled before anything is fetched, so a failed load still has a way back
 function chrome() {
-  $("back").textContent = t("set_back");
   $("set-title").textContent = t("set_title");
   $("set-lede").textContent = t("set_lede");
+  buildNav();
+  $("set-nav").setAttribute("aria-label", t("set_nav_aria"));
+  for (const e of document.querySelectorAll("#set-nav [data-label]")) e.textContent = t(e.dataset.label);
+  $("skill-title").textContent = t("set_nav_skill");
+  $("skill-lede").textContent = t("set_lede_skill");
+  const back = $("back");
+  back.replaceChildren(icon("chevron-left"), el("span", { text: t("set_back") }));
+  showPane();
   document.title = `ukagai · ${t("set_title")}`;
 }
 
