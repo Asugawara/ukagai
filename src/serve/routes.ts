@@ -276,8 +276,11 @@ export function createApp(deps: AppDeps): Hono {
     if (decisionId !== undefined) {
       const d = store.get(decisionId);
       const p = d?.explanation?.path;
-      if (p) scope = p.endsWith(PLAN_BLOCK_SUFFIX) ? { baseDir: documentDir(p) } : { baseDir: documentDir(p), root: documentDir(p) };
-      else if (d?.kind === "approve_plan" && d.plan_name) scope = { baseDir: plansDir(deps.home) }; // plan_name is set only for a plan file inside the plans dir
+      // a plan document's relative paths also try the session's <scratchpad>/ukagai after the plans dir (the plan cannot sit next to its mockups)
+      const sp = d?.session.scratchpad_dir;
+      const fallbackDirs = sp ? [join(sp, "ukagai")] : undefined;
+      if (p) scope = p.endsWith(PLAN_BLOCK_SUFFIX) ? { baseDir: documentDir(p), fallbackDirs } : { baseDir: documentDir(p), root: documentDir(p) };
+      else if (d?.kind === "approve_plan" && d.plan_name) scope = { baseDir: plansDir(deps.home), fallbackDirs }; // plan_name is set only for a plan file inside the plans dir
     } else if (planName !== undefined && isPlanFile(planName)) scope = { baseDir: plansDir(deps.home) };
     if (!scope) return notFound();
     try {
