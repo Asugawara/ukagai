@@ -1,6 +1,7 @@
 #!/bin/sh
 # ukagai installer: downloads a release tarball, verifies it and links bin/ukagai.
-# Usage: curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh -s -- [--lang en|ja] [--codex] [--claude]
+# Usage: curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh -s -- [--version vX.Y.Z] [--force]
+# It then runs "ukagai install", which registers the hooks for every agent found (Claude Code, Codex CLI).
 set -eu
 
 REPO=Asugawara/ukagai
@@ -11,7 +12,6 @@ DATA_DIR=${UKAGAI_DATA_DIR:-$HOME/.ukagai}
 PORT=${UKAGAI_PORT:-4818}
 
 V=${UKAGAI_VERSION:-}
-INSTALL_ARGS=""
 FORCE=0
 NODE_BIN=""
 NODE_REAL=""
@@ -24,22 +24,20 @@ err() { echo "ukagai-install: error: $*" >&2; }
 
 usage_text() {
   cat <<USAGE
-usage: install.sh [--version vX.Y.Z] [--lang en|ja] [--codex] [--claude] [--force]
+usage: install.sh [--version vX.Y.Z] [--force]
   --version   install this version (default: latest release)
-  --lang      GUI language, passed to "ukagai install"
-  --codex     register the Codex CLI hooks (Codex only; add --claude for Claude Code too)
-  --claude    register the Claude Code hooks ("ukagai install")
   --force     replace an existing non-ukagai file at the bin path
+It then runs "ukagai install": the first time it registers the hooks for every agent found
+(Claude Code, Codex CLI); on an upgrade it re-registers the agents that are already registered.
+The language is set on the Settings page, not here.
 env: UKAGAI_VERSION UKAGAI_NODE UKAGAI_DOWNLOADER=curl|wget UKAGAI_BASE_URL
      UKAGAI_HOME UKAGAI_BIN_DIR UKAGAI_DATA_DIR UKAGAI_PORT (server probed while pruning, default 4818)
-Note: --lang / --codex / --claude register the hooks in the real ~/.claude and ~/.codex
-(there is no --settings pass-through); UKAGAI_DATA_DIR is forwarded as --data-dir.
+Note: the hooks go into the real ~/.claude and ~/.codex (there is no --settings pass-through);
+UKAGAI_DATA_DIR is forwarded as --data-dir.
 USAGE
 }
 
 usage() { usage_text >&2; }
-
-add_arg() { INSTALL_ARGS="$INSTALL_ARGS $1"; }
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -48,13 +46,13 @@ parse_args() {
         [ $# -ge 2 ] || { usage; exit 2; }
         V=$2; shift 2 ;;
       --version=*) V=${1#--version=}; shift ;;
-      --lang)
-        [ $# -ge 2 ] || { usage; exit 2; }
-        case $2 in en|ja) ;; *) usage; exit 2 ;; esac
-        add_arg "--lang $2"; shift 2 ;;
-      --codex) add_arg --codex; shift ;;
-      --claude) add_arg --claude; shift ;;
       --force) FORCE=1; shift ;;
+      --lang)
+        say "warning: --lang is ignored; change the language on the Settings page"
+        shift
+        case ${1:-} in ''|-*) ;; *) shift ;; esac ;;
+      --lang=*) say "warning: --lang is ignored; change the language on the Settings page"; shift ;;
+      --codex|--claude) say "warning: $1 is ignored; ukagai install registers every agent it finds (ukagai install $1 picks one)"; shift ;;
       -h|--help) usage_text; exit 0 ;;
       *) usage; exit 2 ;;
     esac
@@ -261,24 +259,24 @@ path_hint() {
   echo "  fish:     fish_add_path $BIN_DIR" >&2
 }
 
-post() {
-  if [ -n "$INSTALL_ARGS" ]; then
-    # shellcheck disable=SC2086
-    set -- install $INSTALL_ARGS
-    # forward a non-default data dir so config.json and node-path land in the same place
-    if [ "$DATA_DIR" != "$HOME/.ukagai" ]; then
-      set -- "$@" --data-dir "$DATA_DIR"
-    fi
-    if [ -t 0 ]; then
-      "$BIN_DIR/ukagai" "$@"
-    else
-      "$BIN_DIR/ukagai" "$@" </dev/null
-    fi
-  else
-    say "ukagai $V installed: $BIN_DIR/ukagai"
-    echo "Next: ukagai install --lang ja   (Claude Code)" >&2
-    echo "      ukagai install --codex   (Codex CLI)" >&2
+# first install: register every agent found; upgrade or reinstall: re-register the registered ones, keeping their options
+register() {
+  # a version that does not know --refresh (an old --version) registers nothing
+  if ! "$BIN_DIR/ukagai" install --help </dev/null 2>/dev/null | grep -q -- --refresh; then
+    say "ukagai $V registers hooks with: ukagai install --claude / --codex"
+    return 0
   fi
+  if [ -n "$PREV" ]; then set -- install --refresh; else set -- install; fi
+  # forward a non-default data dir so config.json and node-path land in the same place
+  if [ "$DATA_DIR" != "$HOME/.ukagai" ]; then
+    set -- "$@" --data-dir "$DATA_DIR"
+  fi
+  "$BIN_DIR/ukagai" "$@" </dev/null || say "warning: hook registration failed; fix the above and run: ukagai $*"
+}
+
+post() {
+  say "ukagai $V installed: $BIN_DIR/ukagai"
+  register
   if [ -n "$PREV" ] && [ "$PREV" != "$V" ]; then
     say "upgraded $PREV -> $V. If a ukagai server is running it restarts at the next session start; or: pkill -f \"cli.js serve\""
   elif [ "$DEV_SERVER" = 1 ]; then

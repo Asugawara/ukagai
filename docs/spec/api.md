@@ -310,7 +310,7 @@ The settings page (`/settings`) edits `<data-dir>/config.json` through these two
 
 ```json
 {
-  "lang": "en",                      // "en" | "ja": GUI / TUI display language (also what `install --lang` sets)
+  "lang": "en",                      // "en" | "ja": GUI / TUI display language (`install` creates `config.json` with a locale-derived value only when the file is missing)
   "theme": "system",                 // "system" | "light" | "dark": the GUI sets <html data-theme> (system = prefers-color-scheme)
   "hints": true,                     // false hides the GUI's bottom key-hint line
   "checkpoints": {
@@ -333,9 +333,9 @@ The settings page (`/settings`) edits `<data-dir>/config.json` through these two
 
 A failed write (for example a read-only data directory) is a 500 `{ "error": "internal error" }` and **changes nothing**: the new values become current, reach the listeners and are broadcast only after the file was written (tmp + rename), so the server never runs on values that are not on disk. Concurrent `PUT`s are applied one after another (the last one wins, memory and file agree). Keys the schema does not know are stripped without an error.
 
-`install --lang` rewrites `config.json` behind a running server's back; the server does not watch the file. A `PUT` that leaves `lang` as the server has it keeps the file's `lang` (so the install is not written over); other fields changed in the file by hand need a restart of `serve` (or any `PUT`, which writes the server's values).
+`install` creates `config.json` (with `lang` from the locale: `ja` when the first non-empty of `LC_ALL`, `LC_MESSAGES`, `LANG` starts with `ja`, otherwise `en`) only when the file is missing, and never rewrites an existing one; the server does not watch the file. Fields changed in the file by hand need a restart of `serve` (or any `PUT`, which writes the server's values).
 
-`config.json` is read tolerantly (`readConfig`): a missing or malformed file, or any unknown / invalid field, falls back to that field's default and never throws (a key an older version wrote is ignored); `writeConfig` writes the whole object. `install --lang` keeps the other settings. Not settings: ports, the data directory, hook budgets, the Codex home.
+`config.json` is read tolerantly (`readConfig`): a missing or malformed file, or any unknown / invalid field, falls back to that field's default and never throws (a key an older version wrote is ignored); `writeConfig` writes the whole object. Not settings: ports, the data directory, hook budgets, the Codex home.
 
 Live application, without a restart: the recap watcher, the Codex bridge (`codex_delay_s` at arm time) and the terminal delivery read the current value at the moment they act; `lang` changes what `GET /api/config`, the injected `<html lang data-lang>` and the next GUI / TUI load use (the hook reads `config.json` per call already). `theme`, `hints`, `plans.auto_show`, and `notify.*` are applied by the GUI itself; the TUI takes `lang` (unless `--lang` pinned it) from `GET /api/settings` at start, on every reconnect refetch and on `settings.updated`.
 

@@ -28,7 +28,7 @@ export class SettingsStore {
     this.listeners.push(fn);
   }
 
-  /** `lang` as it is in config.json now (`install --lang` may have changed it behind the server's back); the live value when unreadable */
+  /** `lang` as it is in config.json now (`install` may have created the file behind the server's back); the live value when unreadable */
   async fileLang(): Promise<Settings["lang"]> {
     return (await readConfig(this.dataDir)).lang;
   }

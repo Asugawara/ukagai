@@ -97,7 +97,7 @@ test("install --codex: merges into hooks.json, appends the managed groups, write
   const e = await setup();
   await writeFile(join(e.codex, "hooks.json"), JSON.stringify(EXISTING, null, 2));
   await writeFile(join(e.codex, "config.toml"), CONFIG);
-  const r = await ukagai(e, ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--lang", "en"]);
+  const r = await ukagai(e, ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")]);
   assert.equal(r.code, 0, r.err);
   const hooks = JSON.parse(await readFile(join(e.codex, "hooks.json"), "utf8")).hooks;
   assert.deepEqual(hooks.PreToolUse[0], EXISTING.hooks.PreToolUse[0]);
@@ -131,7 +131,7 @@ test("install --codex: merges into hooks.json, appends the managed groups, write
 
 test("install --codex twice changes nothing; the second run makes no backups", async () => {
   const e = await setup();
-  const args = ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--lang", "en"];
+  const args = ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
   await ukagai(e, args);
   const h1 = await readFile(join(e.codex, "hooks.json"), "utf8");
   const c1 = await readFile(join(e.codex, "config.toml"), "utf8");
@@ -144,7 +144,7 @@ test("install --codex twice changes nothing; the second run makes no backups", a
 test("uninstall renames the trust of hooks that sat behind a removed ukagai group (their keys shift down)", async () => {
   const e = await setup();
   const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
-  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await ukagai(e, ["install", ...args]);
   const hf = join(e.codex, "hooks.json");
   const doc = JSON.parse(await readFile(hf, "utf8"));
   doc.hooks.Stop.push({ hooks: [AWM] }); // added later by another tool: stop:1:0, trusted by Codex
@@ -160,7 +160,7 @@ test("uninstall renames the trust of hooks that sat behind a removed ukagai grou
 
 test("install replaces a ukagai handler in place (its position and the others' keys stay)", async () => {
   const e = await setup();
-  const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--lang", "en"];
+  const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
   await ukagai(e, ["install", ...args]);
   const hf = join(e.codex, "hooks.json");
   const doc = JSON.parse(await readFile(hf, "utf8"));
@@ -180,7 +180,7 @@ test("uninstall --codex removes only ukagai's handlers and trust; the original b
   await writeFile(join(e.codex, "hooks.json"), JSON.stringify(EXISTING, null, 2) + "\n");
   await writeFile(join(e.codex, "config.toml"), CONFIG);
   const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
-  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await ukagai(e, ["install", ...args]);
   const r = await ukagai(e, ["uninstall", ...args]);
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(JSON.parse(await readFile(join(e.codex, "hooks.json"), "utf8")), EXISTING);
@@ -194,10 +194,10 @@ test("--dry-run writes nothing; without --codex Codex is not touched; --codex al
   assert.match(r.out, /hooks\.json/);
   assert.deepEqual(await readdir(e.codex), []);
   const settings = join(e.dir, "settings.json");
-  const r2 = await ukagai(e, ["install", "--settings", settings, "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--lang", "en"]);
+  const r2 = await ukagai(e, ["install", "--settings", settings, "--codex-home", e.codex, "--data-dir", join(e.dir, "data")]);
   assert.equal(r2.code, 0, r2.err);
   assert.deepEqual(await readdir(e.codex), [], "Codex untouched without --codex");
-  const r3 = await ukagai(e, ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--lang", "en"]);
+  const r3 = await ukagai(e, ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")]);
   assert.equal(r3.code, 0, r3.err);
   assert.deepEqual(await readdir(e.fakeHome), [], "no ~/.claude");
 });
@@ -205,7 +205,7 @@ test("--dry-run writes nothing; without --codex Codex is not touched; --codex al
 test("doctor --codex: trusted after install, modified when the command is edited, not registered after uninstall", async () => {
   const e = await setup();
   const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--server", "http://127.0.0.1:9"];
-  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await ukagai(e, ["install", ...args]);
   let r = await ukagai(e, ["doctor", ...args]);
   assert.match(r.out, /○ +codex hook PreToolUse +trusted/);
   assert.match(r.out, /○ +codex hook Stop +trusted/);
@@ -223,7 +223,7 @@ test("doctor --codex: trusted after install, modified when the command is edited
 test("a path with spaces / quotes is shell-quoted in the command (the data dir here)", async () => {
   const e = await setup();
   const dd = join(e.dir, "it's a dir");
-  await ukagai(e, ["install", "--codex", "--codex-home", e.codex, "--data-dir", dd, "--lang", "en"]);
+  await ukagai(e, ["install", "--codex", "--codex-home", e.codex, "--data-dir", dd]);
   const cmd = JSON.parse(await readFile(join(e.codex, "hooks.json"), "utf8")).hooks.Stop[0].hooks[0].command as string;
   assert.ok(cmd.includes(`'${dd.replace(/'/g, `'\\''`)}'`), cmd);
 });
@@ -235,7 +235,7 @@ const lines = (t: string): string[] => t.replace(/\n$/, "").split("\n");
 test("empty CODEX_HOME: install then uninstall leaves nothing (no files, no record)", async () => {
   const e = await setup();
   const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
-  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await ukagai(e, ["install", ...args]);
   assert.ok((await readdir(e.codex)).includes(".ukagai-codex.json"));
   const r = await ukagai(e, ["uninstall", ...args]);
   assert.equal(r.code, 0, r.err);
@@ -245,7 +245,7 @@ test("empty CODEX_HOME: install then uninstall leaves nothing (no files, no reco
 test("without a record uninstall does not delete a file that merely ends up empty", async () => {
   const e = await setup();
   const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
-  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await ukagai(e, ["install", ...args]);
   await rm(join(e.codex, ".ukagai-codex.json"));
   await ukagai(e, ["uninstall", ...args]);
   assert.deepEqual((await readdir(e.codex)).filter((f) => !f.includes(".bak-")).sort(), ["config.toml", "hooks.json"]);
@@ -269,12 +269,12 @@ test("awm-style hooks.json (tabs, no final newline) + 58 KB config.toml: install
   await writeFile(hf, AWM_TAB);
   await writeFile(cf, cfg);
   const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
-  assert.equal((await ukagai(e, ["install", ...args, "--lang", "en", "--dry-run"])).code, 0);
+  assert.equal((await ukagai(e, ["install", ...args, "--dry-run"])).code, 0);
   assert.equal(await readFile(hf, "utf8"), AWM_TAB, "dry-run changes nothing");
   assert.equal(await readFile(cf, "utf8"), cfg);
   assert.deepEqual((await readdir(e.codex)).sort(), ["config.toml", "hooks.json"]);
 
-  const r = await ukagai(e, ["install", ...args, "--lang", "en"]);
+  const r = await ukagai(e, ["install", ...args]);
   assert.equal(r.code, 0, r.err);
   const h1 = await readFile(hf, "utf8");
   const c1 = await readFile(cf, "utf8");
@@ -297,7 +297,7 @@ test("awm-style hooks.json (tabs, no final newline) + 58 KB config.toml: install
   assert.equal(readState(c1).size, 6);
 
   const bakCount = (await readdir(e.codex)).filter((f) => f.includes(".bak-")).length;
-  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await ukagai(e, ["install", ...args]);
   assert.equal(await readFile(hf, "utf8"), h1);
   assert.equal(await readFile(cf, "utf8"), c1);
   assert.equal((await readdir(e.codex)).filter((f) => f.includes(".bak-")).length, bakCount);
@@ -315,7 +315,7 @@ test("uninstall without a usable backup still removes the added final newline (l
   const cfg = 'model = "x"\n\n[tui]\na = 1';
   await writeFile(cf, cfg);
   const args = ["--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
-  await ukagai(e, ["install", ...args, "--lang", "en"]);
+  await ukagai(e, ["install", ...args]);
   for (const f of await readdir(e.codex)) if (f.startsWith("config.toml.bak-")) await rm(join(e.codex, f));
   await ukagai(e, ["uninstall", ...args]);
   assert.equal(await readFile(cf, "utf8"), cfg);
@@ -324,7 +324,7 @@ test("uninstall without a usable backup still removes the added final newline (l
 test("launcher form: the Codex commands run the launcher; re-install from the node form leaves only the new keys trusted", async () => {
   const e = await setup();
   const launcher = resolve("bin/ukagai");
-  const args = ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data"), "--lang", "en"];
+  const args = ["install", "--codex", "--codex-home", e.codex, "--data-dir", join(e.dir, "data")];
   await ukagai(e, args);
   const cmds = (): string[] => Object.values<any[]>(JSON.parse(readFileSync(join(e.codex, "hooks.json"), "utf8")).hooks).flatMap((g) => g.flatMap((x: any) => x.hooks.map((h: any) => h.command as string)));
   assert.ok(cmds().every((c) => c.startsWith(process.execPath)));

@@ -4,6 +4,7 @@ import { unifiedDiff } from "../settings/diff.js";
 import { readSettings, removeHooks, serialize, writeSettings } from "../settings/merge.js";
 import { apply as applyCodex, plan } from "../install/codex.js";
 import { hookInvocation, parseTarget, type Target } from "../settings/target.js";
+import { registeredClaude, registeredCodex } from "../settings/agents.js";
 import { Client } from "../hook/client.js";
 
 const HEALTHZ_TIMEOUT_MS = 2000;
@@ -29,14 +30,8 @@ async function healthy(server: string): Promise<boolean> {
 async function remainingHooks(t: Target, dryRun: boolean): Promise<string[]> {
   const left: string[] = [];
   // a Claude run removes the Claude hooks; otherwise whatever is registered stays
-  if (!(t.claude && dryRun)) {
-    const settings = await readSettings(t.settingsFile);
-    if (serialize(settings) !== serialize(removeHooks(settings))) left.push("Claude Code");
-  }
-  if (!(t.codex && dryRun)) {
-    const p = await plan({ home: t.codexHome, invocation: hookInvocation(), timeout: t.timeout, hookArgs: [], noAutostart: false }, "uninstall");
-    if (p.hooksBefore !== p.hooksAfter) left.push("Codex CLI");
-  }
+  if (!(t.claude && dryRun) && registeredClaude(await readSettings(t.settingsFile))) left.push("Claude Code");
+  if (!(t.codex && dryRun) && (await registeredCodex(t.codexHome))) left.push("Codex CLI");
   return left;
 }
 
@@ -66,69 +61,84 @@ async function exists(p: string): Promise<boolean> {
   return stat(p).then(() => true, () => false);
 }
 
+/** Remove the ukagai hooks and the skill from Claude Code's settings */
+async function uninstallClaude(t: Target, emit: (s: string) => void): Promise<void> {
+  const fileExists = await exists(t.settingsFile);
+  const before = await readSettings(t.settingsFile);
+  const after = removeHooks(before);
+  const changed = serialize(before) !== serialize(after);
+  const skillFile = join(t.skillDir, "SKILL.md");
+  const skillExists = t.handleSkill && (await exists(skillFile));
+  if (t.dryRun) {
+    const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
+    emit(diff === "" ? "settings: no changes\n" : diff);
+    if (skillExists) emit(`skill: remove ${skillFile}\n`);
+    return;
+  }
+  if (fileExists && changed) {
+    const bak = await writeSettings(t.settingsFile, after);
+    emit(`settings: removed the ukagai hooks from ${t.settingsFile}\n`);
+    if (bak) emit(`backup:   ${bak}\n`);
+  } else emit("settings: no ukagai hooks are registered\n");
+  if (skillExists) {
+    await rm(skillFile);
+    await rmdir(t.skillDir).catch(() => undefined);
+    emit(`skill:    removed ${skillFile}\n`);
+  }
+}
+
+/** Remove the ukagai hooks and their trust from Codex CLI's hooks.json / config.toml */
+async function uninstallCodex(t: Target, emit: (s: string) => void): Promise<void> {
+  const p = await plan({ home: t.codexHome, invocation: hookInvocation(), timeout: t.timeout, hookArgs: [], noAutostart: false }, "uninstall");
+  if (t.dryRun) {
+    for (const [file, a, b] of [
+      [p.hooksFile, p.hooksBefore, p.hooksAfter],
+      [p.configFile, p.configBefore, p.configAfter],
+    ] as const) {
+      const diff = unifiedDiff(a, b, file, `${file} (after)`);
+      emit(diff === "" ? `codex: ${file}: no changes\n` : diff);
+    }
+    return;
+  }
+  const baks = await applyCodex(t.codexHome, p);
+  const changed = p.hooksBefore !== p.hooksAfter || p.configBefore !== p.configAfter;
+  emit(changed ? `codex:    removed the ukagai hooks and trust from ${p.hooksFile} / ${p.configFile}\n` : "codex:    no ukagai hooks are registered\n");
+  for (const b of baks) emit(`backup:   ${b}\n`);
+}
+
 export async function run(argv: string[]): Promise<number> {
   let t;
   try {
-    t = parseTarget(argv);
+    t = parseTarget(argv, "uninstall");
   } catch (err) {
     process.stderr.write(`ukagai uninstall: ${(err as Error).message}\n`);
     return 2;
   }
+  for (const w of t.warnings) process.stderr.write(`ukagai uninstall: warning: ${w}\n`);
   try {
-    const fileExists = t.claude && (await exists(t.settingsFile));
-    const before = t.claude ? await readSettings(t.settingsFile) : {};
-    const after = removeHooks(before);
-    const changed = serialize(before) !== serialize(after);
-    const skillFile = join(t.skillDir, "SKILL.md");
-    const skillExists = t.claude && t.handleSkill && (await exists(skillFile));
-    const codexPlan = t.codex
-      ? await plan({ home: t.codexHome, invocation: hookInvocation(), timeout: t.timeout, hookArgs: [], noAutostart: false }, "uninstall")
-      : undefined;
-
-    if (t.dryRun) {
-      if (t.claude) {
-        const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
-        process.stdout.write(diff === "" ? "settings: no changes\n" : diff);
-        if (skillExists) process.stdout.write(`skill: remove ${skillFile}\n`);
-      }
-      if (codexPlan) {
-        for (const [file, a, b] of [
-          [codexPlan.hooksFile, codexPlan.hooksBefore, codexPlan.hooksAfter],
-          [codexPlan.configFile, codexPlan.configBefore, codexPlan.configAfter],
-        ] as const) {
-          const diff = unifiedDiff(a, b, file, `${file} (after)`);
-          process.stdout.write(diff === "" ? `codex: ${file}: no changes\n` : diff);
-        }
-      }
-      const line = await serverStep(t, true);
-      if (line !== undefined) process.stdout.write(line + "\n");
-      process.stdout.write("(--dry-run: nothing was written)\n");
-      return 0;
-    }
-
     const out: string[] = [];
-    if (t.claude) {
-      if (fileExists && changed) {
-        const bak = await writeSettings(t.settingsFile, after);
-        out.push(`settings: removed the ukagai hooks from ${t.settingsFile}`);
-        if (bak) out.push(`backup:   ${bak}`);
-      } else out.push("settings: no ukagai hooks are registered");
-      if (skillExists) {
-        await rm(skillFile);
-        await rmdir(t.skillDir).catch(() => undefined);
-        out.push(`skill:    removed ${skillFile}`);
+    // Without an explicit agent flag both are handled, and one agent's failure does not stop the other
+    const isolate = !t.agentsExplicit;
+    let failed = false;
+    for (const [agent, on, fn] of [
+      ["claude", t.claude, uninstallClaude],
+      ["codex", t.codex, uninstallCodex],
+    ] as const) {
+      if (!on) continue;
+      try {
+        await fn(t, (s) => void out.push(s));
+      } catch (err) {
+        if (!isolate) throw err;
+        failed = true;
+        process.stderr.write(`${agent}: error: ${(err as Error).message}\n`);
       }
     }
-    if (codexPlan) {
-      const baks = await applyCodex(t.codexHome, codexPlan);
-      const changedCodex = codexPlan.hooksBefore !== codexPlan.hooksAfter || codexPlan.configBefore !== codexPlan.configAfter;
-      out.push(changedCodex ? `codex:    removed the ukagai hooks and trust from ${codexPlan.hooksFile} / ${codexPlan.configFile}` : "codex:    no ukagai hooks are registered");
-      for (const b of baks) out.push(`backup:   ${b}`);
-    }
-    const line = await serverStep(t, false);
-    if (line !== undefined) out.push(line);
-    process.stdout.write(out.join("\n") + "\n");
-    return 0;
+    // With an agent that failed, whether hooks remain is unknown: leave the server alone
+    const line = failed ? (t.settingsGiven || t.projectGiven ? undefined : "server:   left running (an agent failed above; fix it and run uninstall again)") : await serverStep(t, t.dryRun);
+    if (line !== undefined) out.push(line + "\n");
+    if (t.dryRun) out.push("(--dry-run: nothing was written)\n");
+    process.stdout.write(out.join(""));
+    return failed ? 1 : 0;
   } catch (err) {
     process.stderr.write(`ukagai uninstall: ${(err as Error).message}\n`);
     return 1;

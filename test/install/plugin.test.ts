@@ -16,6 +16,8 @@ async function setup() {
   const home = join(dir, "home");
   const codex = join(dir, "codex");
   await mkdir(join(home, ".claude"), { recursive: true });
+  // ~/.claude alone does not make Claude Code "found"; ~/.claude.json does
+  await writeFile(join(home, ".claude.json"), "{}");
   await mkdir(codex);
   return { dir, home, codex, settings: join(home, ".claude", "settings.json"), skill: join(home, ".claude", "skills", "ukagai-explain", "SKILL.md") };
 }
@@ -47,21 +49,21 @@ test("enabledCodexPlugin: [plugins.\"ukagai@…\"] with enabled = true", async (
   assert.equal(await enabledCodexPlugin(e.codex), "ukagai@m");
 });
 
-test("install with the plugin enabled removes settings hooks and the skill copy, keeps --lang", async () => {
+test("install with the plugin enabled removes settings hooks and the skill copy, keeps config.json", async () => {
   const e = await setup();
   assert.equal((await run(e, ["install"])).code, 0);
   assert.ok(await exists(e.skill));
   const s = JSON.parse(await readFile(e.settings, "utf8"));
   assert.ok(s.hooks.PreToolUse);
   await writeFile(e.settings, JSON.stringify({ ...s, ...PLUGIN }));
-  const r = await run(e, ["install", "--lang", "ja"]);
+  const r = await run(e, ["install"]);
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /plugin ukagai@ukagai is enabled: hooks and skill come from the plugin \(use --force to register them in settings\.json as well\)/);
   const after = JSON.parse(await readFile(e.settings, "utf8"));
   assert.equal(after.hooks, undefined);
   assert.deepEqual(after.enabledPlugins, PLUGIN.enabledPlugins);
   assert.ok(!(await exists(e.skill)));
-  assert.match(await readFile(join(e.dir, "data", "config.json"), "utf8"), /"ja"/);
+  assert.match(await readFile(join(e.dir, "data", "config.json"), "utf8"), /"en"/);
 });
 
 test("install --force registers even with the plugin enabled; --settings ignores the plugin", async () => {
@@ -97,7 +99,7 @@ test("doctor: plugin row, and the twice-registered error", async () => {
   assert.ok(!/registered twice/.test(r.out));
   await run(e, ["install", "--force"]);
   r = await run(e, ["doctor"]);
-  assert.match(r.out, /×\s+hooks registered twice\s+plugin and settings\.json: run ukagai install/);
+  assert.match(r.out, /×\s+hooks registered twice\s+plugin and settings\.json: run: ukagai install --claude/);
   await writeFile(e.settings, "{}");
   r = await run(e, ["doctor"]);
   assert.match(r.out, /plugin\s+no plugin/);
