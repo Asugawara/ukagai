@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm, rmdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { buildHookEntries, HOOK_EVENTS } from "../settings/hooks-spec.js";
 import { unifiedDiff } from "../settings/diff.js";
@@ -6,7 +6,8 @@ import { configPath, localeLang, readConfig, writeConfig, type Lang } from "../s
 import { mergeHooks, readSettings, removeHooks, serialize, writeSettings } from "../settings/merge.js";
 import { enabledClaudePlugin, enabledCodexPlugin } from "../settings/plugins.js";
 import { CODEX_SPECS, apply as applyCodex, plan, type CodexInstallOptions } from "./codex.js";
-import { SKILL_SOURCE, hookInvocation, parseTarget, type Invocation, type Target } from "../settings/target.js";
+import { hasSkill, placeSkill, removeSkill } from "../skill/files.js";
+import { SKILL_DIR, hookInvocation, parseTarget, type Invocation, type Target } from "../settings/target.js";
 import { claudeOptions, codexOptions, detectClaude, detectCodex, registeredClaude, registeredCodex, resolveOptions, tilde } from "../settings/agents.js";
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
@@ -41,7 +42,6 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
   const o = resolveOptions(t, registeredClaude(before) ? claudeOptions(before) : undefined);
   const entries = buildHookEntries({ invocation: inv, timeout: o.timeout, observe: o.observe, hookArgs: o.hookArgs, autostart: !o.noAutostart });
   const after = plugin !== undefined ? removeHooks(before) : mergeHooks(before, entries);
-  const skillDest = join(t.skillDir, "SKILL.md");
   const changed = serialize(before) !== serialize(after);
 
   if (t.dryRun) {
@@ -49,8 +49,8 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
     const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
     emit(diff === "" ? "settings: no changes\n" : diff);
     if (plugin !== undefined) {
-      if (t.handleSkill && (await exists(skillDest))) emit(`skill: remove ${skillDest}\n`);
-    } else if (t.handleSkill) emit(`skill: ${SKILL_SOURCE} -> ${skillDest}\n`);
+      if (t.handleSkill && hasSkill(t.skillDir)) emit(`skill: remove ${t.skillDir}/\n`);
+    } else if (t.handleSkill) emit(`skill: ${SKILL_DIR}/ -> ${t.skillDir}/\n`);
     return o.dataDir;
   }
   if (plugin !== undefined) {
@@ -59,20 +59,16 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
       emit(`settings: removed the ukagai hooks from ${t.settingsFile}\n`);
       if (bak) emit(`backup:   ${bak}\n`);
     }
-    if (t.handleSkill && (await exists(skillDest))) {
-      await rm(skillDest);
-      await rmdir(t.skillDir).catch(() => undefined);
-      emit(`skill:    removed ${skillDest}\n`);
+    if (t.handleSkill && hasSkill(t.skillDir)) {
+      removeSkill(t.skillDir);
+      emit(`skill:    removed ${t.skillDir}/\n`);
     }
     emit(pluginLine(plugin) + "\n");
     return o.dataDir;
   }
   // The same content is not written again: every write leaves a .bak-* next to the file
   const bak = changed ? await writeSettings(t.settingsFile, after) : null;
-  if (t.handleSkill) {
-    await mkdir(t.skillDir, { recursive: true });
-    await copyFile(SKILL_SOURCE, skillDest);
-  }
+  if (t.handleSkill) placeSkill(t.skillDir);
   emit(`settings: ${t.settingsFile}${changed ? "" : " (unchanged)"}\n`);
   if (bak) emit(`backup:   ${bak}\n`);
   emit(`hook:     ${[inv.command, ...inv.prefix, "hook"].join(" ")}${inv.launcher ? "" : " (dev checkout: hooks run node + dist/cli.js)"}\n`);
@@ -80,7 +76,7 @@ async function installClaude(t: Target, inv: Invocation, emit: (s: string) => vo
   emit(`timeout:  ${o.timeout}s (PreToolUse --budget ${o.timeout - 10})${o.observe ? " [observe]" : ""}\n`);
   emit(`events:   ${HOOK_EVENTS.join(", ")}\n`);
   emit(o.noAutostart ? "autostart: off (--no-autostart)\n" : "autostart: on\n");
-  emit((t.handleSkill ? `skill:    ${skillDest}` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)") + "\n");
+  emit((t.handleSkill ? `skill:    ${t.skillDir}/` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)") + "\n");
   return o.dataDir;
 }
 

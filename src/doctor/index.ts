@@ -5,6 +5,7 @@ import { CHECKPOINT_FLAG, HOOK_EVENTS, PLAN_CONTEXT_FLAG } from "../settings/hoo
 import { findManaged, readSettings } from "../settings/merge.js";
 import { enabledClaudePlugin, enabledCodexPlugin } from "../settings/plugins.js";
 import { status as codexStatus } from "../install/codex.js";
+import { hasSkill, missingSkillFiles } from "../skill/files.js";
 import { REPO_ROOT, parseTarget, type Target } from "../settings/target.js";
 import { detectClaude, detectCodex, registeredClaude, registeredCodex } from "../settings/agents.js";
 import { VERSION } from "../version.js";
@@ -137,7 +138,10 @@ export async function run(argv: string[]): Promise<number> {
   else add(hasToken, "token", tokenFile);
   if (t.claude) {
     if (viaPlugin) add(true, "skill ukagai-explain", "from the plugin");
-    else if (t.handleSkill) add(await exists(join(t.skillDir, "SKILL.md")), "skill ukagai-explain", join(t.skillDir, "SKILL.md"));
+    else if (t.handleSkill) {
+      const missing = hasSkill(t.skillDir) ? missingSkillFiles(t.skillDir) : ["SKILL.md"];
+      add(missing.length === 0, "skill ukagai-explain", missing.length === 0 ? join(t.skillDir, "SKILL.md") : `missing ${missing.join(", ")} (run ukagai install)`);
+    }
     else add(true, "skill ukagai-explain", "not handled");
   }
 

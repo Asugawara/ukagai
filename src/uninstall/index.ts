@@ -1,8 +1,9 @@
-import { rm, rmdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { unifiedDiff } from "../settings/diff.js";
 import { readSettings, removeHooks, serialize, writeSettings } from "../settings/merge.js";
 import { apply as applyCodex, plan } from "../install/codex.js";
+import { hasSkill, removeSkill } from "../skill/files.js";
 import { hookInvocation, parseTarget, type Target } from "../settings/target.js";
 import { registeredClaude, registeredCodex } from "../settings/agents.js";
 import { Client } from "../hook/client.js";
@@ -67,12 +68,11 @@ async function uninstallClaude(t: Target, emit: (s: string) => void): Promise<vo
   const before = await readSettings(t.settingsFile);
   const after = removeHooks(before);
   const changed = serialize(before) !== serialize(after);
-  const skillFile = join(t.skillDir, "SKILL.md");
-  const skillExists = t.handleSkill && (await exists(skillFile));
+  const skillExists = t.handleSkill && hasSkill(t.skillDir);
   if (t.dryRun) {
     const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
     emit(diff === "" ? "settings: no changes\n" : diff);
-    if (skillExists) emit(`skill: remove ${skillFile}\n`);
+    if (skillExists) emit(`skill: remove ${t.skillDir}/\n`);
     return;
   }
   if (fileExists && changed) {
@@ -81,9 +81,8 @@ async function uninstallClaude(t: Target, emit: (s: string) => void): Promise<vo
     if (bak) emit(`backup:   ${bak}\n`);
   } else emit("settings: no ukagai hooks are registered\n");
   if (skillExists) {
-    await rm(skillFile);
-    await rmdir(t.skillDir).catch(() => undefined);
-    emit(`skill:    removed ${skillFile}\n`);
+    removeSkill(t.skillDir);
+    emit(`skill:    removed ${t.skillDir}/\n`);
   }
 }
 

@@ -5,8 +5,10 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, writeFile, readdir, stat, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { symlink, chmod } from "node:fs/promises";
+import { symlink, chmod, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { SKILL_DIR } from "../../src/settings/target.js";
+import { missingSkillFiles } from "../../src/skill/files.js";
 
 const CLI = resolve("src/cli.ts");
 const TSX = import.meta.resolve("tsx");
@@ -30,6 +32,21 @@ const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => f
 const count = (s: any): number => Object.values<any[]>(s.hooks).reduce((n, g) => n + g.reduce((m, x) => m + x.hooks.length, 0), 0);
 const EVENTS = ["PreToolUse", "PermissionRequest", "SessionStart", "SubagentStart", "UserPromptSubmit", "Stop", "SubagentStop", "PostToolUse", "SessionEnd", "Notification"];
 const SKILL = (e: Env): string => join(e.home, ".claude", "skills", "ukagai-explain", "SKILL.md");
+const SKILL_HOME = (e: Env): string => join(e.home, ".claude", "skills", "ukagai-explain");
+/** Every file under SKILL_DIR, relative */
+async function shippedFiles(dir = SKILL_DIR, rel = ""): Promise<string[]> {
+  const out: string[] = [];
+  for (const d of await readdir(join(dir, rel), { withFileTypes: true })) {
+    if (d.name.startsWith(".")) continue;
+    const r = rel === "" ? d.name : `${rel}/${d.name}`;
+    if (d.isDirectory()) out.push(...(await shippedFiles(dir, r)));
+    else out.push(r);
+  }
+  return out;
+}
+async function assertPlaced(dest: string): Promise<void> {
+  for (const f of await shippedFiles()) assert.ok(await exists(join(dest, f)), `${f} exists under ${dest}`);
+}
 const OTHER = { hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/usr/bin/other", args: ["x"] }] }] }, model: "opus" };
 
 test("install into empty settings: all events, exec form, statusMessage, --budget 3590, skill", async () => {
@@ -63,13 +80,13 @@ test("install into empty settings: all events, exec form, statusMessage, --budge
 test("skill is placed only with --settings + --skill, and uninstall removes it only with --skill", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
-  assert.ok(await exists(SKILL(e)));
+  await assertPlaced(SKILL_HOME(e));
   const r1 = await ukagai(e, ["uninstall", "--settings", e.settings]);
   assert.doesNotMatch(r1.out, /skill:/);
   assert.ok(await exists(SKILL(e)), "uninstall with --settings only does not remove the skill");
   const r2 = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
   assert.match(r2.out, /skill:/);
-  assert.ok(!(await exists(SKILL(e))));
+  assert.ok(!(await exists(SKILL_HOME(e))), "the directory is gone");
 });
 
 test("--data-dir / --server go into every hook's args when given, and not when omitted", async () => {
@@ -186,7 +203,7 @@ test("--project writes to .claude/settings.json and .claude/skills", async () =>
   assert.ok(await exists(join(proj, ".claude", "settings.json")));
   assert.ok(!(await exists(join(proj, ".claude", "skills"))));
   await ukagai(e, ["install", "--project"], proj);
-  assert.ok(await exists(join(proj, ".claude", "skills", "ukagai-explain", "SKILL.md")));
+  await assertPlaced(join(proj, ".claude", "skills", "ukagai-explain"));
   assert.ok(!(await exists(SKILL(e))));
 });
 
@@ -385,6 +402,44 @@ test("doctor: a saved custom skill version is reported, and 'the default changed
   r = await ukagai(e, args);
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /skill \(your version\) +custom version in use \(\S*skill\/SKILL\.md\); the default changed since you started editing/);
+});
+
+test("uninstall keeps a notes.md the human put in the skill directory (and the directory)", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  await writeFile(join(SKILL_HOME(e), "notes.md"), "mine");
+  await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
+  assert.equal(await readFile(join(SKILL_HOME(e), "notes.md"), "utf8"), "mine");
+  assert.ok(!(await exists(SKILL(e))));
+});
+
+test("reinstall removes a stale reference file of an older version", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  await mkdir(join(SKILL_HOME(e), "reference"), { recursive: true });
+  await writeFile(join(SKILL_HOME(e), "reference", "old.md"), "old");
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  assert.ok(!(await exists(join(SKILL_HOME(e), "reference", "old.md"))));
+  await assertPlaced(SKILL_HOME(e));
+});
+
+test("install --dry-run writes no skill files", async () => {
+  const e = await setup();
+  const r = await ukagai(e, ["install", "--settings", e.settings, "--skill", "--dry-run"]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /skill: .*\/ -> .*\/\n/);
+  assert.ok(!(await exists(join(e.home, ".claude"))));
+});
+
+test("doctor: a missing copied file under reference/ fails the skill row", async (t) => {
+  const e = await setup();
+  const ref = (await shippedFiles()).find((f) => f.startsWith("reference/"));
+  if (ref === undefined) return t.skip("skills/ukagai-explain/reference/ has no files yet");
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  const args = ["doctor", "--settings", e.settings, "--skill", "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")];
+  assert.deepEqual(missingSkillFiles(SKILL_HOME(e)), []);
+  await rm(join(SKILL_HOME(e), ref));
+  assert.match((await ukagai(e, args)).out, /× +skill ukagai-explain +missing reference\//);
 });
 
 test("upgrade in place: a settings file from before the plan-context group gains it, user hooks stay, no duplicates", async () => {
