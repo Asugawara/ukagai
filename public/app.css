@@ -478,7 +478,8 @@ body.settings-page { display: block; height: auto; min-height: 100dvh; overflow:
 .set-head h1 { margin: 0; }
 .set-head p { margin: 0; font-size: 12px; color: var(--fg); }
 .set-layout { display: grid; grid-template-columns: 196px minmax(0, 1fr); gap: 28px; align-items: start; }
-.set-main { min-width: 0; max-width: 720px; }
+.set-main { min-width: 0; }
+#form { max-width: 720px; }
 .set-nav { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 1px; }
 .set-nav-group { font-size: 12px; font-weight: 600; margin: 14px 8px 4px; padding-top: 10px; border-top: 1px solid var(--line); }
 .set-nav-item { position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px; color: var(--fg); text-decoration: none; }
@@ -579,3 +580,38 @@ body.settings-page { display: block; height: auto; min-height: 100dvh; overflow:
 .md .ver-old { color: var(--fg); font-size: 0.95em; }
 .md .ver-old s { text-decoration: line-through; text-decoration-thickness: 1px; }
 .md .ver-old::before { content: "−"; margin-right: 6px; font-weight: 700; }
+
+/* Skill pane (Settings): file line, tabs, editor / preview / diff, actions */
+.set-badge { font-size: 11px; font-weight: 600; color: var(--fg); border: 1px solid var(--yellow); background: var(--yellow-bg); border-radius: 999px; padding: 0 8px; line-height: 20px; vertical-align: 2px; }
+.set-filebar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--fg); padding: 4px 0 8px; }
+.set-filebar code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border-radius: 4px; padding: 0 4px; }
+.set-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+.set .set-tabs button { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 6px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: none; margin-bottom: -1px; }
+.set .set-tabs button[aria-selected="true"] { background: var(--panel); border-color: var(--line); font-weight: 600; }
+.set-tabs svg, .set-actions svg { width: 14px; height: 14px; flex: none; }
+.set-tabs button:focus-visible, .set-actions button:focus-visible, #skill-text:focus-visible, .set-view:focus-visible, .set-newer button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.set-view { border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: var(--panel); min-width: 0; }
+.set-view[hidden] { display: none; }
+.set .set-mono, .set-diff { font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.set textarea.set-mono { display: block; border: 0; border-radius: 0 0 8px 8px; background: var(--panel); min-height: 320px; padding: 10px 12px; resize: vertical; }
+.set-preview { padding: 4px 18px 12px; font-size: 13px; overflow-wrap: anywhere; }
+.set-preview h1 { font-size: 18px; margin: 10px 0 4px; }
+.set-preview h2 { font-size: 15px; margin: 14px 0 4px; border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.set-preview pre { overflow-x: auto; background: var(--code); border-radius: 6px; padding: 6px 10px; }
+.set-preview table { border-collapse: collapse; }
+.set-preview th, .set-preview td { border: 1px solid var(--line); padding: 2px 8px; }
+.set-view > .set-help { padding: 8px 12px 0; }
+.set-diff { padding: 6px 0; overflow-x: auto; }
+.set-diff > div { padding: 0 12px; white-space: pre; }
+.set-diff-add { background: var(--add); }
+.set-diff-del { background: var(--del); }
+.set-diff-gap { background: var(--hunk); }
+.set-newer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; margin-top: 8px; padding: 6px 12px; border-left: 3px solid var(--yellow); background: var(--yellow-bg); border-radius: 0 6px 6px 0; }
+.set-newer[hidden], .set-unsaved[hidden] { display: none; }
+.set-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.set-actions button { display: inline-flex; align-items: center; gap: 6px; }
+.set .set-actions button.primary { border-color: var(--accent); font-weight: 600; }
+.set .set-actions button.danger { border-color: var(--red); }
+.set .set-actions button.danger.armed { font-weight: 600; border-width: 2px; }
+.set-unsaved { margin-right: auto; font-size: 12px; color: var(--fg); }
+.set-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); margin-right: 6px; vertical-align: 1px; }

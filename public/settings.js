@@ -2,6 +2,7 @@
 import { api } from "./api.js";
 import { t } from "./i18n.js";
 import { icon } from "./icons.js";
+import { sanitize } from "./sanitize.js";
 
 const $ = (id) => document.getElementById(id);
 const DELAY_MIN = 30; // same limits as CODEX_DELAY_MIN_S / MAX_S in src/contract.ts
@@ -210,6 +211,197 @@ window.addEventListener("hashchange", () => {
   showPane();
 });
 
+// ---- the Skill pane ----
+// Lives outside #form and outside render(): a save, an SSE settings.updated or a reconnect rebuilds #form, and must never touch the draft.
+// `view` is the last GET /api/skill; `loaded` is the text the editor started from (the saved version, or the default when there is none); `draft` is the textarea.
+const sk = { view: null, loaded: "", draft: "", tab: "edit", savedAt: null, newer: null, resetArmed: false, resetTimer: 0, built: false, loadError: null };
+const SKILL_TABS = ["edit", "preview", "diff"];
+const skillDirty = () => sk.view !== null && sk.draft !== sk.loaded;
+const skillEditable = () => sk.view?.default != null;
+const countLines = (text) => (text === "" ? 0 : text.replace(/\n$/, "").split("\n").length);
+
+function buildSkillPane() {
+  if (sk.built) return;
+  sk.built = true;
+  const tabIcons = { edit: "square-pen", preview: "eye", diff: "git-compare" };
+  const tabs = el("div", { class: "set-tabs", role: "tablist", id: "skill-tabs" },
+    ...SKILL_TABS.map((id) => el("button", { type: "button", role: "tab", id: `skill-tab-${id}`, "aria-controls": `skill-view-${id}`, "data-tab": id }, icon(tabIcons[id]), el("span", { "data-l": `skill_tab_${id}` }))));
+  tabs.addEventListener("click", (ev) => { const b = ev.target.closest("[data-tab]"); if (b) selectTab(b.dataset.tab); });
+  tabs.addEventListener("keydown", (ev) => {
+    const at = SKILL_TABS.indexOf(sk.tab);
+    const to = { ArrowRight: (at + 1) % 3, ArrowLeft: (at + 2) % 3, Home: 0, End: 2 }[ev.key];
+    if (to === undefined) return;
+    ev.preventDefault();
+    selectTab(SKILL_TABS[to]);
+    $(`skill-tab-${SKILL_TABS[to]}`).focus();
+  });
+  const area = el("textarea", { id: "skill-text", class: "set-mono", spellcheck: "false", rows: "22" });
+  area.addEventListener("input", () => { sk.draft = area.value; paintSkill(); });
+  const diffNote = el("p", { class: "set-help", id: "skill-diff-note" });
+  const save = el("button", { type: "button", id: "skill-save", class: "primary", onclick: saveSkill }, icon("save"), el("span", { "data-l": "skill_save" }));
+  const discard = el("button", { type: "button", id: "skill-discard", onclick: discardSkill }, icon("undo-2"), el("span", { "data-l": "skill_discard" }));
+  const reset = el("button", { type: "button", id: "skill-reset", class: "danger", onclick: resetSkillClick }, icon("rotate-ccw"), el("span", { id: "skill-reset-label" }));
+  $("pane-skill").append(
+    el("p", { class: "set-err", id: "skill-error", role: "alert" }),
+    el("div", { class: "set-filebar", id: "skill-file" }),
+    tabs,
+    el("div", { class: "set-view", id: "skill-view-edit", role: "tabpanel", "aria-labelledby": "skill-tab-edit" }, area),
+    el("div", { class: "set-view set-preview", id: "skill-view-preview", role: "tabpanel", "aria-labelledby": "skill-tab-preview", tabindex: "0" }),
+    el("div", { class: "set-view", id: "skill-view-diff", role: "tabpanel", "aria-labelledby": "skill-tab-diff", tabindex: "0" }, diffNote, el("div", { class: "set-diff", id: "skill-diff" })),
+    el("div", { class: "set-newer", id: "skill-newer" }, el("span", { "data-l": "skill_newer" }), " ", el("button", { type: "button", id: "skill-load-newer", onclick: () => { if (sk.newer) applySkill(sk.newer, true); } }, el("span", { "data-l": "skill_load_newer" }))),
+    el("div", { class: "set-actions" }, el("span", { class: "set-unsaved", id: "skill-unsaved" }, el("span", { class: "set-dot", "aria-hidden": "true" }), el("span", { "data-l": "skill_unsaved" })), reset, discard, save));
+}
+
+function selectTab(id) {
+  sk.tab = id;
+  paintSkill();
+}
+
+/** Refresh everything around the textarea from `sk` (never the textarea's own value: that is set only when text is loaded) */
+function paintSkill() {
+  if (!sk.built) return;
+  const lang = currentLocale();
+  for (const e of document.querySelectorAll("#pane-skill [data-l]")) e.textContent = t(e.dataset.l);
+  const v = sk.view;
+  const badge = $("skill-badge");
+  const changed = v?.custom != null;
+  badge.hidden = !changed;
+  if (changed) badge.textContent = t("skill_badge", { n: v.changed });
+  $("skill-error").textContent = sk.loadError ? t("skill_load_failed", { message: sk.loadError }) : v && v.default === null ? t("skill_default_missing") : "";
+  const bits = [el("code", { text: t("skill_path") }), el("span", { text: t("skill_lines", { n: countLines(sk.draft) }) })];
+  if (sk.savedAt) bits.push(el("span", { text: t("skill_saved_at", { time: sk.savedAt.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) }) }));
+  $("skill-file").replaceChildren(...bits);
+  for (const id of SKILL_TABS) {
+    const tab = $(`skill-tab-${id}`);
+    tab.setAttribute("aria-selected", String(id === sk.tab));
+    tab.tabIndex = id === sk.tab ? 0 : -1;
+    $(`skill-view-${id}`).hidden = id !== sk.tab;
+  }
+  $("skill-tabs").setAttribute("aria-label", t("skill_tabs"));
+  $("skill-text").setAttribute("aria-label", t("skill_text_label"));
+  $("skill-text").disabled = !skillEditable();
+  if (sk.tab === "preview") paintPreview();
+  if (sk.tab === "diff") paintDiff();
+  const dirty = skillDirty();
+  $("skill-unsaved").hidden = !dirty;
+  $("skill-newer").hidden = !(sk.newer && dirty);
+  $("skill-save").disabled = !skillEditable() || !dirty;
+  $("skill-discard").disabled = !dirty;
+  $("skill-reset").disabled = !skillEditable() || (v?.custom == null);
+  $("skill-reset-label").textContent = t(sk.resetArmed ? "skill_reset_confirm" : "skill_reset");
+  $("skill-reset").classList.toggle("armed", sk.resetArmed);
+}
+
+const currentLocale = () => document.documentElement.lang || "en";
+
+function paintPreview() {
+  const box = $("skill-view-preview");
+  let html = "";
+  try { html = window.marked ? window.marked.parse(sk.draft, { async: false }) : ""; } catch { html = ""; }
+  box.innerHTML = sanitize(html);
+  for (const img of box.querySelectorAll("img")) img.remove();
+}
+
+/** The saved diff, with two lines of context around each change and "…" for the runs in between */
+function paintDiff() {
+  $("skill-diff-note").textContent = t("skill_diff_note");
+  const diff = sk.view?.diff ?? [];
+  const box = $("skill-diff");
+  if (!diff.some((d) => d.kind !== "same")) { box.replaceChildren(el("p", { class: "set-help", text: t("skill_no_diff") })); return; }
+  const keep = new Set();
+  diff.forEach((d, i) => { if (d.kind !== "same") for (let j = Math.max(0, i - 2); j <= Math.min(diff.length - 1, i + 2); j++) keep.add(j); });
+  const rows = [];
+  let gap = false;
+  diff.forEach((d, i) => {
+    if (!keep.has(i)) { gap = true; return; }
+    if (gap && rows.length) rows.push(el("div", { class: "set-diff-gap", text: "…" }));
+    gap = false;
+    rows.push(el("div", { class: `set-diff-${d.kind}`, text: `${{ add: "+", del: "-", same: " " }[d.kind]} ${d.text}` }));
+  });
+  box.replaceChildren(...rows);
+}
+
+/** Take a server view. `force` (or a clean editor) replaces the draft; a dirty draft is kept and `newer` is remembered */
+function applySkill(view, force = false) {
+  const clean = !skillDirty();
+  if (!force && !clean) {
+    sk.newer = view;
+    paintSkill();
+    return;
+  }
+  sk.view = view;
+  sk.newer = null;
+  sk.loadError = null;
+  sk.loaded = view.custom ?? view.default ?? "";
+  sk.draft = sk.loaded;
+  $("skill-text").value = sk.draft;
+  paintSkill();
+}
+
+async function loadSkill() {
+  try {
+    applySkill(await api("/api/skill"));
+  } catch (e) {
+    sk.loadError = String(e?.message ?? e);
+    paintSkill();
+  }
+}
+
+async function saveSkill() {
+  if (!skillEditable() || !skillDirty()) return;
+  status(t("set_saving"));
+  try {
+    const view = await api("/api/skill", { method: "PUT", body: JSON.stringify({ text: sk.draft }) });
+    sk.savedAt = new Date();
+    applySkill(view, true);
+    status(t("set_saved"));
+  } catch (e) {
+    const msg = e.issues?.length ? e.issues.map((i) => i.message).join("; ") : e.message;
+    $("skill-error").textContent = t("set_failed", { message: msg });
+    status(t("set_failed", { message: msg }), true);
+  }
+}
+
+function discardSkill() {
+  sk.draft = sk.loaded;
+  $("skill-text").value = sk.draft;
+  paintSkill();
+}
+
+// The first click arms the button for 4 s; the second one resets (DELETE /api/skill)
+async function resetSkillClick() {
+  if (!sk.resetArmed) {
+    sk.resetArmed = true;
+    clearTimeout(sk.resetTimer);
+    sk.resetTimer = setTimeout(() => { sk.resetArmed = false; paintSkill(); }, 4000);
+    paintSkill();
+    return;
+  }
+  clearTimeout(sk.resetTimer);
+  sk.resetArmed = false;
+  try {
+    const view = await api("/api/skill", { method: "DELETE" });
+    sk.savedAt = null;
+    applySkill(view, true);
+    status(t("set_saved"));
+  } catch (e) {
+    paintSkill();
+    status(t("set_failed", { message: e.message }), true);
+  }
+}
+
+window.addEventListener("beforeunload", (ev) => {
+  if (!skillDirty()) return;
+  ev.preventDefault();
+  ev.returnValue = "";
+});
+
+document.addEventListener("keydown", (ev) => {
+  if (pane !== "skill" || !(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.key.toLowerCase() !== "s") return;
+  ev.preventDefault();
+  saveSkill();
+});
+
 // ---- start ----
 // The static chrome (back link, title) is filled before anything is fetched, so a failed load still has a way back
 function chrome() {
@@ -220,6 +412,8 @@ function chrome() {
   for (const e of document.querySelectorAll("#set-nav [data-label]")) e.textContent = t(e.dataset.label);
   $("skill-title").textContent = t("set_nav_skill");
   $("skill-lede").textContent = t("set_lede_skill");
+  buildSkillPane();
+  paintSkill();
   const back = $("back");
   back.replaceChildren(icon("chevron-left"), el("span", { text: t("set_back") }));
   showPane();
@@ -258,8 +452,14 @@ function connect() {
     applyChrome();
     render();
   });
+  // Another tab saved or reset the skill: a clean editor follows, a dirty one keeps its draft and offers the newer version
+  es.addEventListener("skill.updated", (e) => {
+    const next = JSON.parse(e.data);
+    if (JSON.stringify(next) === JSON.stringify(sk.view)) return;
+    applySkill(next);
+  });
   // A reconnect may have missed changes: a stale `s` would be written back by the next whole-object PUT
-  es.addEventListener("open", () => { if (s) load().catch(() => {}); });
+  es.addEventListener("open", () => { if (s) { load().catch(() => {}); loadSkill(); } });
   es.addEventListener("error", () => { es.close(); setTimeout(connect, 3000); });
 }
 
@@ -269,6 +469,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted) connect(); });
 
 function start() {
   load().then(connect, loadFailed);
+  loadSkill();
 }
 chrome();
 start();
