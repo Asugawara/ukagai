@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { skillName } from "./skill-name.js";
 import { fileURLToPath } from "node:url";
+import { resolveSkillRef } from "./skill-ref.js";
 
 /** Where the ukagai checkout's copy of the dialect spec lives, or null when this install has no docs next to it (docs/spec/markdown.md section 4) */
 function specPath(): string | null {
@@ -14,8 +15,10 @@ function specPath(): string | null {
 }
 
 /** The plan-writing rules handed to the agent at EnterPlanMode (docs/spec/markdown.md section 4); 25 lines at most */
-export function planContextText(spec: string | null = specPath(), env: NodeJS.ProcessEnv = process.env): string {
+export function planContextText(spec: string | null = specPath(), env: NodeJS.ProcessEnv = process.env, skillRef?: string): string {
   const sk = skillName(env);
+  // With the human's edited version the references point at the file (and the skill is not to be read)
+  const skillSrc = skillRef === undefined ? `skill ${sk}` : `${skillRef} (the human's edited version of skill ${sk}; do not read skill ${sk})`;
   return [
     "[ukagai] Write the plan in ukagai Markdown; a human reads it in a GUI / TUI and decides on it. Plan sections, in this order:",
     "- `# Title`: one line saying what the plan does.",
@@ -23,7 +26,7 @@ export function planContextText(spec: string | null = specPath(), env: NodeJS.Pr
     "- `## Steps`: an ordered list; each item starts with a **bold title**, then a badge ([done] [todo] [doing] [blocked] [risk] [skip]) and the `path` it touches; nest task lists or details under it.",
     "- `## Risks`: one callout per risk, `> [!CAUTION] Title` for anything irreversible or touching other people / external systems, `> [!WARNING]` for costly to undo.",
     "- `## Verification`: a task list (`- [ ] command or check`) the reader can tick off.",
-    `A question you ask while in plan mode needs its explanation inside the plan file between \`<!-- ukagai-explain -->\` and \`<!-- /ukagai-explain -->\` (same format as the explanation file; see skill ${sk}).`,
+    `A question you ask while in plan mode needs its explanation inside the plan file between \`<!-- ukagai-explain -->\` and \`<!-- /ukagai-explain -->\` (same format as the explanation file; see ${skillSrc}).`,
     "Palette (use what makes the decision easier to read, nothing more):",
     "- callouts with titles `> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION] Title`, task lists `- [x]` / `- [ ]`, folding `<details><summary>..</summary>` (blank line after the summary) for long evidence;",
     "- Mermaid of any type (flowchart, sequenceDiagram, stateDiagram-v2, gantt, pie, quadrantChart, ...), code blocks with a title (```ts title=\"src/x.ts\") and ```diff for proposed changes;",
@@ -32,8 +35,8 @@ export function planContextText(spec: string | null = specPath(), env: NodeJS.Pr
     "- A plan that hinges on a visual choice (UI variants, layouts): build the candidates in the scratchpad and ask with AskUserQuestion before ExitPlanMode, with each candidate embedded in the explanation; never schedule \"make the mockups\" as a step after approval.",
     "Never open a file or a URL for the human (`open`, `xdg-open`, a browser): put it in the explanation — images `![alt](x.png)`, HTML pages `![alt](x.html)` (the GUI renders them in a sandboxed frame); files next to the explanation file or under the session's scratchpad.",
     spec
-      ? `Full spec: skill ${sk}, section "Rich Markdown (ukagai dialect)", or ${spec}.`
-      : `Full spec: skill ${sk}, section "Rich Markdown (ukagai dialect)".`,
+      ? `Full spec: ${skillRef ?? `skill ${sk}`}, section "Rich Markdown (ukagai dialect)", or ${spec}.`
+      : `Full spec: ${skillRef ?? `skill ${sk}`}, section "Rich Markdown (ukagai dialect)".`,
   ].join("\n");
 }
 
@@ -71,5 +74,7 @@ export function planContext(raw: Record<string, unknown>, dataDir: string): Reco
   const hit =
     (ev === "PreToolUse" && raw["tool_name"] === "EnterPlanMode") || (ev === "UserPromptSubmit" && raw["permission_mode"] === "plan");
   if (!hit || !takeMarker(dataDir, raw["session_id"])) return null;
-  return { hookSpecificOutput: { hookEventName: ev, additionalContext: planContextText() } };
+  const scratchpad = raw["scratchpad_dir"];
+  const skillRef = resolveSkillRef(dataDir, typeof scratchpad === "string" && scratchpad !== "" ? scratchpad : undefined);
+  return { hookSpecificOutput: { hookEventName: ev, additionalContext: planContextText(specPath(), process.env, skillRef) } };
 }

@@ -1099,6 +1099,8 @@ export interface DenyParams {
   blocker?: boolean;
   /** True when the file found has `type: quiz` */
   quiz?: boolean;
+  /** The human's edited version of the skill (a file path): the texts name it instead of the skill; set by the hook, never looked up here */
+  skillRef?: string;
   /** `codex` swaps the Claude Code tool / skill names in the text for Codex's (`request_user_input`, the SessionStart context) */
   agent?: string;
 }
@@ -1235,43 +1237,52 @@ export function handoffReason(kind: "answer_question" | "approve_plan", agent: s
 }
 
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
+  // With the human's version composeRaw already words the skill for the agent: only the question tool's name is swapped for Codex
+  if (p.skillRef !== undefined) {
+    const text = tagged(composeRaw(template, p, missingText, withTail));
+    return p.agent === "codex" ? text.replace(/AskUserQuestion/g, "request_user_input") : text;
+  }
   return forAgent(tagged(composeRaw(template, p, missingText, withTail)), p.agent);
 }
 
 function composeRaw(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
   const sk = skillName(process.env, p.agent);
+  // The skill as the texts below name it: the plain skill, or (the human edited it) the file once, which replaces the skill
+  const ref = p.skillRef;
+  const what = ref === undefined ? `skill ${sk}` : p.agent === "codex" ? `${ref} (the human's edited rules)` : `${ref} (the human's edited version of skill ${sk}; do not read skill ${sk})`;
+  const thatFile = ref === undefined ? `skill ${sk}` : "that file";
   if (p.planFile !== undefined) {
     const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
     return template === "A"
-      ? `First read skill ${sk} (if you have not). In plan mode the explanation goes into your plan file, not a separate file: append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: verbatim, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question. Missing: ${missingText}.` +
+      ? `First read ${what} (if you have not). In plan mode the explanation goes into your plan file, not a separate file: append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: verbatim, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question. Missing: ${missingText}.` +
           tpl
-      : `Could you first read skill ${sk} (if you have not)? In plan mode the explanation goes into your plan file, not a separate file. Could you append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: identical to the question text, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question? Missing: ${missingText}.` +
+      : `Could you first read ${what} (if you have not)? In plan mode the explanation goes into your plan file, not a separate file. Could you append to ${p.planFile} a block between <!-- ukagai-explain --> and <!-- /ukagai-explain --> holding the explanation (front matter with question: identical to the question text, Why this decision is needed now, What only you know, Options table, Recommendation, Assumptions, What I checked), then call AskUserQuestion again with the same question? Missing: ${missingText}.` +
           tpl;
   }
   const isPlan = p.path === undefined || p.question === undefined;
   if (isPlan) {
     return template === "A"
       ? `The plan (ExitPlanMode) is incomplete. Missing: ${missingText}.` +
-          (withTail ? `\nFix the plan text following skill ${sk}, then call ExitPlanMode again with the same plan.` : "")
+          (withTail ? `\nFix the plan text following ${what}, then call ExitPlanMode again with the same plan.` : "")
       : `This plan does not meet the requirements yet. Missing: ${missingText}.` +
-          (withTail ? `\nThe format is described in skill ${sk}. Could you fix it and call ExitPlanMode again?` : "");
+          (withTail ? `\nThe format is described in ${what}. Could you fix it and call ExitPlanMode again?` : "");
   }
   const tpl = needsTemplate(p) ? "\n" + templateBlock(p) : "";
   if (template === "A") {
     return (
-      `First read skill ${sk} (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
+      `First read ${what} (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: ${missingText}.\n` +
       (tpl
         ? `Save to: ${p.path} (any name in the same directory). Write it in this shape; question: already holds the question text verbatim.${tpl}`
         : `Save to: ${p.path} (any name in the same directory). ${questionRule(p.question!)}`) +
-      (withTail ? `\nThe full format is in skill ${sk}. When done, call AskUserQuestion again with the same question. Do not ask in prose.` : "")
+      (withTail ? `\nThe full format is in ${thatFile}. When done, call AskUserQuestion again with the same question. Do not ask in prose.` : "")
     );
   }
   return (
-    `Could you first read skill ${sk} (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
+    `Could you first read ${what} (if you have not)? The explanation file (ukagai format) for this decision does not meet the requirements yet. Missing: ${missingText}.\n` +
     (tpl
       ? `Could you write ${p.path} in this shape (any name in the same directory is fine)? question: is identical to the question text.${tpl}`
       : `Could you write ${p.path} (any name in the same directory is fine)? ${p.question!.includes("\n") ? questionRule(p.question!) : `The front matter question: must be identical to "${p.question}".`}`) +
-    (withTail ? `\nThe full format is in skill ${sk}. When done, please call AskUserQuestion again with the same question.` : "")
+    (withTail ? `\nThe full format is in ${thatFile}. When done, please call AskUserQuestion again with the same question.` : "")
   );
 }
 
