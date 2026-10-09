@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SKILL_DIR } from "../../src/settings/target.js";
+import { copyReference } from "../../src/skill/files.js";
 import { fileURLToPath } from "node:url";
 import { bodyHash, decisionFingerprint } from "../../src/contract.js";
 import { contextText, isEscapedQuestion } from "../../src/hook/context-hooks.js";
@@ -648,6 +651,46 @@ for (const ev of ["SessionStart", "SubagentStart"]) {
     assert.ok(out.additionalContext.includes('Explanations and plans are written in ukagai Markdown (callouts, task lists, details, Mermaid, badges, columns, images); the palette is in skill ukagai-explain, section "Rich Markdown".'));
   });
 }
+
+for (const ev of ["SessionStart", "SubagentStart"]) {
+  test(`${ev}: reference/ is copied to <scratchpad>/ukagai/skill/reference and the context names it; no scratchpad, no copy`, async () => {
+    const src = join(SKILL_DIR, "reference");
+    const sp = mkdtempSync(join(tmpdir(), "ukagai-sp-"));
+    const input = (scratch?: string) => JSON.stringify({ session_id: "s1", transcript_path: "/t", cwd: "/c", ...(scratch ? { scratchpad_dir: scratch } : {}), hook_event_name: ev });
+    const r = await runHook(["--data-dir", tmpDir(), "--no-autostart"], input(sp));
+    const ctx: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    assert.equal(ctx.split("\n").length, 5);
+    const dest = join(sp, "ukagai", "skill", "reference");
+    if (existsSync(src)) {
+      assert.deepEqual(readdirSync(dest).sort(), readdirSync(src).filter((n) => !n.startsWith(".")).sort());
+      assert.ok(ctx.includes(`copied to ${dest}/ (read them there;`));
+    } else {
+      assert.ok(!existsSync(dest));
+      assert.doesNotMatch(ctx, /copied to/);
+    }
+    const sp2 = mkdtempSync(join(tmpdir(), "ukagai-sp-"));
+    const none = await runHook(["--data-dir", tmpDir(), "--no-autostart"], input());
+    assert.doesNotMatch(JSON.parse(none.stdout).hookSpecificOutput.additionalContext, /copied to/);
+    assert.ok(!existsSync(join(sp2, "ukagai")));
+  });
+}
+
+test("copyReference copies a given source, skips dotfiles, and fails open on a missing source", () => {
+  const src = mkdtempSync(join(tmpdir(), "ukagai-ref-"));
+  writeFileSync(join(src, "a.md"), "a");
+  writeFileSync(join(src, ".hidden"), "h");
+  const dir = mkdtempSync(join(tmpdir(), "ukagai-dst-"));
+  assert.equal(copyReference(dir, src), join(dir, "reference"));
+  assert.deepEqual(readdirSync(join(dir, "reference")), ["a.md"]);
+  assert.equal(copyReference(dir, join(src, "nope")), undefined);
+});
+
+test("contextText adds the reference sentence only with a referenceDir, and stays 5 lines", () => {
+  const withRef = contextText("/d", "en", "claude", undefined, "/d/skill/reference");
+  assert.ok(withRef.includes("The reference files of skill ukagai-explain are copied to /d/skill/reference/ (read them there; the skill's own directory is outside the project and would ask for a permission)."));
+  assert.equal(withRef.split("\n").length, 5);
+  assert.doesNotMatch(contextText("/d"), /copied to/);
+});
 
 test("SubagentStart prints the context and posts the event with agent_id; SessionStart posts nothing; a down server changes nothing", async () => {
   const input = (ev: string) => JSON.stringify({ session_id: "s1", transcript_path: "/t", cwd: "/c", hook_event_name: ev, agent_id: "a1", agent_type: "general-purpose" });
