@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/Asugawara/ukagai/compare/v0.2.0...v0.2.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **gui:** Enter sends the option under the cursor after a click on the copy button; a mouse-only helper button (tabindex=-1: copy, Show all, full width, version tabs) no longer keeps Enter / Space, which re-ran the button (a second copy) instead of answering ([1523d50](https://github.com/Asugawara/ukagai/commit/1523d501bc35197f9f1b348ad863dfd99472a18d))
+
 ## [0.2.0](https://github.com/Asugawara/ukagai/compare/v0.1.1...v0.2.0) (2026-10-09)
 
 
