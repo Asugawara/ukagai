@@ -1964,3 +1964,51 @@ gui("UX1: a role=button control focused from the keyboard shows a focus ring", a
   ab("press", "Tab"); // a real key press so :focus-visible applies
   assert.equal(ev<boolean>(`(() => { const b = document.querySelector("#decision .none-card"); if (!b) return false; b.focus(); return b.matches(":focus-visible") && getComputedStyle(b).outlineStyle !== "none"; })()`), true);
 });
+
+gui("blocker: after a click on the copy button, Enter sends the option under the cursor and does not copy again", async () => {
+  const { id } = await seedBlocker();
+  await reopen();
+  ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; })(), "ok"`);
+  ab("click", "#decision .todo .copy-btn");
+  await sleep(200);
+  press("Enter");
+  await waitStatus(id, "answer_submitted", 2000);
+  assert.equal(ev<number>(`window.__clip.length`), 1);
+});
+
+gui("a click on Show all leaves Enter to the option under the cursor", async () => {
+  const sentence = "this sentence reproduces a long headline and is used to check folding, ";
+  const markdown = SEED_MD.replace("I recommend B because this is only a check.", `I recommend B because ${sentence.repeat(10)}and that is all.`);
+  const { id } = await seedQuestion({ markdown });
+  ab("set", "viewport", "1440", "900");
+  await reopen();
+  assert.equal(ev<boolean>(`document.querySelector("#head .more-chip").hidden`), false);
+  ab("click", "#head .more-chip");
+  await sleep(200);
+  press("Enter");
+  const d = await waitStatus(id, "answer_submitted", 2000);
+  assert.equal(Object.values(d.response.answers)[0], "B (Recommended)");
+});
+
+gui("blocker: c copies the command and Enter then sends", async () => {
+  const { id } = await seedBlocker();
+  await reopen();
+  ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; })(), "ok"`);
+  press("c");
+  await sleep(200);
+  assert.equal(ev<number>(`window.__clip.length`), 1);
+  press("Enter");
+  await waitStatus(id, "answer_submitted", 2000);
+});
+
+gui("blocker: after the copy button, a click on the left column gives Enter back", async () => {
+  const { id } = await seedBlocker();
+  await reopen();
+  ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; })(), "ok"`);
+  ab("click", "#decision .todo .copy-btn");
+  await sleep(200);
+  ab("click", "#background");
+  await sleep(200);
+  press("Enter");
+  await waitStatus(id, "answer_submitted", 2000);
+});
