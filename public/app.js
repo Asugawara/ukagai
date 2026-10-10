@@ -3600,6 +3600,8 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const t = ev.target;
+  // A mouse-only helper button (tabindex=-1: copy, show all, full width, version tabs) keeps the focus after a click; let Enter / Space act on the cursor, not on it
+  if (t instanceof HTMLButtonElement && t.tabIndex === -1) t.blur();
   const typing = (t instanceof HTMLInputElement && t.type === "text") || t instanceof HTMLTextAreaElement;
   // Keys during IME composition in a text field go to the input. Outside fields, judge by the physical key even with an IME on (logicalKey)
   if (typing && (ev.isComposing || ev.keyCode === 229)) return;
@@ -3635,7 +3637,7 @@ document.addEventListener("keydown", (ev) => {
     if (sd && historyOf(sd)?.first && !(ui?.kind === "question" && (draftOf(sd).cannot || draftOf(sd).none))) { ev.preventDefault(); openHistory(sd); return; }
   }
   if (!ui || ui.closed) return;
-  const isBtn = t instanceof HTMLButtonElement;
+  const isBtn = t instanceof HTMLButtonElement && t.tabIndex !== -1;
 
   if (ui.kind === "checkpoint") {
     if (typing) {
