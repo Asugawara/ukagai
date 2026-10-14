@@ -195,6 +195,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
       hub.broadcast("plan.removed", { name });
     },
   });
+  await planWatcher.seeded; // a plan written once start() resolves must be reported, not taken for one that was there
   // UKAGAI_TERMINAL=none: no terminal at all (the test script sets it so no test asks the real herdr)
   const terminal = opts.terminal ?? (process.env.UKAGAI_TERMINAL === "none" ? new NoTerminal() : new HerdrTerminal("herdr", (error) => log("herdr_failed", { error })));
   // Looks for the session of every plan file on a timer: without a client asking, nobody else would

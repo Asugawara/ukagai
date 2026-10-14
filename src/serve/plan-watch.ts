@@ -19,7 +19,7 @@ export type PlanWatcherOptions = {
  * (name -> mtimeMs + size) is the safety net and also covers a directory that does not exist yet.
  * Files present at start are not reported.
  */
-export function startPlanWatcher(opts: PlanWatcherOptions): { stop(): void } {
+export function startPlanWatcher(opts: PlanWatcherOptions): { stop(): void; seeded: Promise<void> } {
   const { plansDir, onChange, onRemove, isRead, pollMs = 10000, debounceMs = 400 } = opts;
   const known = new Map<string, string>();
   const timers = new Map<string, NodeJS.Timeout>();
@@ -99,6 +99,8 @@ export function startPlanWatcher(opts: PlanWatcherOptions): { stop(): void } {
   interval.unref();
 
   return {
+    /** Resolves once the files present at start are recorded: a file written after this is reported */
+    seeded,
     stop() {
       stopped = true;
       clearInterval(interval);

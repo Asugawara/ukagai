@@ -139,7 +139,8 @@ async function readEnv() {
   const dir = join(home, ".claude", "plans");
   mkdirSync(dir, { recursive: true });
   const dataDir = tmp();
-  const h = await start({ port: 0, dataDir, home });
+  // A short poll: macOS fs.watch can drop the event of a file removed right after it appeared, and the poll is what catches it
+  const h = await start({ port: 0, dataDir, home, planDebounceMs: 30, planPollMs: 100 });
   handles.push(h);
   const url = `http://127.0.0.1:${h.port}`;
   const call = (method: string, path: string, body?: unknown, auth = true) =>
@@ -188,8 +189,30 @@ test("read: 400 / 404 / 401", async () => {
 
 test("read: persists across a store reload; a removed plan is pruned at load and by the watcher", async () => {
   const e = await readEnv();
+  // The watcher must have announced both plans (so it knows them) before b.md is removed: only then does the removal reach onRemove
+  const ac = new AbortController();
+  const announced = new Set<string>();
+  const res = await fetch(`http://127.0.0.1:${e.h.port}/api/stream`, { headers: { authorization: `Bearer ${e.h.token}` }, signal: ac.signal });
+  void (async () => {
+    const dec = new TextDecoder();
+    let buf = "";
+    try {
+      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+        buf += dec.decode(chunk, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          if (/^event: plan\.updated$/m.test(block)) announced.add((JSON.parse(/^data: (.+)$/m.exec(block)![1]!) as { name: string }).name);
+        }
+      }
+    } catch {}
+  })();
   put(e.dir, "a.md", "# A\n", "2026-10-01T00:00:00Z");
   put(e.dir, "b.md", "# B\n", "2026-10-01T00:00:00Z");
+  for (let i = 0; i < 100 && announced.size < 2; i++) await new Promise((r) => setTimeout(r, 50));
+  ac.abort();
+  assert.deepEqual([...announced].sort(), ["a.md", "b.md"]);
   const t = "2026-10-01T00:00:00.000Z";
   await e.call("POST", "/api/plans/a.md/read", { mtime: t });
   await e.call("POST", "/api/plans/b.md/read", { mtime: t });
