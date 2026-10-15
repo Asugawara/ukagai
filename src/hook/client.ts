@@ -207,12 +207,24 @@ export class Client {
     return (Client.json(r.text) as { pending?: unknown } | undefined)?.pending === true;
   }
 
-  async consumeModeSwitch(sessionId: string): Promise<boolean> {
+  /** True when the server says this is the first ask for the pending record (it asks at most once per record) */
+  async askModeSwitch(sessionId: string, timeoutMs: number = SHORT_TIMEOUT_MS): Promise<boolean> {
+    const r = await this.request(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/ask`,
+      undefined,
+      timeoutMs,
+    );
+    if (!r || r.status !== 200) return false;
+    return (Client.json(r.text) as { ask?: unknown } | undefined)?.ask === true;
+  }
+
+  async consumeModeSwitch(sessionId: string, timeoutMs: number = SHORT_TIMEOUT_MS): Promise<boolean> {
     const r = await this.request(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/consume`,
       undefined,
-      SHORT_TIMEOUT_MS,
+      timeoutMs,
     );
     return r !== null && r.status >= 200 && r.status < 300;
   }

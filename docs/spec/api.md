@@ -21,6 +21,7 @@ A human-readable version of the contract in section 3 of `docs/strategy/03-mvp-i
 | `GET /api/sessions` | GUI | State per session |
 | `GET /api/sessions/:id/instruction` | hook | The human's reply to a progress checkpoint (`instruct` / `stop`), consumed on read, or 404. See "Progress checkpoints" |
 | `GET /api/sessions/:id/pending-mode-switch` | hook | Read the unconsumed "approve and switch to auto" record |
+| `POST /api/sessions/:id/pending-mode-switch/ask` | hook | `{ask: true}` once per record while it is pending (the checkpoint hook's "force a prompt" budget) |
 | `POST /api/sessions/:id/pending-mode-switch/consume` | hook | Delete the record above |
 | `GET /api/sessions/:id/pending-rewrite` | hook | The session's last "Cannot answer" memo, or `null` |
 | `POST /api/sessions/:id/pending-rewrite/consume` | hook | Delete the memo above |
@@ -226,9 +227,9 @@ The same API is used when the GUI sends "opened the session list panel" as a sup
 
 `state` is `working` / `waiting_decision` / `idle` / `ended`. `transcript_path` comes from the hook events (absent before the first event and for Codex `--ephemeral`).
 
-### GET /api/sessions/:id/pending-mode-switch / POST .../consume
+### GET /api/sessions/:id/pending-mode-switch / POST .../ask / POST .../consume
 
-The bodies are `PendingModeSwitch` / `ConsumeModeSwitchResponse` in `contract.ts`. The record is created by an answer with `approve: true, set_mode_auto: true` and expires after 60 minutes (`MODE_SWITCH_TTL_MS`). Its consumer is the `PermissionRequest` hook, which has no matcher: the first permission prompt of **any** tool (Bash, Write, WebFetch, …) after the approval takes it and answers `setMode auto`. (After a hook-allowed ExitPlanMode Claude Code lands in the default mode, and the first prompt is usually not Write / Edit.) The record is also cleared when the session ends (`SessionEnd`) and when a new `approve_plan` decision is created for the session (a new plan: the human decides again).
+The bodies are `PendingModeSwitch` / `AskModeSwitchResponse` / `ConsumeModeSwitchResponse` in `contract.ts`. The record is created by an answer with `approve: true, set_mode_auto: true` and expires after 60 minutes (`MODE_SWITCH_TTL_MS`). Its consumer is the `PermissionRequest` hook, which has no matcher: the first permission prompt of **any** tool (Bash, Write, WebFetch, …) after the approval takes it and answers `setMode auto`. After a hook-allowed ExitPlanMode Claude Code restores the mode from before plan mode (`prePlanMode ?? "default"` in 2.1.300), which is acceptEdits when the human pressed shift+tab from auto; there Edit / Write never prompt, so the switch would rarely happen. The checkpoint `PreToolUse` hook therefore checks the record on the first main-agent `Edit` / `Write` / `MultiEdit` / `NotebookEdit` (no `agent_id`): while the session is in `default` or `acceptEdits` it calls `POST .../ask` (no GET first) and, when that returns `{"ask": true}`, answers `permissionDecision: "ask"`, so the prompt reaches the `PermissionRequest` hook, which switches to auto; while the session is already in `auto` it calls `POST .../consume` directly (a stale record must not answer an unrelated prompt later); in any other mode it leaves the record. The server answers `ask: true` only once per record (a new approval makes a new record), so a prompt the `PermissionRequest` hook did not answer is not repeated on every edit. Parallel edits: only the first forced prompt is answered (Edit / Write normally run one at a time). ExitPlanMode's own `PermissionRequest` cannot be answered: Claude Code still shows its plan dialog ([verification 06](../verification/06-plan-exit-mode.md)). The record is also cleared when the session ends (`SessionEnd`) and when a new `approve_plan` decision is created for the session (a new plan: the human decides again).
 
 ```json
 { "pending": false }
@@ -474,7 +475,7 @@ The allowed transitions are as above (`cancel` uses the existing transitions) (`
 
 | Authorization | Endpoints |
 |---|---|
-| Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `POST /api/decisions/:id/handoff`, `GET /api/sessions/:id/open`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../consume` (both) |
+| Bearer only | `POST /api/decisions`, `GET /api/decisions/:id/wait`, `POST /api/decisions/:id/ack`, `POST /api/decisions/:id/handoff`, `GET /api/sessions/:id/open`, `GET /api/sessions/:id/pending-mode-switch`, `GET /api/sessions/:id/pending-rewrite`, `POST .../ask`, `POST .../consume` (both) |
 | cookie or Bearer | `POST /api/decisions/:id/answer`, `POST /api/events` (with cookie alone, only events whose `hook_event_name` is `ukagai.session_panel_open`. Others get 403), `GET /api/decisions`, `GET /api/decisions/:id`, `GET /api/decisions/:id/history`, `GET /api/plans`, `GET /api/plans/:name`, `GET /api/sessions/:id/plan-versions`, `GET /api/files`, `POST /api/plans/:name/instruct`, `POST /api/plans/:name/read`, `DELETE /api/plans/:name/read`, `GET /api/sessions`, `GET /api/metrics`, `GET /api/config`, `GET /api/settings`, `PUT /api/settings`, `GET /api/skill`, `PUT /api/skill`, `DELETE /api/skill`, `GET /api/stream` |
 | none | `GET /healthz`, `GET /`, `GET /settings` (and `/settings/`), `GET /public/*` |
 - **Host**: anything other than `127.0.0.1:<port>` and `localhost:<port>` (port is the serve one) gets 400 (DNS rebinding protection).
@@ -512,7 +513,7 @@ The body is `{"error":"<short description>"}`.
 
 ## Points not in the plan (added by this document and contract.ts)
 
-- `DecisionContext.ai_title` (the transcript's `ai-title`. Also copied to `session.title` if that is missing), `CreateDecisionRequest.status`, `PendingModeSwitch` / `ConsumeModeSwitchResponse`, the constants `MODE_SWITCH_TTL_MS` / `CANCEL_WINDOW_MS`.
+- `DecisionContext.ai_title` (the transcript's `ai-title`. Also copied to `session.title` if that is missing), `CreateDecisionRequest.status`, `PendingModeSwitch` / `AskModeSwitchResponse` / `ConsumeModeSwitchResponse`, the constants `MODE_SWITCH_TTL_MS` / `CANCEL_WINDOW_MS`.
 
 - `WaitResponse` is `{ "response": DecisionResponse }` (the plan says "200 + response").
 - The response of `POST /api/decisions/:id/ack` is `Decision`, the error body is `{"error":...}`, and the response of `POST /api/events` is 204.
@@ -528,6 +529,6 @@ Hook-side conventions aligned with the W3 implementation.
 - Loop guard: the hook takes all of `GET /api/decisions?status=denied_explain` and filters by `session_id`, `agent_id`, `questions[0].question` (`kind: approve_plan` for ExitPlanMode), and the last 2 minutes. On failure (cannot connect / non-200) it does not deny and prints nothing.
 - wait returns 200 only for `answer_submitted` / `fallback`. A fallback has `response.via: "terminal"`, and the hook prints nothing and does not ack.
 - The `explanation` for no explanation (`attached_via: none`) and for ExitPlanMode has `path: ""` (for plan, `markdown` holds the plan body; for none, `markdown: ""`) and a fixed `match: "question"`. The server does not reject an empty `path`.
-- `GET /api/sessions/:id/pending-mode-switch` is 200 + `{"pending": boolean}`, and `POST .../consume` is 2xx.
+- `GET /api/sessions/:id/pending-mode-switch` is 200 + `{"pending": boolean}`, `POST .../ask` is 200 + `{"ask": boolean}` (anything else is false), and `POST .../consume` is 2xx.
 - `GET /api/sessions/:id/pending-rewrite` is 200 + a memo or `null`; the hook treats anything else as no memo.
 - Hook arguments: `--poll-timeout-ms` (for tests), `--deny-template A|B` (default A).
