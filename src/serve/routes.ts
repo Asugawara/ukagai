@@ -537,6 +537,10 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ consumed: store.consumeModeSwitch(c.req.param("id")) });
   });
 
+  app.post("/api/sessions/:id/pending-mode-switch/ask", auth("bearer"), jsonOnly, (c) => {
+    return c.json({ ask: store.askModeSwitch(c.req.param("id")) });
+  });
+
   app.get("/api/sessions/:id/pending-rewrite", auth("bearer"), (c) => {
     return c.json(store.getRewrite(c.req.param("id")));
   });

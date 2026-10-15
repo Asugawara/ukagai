@@ -458,6 +458,9 @@ export type PendingModeSwitch = z.infer<typeof PendingModeSwitch>;
 /** POST /api/sessions/:id/pending-mode-switch/consume. True if there was an unconsumed record */
 export const ConsumeModeSwitchResponse = z.object({ consumed: z.boolean() });
 export type ConsumeModeSwitchResponse = z.infer<typeof ConsumeModeSwitchResponse>;
+/** True once per record: the checkpoint hook asks the human at most once per approval */
+export const AskModeSwitchResponse = z.object({ ask: z.boolean() });
+export type AskModeSwitchResponse = z.infer<typeof AskModeSwitchResponse>;
 
 // ---- "Cannot answer" ----
 

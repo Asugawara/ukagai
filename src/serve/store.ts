@@ -114,7 +114,7 @@ export class Store {
   private decisions = new Map<string, Decision>();
   private byToolUse = new Map<string, string>();
   private sessions = new Map<string, SessionSummary>();
-  private modeSwitches = new Map<string, { set_at: number }>();
+  private modeSwitches = new Map<string, { set_at: number; asked?: boolean }>();
   private rewrites = new Map<string, NonNullable<PendingRewrite>>();
   private expiredAt = new Map<string, number>();
   private waiters = new Map<string, Set<() => void>>();
@@ -929,6 +929,15 @@ export class Store {
       set_at: new Date(m.set_at).toISOString(),
       expires_at: new Date(m.set_at + MODE_SWITCH_TTL_MS).toISOString(),
     };
+  }
+
+  /** True only while the record is pending and has not been asked about yet; marks it asked */
+  askModeSwitch(sessionId: string): boolean {
+    if (!this.getModeSwitch(sessionId).pending) return false;
+    const m = this.modeSwitches.get(sessionId);
+    if (!m || m.asked) return false;
+    m.asked = true;
+    return true;
   }
 
   consumeModeSwitch(sessionId: string): boolean {

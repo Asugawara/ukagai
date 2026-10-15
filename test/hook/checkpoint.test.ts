@@ -144,3 +144,113 @@ test("integration with the real server: instruct delivered once, then nothing", 
   const second = await runHook(hargs, input());
   assert.equal(second.stdout, "");
 });
+
+// Plan-approval auto switch: ask (once per record, decided by the server) on the first main-agent edit
+const MODE_SWITCH = "/api/sessions/s-1/pending-mode-switch";
+const modeInput = (tool: string, mode: string, extra: Record<string, unknown> = {}) => input(tool, { permission_mode: mode, ...extra });
+const askAnswer = (ask: boolean, inner: Handler = () => false): Handler => (req, res) =>
+  req.method === "POST" && req.path === `${MODE_SWITCH}/ask` ? json(res, 200, { ask }) : inner(req, res);
+const pendingSwitch = (inner: Handler = () => false): Handler => askAnswer(true, inner);
+const modeCalls = (f: Fake, suffix = "") => f.calls.filter((c) => c.path === `${MODE_SWITCH}${suffix}`);
+const ASK = {
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "ask",
+    permissionDecisionReason:
+      "[ukagai] You chose auto mode when approving the plan: ukagai answers this prompt and switches the session to auto mode.",
+  },
+};
+
+test("mode switch: Write in acceptEdits asks once through /ask, with no GET and no consume", async () => {
+  await withServer(pendingSwitch(), async (f, d) => {
+    const r = await runHook(args(f, d), modeInput("Write", "acceptEdits"));
+    assert.deepEqual(JSON.parse(r.stdout), ASK);
+    assert.equal(modeCalls(f, "/ask").length, 1);
+    assert.equal(modeCalls(f).length, 0);
+    assert.equal(modeCalls(f, "/consume").length, 0);
+  });
+});
+
+test("mode switch: Edit in default, MultiEdit and NotebookEdit ask like Write", async () => {
+  for (const [tool, mode] of [["Edit", "default"], ["MultiEdit", "acceptEdits"], ["NotebookEdit", "acceptEdits"]] as const) {
+    await withServer(pendingSwitch(), async (f, d) => {
+      assert.deepEqual(JSON.parse((await runHook(args(f, d), modeInput(tool, mode))).stdout), ASK, tool);
+    });
+  }
+});
+
+test("mode switch: the server says ask: false (already asked or nothing pending) → no ask", async () => {
+  await withServer(askAnswer(false), async (f, d) => {
+    const r = await runHook(args(f, d), modeInput("Write", "acceptEdits"));
+    assert.equal(r.stdout, "");
+    assert.equal(modeCalls(f, "/ask").length, 1);
+  });
+});
+
+test("mode switch: in auto the record is consumed directly (no GET, no ask) and nothing is printed", async () => {
+  await withServer(pendingSwitch(), async (f, d) => {
+    const r = await runHook(args(f, d), modeInput("Write", "auto"));
+    assert.equal(r.stdout, "");
+    assert.equal(modeCalls(f, "/consume").length, 1);
+    assert.equal(modeCalls(f, "/ask").length, 0);
+    assert.equal(modeCalls(f).length, 0);
+  });
+});
+
+test("mode switch: other modes and a missing mode make no extra request", async () => {
+  for (const mode of ["plan", "bypassPermissions", "dontAsk"]) {
+    await withServer(pendingSwitch(), async (f, d) => {
+      const r = await runHook(args(f, d), modeInput("Write", mode));
+      assert.equal(r.stdout, "", mode);
+      assert.equal(f.calls.filter((c) => c.path.includes("pending-mode-switch")).length, 0, mode);
+    });
+  }
+  await withServer(pendingSwitch(), async (f, d) => {
+    const r = await runHook(args(f, d), input("Write"));
+    assert.equal(r.stdout, "");
+    assert.equal(f.calls.filter((c) => c.path.includes("pending-mode-switch")).length, 0);
+  });
+});
+
+test("mode switch: a subagent's Write (agent_id) and Bash make no extra request", async () => {
+  await withServer(pendingSwitch(), async (f, d) => {
+    assert.equal((await runHook(args(f, d), modeInput("Write", "acceptEdits", { agent_id: "a1" }))).stdout, "");
+    assert.equal((await runHook(args(f, d), modeInput("Bash", "acceptEdits"))).stdout, "");
+    assert.equal(f.calls.filter((c) => c.path.includes("pending-mode-switch")).length, 0);
+  });
+});
+
+test("mode switch: no pending switch (404 on /ask) → output as before", async () => {
+  await withServer(() => false, async (f, d) => {
+    assert.equal((await runHook(args(f, d), modeInput("Write", "acceptEdits"))).stdout, "");
+  });
+  await withServer(ins("instruct", "go on"), async (f, d) => {
+    const out = JSON.parse((await runHook(args(f, d), modeInput("Write", "acceptEdits"))).stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, undefined);
+    assert.match(out.additionalContext, /says: go on\n/);
+  });
+});
+
+test("mode switch: a stop instruction denies and wins over the ask", async () => {
+  await withServer(pendingSwitch(ins("stop", "")), async (f, d) => {
+    const out = JSON.parse((await runHook(args(f, d), modeInput("Write", "acceptEdits"))).stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "deny");
+  });
+});
+
+test("mode switch: a stop instruction in auto still consumes the record, output is the deny", async () => {
+  await withServer(pendingSwitch(ins("stop", "")), async (f, d) => {
+    const out = JSON.parse((await runHook(args(f, d), modeInput("Write", "auto"))).stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "deny");
+    assert.equal(modeCalls(f, "/consume").length, 1);
+  });
+});
+
+test("mode switch: an instruction text and the ask share one output", async () => {
+  await withServer(pendingSwitch(ins("instruct", "do B next")), async (f, d) => {
+    const out = JSON.parse((await runHook(args(f, d), modeInput("Write", "acceptEdits"))).stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "ask");
+    assert.equal(out.permissionDecisionReason, ASK.hookSpecificOutput.permissionDecisionReason);
+    assert.match(out.additionalContext, /says: do B next\n/);
+  });
+});
