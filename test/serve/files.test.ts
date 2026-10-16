@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileTag } from "../../src/serve/files.js";
+import { createHash } from "node:crypto";
+import { FRAME_CSP, FRAME_POLICY, fileTag } from "../../src/serve/files.js";
+import { FRAME_HELPER } from "../../src/serve/frame-helper.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const roots: string[] = [];
@@ -67,6 +69,9 @@ async function env() {
   return { home, dataDir, scratch, id, url, h, get, file, approve, explained, fileOf };
 }
 
+/** What every non-200 answer of /api/files carries: it satisfies FRAME_POLICY, so the frame shows the error instead of a broken-page icon */
+const ERROR_CSP = "sandbox; default-src 'none'; base-uri 'none'";
+
 test("served: relative to the document dir, scratchpad (absolute and ../), plans dir, data dir; headers", async () => {
   const e = await env();
   put(join(e.scratch, "ukagai", "shots", "a.png"));
@@ -102,6 +107,7 @@ test("forbidden and missing are all 404 with the same body", async () => {
     const r = await e.file(p);
     assert.equal(r.status, 404, p);
     assert.deepEqual(await r.json(), { error: "not found" });
+    assert.equal(r.headers.get("content-security-policy"), ERROR_CSP, p); // opts in, so the GUI's frame shows the error text
   }
   assert.equal((await e.get(`decision=nope&path=a.png`)).status, 404);
   assert.equal((await e.get(`path=a.png`)).status, 404);
@@ -120,13 +126,16 @@ test("a plan's image outside the plans dir is not served; a symlink in the plans
 test("401 without a cookie or bearer; the GUI cookie works", async () => {
   const e = await env();
   put(join(e.scratch, "ukagai", "a.png"));
-  assert.equal((await e.file("a.png", false)).status, 401);
+  const none = await e.file("a.png", false);
+  assert.equal(none.status, 401);
+  assert.equal(none.headers.get("content-security-policy"), ERROR_CSP);
   const bad = await fetch(`${e.url}/api/files?decision=${e.id}&path=a.png`, { headers: { authorization: "Bearer wrong" } });
   assert.equal(bad.status, 401);
   const page = await fetch(e.url + "/");
   const cookie = (page.headers.get("set-cookie") ?? "").split(";")[0]!;
   const ok = await fetch(`${e.url}/api/files?decision=${e.id}&path=a.png`, { headers: { cookie } });
   assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("content-security-policy"), null); // a served image carries none
 });
 
 test("the document's own directory is a root only for a standalone explanation file", async () => {
@@ -186,7 +195,8 @@ test("html: served with the CSP sandbox and nosniff; scripts stay; relative src 
   const r = await e.file("cmp.html");
   assert.equal(r.status, 200);
   assert.equal(r.headers.get("content-type"), "text/html; charset=utf-8");
-  assert.equal(r.headers.get("content-security-policy"), "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:");
+  assert.equal(r.headers.get("content-security-policy"), FRAME_CSP);
+  assert.equal(FRAME_CSP, `sandbox allow-scripts; ${FRAME_POLICY}`);
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
   const body = await r.text();
   const dir = realpathSync(join(e.scratch, "ukagai"));
@@ -200,7 +210,7 @@ test("html: served with the CSP sandbox and nosniff; scripts stay; relative src 
   assert.ok(body.includes(`href="${u("a.css")}"`));
   assert.ok(body.includes(`url("${u("bg.png", "&")}")`));
   assert.ok(body.includes(`url("${u("../up.png", "&").replace(encodeURIComponent(join(dir, "../up.png")), encodeURIComponent(join(dir, "..", "up.png")))}")`));
-  for (const keep of ['src="data:image/png;base64,AAAA"', 'href="https://example.com/x"', 'href="#frag"', 'src="/abs.png"', 'href="mailto:a@b.c"', 'src="//cdn.example/x.png"', "<script>document.title = 'x'</script>"]) {
+  for (const keep of ['src="data:image/png;base64,AAAA"', 'href="https://example.com/x"', 'href="#frag"', 'src="/abs.png"', 'href="mailto:a@b.c"', 'src="//cdn.example/x.png"', "<script>document.title = 'x'</script>"]) { // the page's own script is kept as written: it does not match the hash, so the CSP blocks it
     assert.ok(body.includes(keep), keep);
   }
   // a rewritten URL resolves through the same route
@@ -212,6 +222,83 @@ test("html: served with the CSP sandbox and nosniff; scripts stay; relative src 
   const img = await e.get(q);
   assert.equal(img.status, 200);
   assert.equal(img.headers.get("content-security-policy"), null); // only pages carry the CSP
+});
+
+test("html: the frame helper sits first and is allowed by its hash alone; nothing from the page gets through", async () => {
+  const e = await env();
+  const hostile = '<script>document.body.dataset.pwned=1</script><img src=x onerror="document.body.dataset.pwned=1"><a href="javascript:alert(1)">j</a>';
+  put(join(e.scratch, "ukagai", "doctype.html"), `<!DOCTYPE html><html><body>${hostile}</body></html>`);
+  put(join(e.scratch, "ukagai", "bom.html"), `\uFEFF \n<!doctype html>\n<p>x</p>`);
+  put(join(e.scratch, "ukagai", "bare.html"), `<p>no doctype</p>${hostile}`);
+  const get = async (f: string) => {
+    const r = await e.file(f);
+    const csp = r.headers.get("content-security-policy") ?? "";
+    const body = Buffer.from(await r.arrayBuffer()).toString("utf8"); // not r.text(): it drops a BOM
+    return { body, csp };
+  };
+  const hash = createHash("sha256").update(FRAME_HELPER).digest("base64");
+  const tag = `<script>${FRAME_HELPER}</script>`;
+  assert.ok(FRAME_POLICY.includes(`script-src 'sha256-${hash}'`), FRAME_POLICY);
+  const a = await get("doctype.html");
+  assert.equal(a.csp, FRAME_CSP);
+  assert.ok(a.body.startsWith(`<!DOCTYPE html>${tag}`), a.body.slice(0, 80)); // right after the doctype, exactly the hashed text
+  assert.equal(a.body.split(FRAME_HELPER).length - 1, 1);
+  assert.ok(!/nonce/i.test(a.csp + a.body.replace(FRAME_HELPER, "")), "no nonce anywhere");
+  assert.ok(a.body.includes("<script>document.body.dataset.pwned=1</script>") && a.body.includes('onerror="document.body.dataset.pwned=1"') && a.body.includes('href="javascript:alert(1)"'));
+  assert.match(a.body, /<\/script><html>/); // the helper ends before the page starts
+  const scriptSrc = /script-src([^;]*)/.exec(a.csp)?.[1] ?? "";
+  assert.equal(scriptSrc.trim(), `'sha256-${hash}'`, "the hash is the only source");
+  const bom = await get("bom.html");
+  assert.ok(bom.body.startsWith(`\uFEFF \n<!doctype html>${tag}`));
+  const bare = await get("bare.html");
+  assert.ok(bare.body.startsWith(tag), "no doctype: at byte 0");
+  assert.ok(bare.body.endsWith(`<p>no doctype</p>${hostile}`));
+  assert.match(a.csp, /^sandbox allow-scripts; default-src 'none'; /); // never allow-same-origin / allow-top-navigation / allow-forms
+  assert.ok(!/allow-(same-origin|top-navigation|forms|popups|modals)/.test(a.csp));
+  // the iframe csp attribute is the policy without the sandbox: the GUI gets exactly FRAME_POLICY from the server
+  const gui = await (await fetch(e.url + "/")).text();
+  assert.equal(/<html[^>]*\sdata-frame-csp="([^"]*)"/.exec(gui)?.[1], FRAME_POLICY);
+  assert.ok(FRAME_CSP.endsWith(FRAME_POLICY) && !/sandbox/.test(FRAME_POLICY));
+});
+
+test("html: view=tab (Open in new tab) is served with the strict policy and no helper; its rewritten links stay in that view", async () => {
+  const e = await env();
+  put(join(e.scratch, "ukagai", "tab.html"), '<!doctype html><p>x</p><img src="a.png"><a href="next.html">n</a>');
+  put(join(e.scratch, "ukagai", "a.png"));
+  const r = await e.get(`decision=${e.id}&path=${encodeURIComponent("tab.html")}&view=tab`);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("content-security-policy"), "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:; base-uri 'none'");
+  assert.ok(!/allow-scripts|script-src/.test(r.headers.get("content-security-policy") ?? ""));
+  const body = await r.text();
+  assert.ok(!body.includes("<script"), "no helper");
+  assert.equal(body.match(/&amp;view=tab/g)?.length, 2, body); // the image and the link carry the flag
+  const framed = await (await e.file("tab.html")).text();
+  assert.ok(!framed.includes("view=tab") && framed.includes("<script>"));
+  // the flag is not part of the tag: the rewritten image URL (flag included) is served
+  const img = /src="(\/api\/files\?[^"]+)"/.exec(body)![1]!.slice("/api/files?".length).replace(/&amp;/g, "&");
+  assert.equal((await e.get(img, false)).status, 200);
+});
+
+test("html: shadow roots and <link> are neutralised (any case) as well as http-equiv", async () => {
+  const e = await env();
+  put(join(e.scratch, "ukagai", "dsd.html"), '<!doctype html><div><template shadowrootmode="closed"><a href="http://x.test/">a</a></template></div><template ShadowRootMode=open ShadowRootDelegatesFocus>b</template><LINK rel=prerender href="http://x.test/p"><link\nrel="preconnect" href="http://x.test"><p>linkage and shadow text</p>');
+  const body = await (await e.file("dsd.html")).text();
+  const page = body.slice(body.indexOf("</script>"));
+  assert.ok(!/shadowroot/i.test(page.replace(/data-ukagai-shadowroot/gi, "")), page);
+  assert.equal(page.match(/data-ukagai-shadowroot/gi)?.length, 3);
+  assert.ok(!/<link\b/i.test(page), page);
+  assert.equal(page.match(/<ukagai-link/gi)?.length, 2);
+  assert.ok(page.includes("linkage and shadow text")); // text that merely spells these words is rewritten too (safe side: the rules are global string replacements, not a parse)
+});
+
+test("html: every http-equiv is renamed (any case, several metas): no meta refresh survives", async () => {
+  const e = await env();
+  put(join(e.scratch, "ukagai", "meta.html"), '<!doctype html><meta http-equiv="refresh" content="0;url=http://x.test/"><META HTTP-EQUIV=Refresh content="1;url=//y.test/"><meta Http-Equiv="Content-Security-Policy" content="x"><p>p</p>');
+  const r = await e.file("meta.html");
+  const body = await r.text();
+  assert.ok(!/http-equiv/i.test(body.replace(/data-ukagai-http-equiv/gi, "")), body);
+  assert.equal(body.match(/data-ukagai-http-equiv/gi)?.length, 3);
+  assert.ok(!/<meta[^>]*\shttp-equiv/i.test(body));
 });
 
 test("html: 2 MB cap, .htm too, roots still enforced, a plan's page works through plan=", async () => {
@@ -253,7 +340,7 @@ test("a plan document's relative path also resolves against the session's <scrat
   assert.equal((await e.fileOf(own, "shot.png")).status, 200);
 
   put(join(plans, "mock.html"), "<p>plans first</p>");
-  assert.equal(await (await e.fileOf(own, "mock.html")).text(), "<p>plans first</p>");
+  assert.ok((await (await e.fileOf(own, "mock.html")).text()).endsWith("</script><p>plans first</p>")); // the page, after the injected helper
 
   assert.equal((await e.fileOf(block, "../../../../../../out.png")).status, 404);
   assert.equal((await e.fileOf(block, outside)).status, 404);

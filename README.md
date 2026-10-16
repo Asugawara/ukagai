@@ -14,7 +14,7 @@ ukagai intercepts the decisions a coding agent asks a human for (Claude Code's `
 
 ## What makes it different
 
-- **The agent explains in rich Markdown and you see it rendered.** Diagrams (Mermaid), diffs, images and whole HTML pages, such as UI or landing-page variants in a sandboxed frame, appear next to the options, so you compare and decide in one place.
+- **The agent explains in rich Markdown and you see it rendered.** Diagrams (Mermaid), diffs, images and whole HTML pages, such as UI or landing-page variants in a sandboxed frame that runs no script of the page's own (full screen with zoom, or in a new tab without any script), appear next to the options, so you compare and decide in one place.
 - **One inbox across sessions and agents.** Claude Code and Codex CLI, questions and plan approvals, with a pending list and history.
 - **No MCP, nothing added to every turn.** Hooks and a skill intercept the agent's own `AskUserQuestion` / plan approval; no tool definitions sit in the context.
 

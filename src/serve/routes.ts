@@ -31,7 +31,8 @@ import type { GuiOpener } from "./gui-open.js";
 import type { SseHub } from "./sse.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
-import { FILE_TYPES, HTML_CSP, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml, type DocumentScope } from "./files.js";
+import { FILE_TYPES, FRAME_CSP, FRAME_POLICY, TAB_CSP, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml, type DocumentScope } from "./files.js";
+import { injectFrameHelper } from "./frame-helper.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanSummary } from "../contract.js";
 import { PlanSessions } from "./plan-session.js";
@@ -181,8 +182,9 @@ export function createApp(deps: AppDeps): Hono {
     const lang = deps.settings?.get().lang ?? deps.lang ?? "en";
     const theme = deps.settings?.get().theme ?? "system";
     html = html.replace(/<html(\s[^>]*)?>/i, (_m, attrs: string | undefined) => {
-      const rest = (attrs ?? "").replace(/\s(?:lang|data-lang|data-theme)="[^"]*"/gi, "");
-      return `<html lang="${lang}" data-lang="${lang}"${theme === "system" ? "" : ` data-theme="${theme}"`}${rest}>`;
+      const rest = (attrs ?? "").replace(/\s(?:lang|data-lang|data-theme|data-frame-csp)="[^"]*"/gi, "");
+      // data-frame-csp: the policy for the embedded HTML view's iframe `csp` attribute (the same string the frame pages are served with)
+      return `<html lang="${lang}" data-lang="${lang}" data-frame-csp="${FRAME_POLICY}"${theme === "system" ? "" : ` data-theme="${theme}"`}${rest}>`;
     });
     c.header("Cache-Control", "no-store");
     return c.html(html);
@@ -303,6 +305,11 @@ export function createApp(deps: AppDeps): Hono {
     const d = c.req.query("decision");
     return d !== undefined ? `decision=${encodeURIComponent(d)}` : `plan=${encodeURIComponent(c.req.query("plan") ?? "")}`;
   };
+  // Every non-200 answer (401, 404, ...) opts in to a policy too: the GUI's frame refuses a document without one, and would show a broken-page icon instead of the error text
+  app.use("/api/files", async (c, next) => {
+    await next();
+    if (c.res.status !== 200) c.header("Content-Security-Policy", "sandbox; default-src 'none'; base-uri 'none'");
+  });
   // A page's own sub-resources carry a tag instead of the cookie (a sandboxed frame does not send it): see files.ts fileTag
   app.get("/api/files", (c, next) => (validFileTag(whoOf(c), c.req.query("path") ?? "", c.req.query("tag")) ? next() : filesAuth(c, next)), async (c) => {
     const notFound = () => c.json({ error: "not found" }, 404);
@@ -330,8 +337,11 @@ export function createApp(deps: AppDeps): Hono {
         "Cache-Control": "private, no-cache",
       };
       if (isHtmlFile(file)) {
-        headers["Content-Security-Policy"] = HTML_CSP;
-        return c.body(rewriteHtml(body.toString("utf8"), dirname(file), whoOf(c)), 200, headers);
+        // view=tab ("Open in new tab"): a top-level tab has no embedder enforcing a policy, so it gets no helper and no script at all
+        const tab = c.req.query("view") === "tab";
+        headers["Content-Security-Policy"] = tab ? TAB_CSP : FRAME_CSP;
+        const page = rewriteHtml(body.toString("utf8"), dirname(file), whoOf(c), tab);
+        return c.body(tab ? page : injectFrameHelper(page), 200, headers);
       }
       return c.body(new Uint8Array(body), 200, headers);
     } catch {

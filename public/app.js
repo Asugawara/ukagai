@@ -295,6 +295,13 @@ function imageUrl(src, doc) {
 
 // Images after the HTML is materialized: external ones (and anything else that slipped past the regex via entities) are removed; local paths become /api/files URLs
 // with the alt text as caption, a button that opens the lightbox, and the alt text with "image not found" when the file cannot be loaded
+// An embedded HTML page may run ukagai's frame helper (zoom, wheel, height) only where the iframe `csp` attribute (CSP Embedded Enforcement, Chromium) is supported: it makes every document the frame
+// loads enforce the server's policy (data-frame-csp on <html>, the same string the page is served with). Elsewhere the frame has no scripts at all (sandbox="")
+const FRAME_CSP = document.documentElement.getAttribute("data-frame-csp") ?? "";
+const FRAME_SCRIPTS = FRAME_CSP !== "" && "csp" in HTMLIFrameElement.prototype;
+const frameAttrs = FRAME_SCRIPTS ? { sandbox: "allow-scripts", csp: FRAME_CSP } : { sandbox: "" };
+// The new-tab link: a top-level tab has no embedder to enforce a policy, so the server serves that view without any script
+const tabUrl = (src) => `${src}${src.includes("?") ? "&" : "?"}view=tab`;
 function documentImages(container, doc) {
   for (const img of [...container.querySelectorAll("img")]) {
     const src = imageUrl((img.getAttribute("src") ?? "").trim(), doc);
@@ -305,8 +312,9 @@ function documentImages(container, doc) {
       const frame = el("figure", { class: "doc-frame" },
         el("div", { class: "doc-frame-bar" },
           el("span", { class: "doc-frame-alt", text: alt || name }), el("span", { class: "chip", text: name }),
+          el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
           el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, text: t("frame_full") })),
-        el("iframe", { class: "doc-frame-view", sandbox: "", src, loading: "lazy", title: alt || name }));
+        el("iframe", { class: "doc-frame-view", ...frameAttrs, src, loading: "lazy", title: alt || name }));
       img.replaceWith(frame);
       const fp = frame.parentElement;
       if (fp?.tagName === "P" && fp.childNodes.length === 1) fp.replaceWith(frame);
@@ -1519,6 +1527,7 @@ let overlay = null; // { kind, el, sel?, v2?, ui? }
 function closeOverlay() {
   if (!overlay) return;
   const back = overlay.opener;
+  if (document.fullscreenElement === overlay.el) document.exitFullscreen().catch(() => {});
   overlay.el.remove();
   overlay = null;
   if (!drawerOpen()) setBackgroundInert(false);
@@ -1527,7 +1536,9 @@ function closeOverlay() {
 function openOverlay(kind, title, body, extra = {}) {
   closeOverlay();
   const opener = document.activeElement;
-  const card = el("div", { class: `overlay-card ${kind}`, tabindex: "-1" }, el("div", { class: "overlay-title" }, el("span", { text: title })), body);
+  const { head, ...rest } = extra; // `head` replaces the plain title row
+  extra = rest;
+  const card = el("div", { class: `overlay-card ${kind}`, tabindex: "-1" }, head ?? el("div", { class: "overlay-title" }, el("span", { text: title })), body);
   const root = el("div", { class: `overlay ${kind}`, role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === root) closeOverlay(); } }, card);
   document.body.append(root);
   overlay = { kind, el: root, opener, ...extra };
@@ -1544,12 +1555,60 @@ function openLightbox(button) {
   const full = el("img", { class: "lightbox-img", src: thumb.getAttribute("src"), alt, onclick: closeOverlay });
   openOverlay("lightbox", alt || t("image"), full);
 }
-// An embedded HTML page at full size: the same overlay, Esc / a click on the backdrop closes it
+// An embedded HTML page at full size: the shared overlay, asked to be the browser's real full screen (the overlay itself fills the viewport when that is refused).
+// A top bar carries the zoom controls; the frame's helper script (src/serve/frame-helper.ts) does the zooming and reports its size / zoom back
+const clampZoom = (z) => Math.min(4, Math.max(0.1, z));
 function openFrame(button) {
   const title = button.getAttribute("data-title") ?? "";
+  const src = button.getAttribute("data-src");
   button.focus({ preventScroll: true });
-  openOverlay("frame", title, el("iframe", { class: "frame-full", sandbox: "", src: button.getAttribute("data-src"), title }));
+  const frame = el("iframe", { class: "frame-full", ...frameAttrs, src, title });
+  const zoomLabel = el("span", { class: "frame-zoom", text: "100%" });
+  const btn = (label, fn) => el("button", { class: "frame-btn", type: "button", text: label, onclick: fn });
+  const zoomControls = FRAME_SCRIPTS ? [zoomLabel,
+    btn(t("frame_fit"), () => frameZoom("fit")), btn("100%", () => frameZoom(1)),
+    btn(t("frame_zoom_out"), () => frameZoom(overlay.zoom / 1.25)), btn(t("frame_zoom_in"), () => frameZoom(overlay.zoom * 1.25))] : [];
+  const head = el("div", { class: "frame-bar" },
+    el("span", { class: "frame-title", text: title }), ...zoomControls,
+    el("a", { class: "frame-btn", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
+    btn(t("frame_close"), closeOverlay));
+  openOverlay("frame", title, frame, { head, frame, zoom: 1, zoomLabel });
+  overlay.el.requestFullscreen?.()?.catch?.(() => {});
 }
+function frameZoom(v) {
+  const w = overlay?.kind === "frame" ? overlay.frame.contentWindow : null;
+  if (!w) return;
+  w.postMessage(v === "fit" ? { ukagai: "fit" } : { ukagai: "zoom", value: clampZoom(v) }, "*");
+}
+function frameKey(key) {
+  if (key === "Escape") closeOverlay();
+  else if (key === "+" || key === "=") frameZoom(overlay.zoom * 1.25);
+  else if (key === "-") frameZoom(overlay.zoom / 1.25);
+  else if (key === "0") frameZoom(1);
+  else if (key === "f") frameZoom("fit");
+}
+// The browser's own Esc leaves full screen even when the focus is inside the frame: that closes the overlay too
+document.addEventListener("fullscreenchange", () => { if (overlay?.kind === "frame" && !document.fullscreenElement) closeOverlay(); });
+// Reports from the frame helper. Only a message whose source is a frame that is in the document now counts (the origin is opaque, so the window is the identity)
+window.addEventListener("message", (e) => {
+  const d = e.data;
+  if (!d || typeof d !== "object" || !e.source) return;
+  const num = (v, lo, hi) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+  if (overlay?.kind === "frame" && overlay.frame.isConnected && e.source === overlay.frame.contentWindow) {
+    if (d.ukagai === "frame" && num(d.zoom, 0.05, 5)) {
+      if (!overlay.modeSent) { overlay.modeSent = true; e.source.postMessage({ ukagai: "mode", overlay: true }, "*"); } // zoom, pinch and zoom keys are the helper's only in full screen
+      overlay.zoom = d.zoom;
+      overlay.zoomLabel.textContent = `${Math.round(d.zoom * 100)}%`;
+    } else if (d.ukagai === "key" && typeof d.key === "string") frameKey(d.key);
+    return;
+  }
+  if (d.ukagai !== "frame" || !num(d.h, 0, 1e6) || !num(d.w, 0, 1e6) || !num(d.zoom, 0.05, 5)) return;
+  for (const f of document.querySelectorAll("iframe.doc-frame-view")) {
+    if (f.contentWindow && f.contentWindow === e.source) { f._natural = d.h * d.zoom; fitInline(f); }
+  }
+});
+function fitInline(f) { f.style.height = `${Math.round(Math.min(Math.max(f._natural, 120), window.innerHeight * 0.7))}px`; }
+window.addEventListener("resize", () => { for (const f of document.querySelectorAll("iframe.doc-frame-view")) if (typeof f._natural === "number") fitInline(f); });
 document.addEventListener("click", (e) => {
   const tgt = e.target instanceof Element ? e.target : null;
   const b = tgt?.closest("button.doc-img-open");
@@ -1598,6 +1657,10 @@ function syncCompare() {
 
 function overlayKey(ev) {
   const key = logicalKey(ev);
+  if (overlay.kind === "frame") { // Tab / Enter / Space stay with the focused button
+    if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ["Escape", "+", "=", "-", "0", "f"].includes(key)) { ev.preventDefault(); frameKey(key); }
+    return;
+  }
   ev.preventDefault();
   const d = decisions.get(shownId);
   if (overlay.kind === "history") {
@@ -3605,13 +3668,13 @@ document.addEventListener("keydown", (ev) => {
   const typing = (t instanceof HTMLInputElement && t.type === "text") || t instanceof HTMLTextAreaElement;
   // Keys during IME composition in a text field go to the input. Outside fields, judge by the physical key even with an IME on (logicalKey)
   if (typing && (ev.isComposing || ev.keyCode === 229)) return;
+  if (overlay) { overlayKey(ev); return; }
   if (document.body.classList.contains("fullwide")) {
     const k = logicalKey(ev);
     if (k === "Escape" || k === "f" || k === "Tab") { ev.preventDefault(); setFullwide(false); }
     else if (k === "Enter") ev.preventDefault(); // no submit while full width
     return;
   }
-  if (overlay) { overlayKey(ev); return; }
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
   if (!typing && key === ",") { ev.preventDefault(); openSettings(); return; }
