@@ -22,9 +22,9 @@ export const FILE_TYPES: Record<string, string> = {
 export const isHtmlFile = (f: string): boolean => FILE_TYPES[extname(f).toLowerCase()]?.startsWith("text/html") ?? false;
 
 /**
- * Sent with every served HTML page: a sandbox without allow-same-origin (opaque origin, no navigation, no forms), no network, and no script except ukagai's own
+ * Sent with every served HTML page: a sandbox without allow-same-origin (opaque origin, no popups, no forms, no top navigation), no network, and no script except ukagai's own
  * frame helper (identified by a fresh nonce per response, so the page's <script>, on*= attributes and javascript: URLs stay blocked); only same-origin / data: images
- * and fonts and inline styles
+ * and fonts and inline styles. allow-scripts also lets a <meta http-equiv=refresh> navigate, so rewriteHtml removes every http-equiv and the helper stops links to anything but /api/files
  */
 export const htmlCsp = (nonce: string): string => `sandbox allow-scripts; default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:`;
 export const newNonce = (): string => randomBytes(16).toString("base64");
@@ -123,6 +123,7 @@ export function rewriteHtml(html: string, dir: string, who: string): string {
     return `/api/files?${who}${amp}path=${encodeURIComponent(abs)}${amp}tag=${fileTag(who, abs)}`;
   };
   return html
+    .replace(/http-equiv/gi, "data-ukagai-http-equiv") // no meta refresh (it would navigate the frame away, past the CSP), no meta CSP games
     .replace(/(\s(?:src|href))=("([^"]*)"|'([^']*)')/gi, (m, name: string, q: string, d?: string, sg?: string) => {
       const u = (d ?? sg ?? "").trim();
       return isRelative(u) ? `${name}="${target(u, "&amp;")}"` : m;

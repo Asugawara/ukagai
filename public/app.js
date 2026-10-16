@@ -1595,9 +1595,11 @@ window.addEventListener("message", (e) => {
   }
   if (d.ukagai !== "frame" || !num(d.h, 0, 1e6) || !num(d.w, 0, 1e6) || !num(d.zoom, 0.05, 5)) return;
   for (const f of document.querySelectorAll("iframe.doc-frame-view")) {
-    if (f.contentWindow && f.contentWindow === e.source) f.style.height = `${Math.round(Math.min(Math.max(d.h * d.zoom, 120), window.innerHeight * 0.7))}px`;
+    if (f.contentWindow && f.contentWindow === e.source) { f._natural = d.h * d.zoom; fitInline(f); }
   }
 });
+function fitInline(f) { f.style.height = `${Math.round(Math.min(Math.max(f._natural, 120), window.innerHeight * 0.7))}px`; }
+window.addEventListener("resize", () => { for (const f of document.querySelectorAll("iframe.doc-frame-view")) if (typeof f._natural === "number") fitInline(f); });
 document.addEventListener("click", (e) => {
   const tgt = e.target instanceof Element ? e.target : null;
   const b = tgt?.closest("button.doc-img-open");
@@ -3657,13 +3659,13 @@ document.addEventListener("keydown", (ev) => {
   const typing = (t instanceof HTMLInputElement && t.type === "text") || t instanceof HTMLTextAreaElement;
   // Keys during IME composition in a text field go to the input. Outside fields, judge by the physical key even with an IME on (logicalKey)
   if (typing && (ev.isComposing || ev.keyCode === 229)) return;
+  if (overlay) { overlayKey(ev); return; }
   if (document.body.classList.contains("fullwide")) {
     const k = logicalKey(ev);
     if (k === "Escape" || k === "f" || k === "Tab") { ev.preventDefault(); setFullwide(false); }
     else if (k === "Enter") ev.preventDefault(); // no submit while full width
     return;
   }
-  if (overlay) { overlayKey(ev); return; }
   if (drawerOpen()) { drawerKey(ev); return; }
   const key = logicalKey(ev);
   if (!typing && key === ",") { ev.preventDefault(); openSettings(); return; }

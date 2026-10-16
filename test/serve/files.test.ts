@@ -236,7 +236,8 @@ test("html: the frame helper carries a fresh nonce and sits first; nothing from 
   assert.equal(a.body.split("nonce=").length - 1, 1, "the nonce appears once: on the helper only");
   assert.ok(a.body.includes("<script>document.body.dataset.pwned=1</script>") && a.body.includes('onerror="document.body.dataset.pwned=1"') && a.body.includes('href="javascript:alert(1)"'));
   assert.match(a.body, /<\/script><html>/); // the helper ends before the page starts
-  assert.ok(!a.csp.includes("unsafe-inline'; font") || a.csp.includes("style-src 'unsafe-inline'")); // only styles are inline
+  const scriptSrc = /script-src([^;]*)/.exec(a.csp)?.[1] ?? "";
+  for (const k of ["'unsafe-inline'", "'unsafe-hashes'", "'strict-dynamic'", "'unsafe-eval'"]) assert.ok(!scriptSrc.includes(k), k);
   assert.ok(!/script-src[^;]*unsafe/.test(a.csp) && !/script-src[^;]*\*/.test(a.csp));
   const bom = await get("bom.html");
   assert.ok(bom.body.startsWith(`\uFEFF \n<!doctype html>${tag(bom.nonce)}`));
@@ -246,6 +247,16 @@ test("html: the frame helper carries a fresh nonce and sits first; nothing from 
   assert.ok(bare.body.endsWith(`<p>no doctype</p>${hostile}`));
   assert.match(a.csp, /^sandbox allow-scripts; default-src 'none'; /); // never allow-same-origin / allow-top-navigation / allow-forms
   assert.ok(!/allow-(same-origin|top-navigation|forms|popups|modals)/.test(a.csp));
+});
+
+test("html: every http-equiv is renamed (any case, several metas): no meta refresh survives", async () => {
+  const e = await env();
+  put(join(e.scratch, "ukagai", "meta.html"), '<!doctype html><meta http-equiv="refresh" content="0;url=http://x.test/"><META HTTP-EQUIV=Refresh content="1;url=//y.test/"><meta Http-Equiv="Content-Security-Policy" content="x"><p>p</p>');
+  const r = await e.file("meta.html");
+  const body = await r.text();
+  assert.ok(!/http-equiv/i.test(body.replace(/data-ukagai-http-equiv/gi, "")), body);
+  assert.equal(body.match(/data-ukagai-http-equiv/gi)?.length, 3);
+  assert.ok(!/<meta[^>]*\shttp-equiv/i.test(body));
 });
 
 test("html: 2 MB cap, .htm too, roots still enforced, a plan's page works through plan=", async () => {

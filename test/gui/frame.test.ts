@@ -4,6 +4,7 @@ import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttp } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,9 +103,11 @@ function png(w: number, h: number, [r, g, b]: [number, number, number]): Buffer 
 const QUESTION = "Which header variant, A or B?";
 // Three stacked 1180 x 700 blocks inside overflow-x:auto wrappers, like a comparison mock-up. The page's own script and onerror= would shrink the inline frame (they tell the parent h=5)
 // if they ran: the frame is sandboxed with allow-scripts, but its CSP lets only ukagai's helper (by nonce) run
-const HOSTILE = `parent.postMessage({ ukagai: "frame", w: 1, h: 5, zoom: 1 }, "*")`;
+const HOSTILE = `parent.postMessage({ ukagai: "frame", w: 1, h: 5, zoom: 1, marker: "pwned" }, "*")`;
 const BLOCK = '<div class="scroll" style="overflow-x:auto"><div style="min-width:1180px;height:700px;background:#dbeafe;border-bottom:2px solid #333">block</div></div>';
 const PAGE = `<!doctype html><html><body style="margin:0"><h1>Variants</h1><img id="shot" src="a.png"><p style="background:url(a.png)">x</p>${BLOCK}${BLOCK}${BLOCK}<script>${HOSTILE}</script><img src="missing.png" onerror='${HOSTILE}'></body></html>`;
+const ABSOLUTE = '<!doctype html><html><body style="margin:0"><div style="position:absolute;top:0;height:300px;width:100px;background:#fde68a">abs</div></body></html>';
+const FLOAT = '<!doctype html><html><body style="margin:0"><div style="float:left;height:300px;width:100px;background:#fbcfe8">float</div></body></html>';
 const SHORT = '<!doctype html><html><body style="margin:0"><div style="height:200px;background:#dcfce7">short</div></body></html>';
 
 async function planSession(slug: string): Promise<void> {
@@ -127,6 +130,8 @@ before(async () => {
   writeFileSync(join(scratch, "ukagai", "a.png"), png(120, 80, [37, 99, 235]));
   writeFileSync(join(scratch, "ukagai", "compare.html"), PAGE);
   writeFileSync(join(scratch, "ukagai", "short.html"), SHORT);
+  writeFileSync(join(scratch, "ukagai", "absolute.html"), ABSOLUTE);
+  writeFileSync(join(scratch, "ukagai", "float.html"), FLOAT);
   mkdirSync(join(home, ".claude", "plans"), { recursive: true });
   writeFileSync(join(home, ".claude", "plans", "a.png"), png(120, 80, [22, 163, 74]));
   writeFileSync(join(home, ".claude", "plans", "plan-compare.html"), PAGE);
@@ -185,8 +190,11 @@ const zoomShown = () => text(".overlay.frame .frame-zoom");
 const inlineHeight = () => ev<number>(`document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height`);
 
 gui("an explanation shows the page in a sandboxed iframe; the image inside loads; full screen opens the overlay and Esc closes it", async () => {
-  const { id } = await seedDoc(EXPL);
+  // a recorder in the parent before the page exists: the explanation arrives live, so the recorder survives to see every message of the frame
   ab("open", base + "/");
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  ev(`window.__msgs = [], window.addEventListener("message", (e) => window.__msgs.push(e.data)), "ok"`);
+  const { id } = await seedDoc(EXPL);
   await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
   const src = `/api/files?decision=${id}&path=${encodeURIComponent("compare.html")}`;
   assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("src")`), src);
@@ -202,6 +210,10 @@ gui("an explanation shows the page in a sandboxed iframe; the image inside loads
   assert.equal(Number(frameImageStatus()), 200);
   // the frame's height follows its content (the page is tall: up to 70% of the window), not a fixed 480px. The page's own script / onerror= told the parent h=5: they did not run
   await waitFor("inline height follows the content", `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 630`);
+  // the page's <script> and onerror= posted a message with a marker: neither ran (the helper's own reports carry none)
+  const msgs = ev<any[]>(`JSON.stringify(window.__msgs)`);
+  assert.ok(msgs.some((m) => m?.ukagai === "frame"), "the helper reported");
+  assert.equal(msgs.filter((m) => m?.marker === "pwned").length, 0);
   ab("screenshot", join(SHOTS, "doc-frame-inline.png"));
   // a message that does not come from a frame in the document is ignored
   ev(`window.postMessage({ ukagai: "frame", w: 1, h: 5, zoom: 1 }, "*"), "ok"`);
@@ -253,6 +265,53 @@ gui("a short page makes a short inline frame", async () => {
   ab("open", base + "/");
   await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
   await waitFor("height follows the content", `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 200`);
+});
+
+const heights = async (n: number) => { const out: number[] = []; for (let i = 0; i < n; i++) { out.push(Math.round(inlineHeight())); await sleep(200); } return out; };
+
+gui("a page of only absolutely positioned (or floated) content settles on one height", async () => {
+  for (const name of ["absolute.html", "float.html"]) {
+    await seedDoc(EXPL.replace("compare.html", name));
+    ab("open", base + "/");
+    await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+    await waitFor(`${name} height`, `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 300`);
+    assert.deepEqual([...new Set(await heights(10))], [300], name);
+    await cancelAll();
+  }
+});
+
+gui("a page cannot navigate the frame: meta refresh and a link to another site go nowhere", async () => {
+  const hits: string[] = [];
+  const land = createHttp((req, res) => {
+    hits.push(req.url ?? "");
+    res.setHeader("content-type", "text/html");
+    res.end('<script>parent.postMessage({ ukagai: "frame", w: 1, h: 7, zoom: 1, marker: "landed" }, "*")</script>landed');
+  });
+  await new Promise<void>((r) => land.listen(0, "127.0.0.1", r));
+  const LAND = `http://127.0.0.1:${(land.address() as { port: number }).port}/landed`;
+  try {
+    writeFileSync(join(scratch, "ukagai", "nav.html"), `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=${LAND}"><META HTTP-EQUIV="Refresh" content="1;url=${LAND}"></head><body style="margin:0"><a id="ext" href="${LAND}" target="_top" style="display:block;height:100px;background:#e0e7ff">external</a><div style="height:300px">x</div></body></html>`);
+    ab("open", base + "/");
+    await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+    ev(`window.__msgs = [], window.addEventListener("message", (e) => window.__msgs.push(e.data)), "ok"`);
+    await seedDoc(EXPL.replace("compare.html", "nav.html"));
+    await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+    await waitFor("height", `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 400`);
+    await sleep(2500); // past the second refresh
+    // a real click on the link
+    const r = ev<{ x: number; y: number }>(`JSON.stringify((() => { const b = document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect(); return { x: b.x + 30, y: b.y + 30 }; })())`);
+    ab("mouse", "move", String(Math.round(r.x)), String(Math.round(r.y)));
+    ab("mouse", "down");
+    ab("mouse", "up");
+    await sleep(1500);
+    const msgs = ev<any[]>(`JSON.stringify(window.__msgs)`);
+    assert.equal(msgs.filter((m) => m?.marker === "landed").length, 0);
+    assert.ok(msgs.filter((m) => m?.ukagai === "frame").length > 0, "the helper is still the frame's script");
+    assert.deepEqual(hits, [], "the other site was never requested");
+    assert.equal(Math.round(inlineHeight()), 400);
+  } finally {
+    land.close();
+  }
 });
 
 gui("an external .html URL is still dropped", async () => {
