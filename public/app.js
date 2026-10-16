@@ -1596,6 +1596,7 @@ window.addEventListener("message", (e) => {
   const num = (v, lo, hi) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
   if (overlay?.kind === "frame" && overlay.frame.isConnected && e.source === overlay.frame.contentWindow) {
     if (d.ukagai === "frame" && num(d.zoom, 0.05, 5)) {
+      if (!overlay.modeSent) { overlay.modeSent = true; e.source.postMessage({ ukagai: "mode", overlay: true }, "*"); } // zoom, pinch and zoom keys are the helper's only in full screen
       overlay.zoom = d.zoom;
       overlay.zoomLabel.textContent = `${Math.round(d.zoom * 100)}%`;
     } else if (d.ukagai === "key" && typeof d.key === "string") frameKey(d.key);

@@ -305,6 +305,11 @@ export function createApp(deps: AppDeps): Hono {
     const d = c.req.query("decision");
     return d !== undefined ? `decision=${encodeURIComponent(d)}` : `plan=${encodeURIComponent(c.req.query("plan") ?? "")}`;
   };
+  // Every non-200 answer (401, 404, ...) opts in to a policy too: the GUI's frame refuses a document without one, and would show a broken-page icon instead of the error text
+  app.use("/api/files", async (c, next) => {
+    await next();
+    if (c.res.status !== 200) c.header("Content-Security-Policy", "sandbox; default-src 'none'; base-uri 'none'");
+  });
   // A page's own sub-resources carry a tag instead of the cookie (a sandboxed frame does not send it): see files.ts fileTag
   app.get("/api/files", (c, next) => (validFileTag(whoOf(c), c.req.query("path") ?? "", c.req.query("tag")) ? next() : filesAuth(c, next)), async (c) => {
     const notFound = () => c.json({ error: "not found" }, 404);

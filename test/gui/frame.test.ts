@@ -40,8 +40,9 @@ function freePort(): Promise<number> {
   });
 }
 
+let current = session; // the browser session the helpers drive (the no-csp test runs its own)
 function ab(...args: string[]): string {
-  return execFileSync("agent-browser", args, { env: { ...process.env, AGENT_BROWSER_SESSION: session }, encoding: "utf8", timeout: 30000 }).trim();
+  return execFileSync("agent-browser", args, { env: { ...process.env, AGENT_BROWSER_SESSION: current }, encoding: "utf8", timeout: 30000 }).trim();
 }
 
 /** Parse the stdout of eval (a JSON string). A JSON.stringify'd value comes out wrapped twice */
@@ -337,6 +338,51 @@ gui("another site never runs a script in the frame, however the frame got there"
     assert.deepEqual(hits.filter((u) => u.startsWith("/beacon")), [], "and its fetch never left");
     assert.ok(!hits.some((u) => u.startsWith("/landed?refresh") || u.startsWith("/landed?dsd")), `meta refresh and the shadow link were never followed: ${hits.join(" ")}`);
   } finally {
+    land.close();
+  }
+});
+
+// Browsers without the iframe `csp` attribute (Firefox, Safari): CI's Chromium has it, so a second browser session deletes it before the GUI loads (an init script)
+gui("without iframe csp support the frames are sandbox=\"\": no script, no zoom controls, a fixed height, and another site's script still never runs", async () => {
+  const hits: string[] = [];
+  const land = createHttp((req, res) => {
+    hits.push(req.url ?? "");
+    res.setHeader("content-type", "text/html");
+    res.end(req.url === "/beacon" ? "ok" : '<script>parent.postMessage({ ukagai: "frame", w: 1, h: 7, zoom: 1, marker: "landed" }, "*"); fetch("/beacon", { mode: "no-cors" })</script>landed');
+  });
+  await new Promise<void>((r) => land.listen(0, "127.0.0.1", r));
+  const LAND = `http://127.0.0.1:${(land.address() as { port: number }).port}`;
+  const initScript = join(top, "no-csp-attribute.js");
+  writeFileSync(initScript, "delete HTMLIFrameElement.prototype.csp;\n");
+  const outer = current;
+  current = `${session}-nocsp`;
+  try {
+    ab("open", base + "/", "--init-script", initScript, "--viewport", "1440x900");
+    await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+    assert.equal(supportsCsp(), false, "the init script removed the attribute");
+    ev(`window.__msgs = [], window.addEventListener("message", (e) => window.__msgs.push(e.data)), "ok"`);
+    await seedDoc(EXPL);
+    await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+    const attrs = (sel: string) => ev<string>(`(() => { const f = document.querySelector(${JSON.stringify(sel)}); return f.getAttribute("sandbox") + "|" + f.hasAttribute("csp"); })()`);
+    assert.equal(attrs(`${BG} iframe.doc-frame-view`), "|false");
+    await sleep(1500); // a helper would have resized it by now
+    assert.equal(Math.round(inlineHeight()), 480);
+    ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
+    await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
+    assert.equal(attrs(".overlay.frame iframe"), "|false");
+    assert.equal(count(".overlay.frame .frame-zoom"), 0);
+    assert.deepEqual(texts(".overlay.frame .frame-bar button, .overlay.frame .frame-bar a"), ["Open in new tab", "Close"], "no zoom / Fit controls");
+    key("Escape");
+    await waitFor("overlay closed", `!document.querySelector(".overlay.frame")`);
+    // the parent sends the frame to a page with no policy: a sandbox="" frame runs no script of it
+    ev(`document.querySelector("${BG} iframe.doc-frame-view").src = ${JSON.stringify(`${LAND}/landed?parent`)}, "ok"`);
+    await sleep(1500);
+    assert.ok(hits.some((u) => u.startsWith("/landed?parent")), "the frame did load the page");
+    assert.equal(ev<any[]>(`JSON.stringify(window.__msgs)`).filter((m) => m?.marker === "landed").length, 0, "its script never ran");
+    assert.deepEqual(hits.filter((u) => u.startsWith("/beacon")), []);
+  } finally {
+    try { ab("close"); } catch {}
+    current = outer;
     land.close();
   }
 });

@@ -69,6 +69,9 @@ async function env() {
   return { home, dataDir, scratch, id, url, h, get, file, approve, explained, fileOf };
 }
 
+/** What every non-200 answer of /api/files carries: it satisfies FRAME_POLICY, so the frame shows the error instead of a broken-page icon */
+const ERROR_CSP = "sandbox; default-src 'none'; base-uri 'none'";
+
 test("served: relative to the document dir, scratchpad (absolute and ../), plans dir, data dir; headers", async () => {
   const e = await env();
   put(join(e.scratch, "ukagai", "shots", "a.png"));
@@ -104,6 +107,7 @@ test("forbidden and missing are all 404 with the same body", async () => {
     const r = await e.file(p);
     assert.equal(r.status, 404, p);
     assert.deepEqual(await r.json(), { error: "not found" });
+    assert.equal(r.headers.get("content-security-policy"), ERROR_CSP, p); // opts in, so the GUI's frame shows the error text
   }
   assert.equal((await e.get(`decision=nope&path=a.png`)).status, 404);
   assert.equal((await e.get(`path=a.png`)).status, 404);
@@ -122,13 +126,16 @@ test("a plan's image outside the plans dir is not served; a symlink in the plans
 test("401 without a cookie or bearer; the GUI cookie works", async () => {
   const e = await env();
   put(join(e.scratch, "ukagai", "a.png"));
-  assert.equal((await e.file("a.png", false)).status, 401);
+  const none = await e.file("a.png", false);
+  assert.equal(none.status, 401);
+  assert.equal(none.headers.get("content-security-policy"), ERROR_CSP);
   const bad = await fetch(`${e.url}/api/files?decision=${e.id}&path=a.png`, { headers: { authorization: "Bearer wrong" } });
   assert.equal(bad.status, 401);
   const page = await fetch(e.url + "/");
   const cookie = (page.headers.get("set-cookie") ?? "").split(";")[0]!;
   const ok = await fetch(`${e.url}/api/files?decision=${e.id}&path=a.png`, { headers: { cookie } });
   assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("content-security-policy"), null); // a served image carries none
 });
 
 test("the document's own directory is a root only for a standalone explanation file", async () => {
@@ -281,7 +288,7 @@ test("html: shadow roots and <link> are neutralised (any case) as well as http-e
   assert.equal(page.match(/data-ukagai-shadowroot/gi)?.length, 3);
   assert.ok(!/<link\b/i.test(page), page);
   assert.equal(page.match(/<ukagai-link/gi)?.length, 2);
-  assert.ok(page.includes("linkage and shadow text")); // only tags and attribute names are touched
+  assert.ok(page.includes("linkage and shadow text")); // text that merely spells these words is rewritten too (safe side: the rules are global string replacements, not a parse)
 });
 
 test("html: every http-equiv is renamed (any case, several metas): no meta refresh survives", async () => {
