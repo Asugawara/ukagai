@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/Asugawara/ukagai/compare/v0.2.1...v0.3.0) (2026-10-16)
+
+
+### Features
+
+* **gui:** an embedded HTML page opens in real full screen with zoom, fit and modifier-wheel scrolling ([03650b6](https://github.com/Asugawara/ukagai/commit/03650b68225d9882191c8c4596775698031a8213))
+
+
+### Bug Fixes
+
+* **gui:** no script but ukagai's helper runs in the HTML frame, wherever the frame navigates ([7adc6b9](https://github.com/Asugawara/ukagai/commit/7adc6b9f114e3938894034f65b93fa970e080db3))
+* **gui:** wheel zoom only in full screen, a missing HTML page shows its error, and the no-csp fallback is tested ([ce2edd1](https://github.com/Asugawara/ukagai/commit/ce2edd19853be5cea644b0b3aa45353b107863e6))
+* **hook:** approving a plan with auto mode now switches to auto even when Claude Code restores acceptEdits; a hook-allowed ExitPlanMode brings back the pre-plan mode (acceptEdits after shift+tab from auto), where Edit / Write never prompt, so the PermissionRequest switch never ran. The checkpoint hook now forces one prompt on the first main-agent edit (server budget: once per approval) and drops the record when the session is already in auto ([1eb30c9](https://github.com/Asugawara/ukagai/commit/1eb30c9ee98279ca33339b57715430ce15e633d5))
+* **serve:** a plan written right after start() is reported; start() now waits for the plan watcher's seed scan, which could take a file written meanwhile for one present at start and never announce it (flaky plan-ready test on macOS CI) ([ec3d8f4](https://github.com/Asugawara/ukagai/commit/ec3d8f43e506111ab6306680facb7e5c11f157f9))
+* **serve:** an embedded HTML page can no longer leave /api/files now that scripts are allowed; the inline height settles ([f7fe2b9](https://github.com/Asugawara/ukagai/commit/f7fe2b93bd970feb5660698f39347a2f3755400f))
+
 ## [0.2.1](https://github.com/Asugawara/ukagai/compare/v0.2.0...v0.2.1) (2026-10-10)
 
 
