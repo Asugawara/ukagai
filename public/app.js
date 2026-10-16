@@ -295,6 +295,13 @@ function imageUrl(src, doc) {
 
 // Images after the HTML is materialized: external ones (and anything else that slipped past the regex via entities) are removed; local paths become /api/files URLs
 // with the alt text as caption, a button that opens the lightbox, and the alt text with "image not found" when the file cannot be loaded
+// An embedded HTML page may run ukagai's frame helper (zoom, wheel, height) only where the iframe `csp` attribute (CSP Embedded Enforcement, Chromium) is supported: it makes every document the frame
+// loads enforce the server's policy (data-frame-csp on <html>, the same string the page is served with). Elsewhere the frame has no scripts at all (sandbox="")
+const FRAME_CSP = document.documentElement.getAttribute("data-frame-csp") ?? "";
+const FRAME_SCRIPTS = FRAME_CSP !== "" && "csp" in HTMLIFrameElement.prototype;
+const frameAttrs = FRAME_SCRIPTS ? { sandbox: "allow-scripts", csp: FRAME_CSP } : { sandbox: "" };
+// The new-tab link: a top-level tab has no embedder to enforce a policy, so the server serves that view without any script
+const tabUrl = (src) => `${src}${src.includes("?") ? "&" : "?"}view=tab`;
 function documentImages(container, doc) {
   for (const img of [...container.querySelectorAll("img")]) {
     const src = imageUrl((img.getAttribute("src") ?? "").trim(), doc);
@@ -305,9 +312,9 @@ function documentImages(container, doc) {
       const frame = el("figure", { class: "doc-frame" },
         el("div", { class: "doc-frame-bar" },
           el("span", { class: "doc-frame-alt", text: alt || name }), el("span", { class: "chip", text: name }),
-          el("a", { class: "doc-frame-open", href: src, target: "_blank", rel: "noopener", text: t("frame_newtab") }),
+          el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
           el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, text: t("frame_full") })),
-        el("iframe", { class: "doc-frame-view", sandbox: "allow-scripts", src, loading: "lazy", title: alt || name }));
+        el("iframe", { class: "doc-frame-view", ...frameAttrs, src, loading: "lazy", title: alt || name }));
       img.replaceWith(frame);
       const fp = frame.parentElement;
       if (fp?.tagName === "P" && fp.childNodes.length === 1) fp.replaceWith(frame);
@@ -1555,14 +1562,15 @@ function openFrame(button) {
   const title = button.getAttribute("data-title") ?? "";
   const src = button.getAttribute("data-src");
   button.focus({ preventScroll: true });
-  const frame = el("iframe", { class: "frame-full", sandbox: "allow-scripts", src, title });
+  const frame = el("iframe", { class: "frame-full", ...frameAttrs, src, title });
   const zoomLabel = el("span", { class: "frame-zoom", text: "100%" });
   const btn = (label, fn) => el("button", { class: "frame-btn", type: "button", text: label, onclick: fn });
-  const head = el("div", { class: "frame-bar" },
-    el("span", { class: "frame-title", text: title }), zoomLabel,
+  const zoomControls = FRAME_SCRIPTS ? [zoomLabel,
     btn(t("frame_fit"), () => frameZoom("fit")), btn("100%", () => frameZoom(1)),
-    btn(t("frame_zoom_out"), () => frameZoom(overlay.zoom / 1.25)), btn(t("frame_zoom_in"), () => frameZoom(overlay.zoom * 1.25)),
-    el("a", { class: "frame-btn", href: src, target: "_blank", rel: "noopener", text: t("frame_newtab") }),
+    btn(t("frame_zoom_out"), () => frameZoom(overlay.zoom / 1.25)), btn(t("frame_zoom_in"), () => frameZoom(overlay.zoom * 1.25))] : [];
+  const head = el("div", { class: "frame-bar" },
+    el("span", { class: "frame-title", text: title }), ...zoomControls,
+    el("a", { class: "frame-btn", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
     btn(t("frame_close"), closeOverlay));
   openOverlay("frame", title, frame, { head, frame, zoom: 1, zoomLabel });
   overlay.el.requestFullscreen?.()?.catch?.(() => {});

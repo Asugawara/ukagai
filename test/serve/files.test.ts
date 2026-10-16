@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileTag } from "../../src/serve/files.js";
+import { createHash } from "node:crypto";
+import { FRAME_CSP, FRAME_POLICY, fileTag } from "../../src/serve/files.js";
+import { FRAME_HELPER } from "../../src/serve/frame-helper.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const roots: string[] = [];
@@ -186,9 +188,8 @@ test("html: served with the CSP sandbox and nosniff; scripts stay; relative src 
   const r = await e.file("cmp.html");
   assert.equal(r.status, 200);
   assert.equal(r.headers.get("content-type"), "text/html; charset=utf-8");
-  const nonce = /script-src 'nonce-([^']+)'/.exec(r.headers.get("content-security-policy") ?? "")?.[1];
-  assert.ok(nonce, "the CSP carries a nonce");
-  assert.equal(r.headers.get("content-security-policy"), `sandbox allow-scripts; default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:`);
+  assert.equal(r.headers.get("content-security-policy"), FRAME_CSP);
+  assert.equal(FRAME_CSP, `sandbox allow-scripts; ${FRAME_POLICY}`);
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
   const body = await r.text();
   const dir = realpathSync(join(e.scratch, "ukagai"));
@@ -202,7 +203,7 @@ test("html: served with the CSP sandbox and nosniff; scripts stay; relative src 
   assert.ok(body.includes(`href="${u("a.css")}"`));
   assert.ok(body.includes(`url("${u("bg.png", "&")}")`));
   assert.ok(body.includes(`url("${u("../up.png", "&").replace(encodeURIComponent(join(dir, "../up.png")), encodeURIComponent(join(dir, "..", "up.png")))}")`));
-  for (const keep of ['src="data:image/png;base64,AAAA"', 'href="https://example.com/x"', 'href="#frag"', 'src="/abs.png"', 'href="mailto:a@b.c"', 'src="//cdn.example/x.png"', "<script>document.title = 'x'</script>"]) { // the page's own script is kept as written: it has no nonce, so the CSP blocks it
+  for (const keep of ['src="data:image/png;base64,AAAA"', 'href="https://example.com/x"', 'href="#frag"', 'src="/abs.png"', 'href="mailto:a@b.c"', 'src="//cdn.example/x.png"', "<script>document.title = 'x'</script>"]) { // the page's own script is kept as written: it does not match the hash, so the CSP blocks it
     assert.ok(body.includes(keep), keep);
   }
   // a rewritten URL resolves through the same route
@@ -216,7 +217,7 @@ test("html: served with the CSP sandbox and nosniff; scripts stay; relative src 
   assert.equal(img.headers.get("content-security-policy"), null); // only pages carry the CSP
 });
 
-test("html: the frame helper carries a fresh nonce and sits first; nothing from the page gets the nonce", async () => {
+test("html: the frame helper sits first and is allowed by its hash alone; nothing from the page gets through", async () => {
   const e = await env();
   const hostile = '<script>document.body.dataset.pwned=1</script><img src=x onerror="document.body.dataset.pwned=1"><a href="javascript:alert(1)">j</a>';
   put(join(e.scratch, "ukagai", "doctype.html"), `<!DOCTYPE html><html><body>${hostile}</body></html>`);
@@ -226,27 +227,61 @@ test("html: the frame helper carries a fresh nonce and sits first; nothing from 
     const r = await e.file(f);
     const csp = r.headers.get("content-security-policy") ?? "";
     const body = Buffer.from(await r.arrayBuffer()).toString("utf8"); // not r.text(): it drops a BOM
-    return { body, nonce: /'nonce-([^']+)'/.exec(csp)?.[1] ?? "", csp };
+    return { body, csp };
   };
+  const hash = createHash("sha256").update(FRAME_HELPER).digest("base64");
+  const tag = `<script>${FRAME_HELPER}</script>`;
+  assert.ok(FRAME_POLICY.includes(`script-src 'sha256-${hash}'`), FRAME_POLICY);
   const a = await get("doctype.html");
-  const b = await get("doctype.html");
-  assert.ok(a.nonce && b.nonce && a.nonce !== b.nonce, "a new nonce per response");
-  const tag = (n: string) => `<script nonce="${n}">(function () {`;
-  assert.ok(a.body.startsWith(`<!DOCTYPE html>${tag(a.nonce)}`), a.body.slice(0, 80)); // right after the doctype
-  assert.equal(a.body.split("nonce=").length - 1, 1, "the nonce appears once: on the helper only");
+  assert.equal(a.csp, FRAME_CSP);
+  assert.ok(a.body.startsWith(`<!DOCTYPE html>${tag}`), a.body.slice(0, 80)); // right after the doctype, exactly the hashed text
+  assert.equal(a.body.split(FRAME_HELPER).length - 1, 1);
+  assert.ok(!/nonce/i.test(a.csp + a.body.replace(FRAME_HELPER, "")), "no nonce anywhere");
   assert.ok(a.body.includes("<script>document.body.dataset.pwned=1</script>") && a.body.includes('onerror="document.body.dataset.pwned=1"') && a.body.includes('href="javascript:alert(1)"'));
   assert.match(a.body, /<\/script><html>/); // the helper ends before the page starts
   const scriptSrc = /script-src([^;]*)/.exec(a.csp)?.[1] ?? "";
-  for (const k of ["'unsafe-inline'", "'unsafe-hashes'", "'strict-dynamic'", "'unsafe-eval'"]) assert.ok(!scriptSrc.includes(k), k);
-  assert.ok(!/script-src[^;]*unsafe/.test(a.csp) && !/script-src[^;]*\*/.test(a.csp));
+  assert.equal(scriptSrc.trim(), `'sha256-${hash}'`, "the hash is the only source");
   const bom = await get("bom.html");
-  assert.ok(bom.body.startsWith(`\uFEFF \n<!doctype html>${tag(bom.nonce)}`));
+  assert.ok(bom.body.startsWith(`\uFEFF \n<!doctype html>${tag}`));
   const bare = await get("bare.html");
-  assert.ok(bare.body.startsWith(tag(bare.nonce)), "no doctype: at byte 0");
-  assert.equal(bare.body.split("nonce=").length - 1, 1);
+  assert.ok(bare.body.startsWith(tag), "no doctype: at byte 0");
   assert.ok(bare.body.endsWith(`<p>no doctype</p>${hostile}`));
   assert.match(a.csp, /^sandbox allow-scripts; default-src 'none'; /); // never allow-same-origin / allow-top-navigation / allow-forms
   assert.ok(!/allow-(same-origin|top-navigation|forms|popups|modals)/.test(a.csp));
+  // the iframe csp attribute is the policy without the sandbox: the GUI gets exactly FRAME_POLICY from the server
+  const gui = await (await fetch(e.url + "/")).text();
+  assert.equal(/<html[^>]*\sdata-frame-csp="([^"]*)"/.exec(gui)?.[1], FRAME_POLICY);
+  assert.ok(FRAME_CSP.endsWith(FRAME_POLICY) && !/sandbox/.test(FRAME_POLICY));
+});
+
+test("html: view=tab (Open in new tab) is served with the strict policy and no helper; its rewritten links stay in that view", async () => {
+  const e = await env();
+  put(join(e.scratch, "ukagai", "tab.html"), '<!doctype html><p>x</p><img src="a.png"><a href="next.html">n</a>');
+  put(join(e.scratch, "ukagai", "a.png"));
+  const r = await e.get(`decision=${e.id}&path=${encodeURIComponent("tab.html")}&view=tab`);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("content-security-policy"), "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:; base-uri 'none'");
+  assert.ok(!/allow-scripts|script-src/.test(r.headers.get("content-security-policy") ?? ""));
+  const body = await r.text();
+  assert.ok(!body.includes("<script"), "no helper");
+  assert.equal(body.match(/&amp;view=tab/g)?.length, 2, body); // the image and the link carry the flag
+  const framed = await (await e.file("tab.html")).text();
+  assert.ok(!framed.includes("view=tab") && framed.includes("<script>"));
+  // the flag is not part of the tag: the rewritten image URL (flag included) is served
+  const img = /src="(\/api\/files\?[^"]+)"/.exec(body)![1]!.slice("/api/files?".length).replace(/&amp;/g, "&");
+  assert.equal((await e.get(img, false)).status, 200);
+});
+
+test("html: shadow roots and <link> are neutralised (any case) as well as http-equiv", async () => {
+  const e = await env();
+  put(join(e.scratch, "ukagai", "dsd.html"), '<!doctype html><div><template shadowrootmode="closed"><a href="http://x.test/">a</a></template></div><template ShadowRootMode=open ShadowRootDelegatesFocus>b</template><LINK rel=prerender href="http://x.test/p"><link\nrel="preconnect" href="http://x.test"><p>linkage and shadow text</p>');
+  const body = await (await e.file("dsd.html")).text();
+  const page = body.slice(body.indexOf("</script>"));
+  assert.ok(!/shadowroot/i.test(page.replace(/data-ukagai-shadowroot/gi, "")), page);
+  assert.equal(page.match(/data-ukagai-shadowroot/gi)?.length, 3);
+  assert.ok(!/<link\b/i.test(page), page);
+  assert.equal(page.match(/<ukagai-link/gi)?.length, 2);
+  assert.ok(page.includes("linkage and shadow text")); // only tags and attribute names are touched
 });
 
 test("html: every http-equiv is renamed (any case, several metas): no meta refresh survives", async () => {

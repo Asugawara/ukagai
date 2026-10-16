@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { FRAME_POLICY } from "../../src/serve/files.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HAS_BROWSER = spawnSync("agent-browser", ["--version"], { stdio: "ignore" }).status === 0;
@@ -102,7 +103,7 @@ function png(w: number, h: number, [r, g, b]: [number, number, number]): Buffer 
 
 const QUESTION = "Which header variant, A or B?";
 // Three stacked 1180 x 700 blocks inside overflow-x:auto wrappers, like a comparison mock-up. The page's own script and onerror= would shrink the inline frame (they tell the parent h=5)
-// if they ran: the frame is sandboxed with allow-scripts, but its CSP lets only ukagai's helper (by nonce) run
+// if they ran: the frame is sandboxed with allow-scripts, but its CSP lets only ukagai's helper (by hash) run
 const HOSTILE = `parent.postMessage({ ukagai: "frame", w: 1, h: 5, zoom: 1, marker: "pwned" }, "*")`;
 const BLOCK = '<div class="scroll" style="overflow-x:auto"><div style="min-width:1180px;height:700px;background:#dbeafe;border-bottom:2px solid #333">block</div></div>';
 const PAGE = `<!doctype html><html><body style="margin:0"><h1>Variants</h1><img id="shot" src="a.png"><p style="background:url(a.png)">x</p>${BLOCK}${BLOCK}${BLOCK}<script>${HOSTILE}</script><img src="missing.png" onerror='${HOSTILE}'></body></html>`;
@@ -187,6 +188,8 @@ const frameImageStatus = () => ev<number | string>(`(async () => { const f = doc
 
 const click = (label: string) => ev(`[...document.querySelectorAll(".overlay.frame .frame-btn")].find((b) => b.textContent === ${JSON.stringify(label)}).click(), "ok"`);
 const zoomShown = () => text(".overlay.frame .frame-zoom");
+/** Chromium's iframe `csp` attribute (CSP Embedded Enforcement); without it the frames have no scripts at all (sandbox="") */
+const supportsCsp = () => ev<boolean>(`"csp" in HTMLIFrameElement.prototype`);
 const inlineHeight = () => ev<number>(`document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height`);
 
 gui("an explanation shows the page in a sandboxed iframe; the image inside loads; full screen opens the overlay and Esc closes it", async () => {
@@ -198,12 +201,27 @@ gui("an explanation shows the page in a sandboxed iframe; the image inside loads
   await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
   const src = `/api/files?decision=${id}&path=${encodeURIComponent("compare.html")}`;
   assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("src")`), src);
-  assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox")`), "allow-scripts"); // never allow-same-origin
+  if (!supportsCsp()) { // no CSP Embedded Enforcement: the frame has no scripts at all, no zoom controls, a fixed inline height; full screen and a new tab still work
+    assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox")`), "");
+    assert.equal(ev<boolean>(`document.querySelector("${BG} iframe.doc-frame-view").hasAttribute("csp")`), false);
+    assert.equal(Math.round(inlineHeight()), 480);
+    ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
+    await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
+    assert.equal(ev<string>(`document.querySelector(".overlay.frame iframe").getAttribute("sandbox")`), "");
+    assert.equal(count(".overlay.frame .frame-zoom"), 0);
+    assert.equal(count(".overlay.frame .frame-bar button"), 1, "only Close is left");
+    key("Escape");
+    return;
+  }
+  const frameAttrs = (sel: string) => ev<string>(`(() => { const f = document.querySelector(${JSON.stringify(sel)}); return f.getAttribute("sandbox") + "|" + f.getAttribute("csp"); })()`);
+  // never allow-same-origin; the csp attribute is the server's policy verbatim (data-frame-csp on <html>)
+  assert.equal(frameAttrs(`${BG} iframe.doc-frame-view`), `allow-scripts|${FRAME_POLICY}`);
+  assert.equal(ev<string>(`document.documentElement.getAttribute("data-frame-csp")`), FRAME_POLICY);
   assert.equal(text(`${BG} .doc-frame-alt`), "比較");
   assert.equal(text(`${BG} .doc-frame-bar .chip`), "compare.html");
   assert.equal(text(`${BG} .doc-frame-full`), "Full screen");
   assert.equal(text(`${BG} .doc-frame-open`), "Open in new tab");
-  assert.equal(ev<string>(`document.querySelector("${BG} .doc-frame-open").getAttribute("href")`), src);
+  assert.equal(ev<string>(`document.querySelector("${BG} .doc-frame-open").getAttribute("href")`), `${src}&view=tab`); // the script-free view
   assert.equal(ev<string>(`document.querySelector("${BG} .doc-frame-open").getAttribute("target") + "|" + document.querySelector("${BG} .doc-frame-open").getAttribute("rel")`), "_blank|noopener");
   assert.equal(count(`${BG} .doc-img`), 0);
   // the page's own <img src="a.png"> is rewritten and served (a 200), and in the real frame it has loaded
@@ -222,7 +240,7 @@ gui("an explanation shows the page in a sandboxed iframe; the image inside loads
   // full screen
   ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
   await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
-  assert.equal(ev<string>(`document.querySelector(".overlay.frame iframe").getAttribute("sandbox")`), "allow-scripts");
+  assert.equal(frameAttrs(".overlay.frame iframe"), `allow-scripts|${FRAME_POLICY}`);
   assert.equal(ev<boolean>(`document.getElementById("main").inert`), true);
   assert.equal(ev<string>(`document.querySelector(".overlay.frame iframe").getAttribute("src")`), src);
   // the overlay fills the window (real full screen, or the fallback), the bar is on top, and the iframe takes the rest at full width: no scroll outside the iframe
@@ -280,37 +298,65 @@ gui("a page of only absolutely positioned (or floated) content settles on one he
   }
 });
 
-gui("a page cannot navigate the frame: meta refresh and a link to another site go nowhere", async () => {
+// The frame is sandboxed with allow-scripts, which applies to every document it navigates to. What keeps another site's script out is the iframe's `csp` attribute (CSP Embedded Enforcement):
+// a document that does not carry the policy is refused, one that opts in can run only the helper. The server also neutralises the usual ways to navigate (http-equiv, declarative shadow roots) and the helper stops plain links,
+// but those are extras: the parent navigates the frame itself below, which only the `csp` attribute can stop
+gui("another site never runs a script in the frame, however the frame got there", async () => {
   const hits: string[] = [];
+  const LANDED = '<script>parent.postMessage({ ukagai: "frame", w: 1, h: 7, zoom: 1, marker: "landed" }, "*"); fetch("/beacon", { mode: "no-cors" })</script>landed';
   const land = createHttp((req, res) => {
     hits.push(req.url ?? "");
     res.setHeader("content-type", "text/html");
-    res.end('<script>parent.postMessage({ ukagai: "frame", w: 1, h: 7, zoom: 1, marker: "landed" }, "*")</script>landed');
+    if (req.url?.startsWith("/optin")) res.setHeader("Allow-CSP-From", "*");
+    res.end(req.url === "/beacon" ? "ok" : LANDED);
   });
   await new Promise<void>((r) => land.listen(0, "127.0.0.1", r));
-  const LAND = `http://127.0.0.1:${(land.address() as { port: number }).port}/landed`;
+  const LAND = `http://127.0.0.1:${(land.address() as { port: number }).port}`;
   try {
-    writeFileSync(join(scratch, "ukagai", "nav.html"), `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=${LAND}"><META HTTP-EQUIV="Refresh" content="1;url=${LAND}"></head><body style="margin:0"><a id="ext" href="${LAND}" target="_top" style="display:block;height:100px;background:#e0e7ff">external</a><div style="height:300px">x</div></body></html>`);
+    // a meta refresh, a closed declarative shadow DOM link (both inert after the rewrite) and a plain link without target (stopped by the helper)
+    writeFileSync(join(scratch, "ukagai", "nav.html"), `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=${LAND}/landed?refresh"><META HTTP-EQUIV="Refresh" content="1;url=${LAND}/landed?refresh2"></head><body style="margin:0"><a id="ext" href="${LAND}/landed?link" style="display:block;height:100px;background:#e0e7ff">external</a><div><template shadowrootmode="closed"><a href="${LAND}/landed?dsd" style="display:block;height:50px">shadow</a></template></div><div style="height:250px">x</div></body></html>`);
     ab("open", base + "/");
     await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
     ev(`window.__msgs = [], window.addEventListener("message", (e) => window.__msgs.push(e.data)), "ok"`);
     await seedDoc(EXPL.replace("compare.html", "nav.html"));
     await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
-    await waitFor("height", `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 400`);
+    if (supportsCsp()) await waitFor("height", `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 350`);
     await sleep(2500); // past the second refresh
-    // a real click on the link
-    const r = ev<{ x: number; y: number }>(`JSON.stringify((() => { const b = document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect(); return { x: b.x + 30, y: b.y + 30 }; })())`);
-    ab("mouse", "move", String(Math.round(r.x)), String(Math.round(r.y)));
+    const click = ev<{ x: number; y: number }>(`JSON.stringify((() => { const b = document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect(); return { x: b.x + 30, y: b.y + 30 }; })())`);
+    ab("mouse", "move", String(Math.round(click.x)), String(Math.round(click.y)));
     ab("mouse", "down");
     ab("mouse", "up");
     await sleep(1500);
+    // navigations that no in-page defence can stop: the frame is sent to a page with no policy, and to one that opts in with Allow-CSP-From: *
+    for (const url of [`${LAND}/landed?parent`, `${LAND}/optin?parent`]) {
+      ev(`document.querySelector("${BG} iframe.doc-frame-view").src = ${JSON.stringify(url)}, "ok"`);
+      await sleep(1500);
+    }
     const msgs = ev<any[]>(`JSON.stringify(window.__msgs)`);
-    assert.equal(msgs.filter((m) => m?.marker === "landed").length, 0);
-    assert.ok(msgs.filter((m) => m?.ukagai === "frame").length > 0, "the helper is still the frame's script");
-    assert.deepEqual(hits, [], "the other site was never requested");
-    assert.equal(Math.round(inlineHeight()), 400);
+    assert.equal(msgs.filter((m) => m?.marker === "landed").length, 0, "the other site's script never ran");
+    assert.deepEqual(hits.filter((u) => u.startsWith("/beacon")), [], "and its fetch never left");
+    assert.ok(!hits.some((u) => u.startsWith("/landed?refresh") || u.startsWith("/landed?dsd")), `meta refresh and the shadow link were never followed: ${hits.join(" ")}`);
   } finally {
     land.close();
+  }
+});
+
+gui("a page that toggles its own content grows and shrinks back, however often", async () => {
+  writeFileSync(join(scratch, "ukagai", "toggle.html"), '<!doctype html><html><head><style>#t{display:none}.box{display:none;height:400px;background:#fecaca}#t:checked~.box{display:block}label{display:block;height:150px;background:#e0e7ff}</style></head><body style="margin:0"><input type="checkbox" id="t"><label for="t">toggle</label><div class="box">box</div></body></html>');
+  ab("open", base + "/");
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  await seedDoc(EXPL.replace("compare.html", "toggle.html"));
+  await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+  if (!supportsCsp()) return; // no helper: nothing measures the page
+  const at = (h: number) => waitFor(`height ${h}`, `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === ${h}`);
+  await at(150);
+  const r = ev<{ x: number; y: number }>(`JSON.stringify((() => { const b = document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect(); return { x: b.x + 30, y: b.y + 30 }; })())`);
+  const tap = async () => { ab("mouse", "move", String(Math.round(r.x)), String(Math.round(r.y))); ab("mouse", "down"); ab("mouse", "up"); await sleep(400); };
+  for (let i = 0; i < 3; i++) {
+    await tap();
+    await at(550);
+    await tap();
+    await at(150);
   }
 });
 
@@ -330,7 +376,7 @@ gui("a plan card shows the page through plan=<name>", async () => {
   writeFileSync(join(home, ".claude", "plans", name), "# Frame plan\n\n## One\n\n![Plan page](plan-compare.html)\n\n## Two\n\nx\n");
   await waitFor("plan frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 10000);
   assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("src")`), `/api/files?plan=${encodeURIComponent(name)}&path=${encodeURIComponent("plan-compare.html")}`);
-  assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox")`), "allow-scripts");
+  assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox")`), supportsCsp() ? "allow-scripts" : "");
   assert.equal(Number(frameImageStatus()), 200);
   ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
   await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);

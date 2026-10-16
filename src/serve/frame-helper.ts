@@ -1,30 +1,35 @@
 /**
- * The script ukagai injects into every served HTML page (docs/spec/markdown.md 2.13). The page's own scripts do not run (the CSP allows only this one's nonce);
- * it also keeps links from leaving /api/files (the server has already removed http-equiv, so there is no meta refresh);
- * the frame is sandboxed without allow-same-origin, so the parent cannot measure it or see its wheel / key events: the helper reports and forwards them with postMessage.
- * The size / key / zoom messaging is frame-only; the link guard also runs when the page is opened on its own (new tab). Plain ES5-ish JS, no dependencies.
+ * The script ukagai injects into every page of the embedded view (docs/spec/markdown.md 2.13). It is allowed by the hash of this exact text (FRAME_POLICY in files.ts);
+ * the page's own scripts do not run. The security boundary is the iframe's `csp` attribute (CSP Embedded Enforcement): every document the frame navigates to must carry the same policy or is refused.
+ * The link guard below is only a cheap extra that keeps an ordinary click inside /api/files; it is not complete (it cannot see into closed shadow roots, for one) and nothing relies on it.
+ * The frame is sandboxed without allow-same-origin, so the parent cannot measure it or see its wheel / key events: the helper reports and forwards them with postMessage.
+ * Pages sized by the viewport (`100vh`, `height:100%`) follow the frame's own height, so they may grow to the parent's 70vh cap. Plain ES5-ish JS, no dependencies.
  */
 export const FRAME_HELPER = String.raw`(function () {
   var de = document.documentElement, zoom = 1, queued = false, framed = window.parent !== window;
   var KEYS = { Escape: 1, "+": 1, "=": 1, "-": 1, "0": 1, f: 1 };
   var clamp = function (z) { return Math.min(4, Math.max(0.1, z)); };
-  // Navigation guard (frame and new tab alike): a link may only go to another /api/files URL of this server (same-page #fragments included)
-  function linkOf(n) {
-    for (; n && n.nodeType === 1; n = n.parentElement) {
-      var tag = n.localName;
-      if (tag === "a" || tag === "area") return n.getAttribute("href") || n.getAttributeNS("http://www.w3.org/1999/xlink", "href");
-    }
-    return null;
-  }
-  function guard(e) {
-    var raw = linkOf(e.target);
-    if (raw === null) return;
+  // Navigation guard (extra, not the boundary): a click whose path holds a link may only go to another /api/files URL of this server (same-page #fragments included).
+  // Every node of the composed path is tested with instanceof (never localName / parentElement, which a page can clobber); an SVG <use> is a closed shadow tree, so a click through one is always stopped
+  function allowed(raw) {
+    if (!raw) return true;
     try {
       var u = new URL(raw, location.href);
-      if (u.protocol === location.protocol && u.host === location.host && u.pathname === "/api/files") return;
-    } catch (err) {}
-    e.preventDefault();
+      return u.protocol === location.protocol && u.host === location.host && u.pathname === "/api/files";
+    } catch (err) { return false; }
   }
+  function blocked(e) {
+    var path = e.composedPath();
+    for (var i = 0; i < path.length; i++) {
+      var n = path[i];
+      if (n instanceof SVGUseElement) return true;
+      if (n instanceof SVGAElement) {
+        if (!allowed(n.href.animVal) || !allowed(n.href.baseVal) || !allowed(n.getAttributeNS("http://www.w3.org/1999/xlink", "href"))) return true;
+      } else if ((n instanceof HTMLAnchorElement || n instanceof HTMLAreaElement) && !allowed(n.href)) return true;
+    }
+    return false;
+  }
+  function guard(e) { if (blocked(e)) e.preventDefault(); }
   window.addEventListener("click", guard, true);
   window.addEventListener("auxclick", guard, true);
   if (!framed) return;
@@ -34,10 +39,14 @@ export const FRAME_HELPER = String.raw`(function () {
     de.style.zoom = "";
     var w = de.scrollWidth, h = 0, extra = 0, sy = window.scrollY || 0;
     if (b) {
-      h = Math.max(b.scrollHeight, Math.ceil(b.getBoundingClientRect().bottom + sy + (parseFloat(getComputedStyle(b).marginBottom) || 0)));
+      var dcs = getComputedStyle(de);
+      // the body's bottom plus its own margin and the document element's margin and padding below it
+      h = Math.max(b.scrollHeight, Math.ceil(b.getBoundingClientRect().bottom + sy + (parseFloat(getComputedStyle(b).marginBottom) || 0) + (parseFloat(dcs.paddingBottom) || 0) + (parseFloat(dcs.marginBottom) || 0)));
       var all = b.querySelectorAll("*");
       for (var i = 0; i < all.length && i < 3000; i++) {
         var o = all[i];
+        // not laid out (display:none, a closed <details>'s content) or pinned to the viewport (position:fixed): neither says how tall the page is
+        if (o.getClientRects().length === 0 || getComputedStyle(o).position === "fixed") continue;
         h = Math.max(h, Math.ceil(o.getBoundingClientRect().bottom + sy));
         if (o.scrollWidth > o.clientWidth + 1) {
           var ox = getComputedStyle(o).overflowX;
@@ -48,14 +57,16 @@ export const FRAME_HELPER = String.raw`(function () {
     de.style.zoom = keep;
     return { w: Math.max(w, window.innerWidth + extra), h: h };
   }
-  // sent values: only a change of 2px or more is sent; two values that keep alternating settle on the larger until the frame width changes
-  var last = null, prev = null, floor = 0, floorW = 0;
+  // sent values: only a change of 2px or more is sent. Two heights that keep alternating because the page follows the frame's own height (the parent resizes the frame to what we sent) settle on the larger
+  // until the frame width changes; a measurement taken while the frame's height has not changed since the previous one comes from the page itself (a toggle, an accordion) and clears that lock
+  var last = null, prev = null, floor = 0, floorW = 0, lastIH = null;
   function report() {
     queued = false;
-    var m = measure(), iw = window.innerWidth;
-    if (iw !== floorW) { floorW = iw; floor = 0; prev = null; }
+    var m = measure(), iw = window.innerWidth, ih = window.innerHeight, frameMoved = lastIH !== null && ih !== lastIH;
+    lastIH = ih;
+    if (iw !== floorW || !frameMoved) { floorW = iw; floor = 0; prev = null; }
     var h = Math.max(m.h, floor);
-    if (last && prev !== null && Math.abs(h - prev.h) < 2 && Math.abs(h - last.h) >= 2) { floor = Math.max(h, last.h); h = floor; }
+    if (frameMoved && last && prev !== null && Math.abs(h - prev.h) < 2 && Math.abs(h - last.h) >= 2) { floor = Math.max(h, last.h); h = floor; }
     if (last && Math.abs(h - last.h) < 2 && Math.abs(m.w - last.w) < 2 && zoom === last.zoom) return;
     if (last && Math.abs(h - last.h) >= 2) prev = last;
     last = { w: m.w, h: h, zoom: zoom };
@@ -115,9 +126,9 @@ export const FRAME_HELPER = String.raw`(function () {
   schedule();
 })();`;
 
-/** `<script nonce>` with the helper, as the very first thing of the page: right after a leading doctype (BOM / whitespace allowed before it), else at byte 0 */
-export function injectFrameHelper(html: string, nonce: string): string {
-  const tag = `<script nonce="${nonce}">${FRAME_HELPER}</script>`;
+/** `<script>` with the helper (allowed by its hash), as the very first thing of the page: right after a leading doctype (BOM / whitespace allowed before it), else at byte 0 */
+export function injectFrameHelper(html: string): string {
+  const tag = `<script>${FRAME_HELPER}</script>`;
   const at = /^﻿?\s*<!doctype[^>]*>/i.exec(html)?.[0].length ?? 0;
   return html.slice(0, at) + tag + html.slice(at);
 }

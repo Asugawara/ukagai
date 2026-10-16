@@ -31,7 +31,7 @@ import type { GuiOpener } from "./gui-open.js";
 import type { SseHub } from "./sse.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
-import { FILE_TYPES, htmlCsp, newNonce, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml, type DocumentScope } from "./files.js";
+import { FILE_TYPES, FRAME_CSP, FRAME_POLICY, TAB_CSP, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml, type DocumentScope } from "./files.js";
 import { injectFrameHelper } from "./frame-helper.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanSummary } from "../contract.js";
@@ -182,8 +182,9 @@ export function createApp(deps: AppDeps): Hono {
     const lang = deps.settings?.get().lang ?? deps.lang ?? "en";
     const theme = deps.settings?.get().theme ?? "system";
     html = html.replace(/<html(\s[^>]*)?>/i, (_m, attrs: string | undefined) => {
-      const rest = (attrs ?? "").replace(/\s(?:lang|data-lang|data-theme)="[^"]*"/gi, "");
-      return `<html lang="${lang}" data-lang="${lang}"${theme === "system" ? "" : ` data-theme="${theme}"`}${rest}>`;
+      const rest = (attrs ?? "").replace(/\s(?:lang|data-lang|data-theme|data-frame-csp)="[^"]*"/gi, "");
+      // data-frame-csp: the policy for the embedded HTML view's iframe `csp` attribute (the same string the frame pages are served with)
+      return `<html lang="${lang}" data-lang="${lang}" data-frame-csp="${FRAME_POLICY}"${theme === "system" ? "" : ` data-theme="${theme}"`}${rest}>`;
     });
     c.header("Cache-Control", "no-store");
     return c.html(html);
@@ -331,9 +332,11 @@ export function createApp(deps: AppDeps): Hono {
         "Cache-Control": "private, no-cache",
       };
       if (isHtmlFile(file)) {
-        const nonce = newNonce();
-        headers["Content-Security-Policy"] = htmlCsp(nonce);
-        return c.body(injectFrameHelper(rewriteHtml(body.toString("utf8"), dirname(file), whoOf(c)), nonce), 200, headers);
+        // view=tab ("Open in new tab"): a top-level tab has no embedder enforcing a policy, so it gets no helper and no script at all
+        const tab = c.req.query("view") === "tab";
+        headers["Content-Security-Policy"] = tab ? TAB_CSP : FRAME_CSP;
+        const page = rewriteHtml(body.toString("utf8"), dirname(file), whoOf(c), tab);
+        return c.body(tab ? page : injectFrameHelper(page), 200, headers);
       }
       return c.body(new Uint8Array(body), 200, headers);
     } catch {
