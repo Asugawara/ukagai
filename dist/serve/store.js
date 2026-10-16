@@ -920,6 +920,16 @@ export class Store {
             expires_at: new Date(m.set_at + MODE_SWITCH_TTL_MS).toISOString(),
         };
     }
+    /** True only while the record is pending and has not been asked about yet; marks it asked */
+    askModeSwitch(sessionId) {
+        if (!this.getModeSwitch(sessionId).pending)
+            return false;
+        const m = this.modeSwitches.get(sessionId);
+        if (!m || m.asked)
+            return false;
+        m.asked = true;
+        return true;
+    }
     consumeModeSwitch(sessionId) {
         const pending = this.getModeSwitch(sessionId).pending;
         if (pending)

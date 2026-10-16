@@ -97,6 +97,8 @@ export function startPlanWatcher(opts) {
     const interval = setInterval(() => void poll().catch(() => { }), pollMs);
     interval.unref();
     return {
+        /** Resolves once the files present at start are recorded: a file written after this is reported */
+        seeded,
         stop() {
             stopped = true;
             clearInterval(interval);

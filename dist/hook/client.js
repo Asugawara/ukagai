@@ -166,8 +166,15 @@ export class Client {
             return false;
         return Client.json(r.text)?.pending === true;
     }
-    async consumeModeSwitch(sessionId) {
-        const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/consume`, undefined, SHORT_TIMEOUT_MS);
+    /** True when the server says this is the first ask for the pending record (it asks at most once per record) */
+    async askModeSwitch(sessionId, timeoutMs = SHORT_TIMEOUT_MS) {
+        const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/ask`, undefined, timeoutMs);
+        if (!r || r.status !== 200)
+            return false;
+        return Client.json(r.text)?.ask === true;
+    }
+    async consumeModeSwitch(sessionId, timeoutMs = SHORT_TIMEOUT_MS) {
+        const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/consume`, undefined, timeoutMs);
         return r !== null && r.status >= 200 && r.status < 300;
     }
     /** The session's last "Cannot answer" memo. Unreachable, an error or an unexpected body yields null (ignored) */

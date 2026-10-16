@@ -378,6 +378,8 @@ export const PendingModeSwitch = z.union([
 ]);
 /** POST /api/sessions/:id/pending-mode-switch/consume. True if there was an unconsumed record */
 export const ConsumeModeSwitchResponse = z.object({ consumed: z.boolean() });
+/** True once per record: the checkpoint hook asks the human at most once per approval */
+export const AskModeSwitchResponse = z.object({ ask: z.boolean() });
 // ---- "Cannot answer" ----
 /** The human could not read the explanation. Always English, whatever the display language: `Cannot answer — <reason>[: <detail>]` */
 export const CANNOT_PREFIX = "Cannot answer — ";

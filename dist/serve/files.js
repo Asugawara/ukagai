@@ -1,8 +1,9 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, resolve, sep } from "node:path";
 import { PLAN_BLOCK_SUFFIX, plansDir, realFileUnder } from "../contract.js";
+import { FRAME_HELPER } from "./frame-helper.js";
 /** Largest document image that is served */
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 /** Largest HTML page that is served (it is read into memory to rewrite its relative URLs) */
@@ -17,8 +18,16 @@ export const FILE_TYPES = {
     ".htm": "text/html; charset=utf-8",
 };
 export const isHtmlFile = (f) => FILE_TYPES[extname(f).toLowerCase()]?.startsWith("text/html") ?? false;
-/** Sent with every served HTML page: no script, no network, no navigation; only same-origin / data: images and fonts and inline styles */
-export const HTML_CSP = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:";
+/**
+ * The policy of the embedded view. The GUI puts exactly this string in the iframe's `csp` attribute (CSP Embedded Enforcement, Chromium): every document the frame loads,
+ * also after the page navigated it, must opt in to a policy at least this strict or is refused, so nothing but ukagai's own frame helper (by hash: the page's <script>,
+ * on*= attributes and javascript: URLs stay blocked) can run in it. No network (only same-origin / data: images and fonts, inline styles).
+ */
+export const FRAME_POLICY = `default-src 'none'; script-src 'sha256-${createHash("sha256").update(FRAME_HELPER).digest("base64")}'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:; base-uri 'none'`;
+/** Sent with the page in the embedded view: a sandbox with allow-scripts (opaque origin, no popups, no forms, no top navigation) plus FRAME_POLICY (which also opts in to the frame's required CSP) */
+export const FRAME_CSP = `sandbox allow-scripts; ${FRAME_POLICY}`;
+/** Sent with the page opened on its own ("Open in new tab"): a top-level tab has no embedder to enforce anything, so it never runs a script */
+export const TAB_CSP = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:; base-uri 'none'";
 // A Claude Code scratchpad below an OS temp dir: <tmp>/claude-<uid>/<project>/<session>/scratchpad/
 const SCRATCHPAD = /^claude-[^/]+\/(?:[^/]+\/)*scratchpad\//;
 const usable = (f) => {
@@ -88,9 +97,11 @@ export function validFileTag(who, path, tag) {
 const isRelative = (u) => u !== "" && !/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(u);
 /**
  * The page's relative local references (`src=`, `href=`, `url(...)`) pointed at /api/files, so they keep working although the page itself is served from there.
- * `who` is the `decision=<id>` / `plan=<name>` query part (already encoded); `dir` the real directory of the page. Scripts are left alone: the CSP sandbox stops them.
+ * `who` is the `decision=<id>` / `plan=<name>` query part (already encoded); `dir` the real directory of the page; `tab` the new-tab view (its links stay in that view). Scripts are left alone: the CSP stops them (only the injected frame helper runs).
+ * Defence in depth, as the CSP and the frame's `csp` attribute are the real boundary: `http-equiv` (meta refresh / meta CSP), declarative shadow roots (the frame helper cannot see into a closed one)
+ * and every `<link>` (`rel=prerender` / `preconnect` reach the network although `default-src 'none'`) are renamed to something inert. Following a link still sends that one request, as without ukagai.
  */
-export function rewriteHtml(html, dir, who) {
+export function rewriteHtml(html, dir, who, tab = false) {
     const target = (rel, amp) => {
         let written = rel.replace(/&amp;/g, "&");
         const cut = written.search(/[?#]/);
@@ -101,9 +112,12 @@ export function rewriteHtml(html, dir, who) {
         }
         catch { /* keep as written */ }
         const abs = resolve(dir, written);
-        return `/api/files?${who}${amp}path=${encodeURIComponent(abs)}${amp}tag=${fileTag(who, abs)}`;
+        return `/api/files?${who}${amp}path=${encodeURIComponent(abs)}${amp}tag=${fileTag(who, abs)}${tab ? `${amp}view=tab` : ""}`; // view=tab keeps a followed link in the script-free new-tab view; it is not part of the tag
     };
     return html
+        .replace(/http-equiv/gi, "data-ukagai-http-equiv") // no meta refresh (it would navigate the frame away), no meta CSP games
+        .replace(/shadowroot/gi, "data-ukagai-shadowroot") // no declarative shadow DOM (shadowrootmode, shadowrootdelegatesfocus, ...)
+        .replace(/<link\b/gi, "<ukagai-link") // no <link rel=prerender|preconnect|...: they ignore the CSP
         .replace(/(\s(?:src|href))=("([^"]*)"|'([^']*)')/gi, (m, name, q, d, sg) => {
         const u = (d ?? sg ?? "").trim();
         return isRelative(u) ? `${name}="${target(u, "&amp;")}"` : m;
