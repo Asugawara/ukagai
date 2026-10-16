@@ -21,8 +21,13 @@ export const FILE_TYPES: Record<string, string> = {
 
 export const isHtmlFile = (f: string): boolean => FILE_TYPES[extname(f).toLowerCase()]?.startsWith("text/html") ?? false;
 
-/** Sent with every served HTML page: no script, no network, no navigation; only same-origin / data: images and fonts and inline styles */
-export const HTML_CSP = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:";
+/**
+ * Sent with every served HTML page: a sandbox without allow-same-origin (opaque origin, no navigation, no forms), no network, and no script except ukagai's own
+ * frame helper (identified by a fresh nonce per response, so the page's <script>, on*= attributes and javascript: URLs stay blocked); only same-origin / data: images
+ * and fonts and inline styles
+ */
+export const htmlCsp = (nonce: string): string => `sandbox allow-scripts; default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'self' data:`;
+export const newNonce = (): string => randomBytes(16).toString("base64");
 
 // A Claude Code scratchpad below an OS temp dir: <tmp>/claude-<uid>/<project>/<session>/scratchpad/
 const SCRATCHPAD = /^claude-[^/]+\/(?:[^/]+\/)*scratchpad\//;
@@ -106,7 +111,7 @@ const isRelative = (u: string): boolean => u !== "" && !/^(?:[a-z][a-z0-9+.-]*:|
 
 /**
  * The page's relative local references (`src=`, `href=`, `url(...)`) pointed at /api/files, so they keep working although the page itself is served from there.
- * `who` is the `decision=<id>` / `plan=<name>` query part (already encoded); `dir` the real directory of the page. Scripts are left alone: the CSP sandbox stops them.
+ * `who` is the `decision=<id>` / `plan=<name>` query part (already encoded); `dir` the real directory of the page. Scripts are left alone: the CSP stops them (only the injected frame helper runs).
  */
 export function rewriteHtml(html: string, dir: string, who: string): string {
   const target = (rel: string, amp: string): string => {

@@ -100,7 +100,12 @@ function png(w: number, h: number, [r, g, b]: [number, number, number]): Buffer 
 }
 
 const QUESTION = "Which header variant, A or B?";
-const PAGE = '<!doctype html><html><body style="margin:0"><h1>Variants</h1><img id="shot" src="a.png"><p style="background:url(a.png)">x</p><script>document.body.dataset.ran = "1"</script></body></html>';
+// Three stacked 1180 x 700 blocks inside overflow-x:auto wrappers, like a comparison mock-up. The page's own script and onerror= would shrink the inline frame (they tell the parent h=5)
+// if they ran: the frame is sandboxed with allow-scripts, but its CSP lets only ukagai's helper (by nonce) run
+const HOSTILE = `parent.postMessage({ ukagai: "frame", w: 1, h: 5, zoom: 1 }, "*")`;
+const BLOCK = '<div class="scroll" style="overflow-x:auto"><div style="min-width:1180px;height:700px;background:#dbeafe;border-bottom:2px solid #333">block</div></div>';
+const PAGE = `<!doctype html><html><body style="margin:0"><h1>Variants</h1><img id="shot" src="a.png"><p style="background:url(a.png)">x</p>${BLOCK}${BLOCK}${BLOCK}<script>${HOSTILE}</script><img src="missing.png" onerror='${HOSTILE}'></body></html>`;
+const SHORT = '<!doctype html><html><body style="margin:0"><div style="height:200px;background:#dcfce7">short</div></body></html>';
 
 async function planSession(slug: string): Promise<void> {
   const tpath = join(home, ".claude", "projects", "p", `${slug}.jsonl`);
@@ -121,6 +126,7 @@ before(async () => {
   mkdirSync(join(scratch, "ukagai"), { recursive: true });
   writeFileSync(join(scratch, "ukagai", "a.png"), png(120, 80, [37, 99, 235]));
   writeFileSync(join(scratch, "ukagai", "compare.html"), PAGE);
+  writeFileSync(join(scratch, "ukagai", "short.html"), SHORT);
   mkdirSync(join(home, ".claude", "plans"), { recursive: true });
   writeFileSync(join(home, ".claude", "plans", "a.png"), png(120, 80, [22, 163, 74]));
   writeFileSync(join(home, ".claude", "plans", "plan-compare.html"), PAGE);
@@ -174,30 +180,79 @@ const EXPL = `---\nukagai: 1\n---\n## Why this decision is needed now\n\nCompare
 /** The frame's document fetched as the browser did; its image is then fetched with no cookie (a sandboxed frame sends none): the tag must authorise it */
 const frameImageStatus = () => ev<number | string>(`(async () => { const f = document.querySelector("${BG} iframe.doc-frame-view"); const r = await fetch(f.getAttribute("src")); const html = await r.text(); const m = /<img id="shot" src="([^"]+)"/.exec(html); return m ? (await fetch(m[1].replace(/&amp;/g, "&"), { credentials: "omit" })).status : "no img"; })().then((v) => JSON.stringify(v))`);
 
+const click = (label: string) => ev(`[...document.querySelectorAll(".overlay.frame .frame-btn")].find((b) => b.textContent === ${JSON.stringify(label)}).click(), "ok"`);
+const zoomShown = () => text(".overlay.frame .frame-zoom");
+const inlineHeight = () => ev<number>(`document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height`);
+
 gui("an explanation shows the page in a sandboxed iframe; the image inside loads; full screen opens the overlay and Esc closes it", async () => {
   const { id } = await seedDoc(EXPL);
   ab("open", base + "/");
   await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
-  assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("src")`), `/api/files?decision=${id}&path=${encodeURIComponent("compare.html")}`);
-  assert.equal(ev<boolean>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox") === ""`), true);
-  assert.equal(ev<number>(`document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height`), 480);
+  const src = `/api/files?decision=${id}&path=${encodeURIComponent("compare.html")}`;
+  assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("src")`), src);
+  assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox")`), "allow-scripts"); // never allow-same-origin
   assert.equal(text(`${BG} .doc-frame-alt`), "比較");
   assert.equal(text(`${BG} .doc-frame-bar .chip`), "compare.html");
   assert.equal(text(`${BG} .doc-frame-full`), "Full screen");
+  assert.equal(text(`${BG} .doc-frame-open`), "Open in new tab");
+  assert.equal(ev<string>(`document.querySelector("${BG} .doc-frame-open").getAttribute("href")`), src);
+  assert.equal(ev<string>(`document.querySelector("${BG} .doc-frame-open").getAttribute("target") + "|" + document.querySelector("${BG} .doc-frame-open").getAttribute("rel")`), "_blank|noopener");
   assert.equal(count(`${BG} .doc-img`), 0);
   // the page's own <img src="a.png"> is rewritten and served (a 200), and in the real frame it has loaded
   assert.equal(Number(frameImageStatus()), 200);
-  await waitFor("page loaded in the frame", `(() => { const f = document.querySelector("${BG} iframe.doc-frame-view"); f.scrollIntoView(); return f.contentWindow === null ? false : true; })()`);
+  // the frame's height follows its content (the page is tall: up to 70% of the window), not a fixed 480px. The page's own script / onerror= told the parent h=5: they did not run
+  await waitFor("inline height follows the content", `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 630`);
+  ab("screenshot", join(SHOTS, "doc-frame-inline.png"));
+  // a message that does not come from a frame in the document is ignored
+  ev(`window.postMessage({ ukagai: "frame", w: 1, h: 5, zoom: 1 }, "*"), "ok"`);
+  await sleep(300);
+  assert.equal(inlineHeight(), 630);
   // full screen
   ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
   await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
-  assert.equal(ev<boolean>(`document.querySelector(".overlay.frame iframe").getAttribute("sandbox") === ""`), true);
+  assert.equal(ev<string>(`document.querySelector(".overlay.frame iframe").getAttribute("sandbox")`), "allow-scripts");
   assert.equal(ev<boolean>(`document.getElementById("main").inert`), true);
-  assert.equal(ev<string>(`document.querySelector(".overlay.frame iframe").getAttribute("src")`), `/api/files?decision=${id}&path=${encodeURIComponent("compare.html")}`);
+  assert.equal(ev<string>(`document.querySelector(".overlay.frame iframe").getAttribute("src")`), src);
+  // the overlay fills the window (real full screen, or the fallback), the bar is on top, and the iframe takes the rest at full width: no scroll outside the iframe
+  const geo = ev<{ w: number; h: number; cw: number; ch: number; fx: number; fw: number; fb: number; scroll: boolean }>(`JSON.stringify((() => {
+    const r = document.querySelector(".overlay.frame .overlay-card").getBoundingClientRect(), f = document.querySelector(".overlay.frame iframe").getBoundingClientRect(), c = document.querySelector(".overlay.frame .overlay-card");
+    return { w: innerWidth, h: innerHeight, cw: r.width, ch: r.height, fx: f.x, fw: f.width, fb: f.bottom, scroll: c.scrollHeight > c.clientHeight || c.scrollWidth > c.clientWidth };
+  })())`);
+  assert.deepEqual([geo.cw, geo.ch, geo.fx, geo.fw, geo.fb, geo.scroll], [geo.w, geo.h, 0, geo.w, geo.h, false]);
+  assert.equal(text(".overlay.frame .frame-title"), "比較");
+  for (const l of ["Fit", "100%", "−", "+", "Open in new tab", "Close"]) assert.equal(ev<boolean>(`[...document.querySelectorAll(".overlay.frame .frame-bar button, .overlay.frame .frame-bar a")].some((b) => b.textContent === ${JSON.stringify(l)})`), true, l);
+  await waitFor("zoom shown", `document.querySelector(".overlay.frame .frame-zoom").textContent === "100%"`);
+  ab("screenshot", join(SHOTS, "doc-frame-full-100.png"));
+  // Fit shows the whole page (the page is 2100+ px tall, the window 900), + / − / 100% change the zoom
+  click("Fit");
+  await waitFor("fit", `parseInt(document.querySelector(".overlay.frame .frame-zoom").textContent) < 60`);
+  const fit = parseInt(zoomShown());
+  assert.ok(fit > 20 && fit < 60, zoomShown());
+  ab("screenshot", join(SHOTS, "doc-frame-full-fit.png"));
+  click("100%");
+  await waitFor("100%", `document.querySelector(".overlay.frame .frame-zoom").textContent === "100%"`);
+  click("+");
+  await waitFor("125%", `document.querySelector(".overlay.frame .frame-zoom").textContent === "125%"`);
+  click("−");
+  click("−");
+  await waitFor("80%", `document.querySelector(".overlay.frame .frame-zoom").textContent === "80%"`);
+  key("+");
+  await waitFor("100% again by a key", `document.querySelector(".overlay.frame .frame-zoom").textContent === "100%"`);
+  key("f");
+  await waitFor("fit by a key", `parseInt(document.querySelector(".overlay.frame .frame-zoom").textContent) < 60`);
+  key("0");
+  await waitFor("100% by a key", `document.querySelector(".overlay.frame .frame-zoom").textContent === "100%"`);
   key("Escape");
   await waitFor("overlay closed", `!document.querySelector(".overlay.frame")`);
   assert.equal(ev<boolean>(`document.getElementById("main").inert`), false);
   ab("screenshot", join(SHOTS, "doc-frame.png"));
+});
+
+gui("a short page makes a short inline frame", async () => {
+  await seedDoc(EXPL.replace("compare.html", "short.html"));
+  ab("open", base + "/");
+  await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+  await waitFor("height follows the content", `Math.round(document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect().height) === 200`);
 });
 
 gui("an external .html URL is still dropped", async () => {
@@ -216,7 +271,7 @@ gui("a plan card shows the page through plan=<name>", async () => {
   writeFileSync(join(home, ".claude", "plans", name), "# Frame plan\n\n## One\n\n![Plan page](plan-compare.html)\n\n## Two\n\nx\n");
   await waitFor("plan frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 10000);
   assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("src")`), `/api/files?plan=${encodeURIComponent(name)}&path=${encodeURIComponent("plan-compare.html")}`);
-  assert.equal(ev<boolean>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox") === ""`), true);
+  assert.equal(ev<string>(`document.querySelector("${BG} iframe.doc-frame-view").getAttribute("sandbox")`), "allow-scripts");
   assert.equal(Number(frameImageStatus()), 200);
   ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
   await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);

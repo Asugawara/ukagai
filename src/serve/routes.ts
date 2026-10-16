@@ -31,7 +31,8 @@ import type { GuiOpener } from "./gui-open.js";
 import type { SseHub } from "./sse.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
-import { FILE_TYPES, HTML_CSP, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml, type DocumentScope } from "./files.js";
+import { FILE_TYPES, htmlCsp, newNonce, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml, type DocumentScope } from "./files.js";
+import { injectFrameHelper } from "./frame-helper.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanSummary } from "../contract.js";
 import { PlanSessions } from "./plan-session.js";
@@ -330,8 +331,9 @@ export function createApp(deps: AppDeps): Hono {
         "Cache-Control": "private, no-cache",
       };
       if (isHtmlFile(file)) {
-        headers["Content-Security-Policy"] = HTML_CSP;
-        return c.body(rewriteHtml(body.toString("utf8"), dirname(file), whoOf(c)), 200, headers);
+        const nonce = newNonce();
+        headers["Content-Security-Policy"] = htmlCsp(nonce);
+        return c.body(injectFrameHelper(rewriteHtml(body.toString("utf8"), dirname(file), whoOf(c)), nonce), 200, headers);
       }
       return c.body(new Uint8Array(body), 200, headers);
     } catch {
