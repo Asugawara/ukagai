@@ -110,7 +110,7 @@ Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troublesho
 git clone https://github.com/Asugawara/ukagai.git && cd ukagai
 npm ci
 npm run build
-npm run vendor                              # bundle marked / mermaid into public/vendor/
+npm run vendor                              # bundle marked / pele into public/vendor/
 node dist/cli.js install --dry-run          # preview the changes to the agents found
 node dist/cli.js install                    # register hooks + skill
 npm run typecheck
