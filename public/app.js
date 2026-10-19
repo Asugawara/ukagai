@@ -2335,7 +2335,8 @@ function colorMermaid(svg, opts) {
   if (!opts.length) return;
   for (const t of svg.querySelectorAll("text.pele-label, text.pele-cluster-label, .pele-edge-label text")) {
     // multi-line labels are one <tspan> per line
-    const text = [...(t.querySelectorAll("tspan").length ? t.querySelectorAll("tspan") : [t])].map((x) => x.textContent ?? "").join(" ").replace(/\s+/g, " ").trim();
+    const spans = t.querySelectorAll("tspan");
+    const text = [...(spans.length ? spans : [t])].map((x) => x.textContent ?? "").join(" ").replace(/\s+/g, " ").trim();
     if (!text || t.closest(".optcolored")) continue;
     const o = opts.find((x) => sameLabel(x.label, text));
     if (!o) continue;
@@ -2346,7 +2347,7 @@ function colorMermaid(svg, opts) {
     const title = t.closest(".pele-cluster-title");
     if (!owner && title?.dataset.id) owner = [...svg.querySelectorAll(".pele-cluster")].find((c) => c.dataset.id === title.dataset.id) ?? null;
     if (!owner) continue;
-    for (const sh of owner.querySelectorAll(":scope > rect, :scope > polygon, :scope > path, :scope > circle, :scope > ellipse")) {
+    for (const sh of owner.querySelectorAll(":scope > rect, :scope > polygon, :scope > path:not(.pele-divider), :scope > circle, :scope > ellipse")) {
       if (sh.closest(".pele-icon")) continue;
       sh.style.setProperty("stroke", o.color, "important");
       sh.style.setProperty("stroke-width", "3px", "important");
