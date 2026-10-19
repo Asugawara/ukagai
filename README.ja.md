@@ -112,7 +112,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 git clone https://github.com/Asugawara/ukagai.git && cd ukagai
 npm ci
 npm run build
-npm run vendor                              # marked / mermaid を public/vendor/ にバンドル
+npm run vendor                              # marked / pele を public/vendor/ にバンドル
 node dist/cli.js install --dry-run          # 見つかったエージェントへの変更をプレビュー
 node dist/cli.js install                    # hooks + スキルを登録
 npm run typecheck
