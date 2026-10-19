@@ -1707,7 +1707,7 @@ gui("V4 §0: a new build of app.js reloads the page within 3 s after the server 
   utimesSync(file, st.atime, next);
   try {
     await startServe();
-    const v = Math.floor(next.getTime()).toString(36);
+    const v = Math.floor(statSync(file).mtimeMs).toString(36); // what the server reads: utimes may store x - 0.001 for x
     await waitFor("reload with the new build", `document.querySelector("#build")?.textContent === "build ${v}"`, 3000);
     assert.notEqual(q1("#build"), before);
   } finally {
