@@ -204,7 +204,14 @@ pre code { background: none; padding: 0; white-space: pre; overflow-wrap: normal
 .diff .hunk { background: var(--hunk); display: block; }
 .diff span { white-space: pre; }
 .mermaid-err { color: var(--red); font-size: 13px; margin-top: 6px; }
-.mermaid-ok svg { max-height: 42vh; width: auto; max-width: 100%; }
+/* pele reads --pele-* (colors switch with the theme tokens, no re-render). --pele-font is not set: render() gets the font so measuring and drawing agree */
+.mermaid-ok {
+  --pele-bg: var(--bg); --pele-fg: var(--fg); --pele-muted: var(--muted); --pele-line: var(--muted);
+  --pele-surface: var(--code); --pele-surface-alt: var(--file); --pele-border: var(--muted);
+  --pele-accent: var(--accent); --pele-critical: var(--red); --pele-error: var(--red);
+}
+.overlay-card .mermaid-ok, .drawer .mermaid-ok { --pele-bg: var(--panel); }
+.mermaid-ok > svg { max-height: 42vh; width: auto; max-width: 100%; }
 .mermaid-ok.wide { overflow-x: auto; }
 .wide-chip { display: block; font: inherit; font-size: 12px; line-height: 18px; padding: 0 2px; margin: 0 0 4px; border: 0; background: none; color: var(--fg); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 

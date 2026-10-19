@@ -323,6 +323,8 @@ test("GET / adds an mtime version (?v=) to app.js / app.css, and /public/* ignor
     assert.equal(r.headers.get("cache-control"), "no-cache");
   }
   assert.ok(html.includes('"/public/vendor/marked.umd.js"'), "vendor is left unchanged");
+  assert.ok(html.includes('"/public/vendor/pele.global.js"'), "diagrams are drawn by pele");
+  assert.ok(!/vendor\/mermaid/.test(html), "the vendored mermaid.js is gone");
 });
 
 test("token file is 0600", async () => {
