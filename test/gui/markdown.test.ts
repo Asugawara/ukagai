@@ -173,7 +173,7 @@ const seedRich = () => seedDoc(EX_MD.replace("__QUESTION__", QUESTION), QUESTION
 
 const BG = "#background";
 const AUTHOR = `${BG} details:not(.fold):not(.affects):not(.plan-sec):not(.plan-sub)`; // the details the author wrote
-const READY = `document.querySelector("${BG} .callout") && document.querySelectorAll("${BG} .mermaid-ok svg").length >= 3`;
+const READY = `document.querySelector("${BG} .callout") && document.querySelectorAll("${BG} .mermaid-ok > svg").length >= 3`;
 
 async function openRich() {
   const { id } = await seedRich();
@@ -268,9 +268,9 @@ gui("every construct renders (callouts, tasks, details, code, badges, mark, colu
 
 gui("Mermaid renders any type: flowchart, sequenceDiagram, pie, and the other listed types do not throw", async () => {
   await openRich();
-  assert.equal(count(`${BG} .mermaid-ok svg`) >= 3, true);
+  assert.equal(count(`${BG} .mermaid-ok > svg`) >= 3, true);
   assert.equal(count(`${BG} .mermaid-err`), 0);
-  // Every type of the spec, rendered through the page's own Mermaid
+  // Every type of the spec, rendered through the page's own pele
   const types: Record<string, string> = {
     mindmap: "mindmap\n  root((Plan))\n    Option A\n    Option B",
     timeline: "timeline\n  title Rollout\n  2026 : Design\n  2027 : Ship",
@@ -284,18 +284,13 @@ gui("Mermaid renders any type: flowchart, sequenceDiagram, pie, and the other li
     classDiagram: "classDiagram\n  class A",
     "stateDiagram-v2": "stateDiagram-v2\n  [*] --> A",
   };
-  const results = ev<Record<string, string>>(`(async () => {
-    const m = window.mermaid.default ?? window.mermaid;
+  const raw = ev<string | Record<string, string>>(`(() => {
     const out = {};
     for (const [k, src] of Object.entries(${JSON.stringify(types)})) {
-      try { const { svg } = await m.render("probe-" + k.replace(/\\W/g, ""), src); out[k] = svg.includes("<svg") ? "ok" : "empty"; } catch (e) { out[k] = String(e.message ?? e).split("\\n")[0]; }
+      try { const { svg } = window.pele.render(src); out[k] = svg.includes("<svg") ? "ok" : "empty"; } catch (e) { out[k] = String(e.message ?? e).split("\\n")[0]; }
     }
-    window.__mm = JSON.stringify(out);
-    return "done";
+    return JSON.stringify(out);
   })()`);
-  void results;
-  await waitFor("mermaid probe", `window.__mm !== undefined`, 20000);
-  const raw = ev<string | Record<string, string>>(`window.__mm`);
   const probe = typeof raw === "string" ? (JSON.parse(raw) as Record<string, string>) : raw;
   for (const k of Object.keys(types)) assert.equal(probe[k], "ok", `${k}: ${probe[k]}`);
 });
@@ -473,7 +468,7 @@ gui("screenshots: the rich explanation in light and dark", async () => {
   ab("set", "viewport", "1280", "1500");
   for (const scheme of ["light", "dark"]) {
     ab("set", "media", scheme);
-    await openRich(); // reloads, so Mermaid starts in the scheme under test
+    await openRich(); // reloads, so the page starts in the scheme under test
     ev(`(() => { const h = [...document.querySelectorAll("${BG} h2")].find((x) => x.textContent === "Callouts and lists"); document.querySelector("${BG}").scrollTop += h.getBoundingClientRect().top - 100; return "ok"; })()`);
     await sleep(500);
     const file = join(SHOTS, `RP2-${scheme}.png`);

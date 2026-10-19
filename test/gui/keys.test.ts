@@ -1061,11 +1061,94 @@ gui("option colors: card labels, label mentions in the text and Mermaid nodes sh
   const node = ev<{ n: number; stroke: string }>(`(() => {
     const labels = [...document.querySelectorAll("#background .mermaid-ok .optcolored")];
     const pg = labels.find(e => e.textContent.trim() === "Postgres");
-    const shapes = [...(pg?.closest("g.node")?.querySelectorAll("rect, polygon, path") ?? [])].filter(x => !x.closest(".label, foreignObject"));
+    const shapes = [...(pg?.closest("g.pele-node")?.querySelectorAll(":scope > rect") ?? [])];
     return JSON.stringify({ n: labels.length, stroke: shapes.map(x => x.style.getPropertyValue("stroke")).find(Boolean) ?? "" });
   })()`);
   assert.equal(node.n >= 3, true);
   assert.equal(node.stroke, "var(--opt-1)");
+});
+
+const MERMAID_OPT_MD = (question: string) => `---
+ukagai: 1
+title: Diagram colours
+question: ${question}
+reversibility: reversible
+scope: file
+---
+
+## Why this decision is needed now
+
+Body.
+
+## Diagram
+
+\`\`\`mermaid
+sequenceDiagram
+  participant App
+  participant Postgres
+  App->>Postgres: query
+\`\`\`
+
+\`\`\`mermaid
+stateDiagram-v2
+  [*] --> Postgres
+  Postgres --> Sqlite
+\`\`\`
+
+\`\`\`mermaid
+flowchart LR
+  A[Sqlite] --> B[Postgres]
+\`\`\`
+
+## Options
+
+| Option | What happens if chosen | Risks and how to undo | Cost |
+|---|---|---|---|
+| Sqlite (Recommended) | Reads go through one file | Revert by deleting the db file | 1 day |
+| Postgres | Reads go through a server | The migration cannot be undone | 5 days |
+| Flat files | Reads stay as they are | Restore from git | 0 days |
+`;
+
+gui("option colors reach sequence participants (top and bottom) and state nodes", async () => {
+  const n = seq + 1;
+  const question = `Colours ${n}: which store?`;
+  await seedQuestion({ options: RICH_OPTIONS, markdown: MERMAID_OPT_MD(question) });
+  await reopen("document.querySelectorAll('#background .mermaid-ok > svg').length >= 3");
+  const r = ev<{ seqLabels: number; seqStrokes: number; stateStroke: string }>(`(() => {
+    const boxes = [...document.querySelectorAll("#background .mermaid-ok")];
+    const seq = boxes[0], state = boxes[1];
+    const pgs = [...seq.querySelectorAll(".optcolored")].filter(e => e.textContent.trim() === "Postgres");
+    const strokes = pgs.map(e => e.closest("g.pele-node")?.querySelector(":scope > rect")?.style.getPropertyValue("stroke")).filter(s => s === "var(--opt-1)");
+    const st = [...state.querySelectorAll(".optcolored")].find(e => e.textContent.trim() === "Postgres")?.closest("g.pele-node")?.querySelector(":scope > rect, :scope > path");
+    return JSON.stringify({ seqLabels: pgs.length, seqStrokes: strokes.length, stateStroke: st?.style.getPropertyValue("stroke") ?? "" });
+  })()`);
+  assert.equal(r.seqLabels, 2); // the participant is drawn above and below
+  assert.equal(r.seqStrokes, 2);
+  assert.equal(r.stateStroke, "var(--opt-1)");
+  await cancelAll();
+});
+
+gui("switching the theme recolours diagrams without a reload, and the diagram font follows the page", async () => {
+  const question = `Theme ${seq + 1}: which store?`;
+  await seedQuestion({ options: RICH_OPTIONS, markdown: MERMAID_OPT_MD(question) });
+  await reopen("document.querySelectorAll('#background .mermaid-ok > svg').length >= 3");
+  // the "App" participant is not an option, so its stroke is pele's own (theme token)
+  const stroke = () => ev<string>(`"s:" + getComputedStyle([...document.querySelectorAll("#background .mermaid-ok .pele-node")].find(g => g.dataset.id === "App").querySelector(":scope > rect")).stroke`).slice(2);
+  const put = (theme: string) => fetch(base + "/api/settings", { method: "PUT", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ ...before, theme }) });
+  const before = (await api("/api/settings")) as Record<string, unknown>;
+  try {
+    ev(`window.__keep = 1, "ok"`);
+    await put("light");
+    await waitFor("light", `document.documentElement.dataset.theme === "light"`);
+    const light = stroke();
+    await put("dark");
+    await waitFor("dark", `document.documentElement.dataset.theme === "dark"`);
+    assert.equal(ev<number>(`window.__keep`), 1); // no reload
+    assert.notEqual(stroke(), light);
+    assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#background .mermaid-ok > svg")).fontFamily === getComputedStyle(document.getElementById("background")).fontFamily`), true);
+  } finally {
+    await put(String(before.theme ?? "system"));
+  }
 });
 
 gui("assumptions, counterargument and affected are in the left column (whole), not in the right one", async () => {
