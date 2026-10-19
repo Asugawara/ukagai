@@ -1,4 +1,4 @@
-// ukagai GUI. Strings that come from outside are inserted with textContent; innerHTML is only for marked / mermaid output.
+// ukagai GUI. Strings that come from outside are inserted with textContent; innerHTML is only for marked / pele output.
 // Display strings go through t() (i18n.js); the language is read from <html data-lang>.
 import { t, applyStatic, currentLang } from "./i18n.js";
 import { sanitize } from "./sanitize.js";
@@ -137,7 +137,6 @@ const $ = (id) => document.getElementById(id);
 // Same shape as the Settings schema in src/contract.ts. `loaded` below does not depend on it: the defaults apply until the first fetch lands
 const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: true, instruction_presets: [] }, notify: { sound: false, browser: false, title_badge: true } };
 let settings = DEFAULT_SETTINGS;
-const isDark = () => settings.theme === "dark" || (settings.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
 function applySettings(s) {
   const prev = settings;
   settings = { ...DEFAULT_SETTINGS, ...s, plans: { ...DEFAULT_SETTINGS.plans, ...s.plans }, notify: { ...DEFAULT_SETTINGS.notify, ...s.notify } };
@@ -149,8 +148,6 @@ function applySettings(s) {
     const dark = link.dataset.hljs === "dark";
     link.media = settings.theme === "system" ? `(prefers-color-scheme: ${dark ? "dark" : "light"})` : dark === (settings.theme === "dark") ? "all" : "not all";
   }
-  const wasDark = prev.theme === "dark" || (prev.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
-  if (isDark() !== wasDark) mermaidReady = false; // re-initialise with the other theme for the next diagram
   document.body.classList.toggle("no-hints", !settings.hints);
   if (settings.lang !== currentLang()) root.dataset.lang = settings.lang; // the MutationObserver below re-renders in the new language
   else if (loaded) { // plan auto-show and the title badge show without a reload
@@ -2331,62 +2328,47 @@ function parseFrontMatter(md) {
   return { fm, body: md.slice(m[0].length) };
 }
 
-let mermaidReady = false;
-let mermaidSeq = 0;
-function getMermaid() {
-  const m = window.mermaid?.default ?? window.mermaid;
-  if (m && !mermaidReady) {
-    m.initialize({
-      startOnLoad: false,
-      securityLevel: "strict",
-      theme: isDark() ? "dark" : "default",
-    });
-    mermaidReady = true;
-  }
-  return m;
-}
+let mermaidSeq = 0; // idPrefix of each pele diagram
 
-// Color the diagram nodes whose text is an option label: shape stroke and text fill in the option's color
+// Color the diagram nodes whose label is an option label: shape stroke and text fill in the option's color
 function colorMermaid(svg, opts) {
   if (!opts.length) return;
-  for (const t of svg.querySelectorAll("text, .nodeLabel")) {
-    const text = (t.textContent ?? "").trim();
+  for (const t of svg.querySelectorAll("text.pele-label, text.pele-cluster-label, .pele-edge-label text")) {
+    // multi-line labels are one <tspan> per line
+    const text = [...(t.querySelectorAll("tspan").length ? t.querySelectorAll("tspan") : [t])].map((x) => x.textContent ?? "").join(" ").replace(/\s+/g, " ").trim();
     if (!text || t.closest(".optcolored")) continue;
     const o = opts.find((x) => sameLabel(x.label, text));
     if (!o) continue;
     t.classList.add("optcolored");
-    if (t.tagName.toLowerCase() === "text") t.style.setProperty("fill", o.color, "important");
-    else t.style.setProperty("color", o.color, "important");
-    // Flowchart / state nodes: every shape of the node group. Sequence actors: the shapes next to the text
-    const node = t.closest("g.node, g.cluster");
-    let shapes = [];
-    if (node) shapes = [...node.querySelectorAll("rect, polygon, path, circle, ellipse")].filter((x) => !x.closest(".label, foreignObject, text"));
-    else {
-      for (let g = t.parentElement; g && g !== svg && !shapes.length; g = g.parentElement) shapes = [...g.children].filter((c) => /^(rect|polygon|path|circle|ellipse)$/i.test(c.tagName));
+    t.style.setProperty("fill", o.color, "important");
+    // The owner: the node / cluster group; a cluster title that moved outside its frame points at it by data-id. An edge label has none
+    let owner = t.closest(".pele-node, .pele-cluster");
+    const title = t.closest(".pele-cluster-title");
+    if (!owner && title?.dataset.id) owner = [...svg.querySelectorAll(".pele-cluster")].find((c) => c.dataset.id === title.dataset.id) ?? null;
+    if (!owner) continue;
+    for (const sh of owner.querySelectorAll(":scope > rect, :scope > polygon, :scope > path, :scope > circle, :scope > ellipse")) {
+      if (sh.closest(".pele-icon")) continue;
+      sh.style.setProperty("stroke", o.color, "important");
+      sh.style.setProperty("stroke-width", "3px", "important");
     }
-    for (const sh of shapes) { sh.style.setProperty("stroke", o.color, "important"); sh.style.setProperty("stroke-width", "3px", "important"); }
   }
 }
 
-async function renderMermaid(codeEl, opts = []) {
+function renderMermaid(codeEl, opts = []) {
   const pre = codeEl.closest("pre") ?? codeEl;
   const source = codeEl.textContent ?? "";
-  const id = `mmd-${++mermaidSeq}`;
   try {
-    const m = getMermaid();
-    if (!m) throw new Error(t("mermaid_missing"));
-    const { svg } = await m.render(id, source);
+    if (!window.pele) throw new Error(t("mermaid_missing"));
+    // the font is passed (not --pele-font): pele measures text with it and draws with the same
+    const { svg, width } = window.pele.render(source, { idPrefix: `mmd-${++mermaidSeq}`, fontFamily: getComputedStyle(document.getElementById("background") ?? document.body).fontFamily, links: false, images: false });
     const box = el("div", { class: "mermaid-ok" });
     box.innerHTML = svg;
-    const el0 = box.querySelector("svg");
+    const el0 = box.querySelector(":scope > svg");
     if (el0) colorMermaid(el0, opts);
-    const natural = el0?.viewBox?.baseVal?.width || parseFloat(el0?.style.maxWidth) || 0;
-    if (natural) box.dataset.natural = String(natural);
+    if (width) box.dataset.natural = String(width);
     pre.replaceWith(box);
     refreshWide();
   } catch (e) {
-    document.getElementById(id)?.remove();
-    document.getElementById("d" + id)?.remove();
     const msg = String(e?.message ?? e).split("\n")[0];
     pre.before(el("div", { class: "mermaid-err", text: t("mermaid_failed", { message: msg }) }));
     pre.textContent = source;
@@ -2404,7 +2386,7 @@ function refreshWide() {
     const chip = box.querySelector(".wide-chip");
     if (wide && !chip) box.prepend(el("button", { class: "wide-chip", type: "button", tabindex: "-1", onclick: () => setFullwide(!document.body.classList.contains("fullwide")) }, t("full_width")));
     else if (!wide && chip) chip.remove();
-    const svg = box.querySelector("svg");
+    const svg = box.querySelector(":scope > svg");
     if (svg) {
       if (full && natural) { svg.style.width = `${natural}px`; svg.style.maxWidth = "none"; svg.style.maxHeight = "none"; }
       else { svg.style.removeProperty("width"); svg.style.removeProperty("max-width"); svg.style.removeProperty("max-height"); }
@@ -2708,7 +2690,7 @@ async function enhance(container, opts = []) {
     code.closest("pre").replaceWith(diffBlock(code.textContent ?? ""));
   }
   highlightCode(container);
-  await Promise.all([...container.querySelectorAll("pre > code.language-mermaid")].map((c) => renderMermaid(c, opts)));
+  for (const c of container.querySelectorAll("pre > code.language-mermaid")) renderMermaid(c, opts);
   foldLongPre(container);
 }
 
