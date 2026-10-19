@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Asugawara/ukagai/compare/v0.3.0...v0.4.0) (2026-10-19)
+
+
+### Features
+
+* **gui:** render Mermaid diagrams with pele instead of the vendored mermaid.js ([694ac3d](https://github.com/Asugawara/ukagai/commit/694ac3dbb0d8044690b89f5b542fff198452ec41))
+
 ## [0.3.0](https://github.com/Asugawara/ukagai/compare/v0.2.1...v0.3.0) (2026-10-16)
 
 
