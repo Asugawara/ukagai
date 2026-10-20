@@ -384,8 +384,9 @@ export class Store {
       this.emit("decision.created", decision);
       this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
     }
-    // A new plan for message delivery replaces the session's earlier ones: they close, and an approval of one no longer lets it through
-    if (decision.delivery === "message" && decision.kind === "approve_plan") this.supersedePlans(decision);
+    // A new plan, whether it waits for message delivery or for the hook, replaces the session's earlier message-delivery ones: they close,
+    // and an approval of one no longer lets it through (the human decides again, as for the pending mode switch above)
+    if (!denied && req.kind === "approve_plan") this.supersedePlans(decision);
     return { decision, created: true };
   }
 
@@ -598,6 +599,13 @@ export class Store {
     const d = this.findOpen(sessionId, agentId, fingerprint);
     if (!d) return undefined;
     if (d.delivery === "message") {
+      // An approval that no longer lets the plan through (revoked) must not come back through the waiting hook either: the human decides again
+      if (this.approvalWithoutGrant(d)) {
+        this.closeUndelivered(d, "superseded");
+        const after = d.status as DecisionStatus;
+        if (after !== "pending" && after !== "answer_submitted") return undefined;
+        return { delivering: { decision_id: d.id } }; // a live mod still holds it: its ack or release closes it
+      }
       if (d.status === "answer_submitted" && d.claim) {
         if (this.claimAlive(d, this.clock())) return { delivering: { decision_id: d.id } };
         this.settleDeadClaim(d);
@@ -959,7 +967,15 @@ export class Store {
     if (live && ev.hook_event_name === "PostToolUse" && (ev as Record<string, unknown>).tool_name === "ExitPlanMode" && !ev.agent_id && !ev.observe) {
       this.planExited(ev.session_id);
     }
-    if (live && ev.hook_event_name === "SessionEnd") this.endMarks.set(ev.session_id, Number.isFinite(at) ? at : this.clock());
+    // The main agent's session is out of plan mode after the human decided (they left it by hand, or the plan went through some other way):
+    // an approval of that time lets nothing through any more. A late event built before the decision does not count
+    const mode = (ev as Record<string, unknown>).permission_mode;
+    if (live && typeof mode === "string" && mode !== "plan" && !ev.agent_id && Number.isFinite(at)) this.revokeGrantsBefore(ev.session_id, at);
+    if (live && ev.hook_event_name === "SessionEnd") {
+      this.endMarks.set(ev.session_id, Number.isFinite(at) ? at : this.clock());
+      // A delivered approval waits for no mod: it is written off now, so a restart within the grace cannot keep it (undelivered ones keep the grace)
+      for (const d of this.asyncOf(ev.session_id)) if (d.status === "answered") this.revokeGrant(d);
+    }
     if (ev.hook_event_name === "SessionEnd") this.endCheckpoints(ev.session_id, live);
     if (live) this.onSessionEvent?.(ev.session_id, ev.hook_event_name);
   }
@@ -1156,6 +1172,9 @@ export class Store {
     delete d.human_prompt_at;
     delete d.close_reason;
     delete d.delivery_flag;
+    // "Approve and auto" switches through the grant, which a classic decision does not have: the plan still goes through the waiting hook,
+    // the mode does not switch, and the card says so (no pending mode switch: when in doubt, auto stays off)
+    if (d.kind === "approve_plan" && d.response?.approve === true && d.response.set_mode_auto) d.delivery_flag = "auto_not_applied";
     this.opts.log?.("message_to_classic", { session: d.session.session_id, decision: d.id });
   }
 
@@ -1168,6 +1187,11 @@ export class Store {
   }
 
   private completeDelivery(d: Decision): void {
+    // A superseded approval reached the agent anyway (its submit was already under way): it lets nothing through, so it is not an answer
+    if (d.close_reason === "superseded") {
+      this.loseDelivery(d, "superseded");
+      return;
+    }
     this.transition(d, "answered");
     d.response = { ...d.response!, delivered_at: new Date(this.clock()).toISOString(), delivered_via: "message" };
     delete d.claim;
@@ -1284,6 +1308,11 @@ export class Store {
       (d) => !d.claim && !d.close_reason && (d.delivery_attempts ?? 0) < DELIVERY_MAX_ATTEMPTS && (d.mod_owner === owner || !this.ownerAlive(sessionId, d.mod_owner, now)),
     );
     if (!next) return open.length === 0 ? this.pollInstruction(sessionId, owner, now) : undefined;
+    // An approval whose grant is gone would tell the agent "it will be allowed" for a plan that is not: it is not delivered
+    if (this.approvalWithoutGrant(next)) {
+      this.closeUndelivered(next, "superseded");
+      return this.inboxPoll(sessionId, owner, idle);
+    }
     next.mod_owner = owner;
     next.claim = { owner, at: new Date(now).toISOString(), offset: this.transcriptSize(next) };
     this.persist(next);
@@ -1302,7 +1331,8 @@ export class Store {
     if (d.status !== "answer_submitted") return { http: 409, status: d.status };
     if (d.claim && d.claim.owner !== owner && this.claimAlive(d, this.clock())) return { http: 409, status: d.status };
     this.completeDelivery(d);
-    return { http: 200, status: d.status };
+    const after = d.status as DecisionStatus; // a superseded approval closes as answer_lost
+    return after === "answered" ? { http: 200, status: after } : { http: 409, status: after };
   }
 
   /** The mod could not submit: `drop` is the reason `$.prompt.submit` gave (absent when it threw) */
@@ -1563,6 +1593,19 @@ export class Store {
     d.grant_used_at = new Date(this.clock()).toISOString();
     this.persist(d);
     this.emit("decision.updated", d);
+  }
+
+  /** An approved plan for message delivery that no longer has its grant (used, written off or too old) */
+  private approvalWithoutGrant(d: Decision): boolean {
+    return d.kind === "approve_plan" && d.delivery === "message" && d.response?.approve === true && !this.grantOf(d, this.clock());
+  }
+
+  /** The grants of the session decided before `at` are written off */
+  private revokeGrantsBefore(sessionId: string, at: number): void {
+    for (const d of this.asyncOf(sessionId)) {
+      const decided = Date.parse(d.response?.decided_at ?? "");
+      if (Number.isFinite(decided) && decided < at) this.revokeGrant(d);
+    }
   }
 
   /** PostToolUse of the main agent's ExitPlanMode: every grant of the session is used up; one that asked for auto mode did not get it */

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MOD_END_GRACE_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
+import { MOD_END_GRACE_MS, MOD_FRESH_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 import { Store } from "../../src/serve/store.js";
 
@@ -329,4 +329,129 @@ test("HTTP: GET plan-grant looks without using; POST plan-grant/consume uses it 
   const after = (await (await api(`/api/decisions/${d.id}`)).json()) as Decision;
   assert.equal(after.status, "answered");
   assert.equal(after.response?.delivered_via, "grant");
+});
+
+// ---- audit R2b fixes ----
+
+const P1 = PLAN + "\nv1\n";
+const P2 = PLAN + "\nv2\n";
+const FP1 = decisionFingerprint("approve_plan", { plan: P1, planFilePath: "/p/plan.md" });
+
+test("S1: a newer plan registered for the waiting hook (the mod not fresh) writes off the older plan's grant; P1 called again after the human rejected P2 does not pass", () => {
+  const h = setup();
+  const d1 = h.plan("toolu_1", P1);
+  h.approve(d1);
+  h.poll(A, true);
+  h.store.inboxAck(SID, A, d1.id);
+  h.advance(MOD_FRESH_MS + 1000); // the mod went quiet: the next plan is classic
+  const d2 = h.store.create(h.req("toolu_2", P2), {}).decision;
+  assert.equal(d2.delivery, undefined, "P2 waits for the hook");
+  h.store.submitAnswer(d2.id, { kind: "reject", reason: "no" });
+  assert.equal(h.store.planGrant(SID, FP1), undefined);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP1), { consumed: false });
+  assert.ok(get(h, d1).grant_used_at);
+  assert.equal(get(h, d1).status, "answered", "a delivered approval stays answered");
+});
+
+test("S1: with the setting off (no mod_owner) a newer plan closes the older one still waiting for delivery, auto grant included", () => {
+  const h = setup();
+  const d1 = h.plan("toolu_1", P1);
+  h.approve(d1, true);
+  const d2 = h.store.create(h.req("toolu_2", P2, { mod_owner: undefined }), {}).decision;
+  assert.equal(d2.delivery, undefined);
+  assert.equal(h.store.planGrant(SID, FP1), undefined);
+  assert.equal(get(h, d1).status, "answer_lost");
+  assert.equal(get(h, d1).status_reason, "superseded");
+  assert.equal(h.poll(A, true), undefined, "nothing left to deliver");
+});
+
+test("M1: a main-agent event out of plan mode after the approval writes the grant off; plan-mode events, subagents, unknown modes and events built before the decision do not", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  const before = new Date(h.now() - 1000).toISOString();
+  h.store.addEvent({ session_id: SID, transcript_path: "/t", cwd: "/w/proj", hook_event_name: "UserPromptSubmit", received_at: before, permission_mode: "default" } as never);
+  h.event("Stop", { permission_mode: "plan" });
+  h.event("Notification", { permission_mode: "plan", notification_type: "idle_prompt" });
+  h.event("UserPromptSubmit", { permission_mode: "plan", delivered_ref: d.id.slice(0, 8) });
+  h.event("PostToolUse", { tool_name: "Edit", permission_mode: "acceptEdits", agent_id: "sub-1" });
+  h.event("Stop");
+  h.event("UserPromptSubmit", { permission_mode: "default" }, "another-session");
+  assert.deepEqual(h.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" }, "the regular re-call in plan mode still finds it");
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
+
+  for (const mode of ["default", "acceptEdits", "auto", "bypassPermissions"]) {
+    const x = setup();
+    const p = x.plan();
+    x.approve(p);
+    x.event("UserPromptSubmit", { permission_mode: mode });
+    assert.equal(x.store.planGrant(SID, FP), undefined, mode);
+    assert.equal(x.poll(A, true), undefined, `${mode}: the approval ("it will be allowed") is not delivered`);
+    assert.equal(get(x, p).status, "answer_lost", mode);
+    assert.equal(get(x, p).status_reason, "superseded", mode);
+  }
+});
+
+test("M2: a re-call that misses the grant goes back to the waiting hook; an auto approval then says auto was not applied, and makes no pending mode switch", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  const open = h.store.openFor(SID, undefined, FP, "toolu_again");
+  assert.ok(open && "decision" in open, "classic re-attach: the approved plan goes through the hook");
+  const after = get(h, d);
+  assert.equal(after.delivery, undefined);
+  assert.equal(after.delivery_flag, "auto_not_applied");
+  assert.equal(h.store.getModeSwitch(SID).pending, false, "auto stays off");
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+
+  const plain = setup();
+  const p = plain.plan();
+  plain.approve(p);
+  plain.store.openFor(SID, undefined, FP, "toolu_again");
+  assert.equal(get(plain, p).delivery_flag, undefined, "no auto was asked for");
+});
+
+test("M4: SessionEnd writes off a delivered approval at once, so a restart within the grace does not keep it; one still waiting keeps the grace", () => {
+  const h = setup();
+  const delivered = h.plan("toolu_1", P1);
+  h.approve(delivered, true);
+  h.poll(A, true);
+  h.store.inboxAck(SID, A, delivered.id);
+  h.event("SessionEnd");
+  assert.equal(h.store.planGrant(SID, FP1), undefined);
+  h.store.close();
+  const again = setup({ dir: h.dir, start: h.now() + 2000 });
+  again.advance(MOD_END_GRACE_MS + 60_000);
+  again.store.checkLeases();
+  assert.equal(again.store.planGrant(SID, FP1), undefined);
+
+  const queued = setup();
+  const q = queued.plan();
+  queued.approve(q);
+  queued.event("SessionEnd");
+  assert.ok(queued.store.planGrant(SID, FP), "undelivered: the grace decides (a --resume may keep polling)");
+  queued.advance(MOD_END_GRACE_MS + 1000);
+  queued.store.checkLeases();
+  assert.equal(queued.store.planGrant(SID, FP), undefined);
+});
+
+test("M5: a superseded approval the mod already submitted is not counted as answered: its ack is 409 answer_lost, and so is the transcript check", () => {
+  const h = setup();
+  const d1 = h.plan("toolu_1", P1);
+  h.approve(d1);
+  h.poll(A, true);
+  h.plan("toolu_2", P2);
+  assert.equal(get(h, d1).close_reason, "superseded");
+  assert.deepEqual(h.store.inboxAck(SID, A, d1.id), { http: 409, status: "answer_lost" });
+  assert.equal(get(h, d1).status_reason, "superseded");
+  assert.equal(get(h, d1).response?.delivered_via, undefined);
+});
+
+test("M5: calling a plan again whose approval was written off goes back to the human (a new card), not through the waiting hook", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d);
+  h.event("UserPromptSubmit", { permission_mode: "default" }); // written off; the mod has not polled since
+  assert.equal(h.store.openFor(SID, undefined, FP, "toolu_again"), undefined);
+  assert.equal(get(h, d).status, "answer_lost");
 });
