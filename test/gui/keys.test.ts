@@ -721,7 +721,7 @@ gui("a background decision that fell back (not counted as answered) says \"did n
   assert.ok(text.includes("did not reach"), text);
 });
 
-gui("inline code wraps at the column width (not nowrap), words with `-` are a nowrap span + wbr, U+2060 is not used, and code blocks are unchanged", async () => {
+gui("inline code wraps at the column width (not nowrap), words with `-` are a nowrap span + wbr, U+2060 is not used, and code blocks keep their whitespace (pre-wrap)", async () => {
   await seedQuestion({ markdown: v2md("A code question?", "Code decision", ROWS, "`some-very-long-inline-code-identifier`\n\n```\nblock\n```\n\n") });
   await reopen();
   const cs = ev<{ ws: string; wrap: string }>(`JSON.stringify((() => { const s = getComputedStyle(document.querySelector("#background :not(pre) > code")); return { ws: s.whiteSpace, wrap: s.overflowWrap }; })())`);
@@ -729,7 +729,7 @@ gui("inline code wraps at the column width (not nowrap), words with `-` are a no
   assert.equal(ev<string>(`document.querySelector("#background :not(pre) > code").textContent`), "some-very-long-inline-code-identifier");
   assert.equal(ev<number>(`document.querySelectorAll("#background :not(pre) > code wbr").length`), 5);
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background :not(pre) > code .nb")).whiteSpace`), "nowrap");
-  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background pre code")).whiteSpace`), "pre");
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#background pre code")).whiteSpace`), "pre-wrap");
 });
 
 gui("copying selected inline code does not include U+2060", async () => {
