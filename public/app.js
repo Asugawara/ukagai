@@ -440,9 +440,9 @@ function stepsLists(container) {
   }
 }
 
-// ==mark== in text (not in code, not across other inline elements)
+// ==mark== in text (not in code or a diagram, not across other inline elements)
 function inlineMarks(container) {
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest("pre, code, mark") || !n.data.includes("==") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest("pre, code, mark, svg") || !n.data.includes("==") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
   const nodes = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
   for (const n of nodes) {
