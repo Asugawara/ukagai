@@ -18,12 +18,14 @@ type Next<E> = (e: E) => Promise<unknown>;
 type On = {
   (event: "session.start", hook: ($: Dollar, e: { isInteractive: boolean; surface: string | null }, next: Next<unknown>) => Promise<unknown>): void;
   (event: "turn.start" | "turn.complete", hook: ($: Dollar, e: { agentId?: string }, next: Next<unknown>) => Promise<unknown>): void;
-  (event: "session.end", hook: ($: Dollar, e: unknown, next: Next<unknown>) => Promise<unknown>): void;
+  (event: "session.end", hook: ($: Dollar, e: { reason?: string }, next: Next<unknown>) => Promise<unknown>): void;
 };
 
 export const register = (on: On): void => {
   let session: ModSession | undefined;
   let timer: { cancel(): void } | undefined;
+  /** What a new ModSession needs again after a /clear: the process goes on, but no session.start follows */
+  let rebuild: (() => Promise<void>) | undefined;
 
   on("session.start", async ($, e, next) => {
     try {
@@ -44,10 +46,14 @@ export const register = (on: On): void => {
           getEnv: (name) => (name === "UKAGAI_DISABLE" ? $.env.get("UKAGAI_DISABLE") : name === "UKAGAI_MOD" ? $.env.get("UKAGAI_MOD") : $.env.get("HOME")),
           setEnv: async (_name, value) => void (await $.env.set("UKAGAI_MOD_OWNER", value)),
         };
-        session = createSession(host, config);
-        await session.start();
-        const s = session;
-        timer = $.clock.every(MOD_POLL_MS, () => void s.tick().catch(() => undefined));
+        const begin = async (): Promise<void> => {
+          const s = createSession(host, config);
+          session = s;
+          await s.start();
+          timer = $.clock.every(MOD_POLL_MS, () => void s.tick().catch(() => undefined));
+        };
+        rebuild = begin;
+        await begin();
       }
     } catch {
       // fail open: the hooks keep working without the mod
@@ -64,8 +70,15 @@ export const register = (on: On): void => {
     return next(e);
   });
   on("session.end", async (_$, e, next) => {
-    timer?.cancel();
-    session?.end();
+    try {
+      timer?.cancel();
+      session?.end();
+      // /clear ends the session but the process goes on under a new id and no session.start follows: start a fresh
+      // ModSession (a new owner; it reads the new id on its first poll). Any other reason is a real end
+      if (e.reason === "clear" && session !== undefined && rebuild !== undefined) await rebuild();
+    } catch {
+      // fail open
+    }
     return next(e);
   });
 };
