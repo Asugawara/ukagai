@@ -80,3 +80,21 @@ shift+tab from `acceptEdits` into plan, then `{"approve":true}`: hook inputs `Po
 4. **Plain approval** (decision bf0efa24): `{"approve":true}` → `PostToolUse default ExitPlanMode`, no `PermissionRequest` for ExitPlanMode, status line `manual mode on`; `grant_used_at` equals `delivered_at`, `grant_handed_at` absent, lookup → 404.
 
 Not run: the window boundary (60 s ± a few ms) and a Codex plan approval.
+
+## Re-check after 6d7d7a8 (message-delivery re-call limit, "not delivered" toast)
+
+- Date: 2026-10-20. Build: `6d7d7a8` (`4c6945c` and `6d7d7a8` on top of `211b33f`), `npm run build` on a clean tree. Claude Code 2.1.304 (sonnet), same setup as above (port 4919, `--setting-sources project,local`, logging hook). One run each.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Mod, "approve and auto", re-call right after the delivery: ends in `auto` | ✓ |
+| 2 | Mod, plain approval, re-call right after the delivery: goes through | ✓ |
+| 3 | Classic, "approve and auto": ends in `auto` | ✓ |
+| 4 | Mod, newer plan before the delivery: the GUI toasts "your answer was not delivered" | ✓ |
+
+1. Decision 5e462250 (`delivered_via: "message"`): answer …35:51.054Z, `delivered_at` …35:52.864Z, `grant_handed_at` …35:54.480Z, `grant_used_at` …35:54.619Z. Hook inputs: `PreToolUse plan ExitPlanMode` → `UserPromptSubmit` → `PreToolUse plan ExitPlanMode` → `PermissionRequest` → `PostToolUse auto ExitPlanMode` → `auto` Write/Bash.
+2. Decision 9c6b15b2 (`delivered_via: "message"`): `delivered_at` …36:54.446Z, `grant_used_at` …36:55.937Z, no `grant_handed_at`. `PostToolUse default ExitPlanMode` (no `PermissionRequest` for ExitPlanMode, pre-plan mode restored); the following `Write` asked in `default`, which is that mode's normal prompt.
+3. Decision e0ff0775 (`delivered_via: "hook"`): `grant_handed_at` …34:52.336Z, `grant_used_at` …34:52.450Z; `PreToolUse plan` → `PermissionRequest plan ExitPlanMode` → `PostToolUse auto ExitPlanMode` → `auto` Write/Bash.
+4. Reproduced through the API in a server started with a temporary `HOME` (the transcript path must be under `~/.claude/projects`), with the GUI open in agent-browser: a session polled as the mod, a plan registered with `delivery: "message"`, answered "approve and auto", then a newer plan registered before the delivery. The old decision became `answer_lost` / `superseded`, and the page added the toast "Plan: 回答は届けていません。新しいプランに置き換わったか、プランを呼び直す期限が過ぎました。エージェントの次のプランで、もう一度聞きます" (the GUI was in Japanese; the English string is in `public/i18n.js`).
+
+Not run: the 10-minute re-call limit itself, and the English toast text on screen.
