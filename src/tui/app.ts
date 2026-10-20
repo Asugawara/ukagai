@@ -1320,7 +1320,7 @@ export class App {
     this.sending.delete(key);
     const dr = this.drafts.get(key);
     if (dr) dr.instruct = "";
-    this.showToast(t(this.lang, via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), now);
+    this.showToast(t(this.lang, via === "terminal" ? "plan_instruct_typed" : via === "message" ? "plan_instruct_message" : "plan_instruct_sent"), now);
   }
 
   planInstructFailed(name: string, message: string, now: number): void {
