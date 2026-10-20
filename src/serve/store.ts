@@ -6,6 +6,7 @@ import {
   CHECKPOINT_TTL_MS,
   DELIVERY_MAX_ATTEMPTS,
   MESSAGE_TTL_MS,
+  MOD_BACKOFF_MAX_MS,
   MOD_CLAIM_STALE_MS,
   MOD_END_GRACE_MS,
   MOD_FRESH_MS,
@@ -1164,7 +1165,9 @@ export class Store {
       this.endMarks.delete(sid);
       const prefix = `${sid}\0`;
       let kept = false;
-      for (const [k, at] of this.ownerSeen) if (k.startsWith(prefix) && at > endAt) kept = true;
+      // Still polling now = a mod lives on in that session (`--resume` from another process). A single poll just after the event is the
+      // dying mod's last tick: it does not keep the session open (a live mod polls at least every MOD_BACKOFF_MAX_MS)
+      for (const [k, at] of this.ownerSeen) if (k.startsWith(prefix) && at > endAt && now - at <= MOD_BACKOFF_MAX_MS) kept = true;
       if (kept) continue;
       for (const d of this.asyncOf(sid)) if (LIVE.includes(d.status)) this.closeUndelivered(d, "session_end");
     }
@@ -1240,7 +1243,21 @@ export class Store {
         this.persist(d);
         this.emit("decision.updated", d);
       }
-    } else this.settleDeadClaim(d);
+    } else {
+      this.settleDeadClaim(d);
+      // Not in the transcript either (submit threw, or the mod lost its state): that is a failed attempt too, so a submit that always throws
+      // cannot claim and release forever
+      const after = d.status as DecisionStatus;
+      if (after === "answer_submitted" && !d.claim) {
+        d.delivery_attempts = (d.delivery_attempts ?? 0) + 1;
+        d.delivery_note ??= "the prompt could not be submitted";
+        if (d.delivery_attempts >= DELIVERY_MAX_ATTEMPTS) this.loseDelivery(d, "undeliverable");
+        else {
+          this.persist(d);
+          this.emit("decision.updated", d);
+        }
+      }
+    }
     return { http: 200, status: d.status };
   }
 

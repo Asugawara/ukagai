@@ -459,7 +459,7 @@ export type AckRequest = z.infer<typeof AckRequest>;
 export const ReleaseRequest = z.object({
   owner: z.string().regex(MOD_OWNER_RE),
   item_id: z.string().min(1).max(100),
-  /** Why `$.prompt.submit` dropped the prompt; absent when it threw */
+  /** Why `$.prompt.submit` dropped the prompt; absent when it threw (the server then counts a failed attempt after checking the transcript) */
   drop: z.string().min(1).max(500).optional(),
 });
 export type ReleaseRequest = z.infer<typeof ReleaseRequest>;

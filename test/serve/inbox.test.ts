@@ -262,7 +262,7 @@ test("release without a drop reads the transcript: the plugin's message since th
   const notSent = claimed(h2, "not_sent");
   assert.deepEqual(h2.store.inboxRelease(SID, A, notSent.id), { http: 200, status: "answer_submitted" });
   assert.equal(get(h2, notSent).claim, undefined);
-  assert.equal(get(h2, notSent).delivery_attempts ?? 0, 0, "no drop was reported");
+  assert.equal(get(h2, notSent).delivery_attempts, 1, "a release without a drop that finds nothing in the transcript is a failed attempt");
 
   const h3 = setup();
   const typed = claimed(h3, "typed");
@@ -336,11 +336,42 @@ test("a SessionEnd of the session closes its decisions after the grace unless a 
 
   const kept = h.ask("kept");
   h.event("SessionEnd"); // `--resume` from another process: the first one keeps polling
-  h.advance(3000);
+  h.advance(MOD_END_GRACE_MS - 2000);
   h.poll(A);
-  h.advance(MOD_END_GRACE_MS);
+  h.advance(2000);
   h.store.checkLeases();
   assert.equal(get(h, kept).status, "pending");
+});
+
+test("a single poll right after the SessionEnd (the dying mod's last tick) does not keep the session open", () => {
+  const h = setup();
+  const d = h.ask();
+  h.event("SessionEnd");
+  h.advance(300);
+  h.poll(A); // in flight when Claude Code exited
+  h.advance(MOD_END_GRACE_MS + 1000);
+  h.store.checkLeases();
+  assert.equal(get(h, d).status, "cancelled");
+  assert.equal(get(h, d).status_reason, "session_end");
+});
+
+test("a release without a drop that finds nothing in the transcript counts as an attempt: a submit that always throws ends in `undeliverable`", () => {
+  const h = setup();
+  const d = h.ask();
+  h.answer(d);
+  for (let i = 0; i < DELIVERY_MAX_ATTEMPTS; i++) {
+    assert.ok(h.poll(A, true), `hand-out ${i + 1}`);
+    h.store.inboxRelease(SID, A, d.id);
+  }
+  assert.equal(get(h, d).status, "answer_lost");
+  assert.equal(get(h, d).status_reason, "undeliverable");
+});
+
+test("a typed prompt registered in the same millisecond is cancelled (created_at == received_at)", () => {
+  const h = setup();
+  const d = h.ask();
+  h.event("UserPromptSubmit", { received_at: new Date(h.now()).toISOString() });
+  assert.equal(get(h, d).status, "cancelled");
 });
 
 test("after a reload the SessionEnd needs no owner: a decision of a mod that is gone closes, and polling under a new session id (/clear) does not keep the old one", () => {

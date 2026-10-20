@@ -99,6 +99,11 @@ test("inbox: bearer token only, JSON only, a 16-hex owner and a boolean idle", a
   assert.equal((await inbox(env, "release", { owner: OWNER, item_id: "x", drop: "" })).status, 400);
   assert.equal((await inbox(env, "release", { owner: OWNER, item_id: "x", drop: "y".repeat(501) })).status, 400);
   assert.equal((await inbox(env, "poll", ok)).status, 204);
+  const item = { owner: OWNER, item_id: "x" };
+  for (const what of ["ack", "release"]) {
+    assert.equal((await api(env, `/api/sessions/${SID}/inbox/${what}`, { body: item, auth: false })).status, 401, what);
+    assert.equal((await api(env, `/api/sessions/${SID}/inbox/${what}`, { body: item, contentType: "text/plain" })).status, 415, what);
+  }
 });
 
 test("message delivery end to end: register -> answer -> poll(item) -> ref event -> ack (twice) -> answered", async () => {

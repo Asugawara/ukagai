@@ -45,16 +45,19 @@ function recordText(rec: Record<string, unknown>): string {
   return texts.join("\n");
 }
 
+/** The most a delivery check reads (what was appended since the claim is small; this only bounds a lost offset) */
+const DELIVERY_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+
 /**
  * Whether the transcript has, from byte `offset` on, a message a plugin submitted (`origin.kind` "plugin") carrying
  * `[ukagai] (ref <ref>)`: the proof that a delivery reached the conversation. Unreadable or missing means false (a double
- * delivery is better than a lost answer). `path` is a decision's transcript, already checked when the decision was registered. Reads only what was appended since `offset`, at most TRANSCRIPT_MAX_BYTES
+ * delivery is better than a lost answer). `path` is a decision's transcript, already checked when the decision was registered. Reads only what was appended since `offset`, at most 8 MiB
  */
 export function transcriptHasDelivery(path: string, offset: number, ref: string): boolean {
   let fd: number | undefined;
   try {
     const size = statSync(path).size;
-    const start = Math.max(0, Math.min(offset, size), size - TRANSCRIPT_MAX_BYTES);
+    const start = Math.max(0, Math.min(offset, size), size - DELIVERY_SCAN_MAX_BYTES);
     if (size <= start) return false;
     fd = openSync(path, "r");
     const buf = Buffer.alloc(size - start);
