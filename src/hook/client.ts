@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Instruction, PendingRewrite, WaitResponse, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
+import { Instruction, PendingRewrite, WaitResponse, Waiting, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
 
 const SHORT_TIMEOUT_MS = 1000;
 /** Registration gets a longer timeout because the server's context collection takes up to 1.5 seconds */
@@ -104,14 +104,15 @@ export class Client {
     }
   }
 
-  /** Register. Returns the Decision (at least with an id) on success, otherwise null */
+  /** Register. Returns the Decision's id (and `delivery: "message"` when the answer will come as a message, so no wait follows) on success, otherwise null */
   async createDecision(
     body: CreateDecisionRequest,
-  ): Promise<Pick<Decision, "id"> | null> {
+  ): Promise<Pick<Decision, "id" | "delivery"> | null> {
     const r = await this.request("POST", "/api/decisions", body, CREATE_TIMEOUT_MS);
     if (!r || (r.status !== 200 && r.status !== 201)) return null;
-    const j = Client.json(r.text) as { id?: unknown } | undefined;
-    return j && typeof j.id === "string" ? { id: j.id } : null;
+    const j = Client.json(r.text) as { id?: unknown; delivery?: unknown } | undefined;
+    if (!j || typeof j.id !== "string") return null;
+    return j.delivery === "message" ? { id: j.id, delivery: "message" } : { id: j.id };
   }
 
   /** List of denied_explain decisions (filtered by session_id). null when unreachable */
@@ -161,13 +162,18 @@ export class Client {
     return r?.status === 200;
   }
 
-  /** The still-open decision of this session and agent with the same fingerprint (the server swaps in the new tool_use_id). Null on a miss or any failure */
-  async findOpen(sessionId: string, agentId: string | undefined, fingerprint: string, toolUseId: string): Promise<Decision | null> {
+  /**
+   * The still-open decision of this session and agent with the same fingerprint (the server swaps in the new tool_use_id).
+   * `delivering`: a mod is delivering its answer as a message right now, nothing to wait for. Null on a miss or any failure
+   */
+  async findOpen(sessionId: string, agentId: string | undefined, fingerprint: string, toolUseId: string): Promise<Decision | { delivering: { decision_id: string } } | null> {
     const q = new URLSearchParams({ fingerprint, tool_use_id: toolUseId });
     if (agentId) q.set("agent_id", agentId);
     const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/open?${q}`, undefined, SHORT_TIMEOUT_MS);
     if (!r || r.status !== 200) return null;
-    const d = (Client.json(r.text) as { decision?: Decision } | undefined)?.decision;
+    const j = Client.json(r.text) as { decision?: Decision; delivering?: { decision_id?: unknown } } | undefined;
+    if (j?.delivering && typeof j.delivering.decision_id === "string") return { delivering: { decision_id: j.delivering.decision_id } };
+    const d = j?.decision;
     return d && typeof d.id === "string" ? d : null;
   }
 
@@ -248,6 +254,20 @@ export class Client {
     if (!r || r.status !== 200) return null;
     const parsed = Instruction.safeParse((Client.json(r.text) as { instruction?: unknown } | undefined)?.instruction);
     return parsed.success ? parsed.data : null;
+  }
+
+  /**
+   * The main agent's PreToolUse: the session's checkpoint reply (consumed), else, when an answer to a question is still on its way
+   * as a message, the decision that holds the tools back. Null on 404, any failure, timeout or an unexpected body
+   */
+  async takeInstructionOrWaiting(sessionId: string, timeoutMs: number): Promise<{ instruction: Instruction } | { waiting: Waiting } | null> {
+    const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/instruction?main=1`, undefined, timeoutMs);
+    if (!r || r.status !== 200) return null;
+    const j = Client.json(r.text) as { instruction?: unknown; waiting?: unknown } | undefined;
+    const ins = Instruction.safeParse(j?.instruction);
+    if (ins.success) return { instruction: ins.data };
+    const w = Waiting.safeParse(j?.waiting);
+    return w.success ? { waiting: w.data } : null;
   }
 
   async consumeRewrite(sessionId: string): Promise<boolean> {

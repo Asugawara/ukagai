@@ -30,7 +30,7 @@ test("buildOutput: approve and reject are unchanged", () => {
 
 test("checkpoint hook: a plan instruction is worded as being about the plan being written", async () => {
   const ins: Instruction = { decision_id: "", kind: "instruct", text: "add a rollback section", created_at: at, about: "plan" };
-  const client = { takeInstruction: async () => ins } as unknown as Client;
+  const client = { takeInstructionOrWaiting: async () => ({ instruction: ins }), takeInstruction: async () => ins } as unknown as Client;
   const out = (await checkpointInstruction({ session_id: "s" }, client)) as { hookSpecificOutput: { additionalContext: string } };
   assert.match(out.hookSpecificOutput.additionalContext, /^\[ukagai\] About the plan you are writing: add a rollback section\n/);
 });

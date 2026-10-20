@@ -1,5 +1,5 @@
 import { autostart, defaultDeps, type AutostartDeps } from "./autostart.js";
-import { EventInput, HookInputBase } from "../contract.js";
+import { EventInput, HookInputBase, parseDeliveryRef } from "../contract.js";
 import type { Client } from "./client.js";
 import { join } from "node:path";
 import { copyReference } from "../skill/files.js";
@@ -119,6 +119,9 @@ export async function observedEvent(raw: Record<string, unknown>, client: Client
   if (name === "UserPromptSubmit") {
     const p = raw["prompt"];
     if (typeof p === "string" && isWakeupPrompt(p)) extra["wakeup"] = true;
+    // A message the ukagai mod delivers starts with its ref: only the ref is sent, so the server can tell it from the human typing
+    const ref = typeof p === "string" ? parseDeliveryRef(p) : undefined;
+    if (ref !== undefined) extra["delivered_ref"] = ref;
     // Only the boolean leaves the hook: the prompt text is the human's (or the harness's), the server has no use for it
     const { prompt: _prompt, ...rest } = raw;
     raw = rest;

@@ -9,6 +9,9 @@ const INSTRUCT_SUFFIX = "Follow this before continuing; do not ask for confirmat
 const STOP_REASON =
   "[ukagai] The human read your progress recap and asked you to stop. Do not run more tools: write a short status (done / in progress / next) and end your turn.";
 
+const WAITING_REASON =
+  "[ukagai] Your question or plan in ukagai is still open: its answer has not reached you yet. Do not run tools now: end your turn. The answer will arrive as a message that starts with [ukagai].";
+
 const ASK_REASON =
   "[ukagai] You chose auto mode when approving the plan: ukagai answers this prompt and switches the session to auto mode.";
 const ASK_OUTPUT = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: ASK_REASON } };
@@ -32,14 +35,22 @@ export async function checkpointInstruction(
   const prompting = mode === "acceptEdits" || mode === "default";
   // The server answers true once per record, so an unanswered prompt is not repeated on every edit.
   // In auto the human already got what they wanted: drop the record rather than let it answer an unrelated prompt later
-  const [ins, ask] = await Promise.all([
-    client.takeInstruction(sessionId, CHECKPOINT_TIMEOUT_MS),
+  // The main agent (no agent_id) is also held back while an answer is on its way as a message; a subagent's tools are not
+  const main = input["agent_id"] === undefined;
+  const [taken, ask] = await Promise.all([
+    main
+      ? client.takeInstructionOrWaiting(sessionId, CHECKPOINT_TIMEOUT_MS)
+      : client.takeInstruction(sessionId, CHECKPOINT_TIMEOUT_MS).then((i) => (i ? { instruction: i } : null)),
     mayAsk && prompting
       ? client.askModeSwitch(sessionId, CHECKPOINT_TIMEOUT_MS)
       : mayAsk && mode === "auto"
         ? client.consumeModeSwitch(sessionId, CHECKPOINT_TIMEOUT_MS).then(() => false)
         : false,
   ]);
+  if (taken && "waiting" in taken) {
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: WAITING_REASON } };
+  }
+  const ins = taken?.instruction;
   if (!ins) return ask ? ASK_OUTPUT : null;
   const text = ins.text.trim();
   if (ins.kind === "stop") {

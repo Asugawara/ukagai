@@ -1305,6 +1305,11 @@ export function handoffLine(kind: "answer_question" | "approve_plan"): string {
   return denyLine(`Still waiting for the human in ukagai: call ${kind === "approve_plan" ? "ExitPlanMode" : "AskUserQuestion"} again, unchanged`);
 }
 
+/** The deny of a question registered for message delivery: the agent ends its turn, the answer comes later as a `[ukagai]` message */
+export function asyncReason(): string {
+  return "[ukagai] Your question is open in the ukagai GUI and is not answered yet. End your turn now: do not run other tools, do not call AskUserQuestion again and do not ask in prose. The human's answer will arrive later as a message that starts with [ukagai].";
+}
+
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {
   // With the human's version composeRaw already words the skill for the agent: only the question tool's name is swapped for Codex
   if (p.skillRef !== undefined) {

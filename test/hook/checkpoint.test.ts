@@ -20,7 +20,7 @@ async function withServer<T>(handler: Handler, fn: (f: Fake, d: string) => Promi
   }
 }
 const ins = (kind: "instruct" | "stop", text: string): Handler => (req, res) =>
-  req.path === "/api/sessions/s-1/instruction" ? json(res, 200, { instruction: { decision_id: "d1", kind, text, created_at: new Date().toISOString() } }) : false;
+  req.path.startsWith("/api/sessions/s-1/instruction") ? json(res, 200, { instruction: { decision_id: "d1", kind, text, created_at: new Date().toISOString() } }) : false;
 
 test("instruct: additionalContext with the exact wording, no decision, tool runs", async () => {
   await withServer(ins("instruct", "do the migration next"), async (f, d) => {
@@ -33,7 +33,7 @@ test("instruct: additionalContext with the exact wording, no decision, tool runs
           "[ukagai] The human read your progress recap and says: do the migration next\nFollow this before continuing; do not ask for confirmation of this message.",
       },
     });
-    assert.deepEqual(f.calls.map((c) => `${c.method} ${c.path}`), ["GET /api/sessions/s-1/instruction"]);
+    assert.deepEqual(f.calls.map((c) => `${c.method} ${c.path}`), ["GET /api/sessions/s-1/instruction?main=1"]);
     assert.equal(f.calls[0]?.auth, "Bearer test-token");
   });
 });
@@ -253,5 +253,45 @@ test("mode switch: an instruction text and the ask share one output", async () =
     assert.equal(out.permissionDecision, "ask");
     assert.equal(out.permissionDecisionReason, ASK.hookSpecificOutput.permissionDecisionReason);
     assert.match(out.additionalContext, /says: do B next\n/);
+  });
+});
+
+// ---- the main agent is held back while an answer is on its way as a message ----
+
+const WAITING_REASON =
+  "[ukagai] Your question or plan in ukagai is still open: its answer has not reached you yet. Do not run tools now: end your turn. The answer will arrive as a message that starts with [ukagai].";
+const waiting: Handler = (req, res) =>
+  req.path.startsWith("/api/sessions/s-1/instruction") ? json(res, 200, { waiting: { decision_id: "d-1", kind: "answer_question" } }) : false;
+
+test("waiting: the main agent's tool is denied with the exact reason, in the one GET of every other case", async () => {
+  await withServer(waiting, async (f, d) => {
+    const r = await runHook(args(f, d), input("Bash"));
+    assert.deepEqual(JSON.parse(r.stdout), { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: WAITING_REASON } });
+    assert.deepEqual(f.calls.map((c) => `${c.method} ${c.path}`), ["GET /api/sessions/s-1/instruction?main=1"]);
+  });
+});
+
+test("waiting: a subagent asks without main=1 and is never held back", async () => {
+  await withServer(waiting, async (f, d) => {
+    const r = await runHook(args(f, d), input("Bash", { agent_id: "sub-1" }));
+    assert.equal(r.stdout, "");
+    assert.deepEqual(f.calls.map((c) => `${c.method} ${c.path}`), ["GET /api/sessions/s-1/instruction"]);
+  });
+});
+
+test("waiting: a checkpoint reply is delivered first (the server answers it instead of waiting)", async () => {
+  await withServer(ins("instruct", "run the tests too"), async (f, d) => {
+    const out = JSON.parse((await runHook(args(f, d), input("Edit"))).stdout).hookSpecificOutput;
+    assert.match(out.additionalContext, /run the tests too/);
+    assert.equal(out.permissionDecision, undefined);
+  });
+});
+
+test("waiting: an unreadable or unexpected answer lets the tool run (fail open)", async () => {
+  await withServer((req, res) => (req.path.startsWith("/api/sessions/s-1/instruction") ? json(res, 200, { waiting: { kind: "nonsense" } }) : false), async (f, d) => {
+    assert.equal((await runHook(args(f, d), input("Bash"))).stdout, "");
+  });
+  await withServer((req, res) => (req.path.startsWith("/api/sessions/s-1/instruction") ? (res.writeHead(500).end(), true) : false), async (f, d) => {
+    assert.equal((await runHook(args(f, d), input("Bash"))).stdout, "");
   });
 });
