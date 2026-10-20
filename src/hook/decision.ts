@@ -347,10 +347,15 @@ export async function handleDecision(
   const base = { tool_use_id: input.tool_use_id, kind, session, request: regInput } as CreateDecisionRequest;
   // The ukagai mod of this Claude Code process (it sets UKAGAI_MOD_OWNER): asks the server to deliver the answer as a message instead of keeping this hook waiting.
   // Only the main agent of Claude Code asks; the server still decides (a live mod, the setting, the kind of question)
-  const modOwner = process.env["UKAGAI_MOD_OWNER"];
-  if (modOwner !== undefined && MOD_OWNER_RE.test(modOwner) && kind === "answer_question" && opts.agent === "claude" && input.agent !== "codex" && !input.agent_id && !opts.observe) {
-    base.mod_owner = modOwner;
+  const envOwner = process.env["UKAGAI_MOD_OWNER"];
+  const modOwner = envOwner !== undefined && MOD_OWNER_RE.test(envOwner) && opts.agent === "claude" && input.agent !== "codex" && !opts.observe ? envOwner : undefined;
+  // With a mod, a plan approval can arrive as a message after the session already left plan mode (the plan went through by its grant, or the human
+  // left plan mode): an ExitPlanMode outside plan mode is Claude Code's to refuse, never a new plan for the human to approve
+  if (modOwner !== undefined && kind === "approve_plan" && input.permission_mode !== "plan") {
+    lg("exit_plan_outside_plan_mode", { permission_mode: input.permission_mode });
+    return null;
   }
+  if (modOwner !== undefined && !input.agent_id) base.mod_owner = modOwner;
 
   // Input that is not a well-formed question / plan is never ours to handle
   let parsed: Parsed;
@@ -364,13 +369,28 @@ export async function handleDecision(
     parsed = { plan: r.data.plan };
   }
 
+  const fingerprint = decisionFingerprint(kind, regInput);
+  // The human approved this very plan while it waited for message delivery: the call goes through once (the grant). "Approve and auto" is
+  // left to the PermissionRequest that follows (only it can switch the mode), so this hook prints nothing for it. Unreachable server: on as before
+  if (kind === "approve_plan" && !input.agent_id && "plan" in parsed && parsed.plan.trim() !== "") {
+    const grant = await client.getPlanGrant(input.session_id, fingerprint);
+    if (grant?.mode === "auto") {
+      lg("plan_grant_auto", { decision_id: grant.decision_id });
+      return null;
+    }
+    if (grant && (await client.consumePlanGrant(input.session_id, fingerprint)).consumed) {
+      lg("plan_grant_used", { decision_id: grant.decision_id });
+      return allow(toolInput);
+    }
+  }
+
   // A question that is still open in ukagai (the previous leg handed off, or the hook died) is re-attached, never registered again
-  const open = await client.findOpen(input.session_id, input.agent_id, decisionFingerprint(kind, regInput), input.tool_use_id);
+  const open = await client.findOpen(input.session_id, input.agent_id, fingerprint, input.tool_use_id);
   let created: Pick<Decision, "id">;
   if (open && "delivering" in open) {
     // A mod is submitting the answer as a message right now: answering here as well would deliver it twice
     lg("delivering", { decision_id: open.delivering.decision_id });
-    return denyOutput(asyncDeny());
+    return denyOutput(asyncDeny(kind));
   }
   if (open) {
     created = { id: open.id };
@@ -381,7 +401,7 @@ export async function handleDecision(
     if (fresh.delivery === "message") {
       // Registered for message delivery: nothing to wait for. The agent ends its turn; the answer comes as a message
       lg("async_registered", { decision_id: fresh.id });
-      return denyOutput(asyncDeny());
+      return denyOutput(asyncDeny(kind));
     }
     created = fresh;
   }

@@ -11,6 +11,7 @@ import {
   DecisionStatus,
   EventInput,
   ExitPlanModeInput,
+  PermissionRequestAllowExitPlan,
   PermissionRequestAllowSetMode,
   PreToolUseAllow,
   PreToolUseDeny,
@@ -63,6 +64,11 @@ test("PermissionRequest / SessionStart output shapes", () => {
       },
     }).success,
   );
+  // ExitPlanMode's own prompt: a plan approved with auto for message delivery carries the plan back, else Claude Code keeps its dialog
+  const exitPlan = fx("permission-request-exit-plan-stdout.json");
+  assert.ok(PermissionRequestAllowExitPlan.safeParse(exitPlan).success);
+  assert.deepEqual(exitPlan.hookSpecificOutput.decision.updatedInput, fx("permission-request-exit-plan-stdin.json").tool_input);
+  assert.ok(!PermissionRequestAllowExitPlan.safeParse({ hookSpecificOutput: { ...exitPlan.hookSpecificOutput, decision: { behavior: "allow", updatedPermissions: exitPlan.hookSpecificOutput.decision.updatedPermissions } } }).success);
   for (const name of ["SessionStart", "SubagentStart"]) {
     assert.ok(
       SessionStartContext.safeParse({ hookSpecificOutput: { hookEventName: name, additionalContext: "x" } }).success,

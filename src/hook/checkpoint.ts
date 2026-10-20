@@ -42,7 +42,8 @@ export async function checkpointInstruction(
     : await client.takeInstruction(sessionId, CHECKPOINT_TIMEOUT_MS).then((i) => (i ? { instruction: i } : null));
   if (taken && "waiting" in taken) {
     // the tool does not run, so the mode-switch record stays for the first tool that does
-    return denyOutput({ line: denyLine("Your question in ukagai is not answered yet: end your turn, the answer arrives as a message"), context: WAITING_CONTEXT });
+    const what = taken.waiting.kind === "approve_plan" ? "Your plan in ukagai is not decided yet" : "Your question in ukagai is not answered yet";
+    return denyOutput({ line: denyLine(`${what}: end your turn, the answer arrives as a message`), context: WAITING_CONTEXT });
   }
   const ask =
     mayAsk && prompting

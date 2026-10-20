@@ -1,6 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Instruction, PendingRewrite, WaitResponse, Waiting, type CreateDecisionRequest, type Decision, type DecisionResponse } from "../contract.js";
+import {
+  ConsumePlanGrantResponse,
+  Instruction,
+  PendingRewrite,
+  PlanGrant,
+  WaitResponse,
+  Waiting,
+  type CreateDecisionRequest,
+  type Decision,
+  type DecisionResponse,
+} from "../contract.js";
 
 const SHORT_TIMEOUT_MS = 1000;
 /** Registration gets a longer timeout because the server's context collection takes up to 1.5 seconds */
@@ -175,6 +185,23 @@ export class Client {
     if (j?.delivering && typeof j.delivering.decision_id === "string") return { delivering: { decision_id: j.delivering.decision_id } };
     const d = j?.decision;
     return d && typeof d.id === "string" ? d : null;
+  }
+
+  /** The session's grant for this plan (the human approved it while it was registered for message delivery). Null on 404, any failure or an unexpected body */
+  async getPlanGrant(sessionId: string, fingerprint: string): Promise<PlanGrant | null> {
+    const q = new URLSearchParams({ fingerprint });
+    const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/plan-grant?${q}`, undefined, SHORT_TIMEOUT_MS);
+    if (!r || r.status !== 200) return null;
+    const parsed = PlanGrant.safeParse((Client.json(r.text) as { grant?: unknown } | undefined)?.grant);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /** Use the grant for this plan (once). `{ consumed: false }` on a miss, any failure or an unexpected body */
+  async consumePlanGrant(sessionId: string, fingerprint: string): Promise<ConsumePlanGrantResponse> {
+    const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/plan-grant/consume`, { fingerprint }, SHORT_TIMEOUT_MS);
+    if (!r || r.status !== 200) return { consumed: false };
+    const parsed = ConsumePlanGrantResponse.safeParse(Client.json(r.text));
+    return parsed.success ? parsed.data : { consumed: false };
   }
 
   async cancel(id: string, timeoutMs: number): Promise<boolean> {
