@@ -350,8 +350,9 @@ export async function handleDecision(
   const envOwner = process.env["UKAGAI_MOD_OWNER"];
   const modOwner = envOwner !== undefined && MOD_OWNER_RE.test(envOwner) && opts.agent === "claude" && input.agent !== "codex" && !opts.observe ? envOwner : undefined;
   // With a mod, a plan approval can arrive as a message after the session already left plan mode (the plan went through by its grant, or the human
-  // left plan mode): an ExitPlanMode outside plan mode is Claude Code's to refuse, never a new plan for the human to approve
-  if (modOwner !== undefined && kind === "approve_plan" && input.permission_mode !== "plan") {
+  // left plan mode): the main agent's ExitPlanMode outside plan mode is Claude Code's to refuse, never a new plan for the human to approve.
+  // A subagent's plan is never delivered as a message, so it is handled as before
+  if (modOwner !== undefined && kind === "approve_plan" && !input.agent_id && input.permission_mode !== "plan") {
     lg("exit_plan_outside_plan_mode", { permission_mode: input.permission_mode });
     return null;
   }

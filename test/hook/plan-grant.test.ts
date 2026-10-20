@@ -189,3 +189,27 @@ test("PermissionRequest of another tool still uses the pending mode switch, neve
     assert.ok(!f.calls.some((c) => c.path.includes("/plan-grant")));
   });
 });
+
+// ---- audit R2b fixes ----
+
+test("M1: PermissionRequest × ExitPlanMode outside plan mode → no output and no request, even with an auto grant (Claude Code's dialog asks the human)", async () => {
+  for (const mode of ["default", "acceptEdits", "bypassPermissions", "auto", undefined]) {
+    await withServer(granting("auto"), async (f, d) => {
+      const r = await runHook(args(f, d), JSON.stringify({ ...PERM, permission_mode: mode }), undefined, { UKAGAI_MOD_OWNER: OWNER });
+      assert.equal(r.code, 0);
+      assert.equal(r.stdout, "", String(mode));
+      assert.deepEqual(f.calls, [], String(mode));
+    });
+  }
+});
+
+test("M3: with a mod, a subagent's ExitPlanMode outside plan mode is handled as before (registered), never looked up for a grant", async () => {
+  const sub = { ...PRE, permission_mode: "default", agent_id: "sub-1", agent_type: "general-purpose" };
+  await withServer(() => false, async (f, d) => {
+    await runHook([...args(f, d), "--budget", "30"], JSON.stringify(sub), undefined, { UKAGAI_MOD_OWNER: OWNER });
+    const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
+    assert.equal(create?.body.kind, "approve_plan");
+    assert.equal(create?.body.mod_owner, undefined, "a subagent never asks for message delivery");
+    assert.ok(!f.calls.some((c) => c.path.includes("/plan-grant")));
+  });
+});

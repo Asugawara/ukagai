@@ -106,6 +106,8 @@ export async function permissionRequest(raw: Record<string, unknown>, client: Cl
 
 /** The session's "approve and auto" grant for this plan, used: allow + updatedInput + setMode auto. Null (Claude Code's dialog) on a miss or any failure */
 async function exitPlanGrant(raw: Record<string, unknown>, sessionId: string, client: Client): Promise<Out | null> {
+  // Outside plan mode the approval is stale (the human left plan mode, or the plan already went through): Claude Code's dialog asks the human
+  if (raw["permission_mode"] !== "plan") return null;
   const toolInput = raw["tool_input"];
   if (typeof toolInput !== "object" || toolInput === null || Array.isArray(toolInput)) return null;
   const input = toolInput as Record<string, unknown>;
