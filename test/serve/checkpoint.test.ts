@@ -103,6 +103,8 @@ test("watcher: a second recap supersedes the first", async () => {
   await live(env);
   appendFileSync(env.transcript, recapLine("first", "2026-10-04T01:00:00.000Z"));
   await until(() => checkpoints(env).length === 1);
+  // Progress must be later than the checkpoint's created_at, which has ms resolution; a loaded runner can return from until() in the same ms
+  await sleep(5);
   assert.equal((await event(env, "PostToolUse")).status, 204);
   appendFileSync(env.transcript, recapLine("second", "2026-10-04T02:00:00.000Z"));
   await until(() => checkpoints(env).length === 2);
