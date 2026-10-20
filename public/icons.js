@@ -1,6 +1,17 @@
-// Icons for the settings page: Lucide (ISC licence, see vendor/LICENSES.md), path data copied from lucide-react 0.554.0.
+// Icons for the settings page and the HTML frame bar: Lucide (ISC licence, see vendor/LICENSES.md), path data copied from lucide-react 0.554.0.
 // Each entry is a list of [tag, attributes] children of a 24x24 stroke icon.
 const ICONS = {
+  "external-link": [
+    ["path", { d: "M15 3h6v6" }],
+    ["path", { d: "M10 14 21 3" }],
+    ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" }],
+  ],
+  maximize: [
+    ["path", { d: "M8 3H5a2 2 0 0 0-2 2v3" }],
+    ["path", { d: "M21 8V5a2 2 0 0 0-2-2h-3" }],
+    ["path", { d: "M3 16v3a2 2 0 0 0 2 2h3" }],
+    ["path", { d: "M16 21h3a2 2 0 0 0 2-2v-3" }],
+  ],
   settings: [
     ["path", { d: "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" }],
     ["circle", { cx: "12", cy: "12", r: "3" }],

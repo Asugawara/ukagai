@@ -2,6 +2,7 @@
 // Display strings go through t() (i18n.js); the language is read from <html data-lang>.
 import { t, applyStatic, currentLang } from "./i18n.js";
 import { sanitize } from "./sanitize.js";
+import { icon } from "./icons.js";
 
 const MULTI_SELECT_SEPARATOR = ", "; // same value as src/contract.ts
 const FOLD_LINES = 9;
@@ -308,9 +309,11 @@ function documentImages(container, doc) {
       const name = (img.getAttribute("src") ?? "").trim().split(/[?#]/)[0].split("/").pop();
       const frame = el("figure", { class: "doc-frame" },
         el("div", { class: "doc-frame-bar" },
-          el("span", { class: "doc-frame-alt", text: alt || name }), el("span", { class: "chip", text: name }),
-          el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
-          el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, text: t("frame_full") })),
+          el("span", { class: "doc-frame-name" },
+            el("span", { class: "doc-frame-alt", title: alt || name, text: alt || name }), el("span", { class: "chip", title: name, text: name })),
+          // In a narrow frame (container query in app.css) the two buttons show only their icon; the text stays as title / aria-label
+          el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", title: t("frame_newtab"), "aria-label": t("frame_newtab") }, icon("external-link"), el("span", { class: "btn-text", text: t("frame_newtab") })),
+          el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, title: t("frame_full"), "aria-label": t("frame_full") }, icon("maximize"), el("span", { class: "btn-text", text: t("frame_full") }))),
         el("iframe", { class: "doc-frame-view", ...frameAttrs, src, loading: "lazy", title: alt || name }));
       img.replaceWith(frame);
       const fp = frame.parentElement;
