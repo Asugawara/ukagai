@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   DELIVERY_MAX_ATTEMPTS,
   MESSAGE_TTL_MS,
+  CHECKPOINT_TTL_MS,
   MOD_CLAIM_STALE_MS,
   MOD_END_GRACE_MS,
   MOD_FRESH_MS,
@@ -726,4 +727,109 @@ test("instruction: another live owner's claim answers 409; SessionEnd drops the 
   h.event("SessionEnd");
   assert.equal(h.poll(A, true), undefined);
   assert.deepEqual(h.store.inboxAck(SID, A, item.item_id), { http: 404 });
+});
+
+// ---- fixes after review: no reply is lost, none is delivered twice ----
+
+function approvalReq(h: H): CreateDecisionRequest {
+  return { tool_use_id: "toolu_plan", kind: "approve_plan", session: { session_id: SID, cwd: "/w/proj", transcript_path: h.transcript }, request: { plan: "p", planFilePath: "" } } as never;
+}
+
+test("instruction: the mod disappears, the reply goes back to the hook queue and the terminal delivery is tried", () => {
+  const h = setup();
+  const cp = instructed(h, "first reply");
+  let offered = 0;
+  h.store.onCheckpointDeliverable = () => {
+    offered++;
+  };
+  h.advance(MOD_GONE_MS + 1);
+  h.store.checkLeases(h.now());
+  assert.equal(offered, 1, "the terminal delivery is asked");
+  assert.equal(h.store.consumeInstruction(SID)?.decision_id, cp.id);
+  assert.equal(h.poll(A, true), undefined);
+});
+
+test("instruction: the sweep expires an old item without a poll, and closes one the transcript already holds", () => {
+  const h = setup();
+  const cp = instructed(h, "go on");
+  const item = instructionItem(h);
+  appendFileSync(h.transcript, JSON.stringify({ type: "user", origin: { kind: "plugin" }, message: { role: "user", content: [{ type: "text", text: item.text }] } }) + "\n");
+  h.advance(MOD_CLAIM_STALE_MS + 1);
+  h.store.checkLeases(h.now());
+  assert.equal(get(h, cp).response?.delivered_via, "message", "closed, not queued again");
+  assert.equal(h.store.consumeInstruction(SID), undefined);
+
+  const h2 = setup();
+  instructed(h2, "stale");
+  h2.store.checkLeases(Date.now() + CHECKPOINT_TTL_MS + 1000); // the instruction is stamped with the wall clock
+  assert.equal(h2.poll(A, true), undefined);
+  assert.equal(h2.store.consumeInstruction(SID), undefined);
+});
+
+test("instruction: a plan instruction after an unclaimed reply is joined; both texts reach the agent and the checkpoint is delivered", async () => {
+  const h = setup();
+  const cp = instructed(h, "first reply");
+  assert.equal(await h.store.queuePlanInstruction(SID, "plan note"), "message");
+  const item = instructionItem(h);
+  assert.match(item.text, /Reply to your progress recap: first reply\nplan note$/);
+  h.store.inboxAck(SID, A, item.item_id);
+  assert.equal(get(h, cp).response?.delivered_via, "message");
+});
+
+test("instruction: a reply answered while the mod submits the first stays queued, then goes next; the first is not lost", () => {
+  const h = setup();
+  const cp1 = instructed(h, "one");
+  const first = instructionItem(h);
+  const cp2 = h.store.create({ tool_use_id: "checkpoint:3", kind: "checkpoint", session: { session_id: SID, cwd: "/w/proj", transcript_path: h.transcript }, request: { recap: "r", recap_at: "2026-10-04T03:00:00.000Z" } } as never, {}).decision;
+  h.store.submitAnswer(cp2.id, { kind: "checkpoint", answer: "instruct", text: "two" } as never);
+  assert.deepEqual(h.store.inboxAck(SID, A, first.item_id), { http: 200, status: "answered" });
+  assert.equal(get(h, cp1).response?.delivered_via, "message");
+  const second = instructionItem(h);
+  assert.match(second.text, /recap: two$/);
+  h.store.inboxAck(SID, A, second.item_id);
+  assert.equal(get(h, cp2).response?.delivered_via, "message");
+});
+
+test("instruction: an approve_plan decision drops an unclaimed plan instruction in the inbox (and logs it)", async () => {
+  const h = setup();
+  h.poll(A, false);
+  h.event("Stop");
+  await h.store.queuePlanInstruction(SID, "plan note");
+  h.store.create(approvalReq(h), {});
+  assert.equal(h.poll(A, true), undefined);
+  assert.ok(h.logs.includes("plan_instruction_dropped"));
+});
+
+test("instruction: five failures join the item in front of a newer instruction instead of dropping either; a queued stop wins and is logged", async () => {
+  const h = setup();
+  const cp = instructed(h, "old");
+  for (let i = 0; i < DELIVERY_MAX_ATTEMPTS; i++) {
+    const it = instructionItem(h);
+    if (i === DELIVERY_MAX_ATTEMPTS - 1) h.store.requeueInstruction(SID, { decision_id: "", kind: "instruct", text: "newer", created_at: new Date(h.now()).toISOString() });
+    h.store.inboxRelease(SID, A, it.item_id, "dropped");
+  }
+  const q = h.store.consumeInstruction(SID);
+  assert.equal(q?.decision_id, cp.id);
+  assert.match(q?.text ?? "", /^old\nnewer$/);
+
+  const h2 = setup();
+  instructed(h2, "old");
+  for (let i = 0; i < DELIVERY_MAX_ATTEMPTS; i++) {
+    const it = instructionItem(h2);
+    if (i === DELIVERY_MAX_ATTEMPTS - 1) h2.store.requeueInstruction(SID, { decision_id: "x", kind: "stop", text: "", created_at: new Date(h2.now()).toISOString() });
+    h2.store.inboxRelease(SID, A, it.item_id, "dropped");
+  }
+  assert.equal(h2.store.consumeInstruction(SID)?.kind, "stop");
+  assert.ok(h2.logs.includes("instruction_dropped"));
+});
+
+test("instruction: a UserPromptSubmit carrying an inbox item's ref is the mod, not the human (a queued stop survives)", () => {
+  const h = setup();
+  instructed(h, "go on");
+  const item = instructionItem(h);
+  const cp = h.store.create({ tool_use_id: "checkpoint:4", kind: "checkpoint", session: { session_id: SID, cwd: "/w/proj", transcript_path: h.transcript }, request: { recap: "r", recap_at: "2026-10-04T04:00:00.000Z" } } as never, {}).decision;
+  h.event("UserPromptSubmit");
+  h.store.submitAnswer(cp.id, { kind: "checkpoint", answer: "stop" } as never);
+  h.event("UserPromptSubmit", { delivered_ref: deliveryRef(item.item_id) });
+  assert.equal(h.store.consumeInstruction(SID)?.kind, "stop", "not dropped by the mod's prompt");
 });

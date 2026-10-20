@@ -80,6 +80,8 @@ type MessageInstruction = {
   source: Instruction;
   created_at: string;
   claim?: { owner: string; at: string; offset: number };
+  /** The transcript size at the first claim: a plugin line with the ref after it means a submit got in */
+  first_offset?: number;
   attempts: number;
 };
 
@@ -182,6 +184,10 @@ export class Store {
   private endMarks = new Map<string, number>();
   /** Instructions (a checkpoint reply, a plan instruction) handed to a live mod instead of the hook / the terminal: item id -> item, one per session */
   private messageInstructions = new Map<string, MessageInstruction>();
+  /** ref of an inbox instruction -> session: a prompt that starts with it is the mod's delivery, not the human (kept after the item closes: the hook's event can arrive after the ack) */
+  private instructionRefs = new Map<string, string>();
+  /** Sessions whose inbox delivery was given up: their next instruction is not offered to the mod again until one reaches the agent */
+  private modBypass = new Set<string>();
 
   // Aggregates rebuilt from events
   private escapedQuestions = 0;
@@ -351,6 +357,13 @@ export class Store {
       this.instructions.delete(session.session_id);
       this.opts.log?.("plan_instruction_dropped", { session: session.session_id, decision: decision.id });
     }
+    if (!denied && req.kind === "approve_plan") {
+      for (const [id, m] of this.messageInstructions) {
+        if (m.session_id !== session.session_id || m.claim || m.source.about !== "plan" || m.source.decision_id !== "") continue;
+        this.messageInstructions.delete(id);
+        this.opts.log?.("plan_instruction_dropped", { session: session.session_id, decision: decision.id });
+      }
+    }
     if (!denied) {
       this.emit("decision.created", decision);
       this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
@@ -472,6 +485,7 @@ export class Store {
     const ins = this.instructions.get(sessionId);
     if (!ins) return undefined;
     this.instructions.delete(sessionId);
+    this.modBypass.delete(sessionId);
     this.markDelivered(ins.decision_id, via);
     if (ins.kind === "stop" && this.decisions.get(ins.decision_id)?.session.agent !== "codex") this.stoppedSessions.add(sessionId);
     return ins;
@@ -492,6 +506,7 @@ export class Store {
       // Typing starts a new turn: only for an agent that is still idle, and not for a reply the human gave long ago
       if (this.sessions.get(sid)?.state !== "idle" || Date.now() - Date.parse(ins.created_at) > maxAgeMs || this.hasOpenAsync(sid)) return undefined;
       this.instructions.delete(sid);
+      this.modBypass.delete(sid);
       return ins;
     }
     return undefined;
@@ -531,6 +546,7 @@ export class Store {
   claimPlanInstruction(sessionId: string, ins: Instruction): Instruction | undefined {
     if (this.instructions.get(sessionId) !== ins || this.sessions.get(sessionId)?.state !== "idle" || this.hasOpenAsync(sessionId)) return undefined;
     this.instructions.delete(sessionId);
+    this.modBypass.delete(sessionId);
     return ins;
   }
 
@@ -797,6 +813,7 @@ export class Store {
     }
     this.checkEndMarks(now);
     this.checkNoAgent(now);
+    this.checkInstructions(now);
   }
 
   close(): void {
@@ -901,7 +918,9 @@ export class Store {
     if (live && ev.hook_event_name === "UserPromptSubmit" && !ev.wakeup) {
       const delivery = ev.delivered_ref ? this.findByRef(ev.session_id, ev.delivered_ref) : undefined;
       if (delivery) this.noteRefSeen(delivery, ev.received_at);
-      else {
+      else if (ev.delivered_ref && this.instructionRefs.get(ev.delivered_ref) === ev.session_id) {
+        // The mod delivering an inbox instruction: not the human either. It closes by ack or by the transcript, not by this event
+      } else {
         const receivedAt = Number.isFinite(at) ? at : Infinity;
         this.cancelPending(ev.session_id, receivedAt);
         this.humanPrompted(ev.session_id, receivedAt, ev.received_at);
@@ -938,6 +957,8 @@ export class Store {
   private endCheckpoints(sessionId: string, live: boolean): void {
     this.instructions.delete(sessionId);
     this.dropMessageInstructions(sessionId);
+    this.modBypass.delete(sessionId);
+    for (const [ref, sid] of this.instructionRefs) if (sid === sessionId) this.instructionRefs.delete(ref);
     this.wakeupTurns.delete(sessionId);
     this.stoppedSessions.delete(sessionId);
     this.modeSwitches.delete(sessionId);
@@ -1288,20 +1309,41 @@ export class Store {
   /** A mod polled the session lately and the message-delivery switch is on: an instruction can go to it instead of the terminal */
   hasLiveMod(sessionId: string): boolean {
     if (this.opts.messageDelivery && !this.opts.messageDelivery()) return false;
+    if (this.modBypass.has(sessionId)) return false;
     return this.liveOwner(sessionId, MOD_FRESH_MS, this.clock());
   }
 
-  /** Moves the session's queued instruction (not a stop) to the mod's inbox. True when it went; false leaves the queue as it was */
+  /**
+   * Moves the session's queued instruction (not a stop) to the mod's inbox. True when it went; false leaves the queue as it was.
+   * An item nobody holds is joined with the new text (a newline between, like the hook queue); one the mod is submitting right now
+   * stays, and the new instruction waits in the queue until that one closes
+   */
   offerToMod(sessionId: string): boolean {
     const ins = this.instructions.get(sessionId);
     if (!ins || ins.kind !== "instruct" || !this.hasLiveMod(sessionId)) return false;
     const d = ins.decision_id ? this.decisions.get(ins.decision_id) : undefined;
     if (d?.session.agent === "codex") return false;
-    const transcript_path = d?.session.transcript_path ?? this.sessions.get(sessionId)?.transcript_path;
+    const now = this.clock();
+    const existing = [...this.messageInstructions.values()].find((m) => m.session_id === sessionId);
+    if (existing?.claim) {
+      if (this.ownerAlive(sessionId, existing.claim.owner, now)) return false;
+      if (existing.first_offset !== undefined && this.instructionTranscriptHas(existing, existing.first_offset)) {
+        this.completeInstruction(existing, false);
+        return this.offerToMod(sessionId);
+      }
+      delete existing.claim;
+    }
     this.instructions.delete(sessionId);
-    this.dropMessageInstructions(sessionId); // one per session, newest wins
+    if (existing) {
+      const text = `${existing.source.text}\n${ins.text}`.slice(0, INSTRUCTION_MAX_CHARS);
+      existing.source = { ...existing.source, text, decision_id: existing.source.decision_id || ins.decision_id };
+      return true;
+    }
+    const transcript_path = d?.session.transcript_path ?? this.sessions.get(sessionId)?.transcript_path;
     const id = randomUUID();
     this.messageInstructions.set(id, { id, session_id: sessionId, transcript_path, source: ins, created_at: ins.created_at, attempts: 0 });
+    this.instructionRefs.set(deliveryRef(id), sessionId);
+    if (this.instructionRefs.size > 500) this.instructionRefs.delete(this.instructionRefs.keys().next().value!);
     return true;
   }
 
@@ -1318,25 +1360,56 @@ export class Store {
     return undefined;
   }
 
-  /** The delivery is over: the checkpoint it answers (if any) is marked delivered */
-  private completeInstruction(m: MessageInstruction): void {
+  /** The delivery is over: the checkpoint it answers (if any) is marked delivered, and an instruction that waited behind it goes next */
+  private completeInstruction(m: MessageInstruction, offerNext = true): void {
     this.messageInstructions.delete(m.id);
     if (m.source.decision_id) this.markDelivered(m.source.decision_id, "message");
+    if (offerNext && this.sessions.get(m.session_id)?.state === "idle" && !this.hasOpenAsync(m.session_id)) this.offerToMod(m.session_id);
   }
 
-  /** Given up (too many drops, or too old): the hook gets it at the next tool call, unless a newer instruction took its place */
-  private requeueInstructionFromMod(m: MessageInstruction): void {
+  /**
+   * The item goes back to the hook queue (joined in front of a newer instruction; a queued stop wins and the text is logged as
+   * dropped), and an idle agent gets it through the terminal delivery now. `bypass`: the mod failed to deliver it, so it is not offered again
+   */
+  private returnToQueue(m: MessageInstruction, bypass: boolean): void {
     this.messageInstructions.delete(m.id);
-    this.requeueInstruction(m.session_id, m.source);
+    const sid = m.session_id;
+    const queued = this.instructions.get(sid);
+    if (queued?.kind === "stop") {
+      this.opts.log?.("instruction_dropped", { session: sid, item: m.id });
+      return;
+    }
+    const text = queued ? `${m.source.text}\n${queued.text}`.slice(0, INSTRUCTION_MAX_CHARS) : m.source.text;
+    this.instructions.set(sid, { ...m.source, text, decision_id: m.source.decision_id || queued?.decision_id || "" });
+    if (bypass) this.modBypass.add(sid);
+    if (this.sessions.get(sid)?.state === "idle") this.offerQueuedInstruction(sid);
+  }
+
+  /** Items nobody can deliver: too old, a plugin line already in the transcript, or no mod left (back to the queue and the terminal) */
+  private checkInstructions(now: number): void {
+    const modOff = this.opts.messageDelivery !== undefined && !this.opts.messageDelivery();
+    for (const m of [...this.messageInstructions.values()]) {
+      if (now - Date.parse(m.created_at) >= CHECKPOINT_TTL_MS) {
+        this.messageInstructions.delete(m.id); // too old to start a turn with
+        this.opts.log?.("instruction_expired", { session: m.session_id, item: m.id });
+        continue;
+      }
+      if (m.claim && this.ownerAlive(m.session_id, m.claim.owner, now)) continue;
+      if (m.first_offset !== undefined && this.instructionTranscriptHas(m, m.first_offset)) {
+        this.completeInstruction(m); // a submit of a gone mod got in
+        continue;
+      }
+      if (!modOff && this.liveOwner(m.session_id, MOD_GONE_MS, now)) {
+        delete m.claim; // its owner is gone but another mod polls the session
+        continue;
+      }
+      this.returnToQueue(m, false);
+    }
   }
 
   private pollInstruction(sessionId: string, owner: string, now: number): PollResponse | undefined {
     for (const m of [...this.messageInstructions.values()]) {
       if (m.session_id !== sessionId) continue;
-      if (now - Date.parse(m.created_at) >= CHECKPOINT_TTL_MS) {
-        this.messageInstructions.delete(m.id); // too old to start a turn with
-        continue;
-      }
       if (m.claim && this.ownerAlive(sessionId, m.claim.owner, now)) continue;
       if (m.claim && this.instructionTranscriptHas(m, m.claim.offset)) {
         this.completeInstruction(m); // the gone mod's submit got in
@@ -1344,6 +1417,7 @@ export class Store {
       }
       if (this.hasOpenAsync(sessionId)) return undefined;
       m.claim = { owner, at: new Date(now).toISOString(), offset: m.transcript_path ? this.transcriptSizeOf(m.transcript_path) : 0 };
+      m.first_offset ??= m.claim.offset;
       return { item: { item_id: m.id, text: instructionText(m.id, m.source) } };
     }
     return undefined;
@@ -1379,7 +1453,7 @@ export class Store {
     m.attempts++;
     if (m.attempts >= DELIVERY_MAX_ATTEMPTS) {
       this.opts.log?.("instruction_undeliverable", { session: sessionId, item: m.id });
-      this.requeueInstructionFromMod(m);
+      this.returnToQueue(m, true);
     }
     return { http: 200, status: "answer_submitted" };
   }
