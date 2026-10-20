@@ -101,7 +101,8 @@ Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troublesho
 | `docs/spec/api.md` | Server API, state transitions, authorization |
 | `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
 | `docs/spec/markdown.md` | The Markdown dialect explanations and plans are written in |
-| `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 wake-up turns and the progress check) |
+| `docs/spec/codex-bridge.md` | The Codex bridge: plan approval and progress checkpoints through the Codex app-server |
+| `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 the mode after plan approval, wake-up turns and the progress check, 07 install from the release on every distribution path, 08 the edited skill is read without a permission prompt) |
 | `skills/ukagai-explain/` | The skill (`SKILL.md`) that teaches Claude how to write explanations, plus the `reference/` files it reads when needed |
 
 ## Development
