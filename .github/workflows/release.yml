@@ -29,8 +29,26 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  package:
+  # Publish only a commit whose ci run succeeded. A red main leaves the tag and the draft release behind;
+  # rerun the failed jobs of this run once ci is green.
+  ci_gate:
     needs: release_please
+    if: needs.release_please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wait for ci on this commit
+        run: sh scripts/wait-for-ci.sh
+
+  package:
+    needs: [release_please, ci_gate]
     if: needs.release_please.outputs.release_created == 'true'
     uses: ./.github/workflows/package.yml
     with:

@@ -47,9 +47,10 @@ When nothing qualifies: for a `hook` call on SessionStart, the launcher prints o
 `release.yml` runs on every push to `main`:
 
 1. `release_please`: release-please in manifest mode (`.release-please-manifest.json`, `release-please-config.json`, `release-type: node`). Conventional commits produce a release PR; merging it creates the tag and a **draft** release.
-2. `package` (reusable `package.yml`): runs `scripts/build-release.sh` and uploads the tarball and `SHA256SUMS` as an artifact.
-3. `publish`: `gh release upload --clobber`, then `gh release edit --draft=false --latest`.
-4. `plugin_branch`: rebuilds the stage and commits its whole tree (`node_modules` included) to the `plugin` branch from a separate worktree, as `github-actions[bot]`. A rerun with no change exits 0.
+2. `ci_gate` (only when a release was created): `scripts/wait-for-ci.sh` waits for the `ci` run of the same commit and fails unless it succeeded (also on a missing run or a 30 min timeout). A failed gate leaves the tag and the draft release; rerun the failed jobs of the release run once `ci` is green.
+3. `package` (reusable `package.yml`): runs `scripts/build-release.sh` and uploads the tarball and `SHA256SUMS` as an artifact.
+4. `publish`: `gh release upload --clobber`, then `gh release edit --draft=false --latest`.
+5. `plugin_branch`: rebuilds the stage and commits its whole tree (`node_modules` included) to the `plugin` branch from a separate worktree, as `github-actions[bot]`. A rerun with no change exits 0.
 
 The `plugin` branch is what both marketplaces install from.
 
