@@ -176,7 +176,7 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
 }
 
 const PANE_IDS = ["general", "notifications", "plans", "checkpoints", "skill"];
-const FIELDSET_PANE: Record<string, string> = { general: "Display", notifications: "Notifications", plans: "Plans", checkpoints: "Progress checkpoints (recap)" };
+const FIELDSET_PANE: Record<string, string[]> = { general: ["Display", "Claude Code"], notifications: ["Notifications"], plans: ["Plans"], checkpoints: ["Progress checkpoints (recap)"] };
 /** Which panes are visible: the visible fieldset legends plus whether the skill section shows */
 const visiblePane = () => ev<{ legends: string[]; skill: boolean; hash: string; current: string | null }>(`JSON.stringify({
   legends: [...document.querySelectorAll("#form fieldset")].filter((f) => !f.hidden).map((f) => f.querySelector("legend").textContent),
@@ -193,12 +193,12 @@ gui("the sidebar: items in order, each with a Lucide icon; clicking one shows on
   assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#set-nav .set-nav-item")].map((a) => a.querySelector("svg")?.dataset.icon))`), ["settings", "bell", "file-text", "clock", "book-open"]);
   assert.equal(ev<string>(`document.querySelector("#back svg")?.dataset.icon`), "chevron-left");
   // General is the default pane, and the other fieldsets stay in the DOM
-  assert.deepEqual(visiblePane(), { legends: ["Display"], skill: false, hash: "", current: "general" });
-  assert.equal(ev<number>(`document.querySelectorAll("#form fieldset").length`), 4);
+  assert.deepEqual(visiblePane(), { legends: ["Display", "Claude Code"], skill: false, hash: "", current: "general" });
+  assert.equal(ev<number>(`document.querySelectorAll("#form fieldset").length`), 5);
   for (const id of PANE_IDS) {
     clickEl(`#set-nav [data-pane="${id}"]`);
     await waitFor(`hash #${id}`, `location.hash === "#${id}"`);
-    assert.deepEqual(visiblePane(), { legends: id === "skill" ? [] : [FIELDSET_PANE[id]!], skill: id === "skill", hash: `#${id}`, current: id });
+    assert.deepEqual(visiblePane(), { legends: id === "skill" ? [] : FIELDSET_PANE[id]!, skill: id === "skill", hash: `#${id}`, current: id });
     assert.ok(text("#pane-title") !== "" || id === "skill");
   }
   // The pane survives a re-render (a save re-renders #form)
@@ -219,7 +219,7 @@ gui("/settings#skill opens the Skill pane, a reload keeps it, and an unknown has
   assert.deepEqual(visiblePane(), { legends: [], skill: true, hash: "#skill", current: "skill" });
   ab("open", base + "/settings#nope");
   await waitFor("settings page", SET_READY);
-  assert.deepEqual(visiblePane(), { legends: ["Display"], skill: false, hash: "#nope", current: "general" });
+  assert.deepEqual(visiblePane(), { legends: ["Display", "Claude Code"], skill: false, hash: "#nope", current: "general" });
   // Back/forward (hashchange) follows too
   ev(`(location.hash = "#checkpoints", "ok")`);
   await waitFor("checkpoints pane", `document.querySelector('#set-nav [aria-current="page"]')?.dataset.pane === "checkpoints"`);
@@ -510,14 +510,14 @@ gui("the page renders in en and ja; the language select re-renders it and saves"
   assert.equal(ev<string>("document.documentElement.dataset.lang"), "en");
   assert.equal(text("#set-title"), "Settings");
   assert.equal(ev<string>("document.title"), "ukagai · Settings");
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["Display", "Progress checkpoints (recap)", "Plans", "Notifications"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["Display", "Progress checkpoints (recap)", "Plans", "Notifications", "Claude Code"]);
   assert.equal(text("#back"), "Back");
   assert.equal(ev<string>(`document.querySelector("#back").getAttribute("href")`), "/");
   setControl("#lang", "ja", "change");
   await waitFor("page in ja", `document.querySelector("#set-title").textContent === "設定"`);
   assert.equal(ev<string>("document.documentElement.dataset.lang"), "ja");
   assert.equal(ev<string>("document.documentElement.lang"), "ja");
-  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["表示", "進捗チェック(recap)", "プラン", "通知"]);
+  assert.deepEqual(ev<string[]>(`JSON.stringify([...document.querySelectorAll("#form legend")].map((l) => l.textContent))`), ["表示", "進捗チェック(recap)", "プラン", "通知", "Claude Code"]);
   await waitFor("saved", `(async () => 1)() && document.querySelector("#status").textContent === "保存しました"`);
   assert.equal((await getSettings()).lang, "ja");
   // The server renders the next load in ja from the start, and the main GUI follows
@@ -758,4 +758,58 @@ gui("plans.auto_show=false: a lone waiting plan keeps the Pending button; an arr
   await waitFor("drawer", `document.querySelector("#pending-list .row")`);
   assert.equal(ev<number>(`document.querySelectorAll("#pending-list .row").length`), 1, "the plan is one item with its approval");
   assert.equal(ev<number>(`document.querySelectorAll("#pending-list .plan-row").length`), 0);
+});
+
+gui("Claude Code: the 'Deliver answers as messages' toggle sits on the General pane, is on by default and saves", async () => {
+  await openSettings();
+  const row = `[...document.querySelectorAll("#form fieldset")].find((f) => f.querySelector("legend").textContent === "Claude Code")`;
+  assert.equal(ev<boolean>(`!${row}.hidden`), true, "shown on the General pane");
+  assert.equal(ev<string>(`${row}.querySelector("label").textContent.trim()`), "Deliver answers as messages");
+  assert.match(ev<string>(`${row}.querySelector(".set-help").textContent`), /Claude Code 2\.1\.304 or later/);
+  assert.equal(ev<boolean>(`${row}.querySelector("input").checked`), true);
+  assert.equal((await getSettings()).claude.message_delivery, true);
+  ev(`(${row}.querySelector("input").click(), "ok")`);
+  await waitFor("saved", `document.querySelector("#status").textContent === "Saved"`);
+  assert.equal((await getSettings()).claude.message_delivery, false);
+  assert.equal(ev<boolean>(`${row}.querySelector("input").checked`), false);
+});
+
+gui("a message-delivery answer: the toast says it will arrive as a message; later ones say delivered, or why it never was", async () => {
+  const owner = "0123456789abcdef";
+  const post = (path: string, body: unknown) =>
+    fetch(base + path, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const toast = (pred: string) => `[...document.querySelectorAll(".toast")].some((t) => ${pred})`;
+  const asked = async (n: number) => {
+    const sid = `00000000-0000-0000-0008-00000000000${n}`;
+    await post(`/api/sessions/${sid}/inbox/poll`, { owner, idle: false });
+    const d = await api("/api/decisions", {
+      tool_use_id: `toolu_msg_${process.pid}_${n}`,
+      kind: "answer_question",
+      mod_owner: owner,
+      session: { session_id: sid, cwd: ROOT, transcript_path: transcript() },
+      request: { questions: [{ question: `Which database should the cache use (${n})?`, header: "DB", multiSelect: false, options: [{ label: "Redis" }, { label: "Memcached" }] }] },
+    });
+    assert.equal(d.delivery, "message");
+    return { sid, id: d.id as string };
+  };
+
+  const first = await asked(1);
+  await openMain();
+  key("Enter");
+  await waitFor("queued toast", toast(`t.textContent === "Will reach the agent as a message when it is idle"`));
+  const item = await (await post(`/api/sessions/${first.sid}/inbox/poll`, { owner, idle: true })).json();
+  assert.equal(item.item.item_id, first.id);
+  await post(`/api/sessions/${first.sid}/inbox/ack`, { owner, item_id: first.id });
+  await waitFor("delivered toast", toast(`t.textContent.endsWith("delivered")`));
+
+  const second = await asked(2);
+  await waitFor("the next question", MAIN_READY);
+  key("Enter");
+  await waitFor("queued toast", toast(`t.textContent === "Will reach the agent as a message when it is idle"`));
+  for (let i = 0; i < 5; i++) {
+    const r = await post(`/api/sessions/${second.sid}/inbox/poll`, { owner, idle: true });
+    assert.equal(r.status, 200, `hand-out ${i + 1}`);
+    await post(`/api/sessions/${second.sid}/inbox/release`, { owner, item_id: second.id, drop: "interrupted" });
+  }
+  await waitFor("lost toast", toast(`t.textContent.endsWith(": could not be delivered (interrupted)")`));
 });

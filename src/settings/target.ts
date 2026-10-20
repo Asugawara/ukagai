@@ -7,6 +7,8 @@ import { resolveCodexHome } from "../serve/codex-bridge/index.js";
 export interface Target {
   settingsFile: string;
   skillDir: string;
+  /** The ukagai-mod plugin (a skills-dir plugin: ~/.claude/skills/ukagai-mod); handled together with the skill */
+  modDir: string;
   timeout: number;
   observe: boolean;
   dryRun: boolean;
@@ -128,6 +130,7 @@ export function parseTarget(argv: string[], command: "install" | "uninstall" | "
     handleSkill: !t.noSkill && (settings === undefined || skill),
     settingsFile: settings ?? join(base, "settings.json"),
     skillDir: join(base, "skills", "ukagai-explain"),
+    modDir: join(base, "skills", "ukagai-mod"),
   };
 }
 
@@ -136,6 +139,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "../..");
 export const CLI_PATH = join(REPO_ROOT, "dist", "cli.js");
 export const SKILL_DIR = join(REPO_ROOT, "skills", "ukagai-explain");
+/** The mod sources (hooks/mod/): shipped in the release stage and copied by `install` */
+export const MOD_DIR = join(REPO_ROOT, "hooks", "mod");
 /** The shipped SKILL.md itself: the default text the settings page shows and the human may edit */
 export const SKILL_SOURCE = join(SKILL_DIR, "SKILL.md");
 

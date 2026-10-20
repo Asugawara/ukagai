@@ -649,3 +649,64 @@ test("uninstall removes an empty leftover skill directory, and prints no skill l
   assert.ok(!(await exists(dir)), "the empty directory is gone");
   assert.doesNotMatch(r.out, /skill:/);
 });
+
+const MOD_HOME = (e: Env): string => join(e.home, ".claude", "skills", "ukagai-mod");
+
+test("install places the ukagai-mod plugin next to the skill: modules only, no command hook, config.json only for --server / --data-dir", async () => {
+  const e = await setup();
+  const r = await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /mod: +\S*skills\/ukagai-mod\//);
+  const manifest = await readJson(join(MOD_HOME(e), ".claude-plugin", "plugin.json"));
+  assert.equal(manifest.name, "ukagai-mod");
+  assert.equal(manifest.hooks, "./hooks/claude.json");
+  assert.deepEqual(await readJson(join(MOD_HOME(e), "hooks", "claude.json")), { modules: ["./mod/register.ts"] });
+  assert.ok(await exists(join(MOD_HOME(e), "hooks", "mod", "register.ts")));
+  assert.ok(await exists(join(MOD_HOME(e), "hooks", "mod", "core.ts")));
+  assert.ok(!(await exists(join(MOD_HOME(e), "hooks", "mod", "config.json"))));
+  assert.ok(!(await exists(join(MOD_HOME(e), "hooks", "hooks.json"))));
+
+  await ukagai(e, ["install", "--settings", e.settings, "--skill", "--server", "http://127.0.0.1:4919", "--data-dir", join(e.dir, "d")]);
+  assert.deepEqual(await readJson(join(MOD_HOME(e), "hooks", "mod", "config.json")), { server: "http://127.0.0.1:4919", dataDir: join(e.dir, "d") });
+});
+
+test("the mod follows the skill's conditions: --settings alone and --no-skill place nothing", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings]);
+  assert.ok(!(await exists(MOD_HOME(e))));
+  const proj = join(e.dir, "proj");
+  await mkdir(proj);
+  await ukagai(e, ["install", "--project", "--no-skill"], proj);
+  assert.ok(!(await exists(join(proj, ".claude", "skills"))));
+  await ukagai(e, ["install", "--project"], proj);
+  assert.ok(await exists(join(proj, ".claude", "skills", "ukagai-mod", ".claude-plugin", "plugin.json")));
+});
+
+test("install --dry-run shows the mod and writes nothing; uninstall removes it (a file of the human's stays)", async () => {
+  const e = await setup();
+  const dry = await ukagai(e, ["install", "--settings", e.settings, "--skill", "--dry-run"]);
+  assert.match(dry.out, /mod: .*\/ -> .*ukagai-mod\/\n/);
+  assert.ok(!(await exists(join(e.home, ".claude"))));
+
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  await writeFile(join(MOD_HOME(e), "notes.md"), "mine");
+  const udry = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill", "--dry-run"]);
+  assert.match(udry.out, /mod: remove .*ukagai-mod\//);
+  assert.ok(await exists(join(MOD_HOME(e), "hooks", "mod", "core.ts")));
+  const r = await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
+  assert.match(r.out, /mod: +removed /);
+  assert.ok(!(await exists(join(MOD_HOME(e), "hooks"))));
+  assert.ok(await exists(join(MOD_HOME(e), "notes.md")));
+});
+
+test("doctor: the mod row is information, never a failure", async () => {
+  const e = await setup();
+  const args = ["doctor", "--settings", e.settings, "--skill", "--server", "http://127.0.0.1:1", "--data-dir", join(e.dir, "data")];
+  await ukagai(e, ["install", "--settings", e.settings, "--skill"]);
+  assert.match((await ukagai(e, args)).out, /○ +mod +\S*ukagai-mod/);
+  await ukagai(e, ["uninstall", "--settings", e.settings, "--skill"]);
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const r = await ukagai(e, args);
+  assert.match(r.out, /○ +mod +not placed/);
+  assert.doesNotMatch(r.out, /× +mod/);
+});

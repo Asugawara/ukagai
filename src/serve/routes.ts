@@ -8,8 +8,11 @@ import {
   AnswerRequest,
   DEFAULT_SETTINGS,
   CheckpointRequest,
+  AckRequest,
   PlanReadRequest,
   PlanInstructRequest,
+  PollRequest,
+  ReleaseRequest,
   Settings,
   SkillPut,
   type SkillView,
@@ -528,15 +531,35 @@ export function createApp(deps: AppDeps): Hono {
     const fingerprint = c.req.query("fingerprint");
     const toolUseId = c.req.query("tool_use_id");
     if (!fingerprint || !toolUseId) return c.json({ error: "fingerprint and tool_use_id are required" }, 400);
-    const open = store.findOpen(c.req.param("id"), c.req.query("agent_id") || undefined, fingerprint);
+    const open = store.openFor(c.req.param("id"), c.req.query("agent_id") || undefined, fingerprint, toolUseId);
     if (!open) return c.json({ error: "no open decision" }, 404);
-    return c.json({ decision: store.reattach(open, toolUseId) });
+    return c.json(open);
   });
 
-  // The human's reply to a progress checkpoint, for the agent's next tool call. Reading it consumes it
+  // The human's reply to a progress checkpoint, for the agent's next tool call. Reading it consumes it.
+  // `main=1` (the main agent's hook): when there is no reply but an answer is on its way as a message, `waiting` tells the hook to hold the tool back
   app.get("/api/sessions/:id/instruction", auth("bearer"), (c) => {
-    const instruction = store.consumeInstruction(c.req.param("id"));
-    return instruction ? c.json({ instruction }) : c.json({ error: "no instruction" }, 404);
+    const id = c.req.param("id");
+    const instruction = store.consumeInstruction(id);
+    if (instruction) return c.json({ instruction });
+    const waiting = c.req.query("main") === "1" ? store.waitingFor(id) : undefined;
+    return waiting ? c.json({ waiting }) : c.json({ error: "no instruction" }, 404);
+  });
+
+  // The ukagai mod's inbox (message delivery): it polls, takes one answer at a time, then acks or releases it. Any of the three counts as the mod being alive
+  const inboxReply = (c: Context, r: ReturnType<Store["inboxAck"]>) => (r.http === 404 ? c.json({ error: "no such item" }, 404) : c.json({ status: r.status }, r.http));
+  app.post("/api/sessions/:id/inbox/poll", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, PollRequest);
+    const r = store.inboxPoll(c.req.param("id"), body.owner, body.idle);
+    return r ? c.json(r) : c.body(null, 204);
+  });
+  app.post("/api/sessions/:id/inbox/ack", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, AckRequest);
+    return inboxReply(c, store.inboxAck(c.req.param("id"), body.owner, body.item_id));
+  });
+  app.post("/api/sessions/:id/inbox/release", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, ReleaseRequest);
+    return inboxReply(c, store.inboxRelease(c.req.param("id"), body.owner, body.item_id, body.drop));
   });
 
   app.get("/api/sessions/:id/pending-mode-switch", auth("bearer"), (c) => {

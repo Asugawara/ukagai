@@ -112,10 +112,12 @@ export interface RunningHook {
 }
 
 /** runHook that can send a signal to the child process */
-export function spawnHook(args: string[], input: string, home: string = tmpDir("ukagai-hook-home-")): RunningHook {
+export function spawnHook(args: string[], input: string, home: string = tmpDir("ukagai-hook-home-"), extraEnv: Record<string, string> = {}): RunningHook {
   const t0 = Date.now();
   // A fresh HOME per child: a hook under test must never reach the real ~/.ukagai (hook.log, token) or ~/.claude.
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+  // The mod of the Claude Code that runs these tests must not turn the hook under test into a message-delivery one
+  const { UKAGAI_MOD_OWNER: _owner, ...inherited } = process.env;
+  const env: NodeJS.ProcessEnv = { ...inherited, HOME: home, ...extraEnv };
   if (home === "") delete env["HOME"]; // "" = HOME unset
   const p = spawn(process.execPath, ["--import", "tsx", cli, "hook", ...args], { stdio: ["pipe", "pipe", "pipe"], env });
   let stdout = "";
@@ -129,6 +131,6 @@ export function spawnHook(args: string[], input: string, home: string = tmpDir("
   return { signal: (sig) => p.kill(sig), result };
 }
 
-export function runHook(args: string[], input: string, home?: string): Promise<HookResult> {
-  return spawnHook(args, input, home).result;
+export function runHook(args: string[], input: string, home?: string, extraEnv?: Record<string, string>): Promise<HookResult> {
+  return spawnHook(args, input, home, extraEnv).result;
 }

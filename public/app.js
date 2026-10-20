@@ -639,12 +639,16 @@ function placeToasts() {
 
 const clip = (s, n = 40) => (s.length > n ? s.slice(0, n) + "…" : s);
 const LOST_KEYS = { answer_lost: "lost_answer_lost", hook_disconnected: "lost_hook_disconnected", cancelled: "lost_cancelled", fallback: "lost_fallback" };
+// A decision whose answer comes as a message from the ukagai mod (delivery "message"): its own words for what happened to it
+const MSG_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal"];
+const msgLostKey = (d) => (d.delivery === "message" && (d.status === "answer_lost" || d.status === "cancelled") && MSG_LOST_REASONS.includes(d.status_reason) ? `lost_${d.status_reason}` : null);
 // When the status of a decision that is not shown changes
 function notifyBackground(prev, d) {
   if (!prev || prev.status === d.status) return;
   if (isCheckpoint(d) && d.status === "cancelled") return; // superseded / expired / new prompt: removed silently
   const title = clip(titleOf(d));
-  if (d.status === "cancelled" && prev.status === "pending") toast(t("cancelled_title", { title }), { kind: "lost", ms: 4000 });
+  if (msgLostKey(d)) toast(t(msgLostKey(d), { title, note: d.delivery_note ?? "" }), { kind: "lost", ms: 4000 });
+  else if (d.status === "cancelled" && prev.status === "pending") toast(t("cancelled_title", { title }), { kind: "lost", ms: 4000 });
   else if (LOST_KEYS[d.status]) toast(t(LOST_KEYS[d.status], { title }), { kind: "lost", ms: 4000 });
   else if (d.status === "answered") toast(isCheckpoint(d) ? (d.response?.kind === "continue" ? t("delivered_title", { title }) : t("checkpoint_sent")) : t("delivered_title", { title }), { kind: "soft" });
 }
@@ -1327,9 +1331,24 @@ const STATUS_KEYS = {
   fallback: "status_fallback",
   cancelled: "status_cancelled",
 };
-const statusText = (status, fallbackKey) => t(STATUS_KEYS[status] ?? fallbackKey);
+const MSG_STATUS_KEYS = { answer_submitted: "status_message_queued", answered: "status_message_delivered", fallback: "status_fallback_message" };
+// The status line of a decision (null: none). A message-delivery decision says when the answer will reach the agent, and why it is held up
+function statusLine(d) {
+  if (d.delivery === "message") {
+    const lost = msgLostKey(d);
+    if (lost) return t(lost, { title: clip(titleOf(d)), note: d.delivery_note ?? "" });
+    const live = d.status === "pending" || d.status === "answer_submitted";
+    if (live && d.delivery_flag === "no_agent") return t("note_no_agent");
+    if (MSG_STATUS_KEYS[d.status]) {
+      const text = t(MSG_STATUS_KEYS[d.status]);
+      return d.status === "answer_submitted" && d.delivery_note ? `${text} — ${t("note_drop", { note: d.delivery_note })}` : text;
+    }
+  }
+  return STATUS_KEYS[d.status] ? t(STATUS_KEYS[d.status]) : null;
+}
+const statusText = (d, fallbackKey) => statusLine(d) ?? t(fallbackKey);
 // An answered checkpoint was sent, not delivered: its text reaches the agent later (the delivered toast follows)
-const answeredText = (d, fallbackKey) => (d.response?.instruct ? t("plan_instructed", { text: clip(d.response.text ?? "") }) : isCheckpoint(d) && d.status === "answered" && d.response?.kind !== "continue" ? t("checkpoint_sent") : statusText(d.status, fallbackKey));
+const answeredText = (d, fallbackKey) => (d.response?.instruct ? t("plan_instructed", { text: clip(d.response.text ?? "") }) : isCheckpoint(d) && d.status === "answered" && d.response?.kind !== "continue" ? t("checkpoint_sent") : statusText(d, fallbackKey));
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
@@ -1744,7 +1763,8 @@ function renderRightBody(d) {
   if (!d) return;
   const dr = draftOf(d);
   const closed = d.status !== "pending";
-  if (STATUS_KEYS[d.status]) root.append(el("div", { class: "status", text: statusText(d.status) }));
+  const status = statusLine(d);
+  if (status) root.append(el("div", { class: "status", text: status }));
 
   if (d.kind === "answer_question") {
     const qs = d.request.questions;

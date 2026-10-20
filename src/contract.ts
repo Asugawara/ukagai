@@ -20,6 +20,41 @@ export const CANCEL_WINDOW_MS = 10000;
 /** A checkpoint nobody answered expires after this long */
 export const CHECKPOINT_TTL_MS = 12 * 3600 * 1000;
 
+// ---- Message delivery (the ukagai mod): see docs/spec/api.md "Message delivery" ----
+
+/** The mod's tick interval */
+export const MOD_POLL_MS = 1000;
+/** The longest interval between the mod's requests while they fail (1 -> 2 -> 4 -> 5 s) */
+export const MOD_BACKOFF_MAX_MS = 5000;
+/** A mod that polled a session this recently can deliver to it: decisions are registered for message delivery, tools are held back */
+export const MOD_FRESH_MS = 15_000;
+/** A decision's owner that was last seen longer ago than this is gone: another owner of the session takes its items over */
+export const MOD_CLAIM_STALE_MS = 30_000;
+/** After a SessionEnd, an owner that polled the session within this time keeps its decisions open */
+export const MOD_END_GRACE_MS = 10_000;
+/** No owner polled the session for this long: the decision is flagged `no_agent` */
+export const MOD_GONE_MS = 120_000;
+/** A message-delivery decision nobody could deliver expires after this long (from `created_at`) */
+export const MESSAGE_TTL_MS = 12 * 3600 * 1000;
+/** Drops of a delivery before it is given up */
+export const DELIVERY_MAX_ATTEMPTS = 5;
+/** Characters of the decision id in a delivery text's ref */
+export const DELIVERY_REF_LEN = 8;
+/** The mod's identifier of one Claude Code process (`UKAGAI_MOD_OWNER`) */
+export const MOD_OWNER_RE = /^[0-9a-f]{16}$/;
+/** Leads every delivery text: `[ukagai] (ref a1b2c3d4) `. Group 1 is the ref */
+export const DELIVERY_REF_RE = /^\[ukagai\] \(ref ([0-9a-f]{8})\) /;
+
+/** The ref of a decision: the first characters of its id */
+export function deliveryRef(decisionId: string): string {
+  return decisionId.slice(0, DELIVERY_REF_LEN);
+}
+
+/** The ref a prompt starts with, or undefined */
+export function parseDeliveryRef(text: string): string | undefined {
+  return DELIVERY_REF_RE.exec(text)?.[1];
+}
+
 // ---- hook stdin (unknown keys pass through) ----
 
 /** The agent a hook / decision comes from. Absent means "claude" */
@@ -241,8 +276,8 @@ export const Explanation = z.object({
 });
 export type Explanation = z.infer<typeof Explanation>;
 
-/** How an answered checkpoint reached the agent: the PreToolUse hook, typed into its terminal, the Codex bridge, or nothing to do (stop of an idle agent) */
-export const DeliveredVia = z.enum(["hook", "terminal", "bridge", "noop"]);
+/** How an answered decision or checkpoint reached the agent: the PreToolUse hook, typed into its terminal, the Codex bridge, nothing to do (stop of an idle agent), or a message the ukagai mod submitted */
+export const DeliveredVia = z.enum(["hook", "terminal", "bridge", "noop", "message"]);
 export type DeliveredVia = z.infer<typeof DeliveredVia>;
 
 export const DecisionResponse = z.object({
@@ -287,9 +322,14 @@ export const Instruction = z.object({
 });
 export type Instruction = z.infer<typeof Instruction>;
 
-/** Body of a 200 from GET /api/sessions/:id/instruction (404 when there is none) */
-export const InstructionResponse = z.object({ instruction: Instruction });
+/** What holds the main agent's tools back: an async decision of its session whose answer has not reached it yet */
+export const Waiting = z.object({ decision_id: z.string(), kind: z.enum(["answer_question", "approve_plan"]) });
+export type Waiting = z.infer<typeof Waiting>;
+
+/** Body of a 200 from GET /api/sessions/:id/instruction (404 when there is neither). `waiting` only for `?main=1` */
+export const InstructionResponse = z.union([z.object({ instruction: Instruction }), z.object({ waiting: Waiting })]);
 export type InstructionResponse = z.infer<typeof InstructionResponse>;
+
 
 export const Decision = z.object({
   id: z.string(),
@@ -316,8 +356,29 @@ export const Decision = z.object({
   handoffs: z.number().int().nonnegative().optional(),
   /** `tool_use_id` is the current one; the ones before a re-attach are kept here */
   previous_tool_use_ids: z.array(z.string()).optional(),
+  /** `message`: registered for message delivery (no hook waits; the ukagai mod delivers the answer). Removed when the decision is switched back to the long-poll */
+  delivery: z.literal("message").optional(),
+  /** message delivery: the mod (`UKAGAI_MOD_OWNER`) that owns the delivery; the one that took it over after a reload */
+  mod_owner: z.string().optional(),
+  /** message delivery: the mod that took the answer to submit it. `offset` is the transcript size at that moment */
+  claim: z.object({ owner: z.string(), at: z.string(), offset: z.number().int().nonnegative() }).optional(),
+  /** message delivery: a prompt carrying this decision's ref reached the hook. A record only: it does not mean the answer was delivered */
+  ref_seen_at: z.string().optional(),
+  /** message delivery: the human typed in the terminal while the answer was waiting */
+  human_prompt_at: z.string().optional(),
+  /** message delivery: the decision must close as soon as the claim ends (a `status_reason`) */
+  close_reason: z.string().optional(),
+  /** message delivery: drops of the delivery so far */
+  delivery_attempts: z.number().int().nonnegative().optional(),
+  /** message delivery: the reason of the last drop */
+  delivery_note: z.string().optional(),
+  /** message delivery: `no_agent` = no mod has polled the session for MOD_GONE_MS */
+  delivery_flag: z.enum(["no_agent"]).optional(),
 });
 export type Decision = z.infer<typeof Decision>;
+
+/** Body of a 200 from GET /api/sessions/:id/open: the open decision to re-attach to, or one a live mod is delivering right now */
+export type OpenResponse = { decision: Decision } | { delivering: { decision_id: string } };
 
 // ---- API input / output ----
 
@@ -332,6 +393,8 @@ export const CreateDecisionRequest = z.object({
   status: z.literal("denied_explain").optional(),
   /** Only for denied_explain. The MissingCode of the deny reason */
   missing: z.array(z.string()).optional(),
+  /** The hook's `UKAGAI_MOD_OWNER`: asks for message delivery (the server decides; a malformed value counts as absent) */
+  mod_owner: z.string().optional(),
 });
 export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequest>;
 
@@ -376,10 +439,32 @@ export const EventInput = HookInputBase.extend({
   escaped_question: z.boolean().optional(),
   /** UserPromptSubmit only: the prompt was a harness wake-up (task-notification), not typed by a human */
   wakeup: z.boolean().optional(),
+  /** UserPromptSubmit only: the ref of a delivery text the prompt started with (the prompt text itself is never sent) */
+  delivered_ref: z.string().regex(/^[0-9a-f]{8}$/).optional(),
   blocker_detected: z.boolean().optional(),
   observe: z.object({ phase: z.enum(["start", "end"]) }).optional(),
 });
 export type EventInput = z.infer<typeof EventInput>;
+
+// ---- Message delivery: the mod's inbox (POST /api/sessions/:id/inbox/<poll|ack|release>) ----
+
+export const PollRequest = z.object({ owner: z.string().regex(MOD_OWNER_RE), idle: z.boolean() });
+export type PollRequest = z.infer<typeof PollRequest>;
+/** 200 from poll: `held` = this owner is delivering that item already; `item` = one was handed over. 204 (no body) when there is nothing */
+export type PollResponse = { held: { item_id: string } } | { item: { item_id: string; text: string } };
+
+export const AckRequest = z.object({ owner: z.string().regex(MOD_OWNER_RE), item_id: z.string().min(1).max(100) });
+export type AckRequest = z.infer<typeof AckRequest>;
+
+export const ReleaseRequest = z.object({
+  owner: z.string().regex(MOD_OWNER_RE),
+  item_id: z.string().min(1).max(100),
+  /** Why `$.prompt.submit` dropped the prompt; absent when it threw (the server then counts a failed attempt after checking the transcript) */
+  drop: z.string().min(1).max(500).optional(),
+});
+export type ReleaseRequest = z.infer<typeof ReleaseRequest>;
+/** 200 / 409 from ack and release */
+export type InboxStatusResponse = { status: DecisionStatus };
 
 export const SessionState = z.enum(["working", "waiting_decision", "idle", "ended"]);
 export type SessionState = z.infer<typeof SessionState>;
@@ -714,6 +799,8 @@ export const CODEX_DELAY_MAX_S = 3600;
 export const INSTRUCTION_PRESETS_MAX = 10;
 export const INSTRUCTION_PRESET_MAX_CHARS = 300;
 
+export const DEFAULT_CLAUDE_SETTINGS = { message_delivery: true };
+
 export const Settings = z.object({
   /** Display language of the GUI / TUI (and the language the agent writes explanations in) */
   lang: z.enum(["en", "ja"]),
@@ -743,6 +830,12 @@ export const Settings = z.object({
     browser: z.boolean(),
     title_badge: z.boolean(),
   }),
+  claude: z
+    .object({
+      /** false: answers are never delivered as messages by the ukagai mod; the hook waits for them (long-poll) */
+      message_delivery: z.boolean(),
+    })
+    .default(DEFAULT_CLAUDE_SETTINGS),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -753,6 +846,7 @@ export const DEFAULT_SETTINGS: Settings = {
   checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true },
   plans: { auto_show: true, instruction_presets: [] },
   notify: { sound: false, browser: false, title_badge: true },
+  claude: DEFAULT_CLAUDE_SETTINGS,
 };
 
 // ---- The user's version of the skill (GET / PUT / DELETE /api/skill) ----

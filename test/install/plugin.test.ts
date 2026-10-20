@@ -189,3 +189,17 @@ test("doctor --settings <file> ignores the user-level plugin and reports that fi
   assert.ok(!/from the plugin/.test(r.out), r.out);
   assert.match(r.out, /hook SessionStart/);
 });
+
+test("install with the plugin enabled removes the ukagai-mod directory too; doctor says the mod comes from the plugin", async () => {
+  const e = await setup();
+  const modDir = join(e.home, ".claude", "skills", "ukagai-mod");
+  assert.equal((await run(e, ["install"])).code, 0);
+  assert.ok(await exists(join(modDir, ".claude-plugin", "plugin.json")));
+  const s = JSON.parse(await readFile(e.settings, "utf8"));
+  await writeFile(e.settings, JSON.stringify({ ...s, ...PLUGIN }));
+  const r = await run(e, ["install"]);
+  assert.match(r.out, /mod: +removed /);
+  assert.ok(!(await exists(modDir)));
+  const d = await run(e, ["doctor"]);
+  assert.match(d.out, /mod\s+from the plugin/);
+});

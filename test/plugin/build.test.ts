@@ -31,12 +31,19 @@ test(".codex-plugin/plugin.json declares the Codex hooks; the Claude manifest do
 
 test("hooks/claude.json equals buildHookEntries for the launcher invocation", () => {
   const want = buildHookEntries({ invocation: { command: "/bin/sh", prefix: ["${CLAUDE_PLUGIN_ROOT}/bin/ukagai"] }, timeout: 3600, observe: false });
-  assert.deepEqual(parse("hooks/claude.json"), { hooks: JSON.parse(JSON.stringify(want)) });
+  assert.deepEqual(parse("hooks/claude.json"), { modules: ["./mod/register.ts"], hooks: JSON.parse(JSON.stringify(want)) });
   const pre = parse("hooks/claude.json").hooks.PreToolUse[0].hooks[0];
   assert.equal(pre.command, "/bin/sh");
   assert.deepEqual(pre.args.slice(0, 2), ["${CLAUDE_PLUGIN_ROOT}/bin/ukagai", "hook"]);
   assert.deepEqual(pre.args.slice(-2), ["--managed-by", "ukagai"]);
   assert.ok(!pre.args.includes("--data-dir") && !pre.args.includes("--server"));
+});
+
+test("hooks/claude.json names the ukagai mod; Codex's file and manifest do not", () => {
+  assert.deepEqual(parse("hooks/claude.json").modules, ["./mod/register.ts"]);
+  assert.ok(!("modules" in parse("hooks/codex.json")));
+  assert.ok(!files["hooks/codex.json"]!.includes("register.ts"));
+  assert.ok(!files[".codex-plugin/plugin.json"]!.includes("mod"));
 });
 
 test("hooks/codex.json has the Codex events, matchers and timeouts", () => {
@@ -70,5 +77,6 @@ test("write-plugin-files.mjs writes the files into a stage (needs dist/)", async
   assert.equal(JSON.parse(await readFile(join(stage, ".claude-plugin/plugin.json"), "utf8")).version, "9.9.9");
   assert.equal(JSON.parse(await readFile(join(stage, ".codex-plugin/plugin.json"), "utf8")).hooks, "./hooks/codex.json");
   assert.ok((await stat(join(stage, "hooks/claude.json"))).isFile());
+  assert.deepEqual(JSON.parse(await readFile(join(stage, "hooks/claude.json"), "utf8")).modules, ["./mod/register.ts"]);
   assert.ok(!(await stat(join(stage, "hooks/hooks.json")).then(() => true, () => false)));
 });

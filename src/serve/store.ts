@@ -1,9 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   CANCEL_WINDOW_MS,
   CHECKPOINT_TTL_MS,
+  DELIVERY_MAX_ATTEMPTS,
+  MESSAGE_TTL_MS,
+  MOD_BACKOFF_MAX_MS,
+  MOD_CLAIM_STALE_MS,
+  MOD_END_GRACE_MS,
+  MOD_FRESH_MS,
+  MOD_GONE_MS,
+  MOD_OWNER_RE,
+  deliveryRef,
+  type PollResponse,
+  type Waiting,
   checkpointFingerprint,
   type DeliveredVia,
   checkpointToolUseId,
@@ -28,6 +39,8 @@ import {
   type SessionState,
   type SessionSummary,
 } from "../contract.js";
+import { deliveryText } from "./delivery-text.js";
+import { transcriptHasDelivery } from "./history.js";
 import type { SseEventName } from "./sse.js";
 
 export class HttpError extends Error {
@@ -50,9 +63,16 @@ export type StoreOptions = {
   onTransition?: (d: Decision, from: DecisionStatus, to: DecisionStatus) => void;
   /** Basename of the plan file a path points at inside the plans directory, or null (resolved once when an approve_plan decision is created) */
   planNameOf?: (filePath: string) => string | null;
-  /** One line to serve.log (plan_instruction_dropped) */
+  /** One line to serve.log (plan_instruction_dropped, message_to_classic) */
   log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
+  /** Settings `claude.message_delivery`, read when a decision is registered (default: on) */
+  messageDelivery?: () => boolean;
+  /** The clock of the message-delivery rules (default Date.now; tests drive it) */
+  now?: () => number;
 };
+
+/** What an inbox request answers: the HTTP status and, for 200 / 409, the decision's status */
+export type InboxResult = { http: 200 | 409; status: DecisionStatus } | { http: 404 };
 
 export type AnswerPatch =
   | { kind: "answers"; answers: Record<string, string> }
@@ -82,6 +102,7 @@ const EVENT_KEYS = [
   "blocker_detected",
   "observe",
   "notification_type",
+  "delivered_ref",
 ] as const;
 const LIVE: readonly DecisionStatus[] = ["pending", "answer_submitted"];
 
@@ -141,6 +162,12 @@ export class Store {
   /** Types a queued plan instruction into the idle agent's terminal; true when it went in (set by the terminal delivery) */
   deliverPlanInstruction: ((sessionId: string, ins: Instruction) => Promise<boolean>) | undefined;
   private monitor: NodeJS.Timeout | undefined;
+  /** When this store started: an owner named by a stored decision counts as seen then, so a restart does not hand its items to another owner */
+  private readonly startedAt: number;
+  /** `<session>\0<owner>` -> when the mod's last inbox request for that session was accepted (epoch ms) */
+  private ownerSeen = new Map<string, number>();
+  /** session -> when its SessionEnd arrived (epoch ms): its message-delivery decisions close unless a mod keeps polling it */
+  private endMarks = new Map<string, number>();
 
   // Aggregates rebuilt from events
   private escapedQuestions = 0;
@@ -158,6 +185,11 @@ export class Store {
     mkdirSync(opts.dir, { recursive: true, mode: 0o700 });
     this.decisionsFile = join(opts.dir, "decisions.jsonl");
     this.eventsFile = join(opts.dir, "events.jsonl");
+    this.startedAt = this.clock();
+  }
+
+  private clock(): number {
+    return this.opts.now?.() ?? Date.now();
   }
 
   // ---- Persistence and restore ----
@@ -182,7 +214,8 @@ export class Store {
     // If no hook comes back, the lease expires and checkLeases moves it to hook_disconnected / answer_lost as usual.
     const lease = new Date(Date.now() + this.opts.leaseGraceMs).toISOString();
     for (const d of this.decisions.values()) {
-      if (LIVE.includes(d.status) && d.kind !== "checkpoint") d.lease_until = lease;
+      // A message-delivery decision has no hook behind it, so no lease either
+      if (LIVE.includes(d.status) && d.kind !== "checkpoint" && d.delivery !== "message") d.lease_until = lease;
     }
     this.restoreInstructions();
     if (existsSync(this.eventsFile)) {
@@ -262,7 +295,7 @@ export class Store {
 
     const denied = req.status === "denied_explain";
     const fingerprint = decisionFingerprint(req.kind, req.request as Record<string, unknown>);
-    const now = Date.now();
+    const now = this.clock();
     const session = { ...req.session };
     if (!session.title && context.ai_title) session.title = context.ai_title;
     const decision: Decision = {
@@ -285,7 +318,10 @@ export class Store {
     if (req.explanation) decision.explanation = req.explanation;
     if (denied && req.missing) decision.missing = req.missing;
     if (!denied) {
-      decision.lease_until = new Date(now + this.opts.leaseGraceMs).toISOString();
+      if (this.wantsMessageDelivery(req, now)) {
+        decision.delivery = "message";
+        decision.mod_owner = req.mod_owner!;
+      } else decision.lease_until = new Date(now + this.opts.leaseGraceMs).toISOString();
       const denial = req.explanation?.attached_via === "after_deny" ? this.findRecentDenial(decision, now) : undefined;
       if (denial) decision.first_denied_at = denial.created_at;
     }
@@ -313,10 +349,12 @@ export class Store {
     session: SessionSummary & { agent?: "claude" | "codex" },
     recap: string,
     recapAt: string,
-  ): { decision: Decision; created: boolean; skipped?: undefined } | { decision?: undefined; created: false; skipped: "after_stop" | "no_progress" } {
+  ): { decision: Decision; created: boolean; skipped?: undefined } | { decision?: undefined; created: false; skipped: "after_stop" | "no_progress" | "decision_pending" } {
     if (session.agent !== "codex") {
       // The human told the agent to stop: no more progress checks until they speak again (Claude Code only; the Codex bridge handles its own)
       if (this.stoppedSessions.has(session.session_id)) return { created: false, skipped: "after_stop" };
+      // A question waits for its answer to be delivered as a message: a card now would be a second thing to answer for the same agent
+      if (this.hasOpenAsync(session.session_id)) return { created: false, skipped: "decision_pending" };
       // Claude Code rewrites its recap while idle: a new card needs the agent to have done something since the last one
       if (!this.hasProgressSinceLastCheckpoint(session.session_id)) return { created: false, skipped: "no_progress" };
     }
@@ -438,7 +476,7 @@ export class Store {
     for (const [sid, ins] of this.instructions) {
       if (ins.decision_id !== decisionId) continue;
       // Typing starts a new turn: only for an agent that is still idle, and not for a reply the human gave long ago
-      if (this.sessions.get(sid)?.state !== "idle" || Date.now() - Date.parse(ins.created_at) > maxAgeMs) return undefined;
+      if (this.sessions.get(sid)?.state !== "idle" || Date.now() - Date.parse(ins.created_at) > maxAgeMs || this.hasOpenAsync(sid)) return undefined;
       this.instructions.delete(sid);
       return ins;
     }
@@ -461,7 +499,7 @@ export class Store {
         : { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
       : { decision_id: "", kind: "instruct", text, created_at, about: "plan" };
     this.instructions.set(sessionId, ins);
-    if (this.sessions.get(sessionId)?.state !== "idle" || !this.deliverPlanInstruction) return "hook";
+    if (this.sessions.get(sessionId)?.state !== "idle" || !this.deliverPlanInstruction || this.hasOpenAsync(sessionId)) return "hook";
     try {
       return (await this.deliverPlanInstruction(sessionId, ins)) ? "terminal" : "hook";
     } catch {
@@ -476,7 +514,7 @@ export class Store {
 
   /** The queued plan instruction of a session, taken off the queue for the terminal delivery (undefined when the hook took it first or the agent is not idle) */
   claimPlanInstruction(sessionId: string, ins: Instruction): Instruction | undefined {
-    if (this.instructions.get(sessionId) !== ins || this.sessions.get(sessionId)?.state !== "idle") return undefined;
+    if (this.instructions.get(sessionId) !== ins || this.sessions.get(sessionId)?.state !== "idle" || this.hasOpenAsync(sessionId)) return undefined;
     this.instructions.delete(sessionId);
     return ins;
   }
@@ -486,15 +524,34 @@ export class Store {
     this.markDelivered(decisionId, "terminal");
   }
 
-  /** The newest decision of the session and agent that is still open (pending, or its hook went away) and asks the same thing */
+  /** The newest decision of the session and agent that is still open (pending, its hook went away, or a message-delivery answer not delivered yet) and asks the same thing */
   findOpen(sessionId: string, agentId: string | undefined, fingerprint: string): Decision | undefined {
     let best: Decision | undefined;
     for (const d of this.decisions.values()) {
       if (d.kind === "checkpoint" || d.session.session_id !== sessionId || (d.session.agent_id ?? "") !== (agentId ?? "") || d.fingerprint !== fingerprint) continue;
-      if (d.status !== "pending" && d.status !== "hook_disconnected") continue;
+      if (d.status !== "pending" && d.status !== "hook_disconnected" && !(d.delivery === "message" && d.status === "answer_submitted")) continue;
       if (!best || d.created_at > best.created_at) best = d;
     }
     return best;
+  }
+
+  /**
+   * The tool was called again: what the hook does with it. A decision a live mod is delivering right now is left alone (`delivering`);
+   * any other open message-delivery decision is switched to the long-poll first, because the agent is now waiting for the answer here
+   */
+  openFor(sessionId: string, agentId: string | undefined, fingerprint: string, toolUseId: string): { decision: Decision } | { delivering: { decision_id: string } } | undefined {
+    const d = this.findOpen(sessionId, agentId, fingerprint);
+    if (!d) return undefined;
+    if (d.delivery === "message") {
+      if (d.status === "answer_submitted" && d.claim) {
+        if (this.claimAlive(d, this.clock())) return { delivering: { decision_id: d.id } };
+        this.settleDeadClaim(d);
+        const after = d.status as DecisionStatus; // settleDeadClaim may have changed it
+        if (after !== "pending" && after !== "answer_submitted") return undefined; // delivered after all, or closed
+      }
+      this.switchToClassic(d);
+    }
+    return { decision: this.reattach(d, toolUseId) };
   }
 
   /** The tool was called again for an open decision: it takes the new tool_use_id and is waited for again (a lost hook is revived) */
@@ -520,6 +577,7 @@ export class Store {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
     if (d.session.session_id !== sessionId) throw new HttpError(403, "decision belongs to another session");
+    if (d.delivery === "message") throw new HttpError(409, "a message-delivery decision has no hook to hand off");
     if (d.status !== "pending") throw new HttpError(409, `cannot hand off a ${d.status} decision`);
     d.handoffs = (d.handoffs ?? 0) + 1;
     d.lease_until = new Date(Date.now() + (this.opts.handoffGraceMs ?? HANDOFF_GRACE_MS)).toISOString();
@@ -612,7 +670,7 @@ export class Store {
     this.emit("decision.updated", d);
     try {
       this.onCheckpointAnswered?.(d);
-      if (claude && patch.answer === "instruct" && this.sessions.get(d.session.session_id)?.state === "idle") this.onCheckpointDeliverable?.(d);
+      if (claude && patch.answer === "instruct" && this.sessions.get(d.session.session_id)?.state === "idle" && !this.hasOpenAsync(d.session.session_id)) this.onCheckpointDeliverable?.(d);
     } catch {
       // A subscriber must not break the answer
     }
@@ -639,6 +697,7 @@ export class Store {
   cancel(id: string, reason?: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
+    if (d.delivery === "message") throw new HttpError(409, "a message-delivery decision is not waited for by a hook");
     this.transition(d, d.status === "answer_submitted" ? "answer_lost" : "cancelled");
     if (reason) d.status_reason = reason;
     delete d.lease_until;
@@ -651,6 +710,7 @@ export class Store {
   ack(id: string): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
+    if (d.delivery === "message") throw new HttpError(409, "a message-delivery decision is acknowledged by the mod");
     this.transition(d, "answered");
     d.response = { ...d.response!, delivered_at: new Date().toISOString() };
     delete d.lease_until;
@@ -661,7 +721,7 @@ export class Store {
   }
 
   private extendLease(d: Decision, timeoutMs: number): void {
-    if (!LIVE.includes(d.status)) return;
+    if (!LIVE.includes(d.status) || d.delivery === "message") return;
     d.lease_until = new Date(Date.now() + timeoutMs + this.opts.leaseGraceMs).toISOString();
   }
 
@@ -702,10 +762,14 @@ export class Store {
     this.monitor.unref();
   }
 
-  checkLeases(now = Date.now()): void {
-    for (const d of this.decisions.values()) {
+  checkLeases(now = this.clock()): void {
+    for (const d of [...this.decisions.values()]) {
       if (d.kind === "checkpoint") {
         if (d.status === "pending" && now - Date.parse(d.created_at) > CHECKPOINT_TTL_MS) this.closeCheckpoint(d, "expired");
+        continue;
+      }
+      if (d.delivery === "message") {
+        if (LIVE.includes(d.status)) this.checkMessageDelivery(d, now);
         continue;
       }
       if (!LIVE.includes(d.status) || !d.lease_until || Date.parse(d.lease_until) > now) continue;
@@ -716,6 +780,8 @@ export class Store {
       this.emit("decision.updated", d);
       this.notify(d.id);
     }
+    this.checkEndMarks(now);
+    this.checkNoAgent(now);
   }
 
   close(): void {
@@ -815,13 +881,21 @@ export class Store {
     if (live && (ev.hook_event_name === "UserPromptSubmit" || ev.hook_event_name === "Stop")) {
       this.cancelRecentlyDisconnected(ev.session_id);
     }
-    // A wake-up prompt is the harness, not the human: it neither cancels pending cards nor lifts / drops a stop
+    // A wake-up prompt is the harness, not the human: it neither cancels pending cards nor lifts / drops a stop.
+    // A prompt that starts with the ref of a message-delivery decision is the mod's delivery (the hook saw it before it could be dropped): not the human either
     if (live && ev.hook_event_name === "UserPromptSubmit" && !ev.wakeup) {
-      this.cancelPending(ev.session_id);
-      this.stoppedSessions.delete(ev.session_id);
-      this.dropQueuedStop(ev.session_id);
+      const delivery = ev.delivered_ref ? this.findByRef(ev.session_id, ev.delivered_ref) : undefined;
+      if (delivery) this.noteRefSeen(delivery, ev.received_at);
+      else {
+        const receivedAt = Number.isFinite(at) ? at : Infinity;
+        this.cancelPending(ev.session_id, receivedAt);
+        this.humanPrompted(ev.session_id, receivedAt, ev.received_at);
+        this.stoppedSessions.delete(ev.session_id);
+        this.dropQueuedStop(ev.session_id);
+      }
     }
     if (live && ev.hook_event_name === "Stop") this.offerQueuedInstruction(ev.session_id);
+    if (live && ev.hook_event_name === "SessionEnd") this.endMarks.set(ev.session_id, Number.isFinite(at) ? at : this.clock());
     if (ev.hook_event_name === "SessionEnd") this.endCheckpoints(ev.session_id, live);
     if (live) this.onSessionEvent?.(ev.session_id, ev.hook_event_name);
   }
@@ -869,6 +943,8 @@ export class Store {
   private offerQueuedInstruction(sessionId: string): void {
     const ins = this.instructions.get(sessionId);
     if (!ins) return;
+    // Typing now would start a turn whose first prompt cancels the question that waits for its answer: the reply stays queued for the next tool call
+    if (this.hasOpenAsync(sessionId)) return;
     // A plan instruction has no decision behind it: type it now that the agent is idle
     if (ins.about === "plan" && ins.decision_id === "") {
       void Promise.resolve(this.deliverPlanInstruction?.(sessionId, ins)).catch(() => {});
@@ -890,10 +966,13 @@ export class Store {
     }
   }
 
-  /** The human spoke next in the terminal = the pending decision is no longer being waited for */
-  private cancelPending(sessionId: string): void {
+  /**
+   * The human spoke next in the terminal = the pending decision is no longer being waited for. Only decisions registered no later than the
+   * prompt count: the prompt's event is built when the hook runs and may reach the server late, after the same turn registered a new one
+   */
+  private cancelPending(sessionId: string, receivedAt: number): void {
     for (const d of this.decisions.values()) {
-      if (d.session.session_id !== sessionId || d.status !== "pending") continue;
+      if (d.session.session_id !== sessionId || d.status !== "pending" || Date.parse(d.created_at) > receivedAt) continue;
       this.transition(d, "cancelled");
       if (d.kind === "checkpoint") d.status_reason = "new_prompt";
       delete d.lease_until;
@@ -913,6 +992,273 @@ export class Store {
       this.persist(d);
       this.emit("decision.updated", d);
     }
+  }
+
+  // ---- Message delivery ----
+
+  private wantsMessageDelivery(req: CreateDecisionRequest, now: number): boolean {
+    const owner = req.mod_owner;
+    if (owner === undefined || !MOD_OWNER_RE.test(owner)) return false;
+    if (req.kind !== "answer_question" || req.session.agent_id !== undefined || req.session.agent === "codex") return false;
+    if (this.opts.messageDelivery && !this.opts.messageDelivery()) return false;
+    const seen = this.ownerSeen.get(`${req.session.session_id}\0${owner}`);
+    if (seen === undefined || now - seen > MOD_FRESH_MS) return false;
+    // An irreversible question outside plan mode keeps the hook waiting (the tools of other kinds are not held back, so the agent could act before the answer)
+    if (req.explanation?.reversibility === "irreversible" && req.session.permission_mode !== "plan") return false;
+    return true;
+  }
+
+  private markSeen(sessionId: string, owner: string): void {
+    this.ownerSeen.set(`${sessionId}\0${owner}`, this.clock());
+  }
+
+  /** Some mod polled the session within `windowMs` (a mod actually seen since this server started) */
+  private liveOwner(sessionId: string, windowMs: number, now: number): boolean {
+    const prefix = `${sessionId}\0`;
+    for (const [k, at] of this.ownerSeen) if (k.startsWith(prefix) && now - at <= windowMs) return true;
+    return false;
+  }
+
+  /** Whether `owner`, named by a decision of the session, is alive: seen within MOD_CLAIM_STALE_MS, or (not seen since this server started) the server started that recently */
+  private ownerAlive(sessionId: string, owner: string | undefined, now: number): boolean {
+    if (!owner) return false;
+    const at = this.ownerSeen.get(`${sessionId}\0${owner}`) ?? this.startedAt;
+    return now - at <= MOD_CLAIM_STALE_MS;
+  }
+
+  private claimAlive(d: Decision, now: number): boolean {
+    return d.claim !== undefined && this.ownerAlive(d.session.session_id, d.claim.owner, now);
+  }
+
+  private asyncOf(sessionId: string): Decision[] {
+    const out: Decision[] = [];
+    for (const d of this.decisions.values()) if (d.delivery === "message" && d.session.session_id === sessionId) out.push(d);
+    return out.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  /** A message-delivery decision of the session waits for its answer or for the answer to be delivered, and a mod is there to deliver it */
+  hasOpenAsync(sessionId: string): boolean {
+    return this.asyncOf(sessionId).some((d) => LIVE.includes(d.status) && d.delivery_flag === undefined);
+  }
+
+  /** The decision whose id starts with `ref` among the session's message-delivery decisions (any status) */
+  private findByRef(sessionId: string, ref: string): Decision | undefined {
+    return this.asyncOf(sessionId).find((d) => deliveryRef(d.id) === ref);
+  }
+
+  private noteRefSeen(d: Decision, at: string): void {
+    if (d.ref_seen_at) return;
+    d.ref_seen_at = at;
+    this.persist(d);
+  }
+
+  /** The human typed in the terminal: an answer waiting for delivery is either delivered after their turn (a mod is there) or dropped */
+  private humanPrompted(sessionId: string, receivedAt: number, receivedIso: string): void {
+    const live = this.liveOwner(sessionId, MOD_FRESH_MS, this.clock());
+    for (const d of this.asyncOf(sessionId)) {
+      if (d.status !== "answer_submitted" || Date.parse(d.created_at) > receivedAt) continue;
+      if (live) {
+        d.human_prompt_at = receivedIso;
+        this.persist(d);
+        this.emit("decision.updated", d);
+      } else this.closeUndelivered(d, "typed_in_terminal");
+    }
+  }
+
+  /** The decision that holds the main agent's tools back right now (oldest first), or undefined */
+  waitingFor(sessionId: string): Waiting | undefined {
+    if (!this.liveOwner(sessionId, MOD_FRESH_MS, this.clock())) return undefined;
+    for (const d of this.asyncOf(sessionId)) {
+      const holds = d.status === "pending" || (d.status === "answer_submitted" && !d.claim && !d.human_prompt_at);
+      if (holds && (d.kind === "answer_question" || d.kind === "approve_plan")) return { decision_id: d.id, kind: d.kind };
+    }
+    return undefined;
+  }
+
+  /** The long-poll takes the decision back: the agent called the tool again and waits for the answer here */
+  private switchToClassic(d: Decision): void {
+    delete d.delivery;
+    delete d.mod_owner;
+    delete d.claim;
+    delete d.human_prompt_at;
+    delete d.close_reason;
+    delete d.delivery_flag;
+    this.opts.log?.("message_to_classic", { session: d.session.session_id, decision: d.id });
+  }
+
+  private transcriptSize(d: Decision): number {
+    try {
+      return statSync(d.session.transcript_path).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  private completeDelivery(d: Decision): void {
+    this.transition(d, "answered");
+    d.response = { ...d.response!, delivered_at: new Date(this.clock()).toISOString(), delivered_via: "message" };
+    delete d.claim;
+    delete d.close_reason;
+    this.persist(d);
+    this.emit("decision.updated", d);
+    this.notify(d.id);
+  }
+
+  private loseDelivery(d: Decision, reason: string): void {
+    this.transition(d, "answer_lost");
+    d.status_reason = reason;
+    delete d.claim;
+    delete d.close_reason;
+    this.persist(d);
+    this.emit("decision.updated", d);
+    this.notify(d.id);
+  }
+
+  /** The claim of a mod that is gone (or released without a drop) ends: the transcript says whether the message got in */
+  private settleDeadClaim(d: Decision): void {
+    const claim = d.claim;
+    if (!claim) return;
+    delete d.claim;
+    if (transcriptHasDelivery(d.session.transcript_path, claim.offset, deliveryRef(d.id))) this.completeDelivery(d);
+    else if (d.close_reason) this.loseDelivery(d, d.close_reason);
+    else {
+      this.persist(d);
+      this.emit("decision.updated", d);
+    }
+  }
+
+  /** Close a message-delivery decision whose answer has not been delivered (session_end, expired, typed_in_terminal) */
+  private closeUndelivered(d: Decision, reason: string): void {
+    if (d.status === "pending") {
+      this.transition(d, "cancelled");
+      d.status_reason = reason;
+      delete d.claim;
+      this.persist(d);
+      this.emit("decision.updated", d);
+      this.notify(d.id);
+    } else if (d.status === "answer_submitted") {
+      if (!d.claim) this.loseDelivery(d, reason);
+      else if (this.claimAlive(d, this.clock())) {
+        // The mod is submitting it right now: its ack or release closes the decision
+        d.close_reason = reason;
+        this.persist(d);
+        this.emit("decision.updated", d);
+      } else {
+        d.close_reason = reason;
+        this.settleDeadClaim(d);
+      }
+    }
+  }
+
+  private checkMessageDelivery(d: Decision, now: number): void {
+    if (now - Date.parse(d.created_at) >= MESSAGE_TTL_MS) {
+      this.closeUndelivered(d, "expired");
+      return;
+    }
+    if (d.status === "answer_submitted" && d.claim && !this.claimAlive(d, now)) this.settleDeadClaim(d);
+  }
+
+  /** SessionEnd + MOD_END_GRACE_MS: a session no mod polled since then is over (a `/clear` polls under a new id, a `--resume` keeps polling) */
+  private checkEndMarks(now: number): void {
+    for (const [sid, endAt] of [...this.endMarks]) {
+      if (now < endAt + MOD_END_GRACE_MS) continue;
+      this.endMarks.delete(sid);
+      const prefix = `${sid}\0`;
+      let kept = false;
+      // Still polling now = a mod lives on in that session (`--resume` from another process). A single poll just after the event is the
+      // dying mod's last tick: it does not keep the session open (a live mod polls at least every MOD_BACKOFF_MAX_MS)
+      for (const [k, at] of this.ownerSeen) if (k.startsWith(prefix) && at > endAt && now - at <= MOD_BACKOFF_MAX_MS) kept = true;
+      if (kept) continue;
+      for (const d of this.asyncOf(sid)) if (LIVE.includes(d.status)) this.closeUndelivered(d, "session_end");
+    }
+  }
+
+  /** `no_agent`: no mod has polled the session for MOD_GONE_MS (never within that time of the server's start); cleared when one comes back */
+  private checkNoAgent(now: number): void {
+    for (const d of this.decisions.values()) {
+      if (d.delivery !== "message" || !LIVE.includes(d.status)) continue;
+      const gone = now - this.startedAt > MOD_GONE_MS && !this.liveOwner(d.session.session_id, MOD_GONE_MS, now);
+      if (gone === (d.delivery_flag === "no_agent")) continue;
+      if (gone) d.delivery_flag = "no_agent";
+      else delete d.delivery_flag;
+      this.persist(d);
+      this.emit("decision.updated", d);
+    }
+  }
+
+  private inboxItem(sessionId: string, itemId: string): Decision | undefined {
+    const d = this.decisions.get(itemId);
+    return d && d.session.session_id === sessionId && d.kind !== "checkpoint" ? d : undefined;
+  }
+
+  /** The mod asks for work. `held`: it is delivering one already. `item`: one answer, claimed for this owner. undefined: nothing (204) */
+  inboxPoll(sessionId: string, owner: string, idle: boolean): PollResponse | undefined {
+    const now = this.clock();
+    this.markSeen(sessionId, owner);
+    const open = this.asyncOf(sessionId).filter((d) => d.status === "answer_submitted");
+    const held = open.find((d) => d.claim?.owner === owner);
+    if (held) return { held: { item_id: held.id } };
+    if (!idle) return undefined;
+    // Its own items first-come by age; the items of an owner that is gone (a reload) are taken over
+    const next = open.find(
+      (d) => !d.claim && !d.close_reason && (d.delivery_attempts ?? 0) < DELIVERY_MAX_ATTEMPTS && (d.mod_owner === owner || !this.ownerAlive(sessionId, d.mod_owner, now)),
+    );
+    if (!next) return undefined;
+    next.mod_owner = owner;
+    next.claim = { owner, at: new Date(now).toISOString(), offset: this.transcriptSize(next) };
+    this.persist(next);
+    this.emit("decision.updated", next);
+    return { item: { item_id: next.id, text: deliveryText(next) } };
+  }
+
+  /** The mod's `$.prompt.submit` succeeded: the answer is delivered (idempotent) */
+  inboxAck(sessionId: string, owner: string, itemId: string): InboxResult {
+    this.markSeen(sessionId, owner);
+    const d = this.inboxItem(sessionId, itemId);
+    if (!d) return { http: 404 };
+    if (d.delivery !== "message") return { http: 409, status: d.status };
+    if (d.status === "answered") return { http: 200, status: "answered" };
+    if (d.status !== "answer_submitted") return { http: 409, status: d.status };
+    if (d.claim && d.claim.owner !== owner && this.claimAlive(d, this.clock())) return { http: 409, status: d.status };
+    this.completeDelivery(d);
+    return { http: 200, status: d.status };
+  }
+
+  /** The mod could not submit: `drop` is the reason `$.prompt.submit` gave (absent when it threw) */
+  inboxRelease(sessionId: string, owner: string, itemId: string, drop?: string): InboxResult {
+    this.markSeen(sessionId, owner);
+    const d = this.inboxItem(sessionId, itemId);
+    if (!d) return { http: 404 };
+    if (d.delivery !== "message") return { http: 409, status: d.status };
+    // A closed decision, or one nobody holds (this release was sent twice): nothing to change
+    if (d.status !== "answer_submitted" || !d.claim) return { http: 200, status: d.status };
+    if (d.claim.owner !== owner && this.claimAlive(d, this.clock())) return { http: 409, status: d.status };
+    if (drop !== undefined) {
+      delete d.claim;
+      d.delivery_attempts = (d.delivery_attempts ?? 0) + 1;
+      d.delivery_note = drop.slice(0, 500);
+      if (d.delivery_attempts >= DELIVERY_MAX_ATTEMPTS) this.loseDelivery(d, "undeliverable");
+      else if (d.close_reason) this.loseDelivery(d, d.close_reason);
+      else {
+        this.persist(d);
+        this.emit("decision.updated", d);
+      }
+    } else {
+      this.settleDeadClaim(d);
+      // Not in the transcript either (submit threw, or the mod lost its state): that is a failed attempt too, so a submit that always throws
+      // cannot claim and release forever
+      const after = d.status as DecisionStatus;
+      if (after === "answer_submitted" && !d.claim) {
+        d.delivery_attempts = (d.delivery_attempts ?? 0) + 1;
+        d.delivery_note ??= "the prompt could not be submitted";
+        if (d.delivery_attempts >= DELIVERY_MAX_ATTEMPTS) this.loseDelivery(d, "undeliverable");
+        else {
+          this.persist(d);
+          this.emit("decision.updated", d);
+        }
+      }
+    }
+    return { http: 200, status: d.status };
   }
 
   // ---- "Approve and auto" ----

@@ -35,7 +35,8 @@ export class PlanReady {
     if (!session || session.state === "working" || session.state === "ended") return false;
     if (this.store.isAskedInTerminal(sessionId)) return false; // the agent ended its turn with a question: the plan is not finished
     if (this.store.isWaitingOnSubagents(sessionId)) return false;
-    return !this.store.list("pending").some((d) => d.session.session_id === sessionId);
+    // An answer that waits for the mod to deliver it is as pending as the question: the plan must not pop up over it
+    return !this.store.list().some((d) => d.session.session_id === sessionId && (d.status === "pending" || (d.status === "answer_submitted" && d.delivery === "message" && d.delivery_flag === undefined)));
   }
 
   /** The summary with its session and `ready` filled in; remembered as what the clients were told */

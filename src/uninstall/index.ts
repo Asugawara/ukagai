@@ -5,6 +5,7 @@ import { unifiedDiff } from "../settings/diff.js";
 import { readSettings, removeHooks, serialize, writeSettings } from "../settings/merge.js";
 import { apply as applyCodex, plan } from "../install/codex.js";
 import { hasSkill, removeSkill } from "../skill/files.js";
+import { hasMod, removeMod } from "../mod/files.js";
 import { hookInvocation, parseTarget, type Target } from "../settings/target.js";
 import { registeredClaude, registeredCodex } from "../settings/agents.js";
 import { Client } from "../hook/client.js";
@@ -74,6 +75,7 @@ async function uninstallClaude(t: Target, emit: (s: string) => void): Promise<vo
     const diff = unifiedDiff(serialize(before), serialize(after), t.settingsFile, `${t.settingsFile} (after)`);
     emit(diff === "" ? "settings: no changes\n" : diff);
     if (skillExists) emit(`skill: remove ${t.skillDir}/\n`);
+    if (t.handleSkill && hasMod(t.modDir)) emit(`mod: remove ${t.modDir}/\n`);
     return;
   }
   if (fileExists && changed) {
@@ -85,6 +87,7 @@ async function uninstallClaude(t: Target, emit: (s: string) => void): Promise<vo
     const removed = removeSkill(t.skillDir);
     if (removed.length > 0) emit(`skill:    removed ${removed.join(", ")} from ${t.skillDir}/\n`);
   }
+  if (t.handleSkill && removeMod(t.modDir)) emit(`mod:      removed ${t.modDir}/\n`);
 }
 
 /** Remove the ukagai hooks and their trust from Codex CLI's hooks.json / config.toml */

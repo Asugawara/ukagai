@@ -47,6 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 - **プラン承認**: 承認（auto モードで続行）、指示（「先にこれをして」）、却下。[ガイド](docs/guide.md#plan-approval)
 - **進捗チェックポイント**: エージェントのセッション要約に、指示または停止で返答できます。[ガイド](docs/guide.md#progress-checkpoints)
 - **TUI**: 同じ画面をターミナルで。`ukagai tui`。[ガイド](docs/guide.md#the-tui)
+- **回答をメッセージで届ける**: 対話の Claude Code ターミナルでは、エージェントは待たずにターンを終え、手が空いたところで回答がメッセージとして届きます（既定でオン、オフにする方法は 3 つ）。[ガイド](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **Codex CLI**: hooks とプラン承認用のブリッジ。[ガイド](docs/guide.md#codex-cli)
 - **設定ページ**: 言語、テーマ、通知、プランの自動表示、エージェントが従うスキルの本文。[ガイド](docs/guide.md#settings)
 - **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
@@ -61,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 ## インストールのオプション
 
-`install.sh` はバイナリを入れたあと `ukagai install` を実行し、見つかったエージェントすべてに hooks とスキルを登録します（先に設定のバックアップを取ります）。`wget` でも実行できます。
+`install.sh` はバイナリを入れたあと `ukagai install` を実行し、見つかったエージェントすべてに hooks とスキルを登録します（先に設定のバックアップを取ります）。Claude Code には、ukagai mod も専用の小さなプラグインとして `~/.claude/skills/ukagai-mod/` に置きます（ukagai プラグインが有効なときは、プラグインが mod を持ってくるので置きません）。`wget` でも実行できます。
 
 次の条件で、そのエージェントが見つかったとみなします。
 
@@ -91,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 プラグインだけを使っている場合、シェルで `ukagai` は打てません。Claude Code ではエージェントの Bash ツール経由で `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` を実行してください。`install.sh` も実行済みの場合は、`ukagai install` が自身の登録を外し、hooks が二重に動かないようにします。
 
-**更新**: インストールのコマンドをもう一度実行します。登録済みのエージェントだけを登録し直し、オプション（`--timeout`、`--observe`、`--no-autostart`、`--server`、`--data-dir`）はそのまま引き継がれます。オプションを既定に戻すには、`ukagai uninstall` のあとに `ukagai install` を実行してください。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`）で Claude Code と Codex CLI の両方から hooks と skill を外します（片方だけなら `--claude` または `--codex`）。hooks が残らなくなればサーバーも止まります（片方が失敗しても、もう片方は外れます。終了コードは 1 で、サーバーは止まらずに残ります）。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
+**更新**: インストールのコマンドをもう一度実行します。登録済みのエージェントだけを登録し直し、オプション（`--timeout`、`--observe`、`--no-autostart`、`--server`、`--data-dir`）はそのまま引き継がれます。オプションを既定に戻すには、`ukagai uninstall` のあとに `ukagai install` を実行してください。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`）で Claude Code と Codex CLI の両方から hooks、skill、ukagai mod を外します（片方だけなら `--claude` または `--codex`）。hooks が残らなくなればサーバーも止まります（片方が失敗しても、もう片方は外れます。終了コードは 1 で、サーバーは止まらずに残ります）。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
 
 うまく動かないときは `ukagai doctor` を実行してください（[トラブルシューティング](docs/guide.md#troubleshooting)）。
 

@@ -3,6 +3,7 @@ import {
   DENY_LINK_WINDOW_MS,
   decisionFingerprint,
   ExitPlanModeInput,
+  MOD_OWNER_RE,
   PLAN_BLOCK_SUFFIX,
   stripExplainBlocks,
   type CreateDecisionRequest,
@@ -13,6 +14,7 @@ import {
 } from "../contract.js";
 import type { Client } from "./client.js";
 import {
+  asyncDeny,
   checkRewrite,
   denyReason,
   handoffReason,
@@ -291,7 +293,7 @@ async function explainPlan(c: Ctx, plan: string): Promise<Explained> {
 }
 
 /** First sight of a question: validate its explanation (deny when it is missing or unfit) and register the decision */
-async function registerFresh(c: Ctx, parsed: Parsed): Promise<Pick<Decision, "id"> | { out: Out | null }> {
+async function registerFresh(c: Ctx, parsed: Parsed): Promise<Pick<Decision, "id" | "delivery"> | { out: Out | null }> {
   const { input, client, kind, base, lg, failMsg } = c;
   const r = "question" in parsed ? await explainQuestion(c, parsed.question) : await explainPlan(c, parsed.plan);
   if ("out" in r) return r;
@@ -343,6 +345,12 @@ export async function handleDecision(
   const regInput: Record<string, unknown> =
     kind === "approve_plan" && typeof toolInput["plan"] === "string" ? { ...toolInput, plan: stripExplainBlocks(toolInput["plan"]) } : toolInput;
   const base = { tool_use_id: input.tool_use_id, kind, session, request: regInput } as CreateDecisionRequest;
+  // The ukagai mod of this Claude Code process (it sets UKAGAI_MOD_OWNER): asks the server to deliver the answer as a message instead of keeping this hook waiting.
+  // Only the main agent of Claude Code asks; the server still decides (a live mod, the setting, the kind of question)
+  const modOwner = process.env["UKAGAI_MOD_OWNER"];
+  if (modOwner !== undefined && MOD_OWNER_RE.test(modOwner) && kind === "answer_question" && opts.agent === "claude" && input.agent !== "codex" && !input.agent_id && !opts.observe) {
+    base.mod_owner = modOwner;
+  }
 
   // Input that is not a well-formed question / plan is never ours to handle
   let parsed: Parsed;
@@ -359,12 +367,22 @@ export async function handleDecision(
   // A question that is still open in ukagai (the previous leg handed off, or the hook died) is re-attached, never registered again
   const open = await client.findOpen(input.session_id, input.agent_id, decisionFingerprint(kind, regInput), input.tool_use_id);
   let created: Pick<Decision, "id">;
+  if (open && "delivering" in open) {
+    // A mod is submitting the answer as a message right now: answering here as well would deliver it twice
+    lg("delivering", { decision_id: open.delivering.decision_id });
+    return denyOutput(asyncDeny());
+  }
   if (open) {
     created = { id: open.id };
     lg("reattach", { decision_id: open.id, handoffs: open.handoffs ?? 0 });
   } else {
     const fresh = await registerFresh({ input, opts, client, kind, base, lg, failMsg }, parsed);
     if ("out" in fresh) return fresh.out;
+    if (fresh.delivery === "message") {
+      // Registered for message delivery: nothing to wait for. The agent ends its turn; the answer comes as a message
+      lg("async_registered", { decision_id: fresh.id });
+      return denyOutput(asyncDeny());
+    }
     created = fresh;
   }
 

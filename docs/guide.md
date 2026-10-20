@@ -74,6 +74,7 @@ Typing goes to the terminal whatever is in the agent's composer: an unsent draft
 Open <http://127.0.0.1:4818/settings> (the header's `Settings` link, or the `,` key in the GUI). A sidebar on the left (a scrolling row on a narrow window) switches between **General**, **Notifications**, **Plans**, **Progress checkpoints** and, under **Agent**, **Skill**; the address keeps the pane (`/settings#skill`), so a reload stays where you were. Every control saves the moment you change it, to `<data-dir>/config.json` (default `~/.ukagai/config.json`, next to the initial `lang` that `install` writes), and takes effect without restarting the server. `Esc` goes back.
 
 - **General**: language (`en` / `ja`; the TUI follows it unless started with `--lang`), theme (system / light / dark), and whether the bottom key-hint line is shown.
+- **Claude Code**: answer questions as messages (on by default). A question is registered and the hook ends the agent's turn at once; the ukagai mod (installed with the plugin) types your answer into the session as a message that starts with `[ukagai]`. Off: the hook waits for the answer as before. A card says when its answer is queued, delivered, held up (`Delivery paused`) or cannot reach the agent because the mod is not responding.
 - **Notifications**: a beep (while the tab is not focused) and / or a browser notification (while it is hidden) on a new decision (turning the browser one on asks for permission; if the browser denies it, the toggle stays off), and the `(N)` count in the tab title.
 - **Plans**: show new plan files automatically (off: they neither pop up nor count in Pending; they stay in the list under `b`; with it on, a plan file pops up only when it is **ready**: its session is known, that agent has stopped (and did not end on a question put to you in the terminal; background subagents still running, or the wake-up turn they trigger not yet started, count as not stopped), nothing else is waiting on you, and, when ukagai handed its plan rules to that session, the file has `Steps` and `Verification`; size does not matter; a file still being written is listed as Writing / 作成中); instruction presets (one per line, shown as one-click chips on plan cards).
 - **Progress checkpoints (recap)**: create them at all (off: no recap from Claude Code or Codex becomes a card; cards already waiting stay), how long Codex has to be quiet after a turn (30 to 3600 s), and whether replies are typed into the agent's herdr pane (off: they wait for the agent's next tool call).
@@ -137,6 +138,18 @@ Details: `docs/spec/codex-bridge.md`.
 When the agent calls `AskUserQuestion` or `ExitPlanMode`, the `PreToolUse` hook first denies the call once and asks the agent to write an explanation file (the `ukagai-explain` skill teaches the format). On the retry, the hook registers the decision with the server, waits for your answer in the GUI / TUI, and injects it back as the tool's result.
 
 The hook waits in one-hour legs: at the end of a leg it asks the agent to call the tool again and re-attaches to the same open question, so the question never falls back to the terminal while the server is up. If the server is unreachable, the hook prints nothing and Claude Code falls back to its normal prompt (a failed wait is retried for up to 120 seconds first).
+
+### Answers as messages (the ukagai mod)
+
+In an interactive Claude Code terminal (2.1.304 or later) ukagai can stop making the agent wait. The hook registers the decision and tells the agent to end its turn; your answer then arrives as a message that starts with `[ukagai]`, sent by the ukagai mod once the agent is idle. The card shows "Will reach the agent as a message when it is idle" and then "Delivered as a message". It is on by default. Everywhere else (`claude -p`, the Agent SDK, Desktop, the VS Code chat, subagents, Codex, a managed policy that blocks mods) the hook waits as described above.
+
+The mod is a small plugin that carries no hooks. With the marketplace plugin it comes with `ukagai@ukagai`; with `install.sh` / `ukagai install` it is placed at `~/.claude/skills/ukagai-mod/` (Claude Code loads it every session as `ukagai-mod@skills-dir`; `ukagai uninstall` removes it and `ukagai doctor` reports it). Three ways to turn it off:
+
+- the toggle on the Settings page (takes effect for the next decision, no restart);
+- `UKAGAI_MOD=0` in the environment of `claude` (the mod does nothing in that process);
+- `claude plugin disable ukagai-mod@skills-dir`.
+
+`UKAGAI_DISABLE=1` stops both the hook and the mod.
 
 Every abnormal exit (and each retry) is recorded as one JSON line in `<data-dir>/hook.log` (ids, status and error text only, never the question or answer; rotated at 1 MB; the last 3 lines are shown by `doctor`).
 

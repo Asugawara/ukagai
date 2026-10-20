@@ -178,7 +178,10 @@ function render() {
         before: browserToggle,
         note: () => el("p", { class: "set-help", id: "perm-state", text: permText() }),
       }),
-      toggle(t("set_n_badge"), "", () => s.notify.title_badge, (n, v) => { n.notify.title_badge = v; })));
+      toggle(t("set_n_badge"), "", () => s.notify.title_badge, (n, v) => { n.notify.title_badge = v; })),
+    // Last in the form so that the ids of the toggles above (`opt-N`, in order) stay put; it is shown on the General pane, below Display
+    fieldset("general", t("set_g_claude"),
+      toggle(t("set_claude_message"), t("set_claude_message_help"), () => s.claude.message_delivery, (n, v) => { n.claude.message_delivery = v; })));
   showPane();
   if (focused) $(focused)?.focus?.();
 }
