@@ -111,7 +111,7 @@ test("a decision is registered for message delivery only when its owner polled t
   assert.equal(h.store.create(h.req("t2"), {}).decision.delivery, undefined, "seen too long ago");
 });
 
-test("not for another session's owner, a missing or malformed owner, a subagent, Codex, the toggle off, a plan, or an irreversible question outside plan mode", () => {
+test("not for another session's owner, a missing or malformed owner, a subagent, Codex, the toggle off, an empty plan, or an irreversible question outside plan mode", () => {
   const h = setup();
   h.poll(A, false, "other-session");
   assert.equal(h.store.create(h.req("t1"), {}).decision.delivery, undefined, "the owner polled another session");
@@ -121,7 +121,7 @@ test("not for another session's owner, a missing or malformed owner, a subagent,
   assert.equal(h.store.create({ ...h.req("t3"), mod_owner: "NOT-HEX" }, {}).decision.delivery, undefined);
   assert.equal(h.store.create({ ...h.req("t4"), session: { ...base.session, agent_id: "sub-1" } }, {}).decision.delivery, undefined);
   assert.equal(h.store.create({ ...h.req("t5"), session: { ...base.session, agent: "codex" } }, {}).decision.delivery, undefined);
-  assert.equal(h.store.create({ ...h.req("t6"), kind: "approve_plan", request: { plan: "# p", planFilePath: "/p.md" } }, {}).decision.delivery, undefined, "plans stay with the hook");
+  assert.equal(h.store.create({ ...h.req("t6"), kind: "approve_plan", request: { plan: "  \n", planFilePath: "/p.md" } }, {}).decision.delivery, undefined, "an empty plan stays with the hook");
   const exp = (reversibility: "irreversible" | "reversible") => ({ path: "", markdown: "x", has: { mermaid: false, table: false, diff: false }, match: "question" as const, attached_via: "first_call" as const, reversibility });
   assert.equal(h.store.create({ ...h.req("t7"), explanation: exp("irreversible") }, {}).decision.delivery, undefined);
   assert.equal(h.store.create({ ...h.req("t8"), explanation: exp("irreversible"), session: { ...base.session, permission_mode: "plan" } }, {}).decision.delivery, "message");

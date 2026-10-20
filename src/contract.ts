@@ -38,6 +38,8 @@ export const MOD_GONE_MS = 120_000;
 export const MESSAGE_TTL_MS = 12 * 3600 * 1000;
 /** Drops of a delivery before it is given up */
 export const DELIVERY_MAX_ATTEMPTS = 5;
+/** An approval of a plan registered for message delivery lets the same plan through once, for this long after the human decided */
+export const PLAN_GRANT_TTL_MS = 12 * 3600 * 1000;
 /** Characters of the decision id in a delivery text's ref */
 export const DELIVERY_REF_LEN = 8;
 /** The mod's identifier of one Claude Code process (`UKAGAI_MOD_OWNER`) */
@@ -173,6 +175,25 @@ export const PreToolUseDeny = z.object({
 });
 export type PreToolUseDeny = z.infer<typeof PreToolUseDeny>;
 
+/** PermissionRequest × ExitPlanMode: a plan the human approved with "and auto" in a message-delivery decision. Without `updatedInput` Claude Code keeps its own dialog */
+export const PermissionRequestAllowExitPlan = z.object({
+  hookSpecificOutput: z.object({
+    hookEventName: z.literal("PermissionRequest"),
+    decision: z.object({
+      behavior: z.literal("allow"),
+      updatedInput: z.record(z.string(), z.unknown()),
+      updatedPermissions: z.tuple([
+        z.object({
+          type: z.literal("setMode"),
+          mode: z.literal("auto"),
+          destination: z.literal("session"),
+        }),
+      ]),
+    }),
+  }),
+});
+export type PermissionRequestAllowExitPlan = z.infer<typeof PermissionRequestAllowExitPlan>;
+
 export const PermissionRequestAllowSetMode = z.object({
   hookSpecificOutput: z.object({
     hookEventName: z.literal("PermissionRequest"),
@@ -276,8 +297,11 @@ export const Explanation = z.object({
 });
 export type Explanation = z.infer<typeof Explanation>;
 
-/** How an answered decision or checkpoint reached the agent: the PreToolUse hook, typed into its terminal, the Codex bridge, nothing to do (stop of an idle agent), or a message the ukagai mod submitted */
-export const DeliveredVia = z.enum(["hook", "terminal", "bridge", "noop", "message"]);
+/**
+ * How an answered decision or checkpoint reached the agent: the PreToolUse hook, typed into its terminal, the Codex bridge, nothing to do
+ * (stop of an idle agent), a message the ukagai mod submitted, or (a plan approved for message delivery) the re-called ExitPlanMode used its grant
+ */
+export const DeliveredVia = z.enum(["hook", "terminal", "bridge", "noop", "message", "grant"]);
 export type DeliveredVia = z.infer<typeof DeliveredVia>;
 
 export const DecisionResponse = z.object({
@@ -372,10 +396,26 @@ export const Decision = z.object({
   delivery_attempts: z.number().int().nonnegative().optional(),
   /** message delivery: the reason of the last drop */
   delivery_note: z.string().optional(),
-  /** message delivery: `no_agent` = no mod has polled the session for MOD_GONE_MS */
-  delivery_flag: z.enum(["no_agent"]).optional(),
+  /** message delivery: `no_agent` = no mod has polled the session for MOD_GONE_MS; `auto_not_applied` = the plan was approved with auto mode, but ExitPlanMode went through without ukagai switching the mode */
+  delivery_flag: z.enum(["no_agent", "auto_not_applied"]).optional(),
+  /** message delivery, approve_plan: the approval's one-time pass for the same plan (the grant) was used or revoked */
+  grant_used_at: z.string().optional(),
 });
 export type Decision = z.infer<typeof Decision>;
+
+/** Body of a 200 from GET /api/sessions/:id/plan-grant: the human approved this plan (`mode: "auto"` = and asked for auto mode) and it was not let through yet */
+export const PlanGrant = z.object({ decision_id: z.string(), mode: z.literal("auto").optional() });
+export type PlanGrant = z.infer<typeof PlanGrant>;
+export type PlanGrantResponse = { grant: PlanGrant };
+
+/** POST /api/sessions/:id/plan-grant/consume */
+export const ConsumePlanGrantRequest = z.object({ fingerprint: z.string().regex(/^[0-9a-f]{64}$/) });
+export type ConsumePlanGrantRequest = z.infer<typeof ConsumePlanGrantRequest>;
+export const ConsumePlanGrantResponse = z.union([
+  z.object({ consumed: z.literal(true), mode: z.literal("auto").optional() }),
+  z.object({ consumed: z.literal(false) }),
+]);
+export type ConsumePlanGrantResponse = z.infer<typeof ConsumePlanGrantResponse>;
 
 /** Body of a 200 from GET /api/sessions/:id/open: the open decision to re-attach to, or one a live mod is delivering right now */
 export type OpenResponse = { decision: Decision } | { delivering: { decision_id: string } };

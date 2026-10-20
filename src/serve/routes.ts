@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTINGS,
   CheckpointRequest,
   AckRequest,
+  ConsumePlanGrantRequest,
   PlanReadRequest,
   PlanInstructRequest,
   PollRequest,
@@ -560,6 +561,19 @@ export function createApp(deps: AppDeps): Hono {
   app.post("/api/sessions/:id/inbox/release", auth("bearer"), jsonOnly, async (c) => {
     const body = await parse(c, ReleaseRequest);
     return inboxReply(c, store.inboxRelease(c.req.param("id"), body.owner, body.item_id, body.drop));
+  });
+
+  // A plan the human approved while it was registered for message delivery: the re-called ExitPlanMode with the same plan is let through once
+  // (PreToolUse for a plain approval, PermissionRequest for "approve and auto"). Both need the session and the plan's fingerprint to match
+  app.get("/api/sessions/:id/plan-grant", auth("bearer"), (c) => {
+    const fp = ConsumePlanGrantRequest.safeParse({ fingerprint: c.req.query("fingerprint") });
+    if (!fp.success) return c.json({ error: "fingerprint is required" }, 400);
+    const grant = store.planGrant(c.req.param("id"), fp.data.fingerprint);
+    return grant ? c.json({ grant }) : c.json({ error: "no grant" }, 404);
+  });
+  app.post("/api/sessions/:id/plan-grant/consume", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, ConsumePlanGrantRequest);
+    return c.json(store.consumePlanGrant(c.req.param("id"), body.fingerprint));
   });
 
   app.get("/api/sessions/:id/pending-mode-switch", auth("bearer"), (c) => {

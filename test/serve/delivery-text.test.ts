@@ -49,3 +49,37 @@ test("free text with newlines and quotes cannot break out of its line; 'None of 
   assert.equal(lines[2], '- "Another?": "None of these — add Postgres"');
   assert.equal(lines[3], '- "Third?": "Cannot answer — Undefined terms: lease"');
 });
+
+// ---- plans ----
+
+const plan = (response: Record<string, unknown>) => ({ id: ID, kind: "approve_plan" as const, response: { via: "gui" as const, decided_at: "2026-01-01T00:00:00.000Z", ...response } });
+
+test("plan approved (with or without auto): call ExitPlanMode once more with the same plan", () => {
+  const text = "[ukagai] (ref a1b2c3d4) The human approved your plan in the ukagai GUI. Call ExitPlanMode once more with the same plan, without editing the plan file first; it will be allowed.";
+  assert.equal(deliveryText(plan({ approve: true })), text);
+  assert.equal(deliveryText(plan({ approve: true, set_mode_auto: true })), text);
+});
+
+test("plan rejected: with the reason, or the hook's no-reason text after the ref", () => {
+  assert.equal(
+    deliveryText(plan({ approve: false, reason: "too broad" })),
+    "[ukagai] (ref a1b2c3d4) The human rejected your plan in the ukagai GUI: too broad\nYou are still in plan mode: revise the plan file, then call ExitPlanMode again.",
+  );
+  assert.equal(
+    deliveryText(plan({ approve: false })),
+    "[ukagai] (ref a1b2c3d4) The human rejected the plan without giving a reason. Revise the plan (look for what a reader would object to) or ask one question about what to change, then call ExitPlanMode again.",
+  );
+  assert.equal(deliveryText(plan({ approve: false, reason: "  " })), deliveryText(plan({ approve: false })), "a blank reason is no reason");
+});
+
+test("plan instructed: the hook's instruction text after the ref; every plan text carries one ref only", () => {
+  const text = deliveryText(plan({ instruct: true, text: "check the tests first" }));
+  assert.equal(
+    text,
+    "[ukagai] (ref a1b2c3d4) The human has not approved the plan yet and asks you to do this first: check the tests first\nYou are still in plan mode: do it (research, subagents and reviews are fine; do not edit project files), update the plan file, then call ExitPlanMode again.",
+  );
+  for (const t of [text, deliveryText(plan({ approve: true })), deliveryText(plan({ approve: false }))]) {
+    assert.equal(parseDeliveryRef(t), "a1b2c3d4");
+    assert.equal(t.match(/\[ukagai\]/g)?.length, 1);
+  }
+});
