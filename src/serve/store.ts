@@ -384,9 +384,10 @@ export class Store {
       this.emit("decision.created", decision);
       this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
     }
-    // A new plan, whether it waits for message delivery or for the hook, replaces the session's earlier message-delivery ones: they close,
-    // and an approval of one no longer lets it through (the human decides again, as for the pending mode switch above)
-    if (!denied && req.kind === "approve_plan") this.supersedePlans(decision);
+    // A new plan of the main agent, whether it waits for message delivery or for the hook, replaces the session's earlier message-delivery
+    // ones: they close, and an approval of one no longer lets it through (the human decides again). A subagent's plan is not the main
+    // agent's next plan: it leaves them (the pending mode switch above is cleared by any plan, as before)
+    if (!denied && req.kind === "approve_plan" && session.agent_id === undefined) this.supersedePlans(decision);
     return { decision, created: true };
   }
 
@@ -1594,6 +1595,8 @@ export class Store {
   private revokeGrant(d: Decision): void {
     if (!this.grantOf(d, this.clock())) return;
     d.grant_used_at = new Date(this.clock()).toISOString();
+    // A mod is already submitting the approval ("it will be allowed"): its ack or the transcript check closes it as lost, not answered
+    if (d.status === "answer_submitted" && d.claim) d.close_reason ??= "superseded";
     this.persist(d);
     this.emit("decision.updated", d);
   }

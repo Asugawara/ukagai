@@ -1,10 +1,10 @@
 // A plan approved while it waited for message delivery: its grant lets the same plan's re-called ExitPlanMode through once
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MOD_END_GRACE_MS, MOD_FRESH_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
+import { MOD_CLAIM_STALE_MS, MOD_END_GRACE_MS, MOD_FRESH_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 import { Store } from "../../src/serve/store.js";
 
@@ -488,6 +488,65 @@ test("an approval whose grant was written off while an instruction waited behind
   const r = h.poll(A, true);
   assert.ok(r && "item" in r && r.item.item_id !== d.id, "not the approval: the instruction");
   assert.match(r.item.text, /About the plan you are writing: note$/);
+  assert.equal(get(h, d).status, "answer_lost");
+  assert.equal(get(h, d).status_reason, "superseded");
+});
+
+// ---- re-audit L1 / L2 ----
+
+test("L1: a subagent's plan does not supersede the main agent's plans: a pending one stays, an approved one keeps its grant and is still delivered", () => {
+  const sub = (h: H, n: number) =>
+    h.store.create(h.req(`toolu_sub_${n}`, P2, { mod_owner: undefined, session: { session_id: SID, cwd: "/w/proj", transcript_path: join(h.dir, "t.jsonl"), permission_mode: "plan", agent_id: "sub-1", agent_type: "Plan" } }), {}).decision;
+  const h = setup();
+  const pending = h.plan("toolu_main", P1);
+  assert.equal(sub(h, 1).delivery, undefined);
+  assert.equal(get(h, pending).status, "pending");
+  assert.equal(get(h, pending).status_reason, undefined);
+  assert.deepEqual(h.store.waitingFor(SID), { decision_id: pending.id, kind: "approve_plan" }, "the main agent still waits for it");
+
+  const a = setup();
+  const approved = a.plan("toolu_main", P1);
+  a.approve(approved, true);
+  sub(a, 2);
+  assert.equal(get(a, approved).status, "answer_submitted");
+  assert.deepEqual(a.store.planGrant(SID, FP1), { decision_id: approved.id, mode: "auto" });
+  const item = a.poll(A, true);
+  assert.ok(item && "item" in item && item.item.item_id === approved.id, "the approval is still delivered");
+
+  const d = setup();
+  const delivered = d.plan("toolu_main", P1);
+  d.approve(delivered);
+  d.poll(A, true);
+  d.store.inboxAck(SID, A, delivered.id);
+  sub(d, 3);
+  assert.ok(d.store.planGrant(SID, FP1), "a delivered approval keeps its grant too");
+});
+
+test("L2: an approval the mod is already submitting when an event writes its grant off closes as lost: ack 409 answer_lost, and the re-call registers anew", () => {
+  const h = setup();
+  const d = h.plan("toolu_1", P1);
+  h.advance(1000);
+  h.approve(d, true);
+  const item = h.poll(A, true);
+  assert.ok(item && "item" in item);
+  h.event("UserPromptSubmit", { permission_mode: "default" });
+  assert.equal(h.store.planGrant(SID, FP1), undefined);
+  assert.equal(get(h, d).close_reason, "superseded");
+  assert.deepEqual(h.store.inboxAck(SID, A, d.id), { http: 409, status: "answer_lost" });
+  assert.equal(get(h, d).status_reason, "superseded");
+  assert.equal(h.store.openFor(SID, undefined, FP1, "toolu_again"), undefined);
+});
+
+test("L2: the same when the claiming mod went away and the transcript shows its submit", () => {
+  const h = setup();
+  const d = h.plan("toolu_1", P1);
+  h.advance(1000);
+  h.approve(d);
+  h.poll(A, true);
+  h.event("Stop", { permission_mode: "default" });
+  appendFileSync(join(h.dir, "t.jsonl"), JSON.stringify({ type: "user", origin: { kind: "plugin" }, message: { content: [{ type: "text", text: `[ukagai] (ref ${d.id.slice(0, 8)}) The human approved your plan` }] } }) + "\n");
+  h.advance(MOD_CLAIM_STALE_MS + 1000);
+  h.store.checkLeases();
   assert.equal(get(h, d).status, "answer_lost");
   assert.equal(get(h, d).status_reason, "superseded");
 });
