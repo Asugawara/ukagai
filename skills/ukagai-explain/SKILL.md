@@ -33,6 +33,7 @@ scope: file | repo | machine | external
 ## Options
 | Option | What happens if chosen | Risks and how to undo |
 |---|---|---|
+No diagram: <why> (when one is required and none fits)
 ## Recommendation
 ## Assumptions
 ## What I checked
@@ -46,8 +47,8 @@ Optional H2s: Counterargument, Affected, Terms, Diagram, Related diff; no others
 | Code | Limit |
 |---|---|
 | `front_matter` `question` `recommended` `table` | `ukagai: 1`; `question` equals the call's; `recommended` is a label; table: columns named like happens / risk, one row per option, no empty cell |
-| `recommend_long` `recommend_name` `recommend_cond` | 5 sentences / 400 characters (aim for 3 sentences); first sentence names the option (never "the first one"); needs "if …, B" / when / unless |
-| `cell_long` `undo` | 160 characters per cell (aim for 2 sentences); each risk cell says how to undo, or that it cannot be |
+| `recommend_long` `recommend_name` `recommend_cond` | 5 sentences / 400 characters, callouts not counted (aim for 3 sentences); first sentence names the option (never "the first one"); needs "if …, B" / when / unless |
+| `cell_long` `undo` | 160 characters per cell (aim for 2 sentences); each risk cell says how to undo (`Undo: <how>`), or that it cannot be |
 | `why_long` `assumptions_long` `against_weak` | 600 characters; at most 3; Counterargument must not repeat the Recommendation |
 | `checked` `footnote` `coined_term` | What I checked unless `reversible` + `file`; each `[^n]` defined; `W-T2` / `Phase 2` need a Terms entry |
 | `diagram` `diagram_trivial` `language` `multi` `todo` `impact` `quiz_*` | see Diagram rule and the reference |
@@ -69,11 +70,11 @@ Read [reference/writing.md](reference/writing.md) (under this skill's directory)
 
 Draw a diagram only when it shows something the Options table cannot: a sequence of 3 or more steps between 2 or more actors, a state machine with 4 or more states, or a data flow between 3 or more components (a flowchart needs 5 or more nodes). Never draw the options themselves as nodes (a branch into A / B / C) and never restate the table; at most one diagram; when in doubt, none. When the decision is not reversible or the scope is machine / external, a diagram that meets this rule is required; if none does, write none and say why in one line under Options ("No diagram: <why>").
 
-`diagram_trivial`: a flowchart with 4 or fewer nodes, or half its labels equal to option labels. `No diagram: <why, 8+ characters>` satisfies `diagram`.
+`diagram_trivial`: a flowchart with 4 or fewer nodes, or half its labels equal to option labels. `No diagram: <why, 8+ characters>` satisfies `diagram`; a copied `<why>` does not.
 
 ## Emphasis
 
-`**bold**` only for the recommended option's name and a fact that cannot be undone: one per sentence, 8 in the whole explanation. `> [!WARNING]` costly to undo, `> [!CAUTION]` cannot be undone.
+`**bold**` only for the recommended option's name and a fact that cannot be undone: one per sentence, 8 in the whole explanation.
 
 ## Rich Markdown (ukagai dialect)
 

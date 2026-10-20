@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": true
+  },
+  "question": "設定ファイルの置き場所をどちらにしますか？"
+}

@@ -12,6 +12,8 @@ const NEVER =
 const REQUIRED =
   'When the decision is not reversible or the scope is machine / external, a diagram that meets this rule is required; if none does, write none and say why in one line under Options ("No diagram: <why>").';
 
+const PLACEMENT = "The Mermaid block may sit in any section";
+
 const skill = readFileSync(fileURLToPath(new URL("../../skills/ukagai-explain/SKILL.md", import.meta.url)), "utf8");
 
 // Each assertion fails when the sentence it names is removed from that text.
@@ -25,6 +27,7 @@ for (const [name, text] of [
     assert.ok(text.includes(SHOWS), "the 'only when it shows something the Options table cannot' sentence");
     assert.ok(text.includes(NEVER), "the 'never draw the options as nodes' sentence");
     assert.ok(text.includes(REQUIRED), "the 'required / No diagram: <why>' sentence");
+    if (name !== "SKILL.md") assert.ok(text.includes(PLACEMENT), "the 'Mermaid block may sit in any section' sentence");
   });
 }
 

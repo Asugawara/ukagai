@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": true
+  },
+  "question": "トークンの署名方式を変えてよいですか？"
+}

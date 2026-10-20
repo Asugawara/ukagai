@@ -34,7 +34,7 @@ When a plan was rewritten after an instruction, the plan screen (GUI and TUI) sh
 
 When Claude Code writes a session recap, the server turns it into a non-blocking "Progress check" in the GUI / TUI. If you answer *Give an instruction…* or *Stop here*, a second, cheap `PreToolUse` hook (`hook --checkpoint`, matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite`, 10 s) hands it to the agent once at its next tool call (as context, or as a deny that asks it to write a short status and end the turn); with nothing pending it is a single 404 and prints nothing.
 
-A recap becomes a new card only when the agent did something since the previous card (Claude Code rewrites its recap while idle); a turn the harness starts to wake the agent (a task notification, a monitor firing) does not count unless the agent changed a file or asked something in it, and such a wake-up neither cancels the card you have nor lifts a stop you gave.
+A recap becomes a new card only when the agent did something since the previous card (Claude Code rewrites its recap while idle); a turn the harness starts to wake the agent (a task notification, a monitor firing, a subagent handing back its report) does not count unless the agent changed a file or asked something in it, and such a wake-up neither cancels the card you have nor lifts a stop you gave.
 
 A recap means the agent is idle, and an idle agent calls no tool, so the reply is delivered by where the agent is:
 

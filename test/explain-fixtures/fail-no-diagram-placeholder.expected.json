@@ -1,0 +1,12 @@
+{
+  "valid": false,
+  "missing": [
+    "diagram"
+  ],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": true
+  },
+  "question": "本番の設定を更新してよいですか？"
+}

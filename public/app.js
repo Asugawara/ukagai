@@ -49,9 +49,9 @@ const columnLabel = (name) => (COLUMN_HAPPENS.test(name) ? t("col_happens") : CO
 // Words in a risk cell. Same lists as UNDO_BAD_WORDS / UNDO_WORDS in src/hook/explain.ts (N0): checked in that order, so
 // "cannot be restored" is red only. English is matched at word boundaries, Japanese anywhere.
 const UNDO_BAD_WORDS =
-  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i;
+  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と|(後から|あとから|後で|あとで)[^。]{0,20}?ことはでき(ない|ません)/i;
 const UNDO_WORDS =
-  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i;
+  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the|ukagai uninstall)\b|(?:^|[.;:]\s+|\b(?:you|we) can |\bby )(?:uninstall|switch back|turn (?:it|them) off|(?:change|set|turn) (?:it|them) back)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元|戻し方|取り消し(は|の)?不要|直せ(?!ない|ません)|補え(?!ない|ません)|再開(でき|すれば|するときは|するには)|(いつでも|あとで|後で|後から)[^。]{0,20}?(マージ|merge|push|入れ替え|差し替え|切り替え|試|戻|直|消|止め|閉じ|続け|独立|外|有効|無効|再開|再)[^。]{0,6}?(でき(る|ます)|られ(る|ます)|(?<![さかまわたなばがら])れ(る|ます)|[えけげせてねべめ](る|ます)|足せば|直す)(?!と困|が困|のは困)|(止め|解除|閉じ|消し|削除)るには|(解除|閉じ|消し|削除)れば|(止め|解除|閉じ|消し|削除)られ(?!ない|ません)|(終わったら|不要になったら)[^。]{0,10}?(止め|消(す(?!の)|せば|して)|閉じ|削除)|close すれば|何も(変わら(ない|ず)(?!まま)|残ら|有効化され|外に出)|残るもの(は|が)(ない|ありません)/i;
 const hasBad = (s) => UNDO_BAD_WORDS.test(s ?? "");
 
 // <coined> Suspicious identifiers (U1). Same rules as the coined-terms section of src/hook/explain.ts (COINED_ALLOW / COINED_TOKEN /
@@ -64,7 +64,7 @@ const COINED_ALLOW_WORDS =
 const COINED_ALLOW = new Set(COINED_ALLOW_WORDS.split(" "));
 const COINED_TOKEN = /\b[A-Z]{1,4}\d{0,3}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
 const COINED_SKIP =
-  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b/g;
+  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b|\b(?:RS|HS|ES|PS)(?:256|384|512)\b|\bPG\d{2}\b|\bL\d+-L?\d+\b|#L\d+|\bV\d{3,}\b|\b[Ss]tage \d+(?= passed)|(?:ステップ|フェーズ|段階|工程|ラウンド)\s?\d+(?=\s?[件個本])|(?:[\w.-]+\/){2,}[\w.-]*|[\w-]+\.(?:md|txt|ts|tsx|js|mjs|py|rb|rs|go|json|ya?ml|toml|sh|sql|html)\b/g;
 const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Round", "Batch", "Lane"];
 const anyCase = (w) => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
 const COINED_PHASE_EN = new RegExp(
