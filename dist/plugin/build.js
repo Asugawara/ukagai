@@ -29,7 +29,8 @@ export function pluginFiles(version) {
             skills: "./skills/",
             hooks: "./hooks/claude.json",
         }),
-        "hooks/claude.json": json({ hooks: claudeHooks }),
+        // "modules" is the ukagai mod (hooks/mod/, copied by scripts/build-release.sh); there is still no hooks/hooks.json
+        "hooks/claude.json": json({ modules: ["./mod/register.ts"], hooks: claudeHooks }),
         "plugin.json": json({
             name: "ukagai",
             version,

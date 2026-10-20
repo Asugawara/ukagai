@@ -1,7 +1,8 @@
-import { AskUserQuestionInput, DENY_LINK_WINDOW_MS, decisionFingerprint, ExitPlanModeInput, PLAN_BLOCK_SUFFIX, stripExplainBlocks, } from "../contract.js";
-import { checkRewrite, denyReason, handoffReason, multiDenyReason, explainDir, findExplanation, markUsed, MISSING_LABELS, coinedTermLabel, findCoinedTerms, parseFrontMatter, parsePlanImpact, toLines, validateExplanation, validatePlan, } from "./explain.js";
+import { AskUserQuestionInput, DENY_LINK_WINDOW_MS, decisionFingerprint, ExitPlanModeInput, MOD_OWNER_RE, PLAN_BLOCK_SUFFIX, stripExplainBlocks, } from "../contract.js";
+import { asyncDeny, checkRewrite, denyReason, handoffReason, handoffLine, multiDenyReason, multiDenyLine, explainDenyLine, planDenyLine, explainDir, findExplanation, findUsedExplanation, fileUsedLabel, markUsed, MISSING_LABELS, coinedTermLabel, findCoinedTerms, parseFrontMatter, parsePlanImpact, toLines, validateExplanation, validatePlan, } from "./explain.js";
+import { denyLine, denyOutput } from "./deny.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { findPlanFile, readBlockFor } from "./plan-file.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hookLog } from "./log.js";
@@ -16,15 +17,6 @@ const RETRY_MAX_MS = 30_000;
 const FINAL_STATUSES = new Set([401, 404, 410]);
 const ACK_RETRY_DELAY_MS = 1000;
 const NO_HAS = { mermaid: false, table: false, diff: false };
-function deny(reason) {
-    return {
-        hookSpecificOutput: {
-            hookEventName: "PreToolUse",
-            permissionDecision: "deny",
-            permissionDecisionReason: reason,
-        },
-    };
-}
 function allow(updatedInput) {
     return {
         hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput },
@@ -58,22 +50,28 @@ export function buildOutput(kind, toolInput, response) {
             return null;
         return allow({ ...toolInput, answers: response.answers });
     }
-    if (response.instruct === true)
-        return deny(planInstructReason(response.text ?? ""));
+    if (response.instruct === true) {
+        return denyOutput({ line: denyLine("Plan not approved yet: the human asked for something first"), context: planInstructReason(response.text ?? "") });
+    }
     if (response.approve === true)
         return allow(toolInput);
-    if (response.approve === false)
-        return deny(response.reason?.trim() ? response.reason : planRejectedNoReason());
+    if (response.approve === false) {
+        const reason = response.reason?.trim();
+        return denyOutput({
+            line: denyLine("The human rejected the plan"),
+            context: reason ? `[ukagai] The human rejected the plan and wrote: ${reason}` : planRejectedNoReason(),
+        });
+    }
     return null;
 }
 /** Record a deny that carries no explanation, then answer with it. Null (fall back) when the server cannot record it */
-async function denyAndRecord(c, reason, missing) {
+async function denyAndRecord(c, text, missing) {
     const reg = await c.client.createDecision({ ...c.base, status: "denied_explain", missing });
     if (!reg) {
         c.lg("create_decision_failed", c.failMsg());
         return null;
     }
-    return deny(reason);
+    return denyOutput(text, c.input.agent ?? c.opts.agent);
 }
 /** The human's edited skill as the deny reasons should name it (nothing when there is none or it cannot be read: fail open) */
 function skillRefParam(c) {
@@ -112,15 +110,21 @@ async function explainQuestion(c, data) {
             questionCount(d) > 1 &&
             now - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS);
     if (data.questions.length > 1 && !multiGuarded) {
-        return { out: await denyAndRecord(c, multiDenyReason(data.questions.length, input.agent), ["multi"]) };
+        return { out: await denyAndRecord(c, { line: multiDenyLine(data.questions.length), context: multiDenyReason(data.questions.length, input.agent) }, ["multi"]) };
     }
     let found;
+    let fallbackDir;
     if (planHit) {
         const block = planHit.block ?? (await readBlockFor(planHit.file, q0.question));
         found = block ? { path: planHit.file + PLAN_BLOCK_SUFFIX, markdown: block.body, match: "question" } : null;
     }
     else {
         found = await findExplanation(dir, q0.question);
+        // A resumed session may have been told the data-dir location while this call carries a scratchpad: look there too
+        if (!found && input.scratchpad_dir) {
+            fallbackDir = explainDir(undefined, opts.dataDir, input.session_id);
+            found = await findExplanation(fallbackDir, q0.question);
+        }
     }
     const labels = q0.options.map((o) => o.label);
     const v = found
@@ -158,11 +162,19 @@ async function explainQuestion(c, data) {
     }
     const own = v ? v.missing : ["file"];
     const codes = [...own, ...rewriteIssues.map((i) => i.code).filter((c) => !own.includes(c))];
+    // No file for this call: an earlier ask of the same question may have consumed one (renamed it `.used.md`)
+    const used = !found && !planFile ? ((await findUsedExplanation(dir, q0.question)) ?? (fallbackDir ? await findUsedExplanation(fallbackDir, q0.question) : null)) : null;
+    if (!found)
+        lg("explain_not_found", { dir, fallback: fallbackDir, used: used ? basename(used) : undefined });
     const reason = denyReason(opts.denyTemplate, {
         ...(planFile ? { planFile } : { path: join(dir, "explain.md") }),
         question: q0.question,
         missing: [
-            ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0) : MISSING_LABELS[c])),
+            ...own.map((c) => c === "file" && used
+                ? fileUsedLabel(used)
+                : c === "coined_term" && found
+                    ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0)
+                    : MISSING_LABELS[c]),
             ...rewriteIssues.map((i) => i.text),
         ],
         codes,
@@ -171,7 +183,7 @@ async function explainQuestion(c, data) {
         blocker: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "blocker" : false,
         quiz: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "quiz" : false,
     });
-    return { out: await denyAndRecord(c, reason, codes) };
+    return { out: await denyAndRecord(c, { line: explainDenyLine({ codes, ...(planFile ? { planFile } : {}), used: used !== null }), context: reason }, codes) };
 }
 async function explainPlan(c, plan) {
     const { input, opts, client, lg, failMsg } = c;
@@ -197,7 +209,7 @@ async function explainPlan(c, plan) {
     if (prior.length > 0)
         return { explanation: noExplanation("loop_guard") };
     const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => MISSING_LABELS[m]), agent: input.agent, ...skillRefParam(c) });
-    return { out: await denyAndRecord(c, reason, v.missing) };
+    return { out: await denyAndRecord(c, { line: planDenyLine(), context: reason }, v.missing) };
 }
 /** First sight of a question: validate its explanation (deny when it is missing or unfit) and register the decision */
 async function registerFresh(c, parsed) {
@@ -247,6 +259,19 @@ build = buildOutput) {
     // What ukagai registers and fingerprints: a plan without the explanation blocks written for AskUserQuestion (the answer still goes back with the original input)
     const regInput = kind === "approve_plan" && typeof toolInput["plan"] === "string" ? { ...toolInput, plan: stripExplainBlocks(toolInput["plan"]) } : toolInput;
     const base = { tool_use_id: input.tool_use_id, kind, session, request: regInput };
+    // The ukagai mod of this Claude Code process (it sets UKAGAI_MOD_OWNER): asks the server to deliver the answer as a message instead of keeping this hook waiting.
+    // Only the main agent of Claude Code asks; the server still decides (a live mod, the setting, the kind of question)
+    const envOwner = process.env["UKAGAI_MOD_OWNER"];
+    const modOwner = envOwner !== undefined && MOD_OWNER_RE.test(envOwner) && opts.agent === "claude" && input.agent !== "codex" && !opts.observe ? envOwner : undefined;
+    // With a mod, a plan approval can arrive as a message after the session already left plan mode (the plan went through by its grant, or the human
+    // left plan mode): the main agent's ExitPlanMode outside plan mode is Claude Code's to refuse, never a new plan for the human to approve.
+    // A subagent's plan is never delivered as a message, so it is handled as before
+    if (modOwner !== undefined && kind === "approve_plan" && !input.agent_id && input.permission_mode !== "plan") {
+        lg("exit_plan_outside_plan_mode", { permission_mode: input.permission_mode });
+        return null;
+    }
+    if (modOwner !== undefined && !input.agent_id)
+        base.mod_owner = modOwner;
     // Input that is not a well-formed question / plan is never ours to handle
     let parsed;
     if (kind === "answer_question") {
@@ -261,9 +286,32 @@ build = buildOutput) {
             return null;
         parsed = { plan: r.data.plan };
     }
+    const fingerprint = decisionFingerprint(kind, regInput);
+    // The human approved this very plan (while it waited for message delivery): the call goes through once (the grant). "Approve and auto" is
+    // handed to the PermissionRequest that follows (only it can switch the mode), so this hook prints nothing for it. The server hands it once:
+    // a grant handed before (its PermissionRequest did not use it) is written off and the plan goes on to the human. Unreachable server: on as before
+    if (kind === "approve_plan" && !input.agent_id && "plan" in parsed && parsed.plan.trim() !== "") {
+        const grant = await client.getPlanGrant(input.session_id, fingerprint);
+        if (grant?.mode === "auto") {
+            if (await client.handPlanGrant(input.session_id, fingerprint)) {
+                lg("plan_grant_auto", { decision_id: grant.decision_id });
+                return null;
+            }
+            lg("plan_grant_not_handed", { decision_id: grant.decision_id });
+        }
+        else if (grant && (await client.consumePlanGrant(input.session_id, fingerprint)).consumed) {
+            lg("plan_grant_used", { decision_id: grant.decision_id });
+            return allow(toolInput);
+        }
+    }
     // A question that is still open in ukagai (the previous leg handed off, or the hook died) is re-attached, never registered again
-    const open = await client.findOpen(input.session_id, input.agent_id, decisionFingerprint(kind, regInput), input.tool_use_id);
+    const open = await client.findOpen(input.session_id, input.agent_id, fingerprint, input.tool_use_id);
     let created;
+    if (open && "delivering" in open) {
+        // A mod is submitting the answer as a message right now: answering here as well would deliver it twice
+        lg("delivering", { decision_id: open.delivering.decision_id });
+        return denyOutput(asyncDeny(kind));
+    }
     if (open) {
         created = { id: open.id };
         lg("reattach", { decision_id: open.id, handoffs: open.handoffs ?? 0 });
@@ -272,6 +320,11 @@ build = buildOutput) {
         const fresh = await registerFresh({ input, opts, client, kind, base, lg, failMsg }, parsed);
         if ("out" in fresh)
             return fresh.out;
+        if (fresh.delivery === "message") {
+            // Registered for message delivery: nothing to wait for. The agent ends its turn; the answer comes as a message
+            lg("async_registered", { decision_id: fresh.id });
+            return denyOutput(asyncDeny(kind));
+        }
         created = fresh;
     }
     // Termination signal from Esc / ctrl+c: tell the server to cancel once, print nothing, and exit
@@ -299,7 +352,7 @@ build = buildOutput) {
                 // the server cannot record the hand-off is it a real failure and Claude Code's own prompt takes over
                 if (await client.handoff(created.id, input.session_id)) {
                     lg("handoff", { decision_id: created.id });
-                    return deny(handoffReason(kind, input.agent));
+                    return denyOutput({ line: handoffLine(kind), context: handoffReason(kind, input.agent) }, input.agent ?? opts.agent);
                 }
                 lg("fallback_budget", { decision_id: created.id, ...failMsg() });
                 await client.answerFallback(created.id);
@@ -332,22 +385,28 @@ build = buildOutput) {
             }
             failStreakStart = undefined;
             failCount = 0;
-            const out = build(kind, toolInput, r.response);
-            if (!out) {
+            // "Approve and auto" of the main agent's plan in plan mode: only the PermissionRequest of this same ExitPlanMode can switch the mode.
+            // The ack leaves it the grant and this hook prints nothing; without the server that hook prints nothing either, and Claude Code's dialog asks
+            const toPermission = build === buildOutput && kind === "approve_plan" && r.response.approve === true && r.response.set_mode_auto === true &&
+                !input.agent_id && input.permission_mode === "plan" && "plan" in parsed && parsed.plan.trim() !== "";
+            const out = toPermission ? null : build(kind, toolInput, r.response);
+            if (!out && !toPermission) {
                 lg("no_answer_output", { decision_id: created.id, message: `via=${r.response.via}` });
                 return null;
             }
             // The human's answer is already submitted: one retry before giving up on the ack
-            let acked = await client.ack(created.id);
+            let acked = await client.ack(created.id, toPermission);
             if (!acked) {
                 lg("ack_retry", { decision_id: created.id, ...failMsg() });
                 await sleep(ACK_RETRY_DELAY_MS);
-                acked = await client.ack(created.id);
+                acked = await client.ack(created.id, toPermission);
             }
             if (!acked) {
                 lg("ack_failed", { decision_id: created.id, ...failMsg() });
                 return null;
             }
+            if (toPermission)
+                lg("plan_auto_to_permission_request", { decision_id: created.id });
             return out;
         }
     }

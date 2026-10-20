@@ -4,7 +4,7 @@ Copied from `src/hook/explain.ts`. Rows follow the order the hook reports them (
 
 | Code | Fix |
 |---|---|
-| `file` | The explanation file does not exist yet. Write it before AskUserQuestion |
+| `file` | No explanation file has this question, or the one it had was renamed `<name>.used.md` by an earlier ask of the same question. Write a new one before AskUserQuestion |
 | `front_matter` | Start with `---`, `ukagai: 1`, and close with `---` |
 | `language` | Configured language is Japanese: title, body and the AskUserQuestion text in Japanese (code and proper nouns may stay) |
 | `question` | `question:` must equal `questions[0].question` exactly |
@@ -26,12 +26,12 @@ Copied from `src/hook/explain.ts`. Rows follow the order the hook reports them (
 | `undo` | A risk cell has neither an undo phrase nor a cannot-undo phrase |
 | `todo` | Blocker only: "What you need to do" with a fenced code block |
 | `recommend` | Section "Recommendation" |
-| `recommend_long` | Over 5 sentences or 400 characters |
+| `recommend_long` | Over 5 sentences or 400 characters (callout lines `>` are not counted) |
 | `recommend_cond` | Needs a condition word (see below) |
 | `recommend_name` | First sentence names the option: its full label, or its first 3 words (spaced ASCII label of 4+ words) or first 12 characters (long or Japanese label); a label of 3 characters or fewer matches on word boundaries. No positional wording |
 | `against_weak` | Counterargument text is contained in the Recommendation |
 | `assumptions_long` | More than 3 Assumptions |
-| `diagram` | Required (not `reversible`, or scope machine / external) but no Mermaid and no `No diagram:` line |
+| `diagram` | Required (not `reversible`, or scope machine / external) but no Mermaid block anywhere in the body and no `No diagram:` line (a copied `<why>` does not count) |
 | `diagram_trivial` | Flowchart / graph with 4 or fewer distinct nodes, or half the labels equal option labels |
 | `checked` | "What I checked" is required unless `reversible` + `file` |
 | `footnote` | A `[^n]` in the body without a `[^n]:` definition |
@@ -42,9 +42,9 @@ Copied from `src/hook/explain.ts`. Rows follow the order the hook reports them (
 
 - `recommend_cond` (whole words, not inside code or `>` callouts): `if` `when` `unless` `otherwise` `in case`; Japanese `なら` (not `ならない` / `ならず`), `なければ` (not `なければならない`), `場合`, `とき` (not `ときどき`), `であれば`, `際は`, `際に`.
 - `recommend_name` positional wording: `the first one`, `the second option`, `option B`, `plan A`, `1つ目`, `2つ目`, `3つ目`, `一つ目`, `最初の案`, `案 A`, `選択肢 1`.
-- `undo`, how to undo: `undo` `undone` `revert` `roll back` `restore` `reinstall` `recreate` `re-run` `rerun` `git checkout|revert|reset|stash` `delete the` `remove the`; Japanese `戻せ` `戻る` `戻す` `元に戻` `消せ` `やり直` `再実行` `再作成` `復元`.
-- `undo`, cannot be undone (checked first, painted red): `cannot be undone|restored|reverted|recovered|rolled back` (also `can't`, `won't`), `no way back`, `irreversible`, `unrecoverable`, `permanent(ly)`; Japanese `戻せない` `戻せません` `元に戻らない` `元に戻せない` `復元できない` `取り消せない` `二度と`.
-- `diagram`: a line `No diagram: <why, 8+ characters>` (or `図なし: …`, `図は不要: …`) outside code under Options.
+- `undo`, how to undo: `undo` `undone` `revert` `roll back` `restore` `reinstall` `recreate` `re-run` `rerun` `git checkout|revert|reset|stash` `delete the` `remove the` `uninstall` `switch back` `change / set / turn it back` `turn it off`; Japanese `戻せ` `戻る` `戻す` `元に戻` `消せ` `やり直` `再実行` `再作成` `復元` `戻し方` `取り消しは不要` `直せる` `補える` `再開できる` `いつでも / あとで / 後から … できる` (an undo-type verb in between: マージ, 差し替え, 戻, 消, 止め, 足 …) `止めれば / 解除すれば / 削除すれば / 止められる` `終わったら消す` `close すれば` `何も変わらない` `残るものはない`. A copied `Undo: <how>` counts as nothing.
+- `undo`, cannot be undone (checked first, painted red): `cannot be undone|restored|reverted|recovered|rolled back` (also `can't`, `won't`), `no way back`, `irreversible`, `unrecoverable`, `permanent(ly)`; Japanese `戻せない` `戻せません` `元に戻らない` `元に戻せない` `復元できない` `取り消せない` `二度と`; `後から / あとで … ことはできない`.
+- `diagram`: a line `No diagram: <why, 8+ characters>` (or `図なし: …`, `図は不要: …`) outside code under Options; the reason must be real (a copied `<why>` does not count).
 - `diagram_trivial` compares trimmed, case-folded labels with `(Recommended)` / `（推奨）` stripped. Only flowchart / graph is checked.
 
 ## Coined terms (`coined_term`)
@@ -52,7 +52,7 @@ Copied from `src/hook/explain.ts`. Rows follow the order the hook reports them (
 The scan covers title and body outside fences; inline code counts, and tokens in the question or option labels are exempt.
 - Hit: 1-4 capitals + optional digits + `-` + 1-4 capitals/digits (`W-T2`, `P-GH`), or 1-4 capitals + 1-3 digits (+ capital) (`FT4`, `TM28`, `W3`); and an English phase word (any case) followed by a number or capital: `Phase 2`, `Gate B`, `Step 3a`, also Stage, Sprint, Milestone, Track, Wave, Round, Batch, Lane ("step by step" is not hit); Japanese `フェーズ` `ステップ` `段階` `工程` `ゲート` `トラック` `ラウンド` `第` hit only when followed by a number or capital (`フェーズ 2`, `第 3`), a bare word is not flagged.
 - Allowed: CI CLI API GUI TUI SSE URL HTTP JSON YAML HTML CSS PR DB UI ID CPU GPU GB MB SQL SSH TLS DNS TCP AWS GCP S3 IAM VM OS PID NPM SVG PNG PDF CSV UTF IDE LSP MCP LLM AI QA README TODO CRUD REST RPC JWT SDK SHA RSA AES HMAC, plus ARM64 E2E ES5-7 W3C X11 V8 R2 U2 Z3 H264 H265 AV1 VP9 SOC2 BM25 I18N L10N A11Y OIDC, M1-M4 L1-L4 Q1-Q4 H1-H2 T1-T3, any token of 3+ capitals whose prefix is allowed.
-- Skipped shapes: `FY25`, `CVE-2024-1234`, regions (`US-EAST-1`), `PCI-DSS`, `P-256`, `MPEG-4`, `PM2.5`, URLs, version-suffixed `v0.2.0-DT1`.
+- Skipped shapes: `FY25`, `CVE-2024-1234`, regions (`US-EAST-1`), `PCI-DSS`, `P-256`, `MPEG-4`, `PM2.5`, JWT algorithms (`RS256`, `HS512`, …), `PG` + 2 digits, line locators (`L42-L50`, `#L42`), Flyway file prefixes (`V023__`), `stage 52 passed`, a process word with a count (`ステップ 56 件`), paths with 2+ `/`, file names with an extension, URLs, version-suffixed `v0.2.0-DT1`.
 - Define under Terms in 12+ characters of plain words; "plan の行", "the plan item", "see plan", "計画の項目" count as nothing.
 
 ## Headings and columns (Japanese aliases)

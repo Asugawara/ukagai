@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Instruction, PendingRewrite, WaitResponse } from "../contract.js";
+import { ConsumePlanGrantResponse, HandPlanGrantResponse, Instruction, PendingRewrite, PlanGrant, WaitResponse, Waiting, } from "../contract.js";
 const SHORT_TIMEOUT_MS = 1000;
 /** Registration gets a longer timeout because the server's context collection takes up to 1.5 seconds */
 const CREATE_TIMEOUT_MS = 3000;
@@ -83,13 +83,15 @@ export class Client {
             return undefined;
         }
     }
-    /** Register. Returns the Decision (at least with an id) on success, otherwise null */
+    /** Register. Returns the Decision's id (and `delivery: "message"` when the answer will come as a message, so no wait follows) on success, otherwise null */
     async createDecision(body) {
         const r = await this.request("POST", "/api/decisions", body, CREATE_TIMEOUT_MS);
         if (!r || (r.status !== 200 && r.status !== 201))
             return null;
         const j = Client.json(r.text);
-        return j && typeof j.id === "string" ? { id: j.id } : null;
+        if (!j || typeof j.id !== "string")
+            return null;
+        return j.delivery === "message" ? { id: j.id, delivery: "message" } : { id: j.id };
     }
     /** List of denied_explain decisions (filtered by session_id). null when unreachable */
     async listDeniedExplain(sessionId) {
@@ -114,8 +116,9 @@ export class Client {
             ? { kind: "answer", response: parsed.data.response }
             : { kind: "error", status: 200, message: "unparseable wait response" };
     }
-    async ack(id) {
-        const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/ack`, undefined, SHORT_TIMEOUT_MS);
+    /** `keepPlanGrant`: an "approve and auto" grant is left to the PermissionRequest of the same ExitPlanMode (otherwise the server uses it up) */
+    async ack(id, keepPlanGrant = false) {
+        const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/ack`, keepPlanGrant ? { keep_plan_grant: true } : undefined, SHORT_TIMEOUT_MS);
         return r?.status === 200;
     }
     async answerFallback(id) {
@@ -127,7 +130,10 @@ export class Client {
         const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/handoff`, { session_id: sessionId }, SHORT_TIMEOUT_MS);
         return r?.status === 200;
     }
-    /** The still-open decision of this session and agent with the same fingerprint (the server swaps in the new tool_use_id). Null on a miss or any failure */
+    /**
+     * The still-open decision of this session and agent with the same fingerprint (the server swaps in the new tool_use_id).
+     * `delivering`: a mod is delivering its answer as a message right now, nothing to wait for. Null on a miss or any failure
+     */
     async findOpen(sessionId, agentId, fingerprint, toolUseId) {
         const q = new URLSearchParams({ fingerprint, tool_use_id: toolUseId });
         if (agentId)
@@ -135,8 +141,36 @@ export class Client {
         const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/open?${q}`, undefined, SHORT_TIMEOUT_MS);
         if (!r || r.status !== 200)
             return null;
-        const d = Client.json(r.text)?.decision;
+        const j = Client.json(r.text);
+        if (j?.delivering && typeof j.delivering.decision_id === "string")
+            return { delivering: { decision_id: j.delivering.decision_id } };
+        const d = j?.decision;
         return d && typeof d.id === "string" ? d : null;
+    }
+    /** The session's grant for this plan (the human approved it, and it was not let through yet). Null on 404, any failure or an unexpected body */
+    async getPlanGrant(sessionId, fingerprint) {
+        const q = new URLSearchParams({ fingerprint });
+        const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/plan-grant?${q}`, undefined, SHORT_TIMEOUT_MS);
+        if (!r || r.status !== 200)
+            return null;
+        const parsed = PlanGrant.safeParse(Client.json(r.text)?.grant);
+        return parsed.success ? parsed.data : null;
+    }
+    /** Use the grant for this plan (once). `{ consumed: false }` on a miss, any failure or an unexpected body */
+    async consumePlanGrant(sessionId, fingerprint) {
+        const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/plan-grant/consume`, { fingerprint }, SHORT_TIMEOUT_MS);
+        if (!r || r.status !== 200)
+            return { consumed: false };
+        const parsed = ConsumePlanGrantResponse.safeParse(Client.json(r.text));
+        return parsed.success ? parsed.data : { consumed: false };
+    }
+    /** Leave this plan's auto grant to the PermissionRequest of the same call. False on a miss (none, or handed before: now written off) or any failure */
+    async handPlanGrant(sessionId, fingerprint) {
+        const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/plan-grant/hand`, { fingerprint }, SHORT_TIMEOUT_MS);
+        if (!r || r.status !== 200)
+            return false;
+        const parsed = HandPlanGrantResponse.safeParse(Client.json(r.text));
+        return parsed.success && parsed.data.handed;
     }
     async cancel(id, timeoutMs) {
         const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/cancel`, undefined, timeoutMs);
@@ -159,24 +193,6 @@ export class Client {
         const r = await this.request("POST", "/api/events", event, timeoutMs);
         return r !== null && r.status >= 200 && r.status < 300;
     }
-    /** On 200 the body is `{pending: boolean}`. Anything else is false */
-    async getPendingModeSwitch(sessionId) {
-        const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch`, undefined, SHORT_TIMEOUT_MS);
-        if (!r || r.status !== 200)
-            return false;
-        return Client.json(r.text)?.pending === true;
-    }
-    /** True when the server says this is the first ask for the pending record (it asks at most once per record) */
-    async askModeSwitch(sessionId, timeoutMs = SHORT_TIMEOUT_MS) {
-        const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/ask`, undefined, timeoutMs);
-        if (!r || r.status !== 200)
-            return false;
-        return Client.json(r.text)?.ask === true;
-    }
-    async consumeModeSwitch(sessionId, timeoutMs = SHORT_TIMEOUT_MS) {
-        const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/consume`, undefined, timeoutMs);
-        return r !== null && r.status >= 200 && r.status < 300;
-    }
     /** The session's last "Cannot answer" memo. Unreachable, an error or an unexpected body yields null (ignored) */
     async getPendingRewrite(sessionId) {
         const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/pending-rewrite`, undefined, SHORT_TIMEOUT_MS);
@@ -192,6 +208,21 @@ export class Client {
             return null;
         const parsed = Instruction.safeParse(Client.json(r.text)?.instruction);
         return parsed.success ? parsed.data : null;
+    }
+    /**
+     * The main agent's PreToolUse: the session's checkpoint reply (consumed), else, when an answer to a question is still on its way
+     * as a message, the decision that holds the tools back. Null on 404, any failure, timeout or an unexpected body
+     */
+    async takeInstructionOrWaiting(sessionId, timeoutMs) {
+        const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/instruction?main=1`, undefined, timeoutMs);
+        if (!r || r.status !== 200)
+            return null;
+        const j = Client.json(r.text);
+        const ins = Instruction.safeParse(j?.instruction);
+        if (ins.success)
+            return { instruction: ins.data };
+        const w = Waiting.safeParse(j?.waiting);
+        return w.success ? { waiting: w.data } : null;
     }
     async consumeRewrite(sessionId) {
         const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/pending-rewrite/consume`, undefined, SHORT_TIMEOUT_MS);

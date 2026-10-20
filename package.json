@@ -1,6 +1,6 @@
 {
   "name": "ukagai",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Agents ask, humans decide. Hooks + GUI that collect Claude Code and Codex CLI questions (AskUserQuestion) and plan approvals in one place, each with the agent's own explanation.",
   "keywords": [
     "claude-code",
@@ -28,7 +28,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.mod.json",
     "test": "UKAGAI_TERMINAL=none node --import tsx --test \"test/**/*.test.ts\"",
     "dev:serve": "tsx src/cli.ts serve",
     "vendor": "cp node_modules/pele/dist/pele.global.js node_modules/marked/lib/marked.umd.js public/vendor/",

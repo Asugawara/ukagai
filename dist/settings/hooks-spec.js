@@ -9,6 +9,8 @@ export const CHECKPOINT_FLAG = "--checkpoint";
 /** EnterPlanMode (and the first UserPromptSubmit in plan mode) carries the plan-writing rules (docs/spec/markdown.md section 4) */
 export const PLAN_CONTEXT_MATCHER = "EnterPlanMode";
 export const PLAN_CONTEXT_FLAG = "--plan-context";
+/** Timeout (s) of the synchronous hooks that never decide: the in-process work is bounded far below it, the slack absorbs process-start stalls (a timeout shows as a red hook error) */
+export const SYNC_TIMEOUT = 10;
 export const HOOK_EVENTS = [
     "PreToolUse",
     "PermissionRequest",
@@ -44,24 +46,25 @@ export function buildHookEntries(opts) {
     ];
     const preExtra = ["--budget", String(opts.timeout - 10), ...(opts.observe ? ["--observe"] : [])];
     const pre = mk(preExtra, opts.timeout, opts.observe ? {} : { statusMessage: STATUS_MESSAGE });
+    // ExitPlanMode: a plan that went through without its grant being used (Claude Code's own dialog) uses it up on the server
     const postMatcher = opts.observe
         ? `Edit|Write|MultiEdit|NotebookEdit|${DECISION_MATCHER}`
-        : "Edit|Write|MultiEdit|NotebookEdit";
+        : "Edit|Write|MultiEdit|NotebookEdit|ExitPlanMode";
     const post = mk(opts.observe ? ["--observe"] : [], 5, { async: true });
     return {
         PreToolUse: [
             ...group(pre, DECISION_MATCHER),
             // observe mode only watches: it must not steer the agent
-            ...(opts.observe ? [] : group(mk([CHECKPOINT_FLAG], 3), CHECKPOINT_MATCHER)),
-            ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], 3), PLAN_CONTEXT_MATCHER)),
+            ...(opts.observe ? [] : group(mk([CHECKPOINT_FLAG], SYNC_TIMEOUT), CHECKPOINT_MATCHER)),
+            ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], SYNC_TIMEOUT), PLAN_CONTEXT_MATCHER)),
         ],
-        PermissionRequest: group(mk([], 5)),
-        SessionStart: group(mk(opts.autostart === false ? ["--no-autostart"] : [], 5)),
-        SubagentStart: group(mk([], 5)),
+        PermissionRequest: group(mk([], SYNC_TIMEOUT)),
+        SessionStart: group(mk(opts.autostart === false ? ["--no-autostart"] : [], SYNC_TIMEOUT)),
+        SubagentStart: group(mk([], SYNC_TIMEOUT)),
         UserPromptSubmit: [
             ...group(mk([], 5, { async: true })),
             // plan mode entered by the human never calls EnterPlanMode: the first prompt typed in plan mode carries the rules instead
-            ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], 3))),
+            ...(opts.observe ? [] : group(mk([PLAN_CONTEXT_FLAG], SYNC_TIMEOUT))),
         ],
         Stop: group(mk([], 5, { async: true })),
         SubagentStop: group(mk([], 5, { async: true })),

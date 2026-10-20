@@ -17,6 +17,7 @@ ukagai は、コーディングエージェントが人間に求める判断（C
 - **エージェントがリッチな Markdown で説明し、描画された状態で見られます。** 図（Mermaid）、diff、画像、そして UI やランディングページの案のような HTML ページ丸ごとがページ自身のスクリプトを実行しないサンドボックス化されたフレーム（全画面でのズーム表示や、スクリプトなしの新しいタブでの表示にも対応）で、選択肢のすぐ隣に表示されます。比べて決めるのが 1 か所で済みます。
 - **セッションもエージェントも横断する 1 つの受信箱。** Claude Code と Codex CLI、質問とプラン承認を、保留一覧と履歴つきで扱えます。
 - **MCP なし、毎ターンの文脈に何も足しません。** hooks とスキルがエージェント自身の `AskUserQuestion` / プラン承認を横取りし、ツール定義が文脈に居座ることはありません。
+- **GUI が軽い。** Mermaid の図は mermaid.js（5.5 MB）ではなく [pele](https://github.com/obsidianmd/pele)（682 KB）で描きます。リリースは 22% 小さくなり、GUI のページは約 3 倍速く読み込まれます。
 
 ![エージェントが提案した 2 つのオンボーディングページ案を GUI で並べて表示](docs/images/ja/compare.png)
 
@@ -28,7 +29,7 @@ ukagai は、コーディングエージェントが人間に求める判断（C
 
 ## クイックスタート
 
-必要なもの: Node.js 22 以上、macOS または Linux（Windows は非対応）、Claude Code と Codex CLI のどちらか（または両方）。
+必要なもの: Node.js 22 以上、macOS または Linux（Windows は非対応）、Claude Code（2.1.304 以上）と Codex CLI のどちらか（または両方）。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
@@ -46,6 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 - **プラン承認**: 承認（auto モードで続行）、指示（「先にこれをして」）、却下。[ガイド](docs/guide.md#plan-approval)
 - **進捗チェックポイント**: エージェントのセッション要約に、指示または停止で返答できます。[ガイド](docs/guide.md#progress-checkpoints)
 - **TUI**: 同じ画面をターミナルで。`ukagai tui`。[ガイド](docs/guide.md#the-tui)
+- **回答をメッセージで届ける**: 対話の Claude Code ターミナルでは、エージェントは待たずにターンを終え、手が空いたところで回答がメッセージとして届きます（既定でオン、オフにする方法は 3 つ）。[ガイド](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **Codex CLI**: hooks とプラン承認用のブリッジ。[ガイド](docs/guide.md#codex-cli)
 - **設定ページ**: 言語、テーマ、通知、プランの自動表示、エージェントが従うスキルの本文。[ガイド](docs/guide.md#settings)
 - **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
@@ -60,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 ## インストールのオプション
 
-`install.sh` はバイナリを入れたあと `ukagai install` を実行し、見つかったエージェントすべてに hooks とスキルを登録します（先に設定のバックアップを取ります）。`wget` でも実行できます。
+`install.sh` はバイナリを入れたあと `ukagai install` を実行し、見つかったエージェントすべてに hooks とスキルを登録します（先に設定のバックアップを取ります）。Claude Code には、ukagai mod も専用の小さなプラグインとして `~/.claude/skills/ukagai-mod/` に置きます（ukagai プラグインが有効なときは、プラグインが mod を持ってくるので置きません）。`wget` でも実行できます。
 
 次の条件で、そのエージェントが見つかったとみなします。
 
@@ -90,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 プラグインだけを使っている場合、シェルで `ukagai` は打てません。Claude Code ではエージェントの Bash ツール経由で `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` を実行してください。`install.sh` も実行済みの場合は、`ukagai install` が自身の登録を外し、hooks が二重に動かないようにします。
 
-**更新**: インストールのコマンドをもう一度実行します。登録済みのエージェントだけを登録し直し、オプション（`--timeout`、`--observe`、`--no-autostart`、`--server`、`--data-dir`）はそのまま引き継がれます。オプションを既定に戻すには、`ukagai uninstall` のあとに `ukagai install` を実行してください。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`）で Claude Code と Codex CLI の両方から hooks と skill を外します（片方だけなら `--claude` または `--codex`）。hooks が残らなくなればサーバーも止まります（片方が失敗しても、もう片方は外れます。終了コードは 1 で、サーバーは止まらずに残ります）。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
+**更新**: インストールのコマンドをもう一度実行します。登録済みのエージェントだけを登録し直し、オプション（`--timeout`、`--observe`、`--no-autostart`、`--server`、`--data-dir`）はそのまま引き継がれます。オプションを既定に戻すには、`ukagai uninstall` のあとに `ukagai install` を実行してください。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`）で Claude Code と Codex CLI の両方から hooks、skill、ukagai mod を外します（片方だけなら `--claude` または `--codex`）。hooks が残らなくなればサーバーも止まります（片方が失敗しても、もう片方は外れます。終了コードは 1 で、サーバーは止まらずに残ります）。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
 
 うまく動かないときは `ukagai doctor` を実行してください（[トラブルシューティング](docs/guide.md#troubleshooting)）。
 
@@ -103,7 +105,8 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 | `docs/spec/api.md` | サーバー API、状態遷移、認可 |
 | `docs/spec/explain.md` | エージェントが書く説明ファイルと、hook の検証ルール |
 | `docs/spec/markdown.md` | 説明とプランを書くための Markdown 方言 |
-| `docs/verification/` | 実環境での検証記録（01 質問の注入、02 Codex の hooks と hook の限界、03 E2E、04 プラン作成時の文脈、05 プランの指示と approve-and-auto、06 起こされたターンと進捗チェック） |
+| `docs/spec/codex-bridge.md` | Codex ブリッジ: Codex app-server 経由のプラン承認と進捗チェックポイント |
+| `docs/verification/` | 実環境での検証記録（01 質問の注入、02 Codex の hooks と hook の限界、03 E2E、04 プラン作成時の文脈、05 プランの指示と approve-and-auto、06 プラン承認後のモード、起こされたターンと進捗チェック、07 すべての配布経路でのリリースからのインストール、08 編集したスキルが権限プロンプトなしで読まれること） |
 | `skills/ukagai-explain/` | Claude に説明の書き方を教えるスキル（`SKILL.md`）と、必要なときに読む `reference/` のファイル |
 
 ## 開発

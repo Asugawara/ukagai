@@ -1,7 +1,8 @@
 import { readdir, readFile, rename, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { skillName } from "./skill-name.js";
 import { RECENCY_WINDOW_MS, bodyHash } from "../contract.js";
+import { DENY_LINE_MAX, denyLine } from "./deny.js";
 // Implements the rules in docs/spec/explain.md.
 /** Section headings: English first, Japanese alias second. */
 export const SECTION = {
@@ -33,9 +34,9 @@ export const BLOCKER_LABELS = {
 export const COLUMN_HAPPENS = /happens|outcome|起きること/i;
 export const COLUMN_RISK = /risk|リスク/i;
 /** Phrases that say the change cannot be undone. Checked before UNDO_WORDS. */
-export const UNDO_BAD_WORDS = /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i;
+export const UNDO_BAD_WORDS = /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と|(後から|あとから|後で|あとで)[^。]{0,20}?ことはでき(ない|ません)/i;
 /** Phrases that say how to undo. */
-export const UNDO_WORDS = /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i;
+export const UNDO_WORDS = /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the|ukagai uninstall)\b|(?:^|[.;:]\s+|\b(?:you|we) can |\bby )(?:uninstall|switch back|turn (?:it|them) off|(?:change|set|turn) (?:it|them) back)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元|戻し方|取り消し(は|の)?不要|直せ(?!ない|ません)|補え(?!ない|ません)|再開(でき|すれば|するときは|するには)|(いつでも|あとで|後で|後から)[^。]{0,20}?(マージ|merge|push|入れ替え|差し替え|切り替え|試|戻|直|消|止め|閉じ|続け|独立|外|有効|無効|再開|再)[^。]{0,6}?(でき(る|ます)|られ(る|ます)|(?<![さかまわたなばがら])れ(る|ます)|[えけげせてねべめ](る|ます)|足せば|直す)(?!と困|が困|のは困)|(止め|解除|閉じ|消し|削除)るには|(解除|閉じ|消し|削除)れば|(止め|解除|閉じ|消し|削除)られ(?!ない|ません)|(終わったら|不要になったら)[^。]{0,10}?(止め|消(す(?!の)|せば|して)|閉じ|削除)|close すれば|何も(変わら(ない|ず)(?!まま)|残ら|有効化され|外に出)|残るもの(は|が)(ない|ありません)/i;
 /** Names used in the deny reason (spec section 4) */
 export const MISSING_LABELS = {
     file: "the explanation file itself",
@@ -52,16 +53,16 @@ export const MISSING_LABELS = {
     table: "the options table (first column is the label; columns for what happens if chosen and for risks and how to undo; one row per option)",
     todo: 'the "What you need to do" section (with a code block of commands)',
     recommend: 'the "Recommendation" section',
-    recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters)',
+    recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters; callout lines are not counted)',
     recommend_cond: 'a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.)',
     recommend_name: 'the first sentence of "Recommendation" must name the recommended option by its label (quote its first words), not by position; do not refer to options by position ("the first one", "plan A")',
     against_weak: "the Counterargument repeats the Recommendation; make it attack the pick",
     assumptions_long: "at most 3 Assumptions: keep only premises you did not verify and that would change the pick",
     cell_long: "a cell in the options table is too long (at most 160 characters per cell)",
     coined_term: "internal identifiers the reader cannot know (plan codes, phase / gate / worker names). Say what each is in plain words, or define it under Terms",
-    undo: "each risk cell must say how to undo (or that it cannot be undone)",
+    undo: 'each risk cell must say how to undo, or that it cannot be undone (e.g. "Undo: git revert <commit>", "Undo: nothing to do", "Cannot be undone: the email is sent")',
     why_long: 'the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked")',
-    diagram: 'a "Diagram" section with a Mermaid diagram that shows a sequence of 3+ steps between 2+ actors, a state machine with 4+ states, or a data flow between 3+ components (if none does, write one line under Options: "No diagram: <why>")',
+    diagram: 'a Mermaid diagram (in any section) that shows a sequence of 3+ steps between 2+ actors, a state machine with 4+ states, or a data flow between 3+ components (if none does, write one line under Options: "No diagram: <your reason>")',
     diagram_trivial: "remove the diagram: it only branches into the options or has 4 or fewer nodes, and the Options table already says it (draw only what the table cannot: a sequence between actors, a state machine, a data flow)",
     checked: 'the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes)',
     footnote: 'a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked")',
@@ -263,7 +264,9 @@ function tableOk(t, labels) {
 function tableUndoOk(t, blocker) {
     const risk = columnsOf(t)[1];
     const fixed = Object.values(BLOCKER_LABELS).flatMap((names) => names.map(normalizeLabel));
-    return t.rows.every((r) => (blocker && fixed.includes(normalizeLabel(r[0] ?? ""))) || (UNDO_BAD_WORDS.test(r[risk] ?? "") || UNDO_WORDS.test(r[risk] ?? "")));
+    // A copied hint (`Undo: <how>`) says nothing: blank it before looking for undo words
+    const said = (cell) => cell.replace(/\bundo:\s*<[^>]*>/gi, "");
+    return t.rows.every((r) => (blocker && fixed.includes(normalizeLabel(r[0] ?? ""))) || UNDO_BAD_WORDS.test(said(r[risk] ?? "")) || UNDO_WORDS.test(said(r[risk] ?? "")));
 }
 /** Length limits (spec 3.2). Characters are code points after NFKC */
 export const LIMITS = { recommendChars: 400, recommendSentences: 5, cellChars: 160, whyChars: 600, assumptions: 3 };
@@ -365,15 +368,13 @@ function againstRepeats(against, recommendation) {
 function hasContent(lines, s) {
     return lines.slice(s.start + 1, s.end).some((l) => l.trim() !== "");
 }
-function sectionHasMermaid(blocks, s) {
-    return blocks.some((b) => b.lang === "mermaid" && b.start > s.start && b.start < s.end);
-}
 /** A line under Options that says why no diagram is drawn ("No diagram: <reason>", "図なし: <理由>") */
 const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
 function hasNoDiagramNote(lines, inFence, s) {
     for (let i = s.start + 1; i < s.end; i++) {
-        if (!inFence[i] && NO_DIAGRAM_NOTE.test(lines[i]))
-            return true;
+        const m = inFence[i] ? null : NO_DIAGRAM_NOTE.exec(lines[i]);
+        if (m && !/^[*_\x60\s]*</.test(m[1]))
+            return true; // a copied placeholder (`No diagram: <why>`) gives no reason
     }
     return false;
 }
@@ -539,7 +540,7 @@ export const COINED_ALLOW = new Set(("CI CD CLI API GUI TUI SSE URL URI HTTP HTT
 /** A short code: 1-4 letters, optional `-`, 1-4 letters / digits, with a digit or `-` in it (`W-T2`, `FT4`, `P-GH`, `TM28`) */
 export const COINED_TOKEN = /\b[A-Z]{1,4}\d{0,3}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
 /** Well-known code shapes blanked out before scanning: fiscal years, CVE ids, cloud regions, PCI-DSS, elliptic curves (`P-256`), MPEG-4, PM2.5 */
-export const COINED_SKIP = /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b/g;
+export const COINED_SKIP = /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b|\b(?:RS|HS|ES|PS)(?:256|384|512)\b|\bPG\d{2}\b|\bL\d+-L?\d+\b|#L\d+|\bV\d{3,}\b|\b[Ss]tage \d+(?= passed)|(?:ステップ|フェーズ|段階|工程|ラウンド)\s?\d+(?=\s?[件個本])|(?:[\w.-]+\/){2,}[\w.-]*|[\w-]+\.(?:md|txt|ts|tsx|js|mjs|py|rb|rs|go|json|ya?ml|toml|sh|sql|html)\b/g;
 const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Round", "Batch", "Lane"];
 const anyCase = (w) => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
 /** A process word plus a number / letter: `Phase 2`, `Gate B`, `Step 3a` (the keyword in any case; the id is digits or capitals so that "step by step" is not hit) */
@@ -829,7 +830,8 @@ export function validateExplanation(markdown, kind = "answer_question", labels, 
             missing.push("recommend");
         else {
             const text = sectionText(lines, inFence, recommend);
-            if (cpLength(text) > LIMITS.recommendChars || countSentences(text) > LIMITS.recommendSentences) {
+            const counted = condText(text);
+            if (cpLength(counted) > LIMITS.recommendChars || countSentences(counted) > LIMITS.recommendSentences) {
                 missing.push("recommend_long");
             }
             if (!RECOMMEND_COND.test(condText(text)))
@@ -853,9 +855,8 @@ export function validateExplanation(markdown, kind = "answer_question", labels, 
         (!scopeKnown || !revKnown || rev !== "reversible" || scope === "machine" || scope === "external");
     const trivial = blocker ? null : trivialDiagram(blocks, lines, okTables.flatMap((t) => t.rows.map((r) => r[0] ?? "")));
     if (diagramRequired && trivial === null) {
-        const diagram = findSection(headings, lines.length, SECTION.diagram);
         const noted = options !== null && hasNoDiagramNote(lines, inFence, options);
-        if ((!diagram || !sectionHasMermaid(blocks, diagram)) && !noted)
+        if (!blocks.some((b) => b.lang === "mermaid") && !noted)
             missing.push("diagram");
     }
     if (trivial !== null)
@@ -948,6 +949,33 @@ export async function findExplanation(dir, question, now = Date.now()) {
     if (recent.length === 1)
         return { path: recent[0].path, markdown: recent[0].markdown, match: "recency" };
     return null;
+}
+/** The newest `<name>.used.md` of `dir` whose `question:` equals the question (an earlier ask of it consumed the file), or null */
+export async function findUsedExplanation(dir, question) {
+    let names;
+    try {
+        names = (await readdir(dir)).filter((n) => n.endsWith(".used.md"));
+    }
+    catch {
+        return null;
+    }
+    let best = null;
+    for (const n of names) {
+        const path = join(dir, n);
+        try {
+            const [markdown, st] = await Promise.all([readFile(path, "utf8"), stat(path)]);
+            if (parseFrontMatter(toLines(markdown)).fields["question"] === question && (!best || st.mtimeMs > best.mtimeMs))
+                best = { path, mtimeMs: st.mtimeMs };
+        }
+        catch {
+            // ignore unreadable files
+        }
+    }
+    return best?.path ?? null;
+}
+/** The `Missing:` entry for a question whose file was renamed `.used.md` by an earlier ask */
+export function fileUsedLabel(path) {
+    return `a new explanation file: ${basename(path)} was used by the earlier ask of this question; write a new one for what the human said since`;
 }
 /** Rename `<name>.md` to `<name>.used.md` and return the new path */
 export async function markUsed(path) {
@@ -1052,7 +1080,7 @@ function templateBlock(p) {
                 `## ${SECTION.recommendation[0]}`,
                 "(the option you recommend and why; the last sentence names the condition that makes another option right)",
                 `## ${SECTION.assumptions[0]}  (one premise per bullet)`,
-                `## ${SECTION.diagram[0]}  (Mermaid; for anything not reversible, or scope machine / external)`,
+                `## ${SECTION.diagram[0]}  (Mermaid, or one line "No diagram: <your reason>" under Options; for anything not reversible, or scope machine / external)`,
                 `## ${SECTION.checked[0]}  (commands run and files read; evidence as [^1]: ... cited from the body; not needed for reversible + file)`,
             ];
     return "```\n" + body.join("\n") + "\n```";
@@ -1078,6 +1106,58 @@ export function handoffReason(kind, agent) {
         ? "Call ExitPlanMode again now with the same plan"
         : "Call AskUserQuestion again now with exactly the same question and options";
     return forAgent(tagged(`The human has not answered yet; the question stays open in ukagai. ${call} to keep waiting for the answer. Do not ask in prose and do not change the question.`), agent);
+}
+/** One-line counterparts of the deny reasons (the Claude Code red line); the reasons themselves become the hook context */
+function fixesLine(head, codes) {
+    const n = codes.length;
+    const base = `${head} needs ${n} fix${n === 1 ? "" : "es"}`;
+    const full = denyLine(`${base}: ${codes.join(", ")}`);
+    if (full.length <= DENY_LINE_MAX)
+        return full;
+    // Truncate the code list with an ellipsis so the line stays one terminal line
+    let list = codes.join(", ");
+    while (list.length > 0) {
+        list = list.slice(0, -1);
+        const line = denyLine(`${base}: ${list.trimEnd()}…`);
+        if (line.length <= DENY_LINE_MAX)
+            return line;
+    }
+    return denyLine(base);
+}
+/** The red line of a question denied for its explanation: no file (`used`: an earlier ask consumed it), or a file that needs fixes */
+export function explainDenyLine(p) {
+    const plan = p.planFile !== undefined;
+    if (p.codes.length === 1 && p.codes[0] === "file") {
+        if (plan)
+            return denyLine("Question not shown to the human yet: the plan file has no explanation block for it");
+        return denyLine(p.used ? "Question not shown to the human yet: its explanation file was used by the earlier ask" : "Question not shown to the human yet: it has no explanation file");
+    }
+    return fixesLine(plan ? "Question not shown to the human yet: its explanation block in the plan file" : "Question not shown to the human yet: its explanation file", p.codes);
+}
+/** The red line of an ExitPlanMode denied for a missing "Scope and reversibility" section */
+export function planDenyLine() {
+    return denyLine('Plan not shown to the human yet: it needs a "Scope and reversibility" section');
+}
+/** The red line of a call with several questions */
+export function multiDenyLine(count) {
+    return denyLine(`Questions not shown to the human yet: ask one per call (this call had ${count})`);
+}
+/** The red line of the hand-off deny */
+export function handoffLine(kind) {
+    return denyLine(`Still waiting for the human in ukagai: call ${kind === "approve_plan" ? "ExitPlanMode" : "AskUserQuestion"} again, unchanged`);
+}
+/** The deny of a question or plan registered for message delivery: the agent ends its turn, the answer comes later as a `[ukagai]` message (red line + hook context) */
+export function asyncDeny(kind = "answer_question") {
+    if (kind === "approve_plan") {
+        return {
+            line: denyLine("Plan sent to the human in ukagai: stay in plan mode and end your turn, the decision arrives as a message"),
+            context: "[ukagai] The plan is open for the human's review in the ukagai GUI. It is NOT approved. Stay in plan mode and do not implement. End your turn now. The human's decision will arrive later as a message that starts with [ukagai].",
+        };
+    }
+    return {
+        line: denyLine("Question sent to the human in ukagai: end your turn, the answer arrives as a message"),
+        context: "[ukagai] Your question is open in the ukagai GUI and is not answered yet. End your turn now: do not run other tools, do not call AskUserQuestion again and do not ask in prose. The human's answer will arrive later as a message that starts with [ukagai].",
+    };
 }
 function composeReason(template, p, missingText, withTail) {
     // With the human's version composeRaw already words the skill for the agent: only the question tool's name is swapped for Codex

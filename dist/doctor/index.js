@@ -6,6 +6,7 @@ import { findManaged, readSettings } from "../settings/merge.js";
 import { enabledClaudePlugin, enabledCodexPlugin } from "../settings/plugins.js";
 import { status as codexStatus } from "../install/codex.js";
 import { hasSkill, missingSkillFiles } from "../skill/files.js";
+import { hasMod, missingModFiles } from "../mod/files.js";
 import { REPO_ROOT, parseTarget } from "../settings/target.js";
 import { detectClaude, detectCodex, registeredClaude, registeredCodex } from "../settings/agents.js";
 import { VERSION } from "../version.js";
@@ -158,6 +159,13 @@ export async function run(argv) {
         }
         else
             add(true, "skill ukagai-explain", "not handled");
+        // Information only: without the mod the hooks wait as before
+        if (viaPlugin)
+            add(true, "mod", "from the plugin");
+        else if (t.handleSkill) {
+            const missing = hasMod(t.modDir) ? missingModFiles(t.modDir) : undefined;
+            add(true, "mod", missing === undefined ? "not placed (answers are waited for by the hook; run ukagai install to deliver them as messages)" : missing.length === 0 ? `${t.modDir} (delivers answers as messages in an interactive terminal)` : `missing ${missing.join(", ")} (run ukagai install)`);
+        }
     }
     // The human's own version of the skill (settings page, Skill): the hooks point the agent at it, so say so; stale = the shipped text changed since editing began
     const mine = await readSkill(t.dataDir);

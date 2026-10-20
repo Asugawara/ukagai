@@ -7,7 +7,9 @@ import { mergeHooks, readSettings, removeHooks, serialize, writeSettings } from 
 import { enabledClaudePlugin, enabledCodexPlugin } from "../settings/plugins.js";
 import { CODEX_SPECS, apply as applyCodex, plan } from "./codex.js";
 import { hasSkill, placeSkill, removeSkill } from "../skill/files.js";
-import { SKILL_DIR, hookInvocation, parseTarget } from "../settings/target.js";
+import { hasMod, placeMod, removeMod } from "../mod/files.js";
+import { getVersion } from "../version.js";
+import { MOD_DIR, SKILL_DIR, hookInvocation, parseTarget } from "../settings/target.js";
 import { claudeOptions, codexOptions, detectClaude, detectCodex, registeredClaude, registeredCodex, resolveOptions, tilde } from "../settings/agents.js";
 const exists = (p) => stat(p).then(() => true, () => false);
 const pluginLine = (key) => `plugin ${key} is enabled: hooks and skill come from the plugin (use --force to register them in settings.json as well)`;
@@ -46,9 +48,13 @@ async function installClaude(t, inv, emit) {
         if (plugin !== undefined) {
             if (t.handleSkill && hasSkill(t.skillDir))
                 emit(`skill: remove ${t.skillDir}/\n`);
+            if (t.handleSkill && hasMod(t.modDir))
+                emit(`mod: remove ${t.modDir}/\n`);
         }
-        else if (t.handleSkill)
+        else if (t.handleSkill) {
             emit(`skill: ${SKILL_DIR}/ -> ${t.skillDir}/\n`);
+            emit(`mod: ${MOD_DIR}/ -> ${t.modDir}/\n`);
+        }
         return o.dataDir;
     }
     if (plugin !== undefined) {
@@ -63,13 +69,17 @@ async function installClaude(t, inv, emit) {
             if (removed.length > 0)
                 emit(`skill:    removed ${removed.join(", ")} from ${t.skillDir}/\n`);
         }
+        if (t.handleSkill && removeMod(t.modDir))
+            emit(`mod:      removed ${t.modDir}/\n`);
         emit(pluginLine(plugin) + "\n");
         return o.dataDir;
     }
     // The same content is not written again: every write leaves a .bak-* next to the file
     const bak = changed ? await writeSettings(t.settingsFile, after) : null;
-    if (t.handleSkill)
+    if (t.handleSkill) {
         placeSkill(t.skillDir);
+        placeMod(t.modDir, { version: getVersion(), server: t.given.server ? t.server : undefined, dataDir: t.given.dataDir ? t.dataDir : undefined });
+    }
     emit(`settings: ${t.settingsFile}${changed ? "" : " (unchanged)"}\n`);
     if (bak)
         emit(`backup:   ${bak}\n`);
@@ -80,6 +90,8 @@ async function installClaude(t, inv, emit) {
     emit(`events:   ${HOOK_EVENTS.join(", ")}\n`);
     emit(o.noAutostart ? "autostart: off (--no-autostart)\n" : "autostart: on\n");
     emit((t.handleSkill ? `skill:    ${t.skillDir}/` : t.noSkill ? "skill:    (--no-skill)" : "skill:    (not handled because --settings was given; use --skill to place it)") + "\n");
+    if (t.handleSkill)
+        emit(`mod:      ${t.modDir}/ (answers reach an idle agent as messages; turn off with UKAGAI_MOD=0)\n`);
     return o.dataDir;
 }
 /** Register (or, with the plugin enabled, unregister) the hooks in Codex CLI's hooks.json and trust them in config.toml */

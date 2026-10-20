@@ -2,6 +2,7 @@
 // Display strings go through t() (i18n.js); the language is read from <html data-lang>.
 import { t, applyStatic, currentLang } from "./i18n.js";
 import { sanitize } from "./sanitize.js";
+import { icon } from "./icons.js";
 
 const MULTI_SELECT_SEPARATOR = ", "; // same value as src/contract.ts
 const FOLD_LINES = 9;
@@ -48,9 +49,9 @@ const columnLabel = (name) => (COLUMN_HAPPENS.test(name) ? t("col_happens") : CO
 // Words in a risk cell. Same lists as UNDO_BAD_WORDS / UNDO_WORDS in src/hook/explain.ts (N0): checked in that order, so
 // "cannot be restored" is red only. English is matched at word boundaries, Japanese anywhere.
 const UNDO_BAD_WORDS =
-  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i;
+  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と|(後から|あとから|後で|あとで)[^。]{0,20}?ことはでき(ない|ません)/i;
 const UNDO_WORDS =
-  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i;
+  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the|ukagai uninstall)\b|(?:^|[.;:]\s+|\b(?:you|we) can |\bby )(?:uninstall|switch back|turn (?:it|them) off|(?:change|set|turn) (?:it|them) back)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元|戻し方|取り消し(は|の)?不要|直せ(?!ない|ません)|補え(?!ない|ません)|再開(でき|すれば|するときは|するには)|(いつでも|あとで|後で|後から)[^。]{0,20}?(マージ|merge|push|入れ替え|差し替え|切り替え|試|戻|直|消|止め|閉じ|続け|独立|外|有効|無効|再開|再)[^。]{0,6}?(でき(る|ます)|られ(る|ます)|(?<![さかまわたなばがら])れ(る|ます)|[えけげせてねべめ](る|ます)|足せば|直す)(?!と困|が困|のは困)|(止め|解除|閉じ|消し|削除)るには|(解除|閉じ|消し|削除)れば|(止め|解除|閉じ|消し|削除)られ(?!ない|ません)|(終わったら|不要になったら)[^。]{0,10}?(止め|消(す(?!の)|せば|して)|閉じ|削除)|close すれば|何も(変わら(ない|ず)(?!まま)|残ら|有効化され|外に出)|残るもの(は|が)(ない|ありません)/i;
 const hasBad = (s) => UNDO_BAD_WORDS.test(s ?? "");
 
 // <coined> Suspicious identifiers (U1). Same rules as the coined-terms section of src/hook/explain.ts (COINED_ALLOW / COINED_TOKEN /
@@ -63,7 +64,7 @@ const COINED_ALLOW_WORDS =
 const COINED_ALLOW = new Set(COINED_ALLOW_WORDS.split(" "));
 const COINED_TOKEN = /\b[A-Z]{1,4}\d{0,3}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{1,3}[A-Z]?\b/g;
 const COINED_SKIP =
-  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b/g;
+  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b|\b(?:RS|HS|ES|PS)(?:256|384|512)\b|\bPG\d{2}\b|\bL\d+-L?\d+\b|#L\d+|\bV\d{3,}\b|\b[Ss]tage \d+(?= passed)|(?:ステップ|フェーズ|段階|工程|ラウンド)\s?\d+(?=\s?[件個本])|(?:[\w.-]+\/){2,}[\w.-]*|[\w-]+\.(?:md|txt|ts|tsx|js|mjs|py|rb|rs|go|json|ya?ml|toml|sh|sql|html)\b/g;
 const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Round", "Batch", "Lane"];
 const anyCase = (w) => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
 const COINED_PHASE_EN = new RegExp(
@@ -308,9 +309,11 @@ function documentImages(container, doc) {
       const name = (img.getAttribute("src") ?? "").trim().split(/[?#]/)[0].split("/").pop();
       const frame = el("figure", { class: "doc-frame" },
         el("div", { class: "doc-frame-bar" },
-          el("span", { class: "doc-frame-alt", text: alt || name }), el("span", { class: "chip", text: name }),
-          el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
-          el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, text: t("frame_full") })),
+          el("span", { class: "doc-frame-name" },
+            el("span", { class: "doc-frame-alt", title: alt || name, text: alt || name }), el("span", { class: "chip", title: name, text: name })),
+          // In a narrow frame (container query in app.css) the two buttons show only their icon; the text stays as title / aria-label
+          el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", title: t("frame_newtab"), "aria-label": t("frame_newtab") }, icon("external-link"), el("span", { class: "btn-text", text: t("frame_newtab") })),
+          el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, title: t("frame_full"), "aria-label": t("frame_full") }, icon("maximize"), el("span", { class: "btn-text", text: t("frame_full") }))),
         el("iframe", { class: "doc-frame-view", ...frameAttrs, src, loading: "lazy", title: alt || name }));
       img.replaceWith(frame);
       const fp = frame.parentElement;
@@ -437,9 +440,9 @@ function stepsLists(container) {
   }
 }
 
-// ==mark== in text (not in code, not across other inline elements)
+// ==mark== in text (not in code or a diagram, not across other inline elements)
 function inlineMarks(container) {
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest("pre, code, mark") || !n.data.includes("==") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest("pre, code, mark, svg") || !n.data.includes("==") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
   const nodes = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
   for (const n of nodes) {
@@ -636,12 +639,18 @@ function placeToasts() {
 
 const clip = (s, n = 40) => (s.length > n ? s.slice(0, n) + "…" : s);
 const LOST_KEYS = { answer_lost: "lost_answer_lost", hook_disconnected: "lost_hook_disconnected", cancelled: "lost_cancelled", fallback: "lost_fallback" };
+// A decision whose answer comes as a message from the ukagai mod (delivery "message"): its own words for what happened to it.
+// `superseded` only for an answer that was not delivered (a newer plan, or the re-call time limit); a pending plan a newer one replaced is just cancelled
+const MSG_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded"];
+const msgLostKey = (d) =>
+  d.delivery === "message" && (d.status === "answer_lost" || (d.status === "cancelled" && d.status_reason !== "superseded")) && MSG_LOST_REASONS.includes(d.status_reason) ? `lost_${d.status_reason}` : null;
 // When the status of a decision that is not shown changes
 function notifyBackground(prev, d) {
   if (!prev || prev.status === d.status) return;
   if (isCheckpoint(d) && d.status === "cancelled") return; // superseded / expired / new prompt: removed silently
   const title = clip(titleOf(d));
-  if (d.status === "cancelled" && prev.status === "pending") toast(t("cancelled_title", { title }), { kind: "lost", ms: 4000 });
+  if (msgLostKey(d)) toast(t(msgLostKey(d), { title, note: d.delivery_note ?? "" }), { kind: "lost", ms: 4000 });
+  else if (d.status === "cancelled" && prev.status === "pending") toast(t("cancelled_title", { title }), { kind: "lost", ms: 4000 });
   else if (LOST_KEYS[d.status]) toast(t(LOST_KEYS[d.status], { title }), { kind: "lost", ms: 4000 });
   else if (d.status === "answered") toast(isCheckpoint(d) ? (d.response?.kind === "continue" ? t("delivered_title", { title }) : t("checkpoint_sent")) : t("delivered_title", { title }), { kind: "soft" });
 }
@@ -1324,9 +1333,26 @@ const STATUS_KEYS = {
   fallback: "status_fallback",
   cancelled: "status_cancelled",
 };
-const statusText = (status, fallbackKey) => t(STATUS_KEYS[status] ?? fallbackKey);
+const MSG_STATUS_KEYS = { answer_submitted: "status_message_queued", answered: "status_message_delivered", fallback: "status_fallback_message" };
+// The status line of a decision (null: none). A message-delivery decision says when the answer will reach the agent, and why it is held up
+function statusLine(d) {
+  // The plan went through without auto mode: the waiting hook's ack or ExitPlanMode's PostToolUse used its grant without switching
+  if (d.delivery_flag === "auto_not_applied") return t("note_auto_not_applied");
+  if (d.delivery === "message") {
+    const lost = msgLostKey(d);
+    if (lost) return t(lost, { title: clip(titleOf(d)), note: d.delivery_note ?? "" });
+    const live = d.status === "pending" || d.status === "answer_submitted";
+    if (live && d.delivery_flag === "no_agent") return t("note_no_agent");
+    if (MSG_STATUS_KEYS[d.status]) {
+      const text = t(MSG_STATUS_KEYS[d.status]);
+      return d.status === "answer_submitted" && d.delivery_note ? `${text} — ${t("note_drop", { note: d.delivery_note })}` : text;
+    }
+  }
+  return STATUS_KEYS[d.status] ? t(STATUS_KEYS[d.status]) : null;
+}
+const statusText = (d, fallbackKey) => statusLine(d) ?? t(fallbackKey);
 // An answered checkpoint was sent, not delivered: its text reaches the agent later (the delivered toast follows)
-const answeredText = (d, fallbackKey) => (d.response?.instruct ? t("plan_instructed", { text: clip(d.response.text ?? "") }) : isCheckpoint(d) && d.status === "answered" && d.response?.kind !== "continue" ? t("checkpoint_sent") : statusText(d.status, fallbackKey));
+const answeredText = (d, fallbackKey) => (d.response?.instruct ? t("plan_instructed", { text: clip(d.response.text ?? "") }) : isCheckpoint(d) && d.status === "answered" && d.response?.kind !== "continue" ? t("checkpoint_sent") : statusText(d, fallbackKey));
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
@@ -1741,7 +1767,8 @@ function renderRightBody(d) {
   if (!d) return;
   const dr = draftOf(d);
   const closed = d.status !== "pending";
-  if (STATUS_KEYS[d.status]) root.append(el("div", { class: "status", text: statusText(d.status) }));
+  const status = statusLine(d);
+  if (status) root.append(el("div", { class: "status", text: status }));
 
   if (d.kind === "answer_question") {
     const qs = d.request.questions;
@@ -2281,7 +2308,7 @@ async function sendPlanInstruct(pd, dr, text) {
   try {
     const { delivered_via } = await post(`/api/plans/${encodeURIComponent(planNameOf(pd.id))}/instruct`, { text });
     dr.instruct = "";
-    toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), { kind: "ok" });
+    toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : delivered_via === "message" ? "plan_instruct_message" : "plan_instruct_sent"), { kind: "ok" });
   } catch (e) {
     if (e.status === 409) toast(t("plan_instruct_stop_queued"), { kind: "lost", ms: 4000 }); // a stop is queued for the session
     else if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
@@ -2502,7 +2529,7 @@ function softHyphens(root) {
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const escAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const SKIP_RICH = "pre, .term, .term-undef, .optref, .fn, .fn-n, button, .risk-bad, .risk-undo, .num, .cbadge";
+const SKIP_RICH = "pre, svg, .term, .term-undef, .optref, .fn, .fn-n, button, .risk-bad, .risk-undo, .num, .cbadge";
 
 // Wrap every match of the global regex `re` in text nodes under root; make(m) returns the node to put in, or null to leave the text
 function wrapText(root, re, make, skip = SKIP_RICH) {
@@ -2552,7 +2579,7 @@ function undefMarks(root, tokens) {
 // Option labels: a <strong> / <code> that is exactly a label (any length); plain text for labels of 3+ characters
 function optMarks(root, opts) {
   for (const e of root.querySelectorAll("strong, code")) {
-    if (e.closest("pre, .optref")) continue;
+    if (e.closest("pre, svg, .optref")) continue;
     const o = opts.find((x) => sameLabel(x.label, e.textContent ?? ""));
     if (o) { e.classList.add("optref"); e.style.setProperty("--oc", o.color); }
   }
@@ -3488,8 +3515,21 @@ function notifyArrival(d) {
   }
 }
 
+// Decisions whose "auto mode was not switched on" was toasted (once each; the initial list of a page load never toasts it)
+const autoNotAppliedToasted = new Set();
 function upsert(d) {
   const prev = decisions.get(d.id);
+  // The flag comes after the plan's card closed (the ExitPlanMode that went through), so the card never shows it: a toast does, whatever is shown,
+  // after the other toasts of this update
+  const autoNote = loaded && d.delivery_flag === "auto_not_applied" && prev?.delivery_flag !== "auto_not_applied" && !autoNotAppliedToasted.has(d.id);
+  if (autoNote) autoNotAppliedToasted.add(d.id);
+  try {
+    upsertDecision(d, prev);
+  } finally {
+    if (autoNote) toast(t("note_auto_not_applied"), { kind: "lost", ms: 6000 });
+  }
+}
+function upsertDecision(d, prev) {
   decisions.set(d.id, d);
   if (d.kind === "approve_plan") queueMicrotask(refreshShownVersions);
   if (!prev && d.status === "pending" && loaded) notifyArrival(d);

@@ -17,6 +17,7 @@ ukagai intercepts the decisions a coding agent asks a human for (Claude Code's `
 - **The agent explains in rich Markdown and you see it rendered.** Diagrams (Mermaid), diffs, images and whole HTML pages, such as UI or landing-page variants in a sandboxed frame that runs no script of the page's own (full screen with zoom, or in a new tab without any script), appear next to the options, so you compare and decide in one place.
 - **One inbox across sessions and agents.** Claude Code and Codex CLI, questions and plan approvals, with a pending list and history.
 - **No MCP, nothing added to every turn.** Hooks and a skill intercept the agent's own `AskUserQuestion` / plan approval; no tool definitions sit in the context.
+- **A light GUI.** Mermaid diagrams are drawn by [pele](https://github.com/obsidianmd/pele) (682 KB) instead of mermaid.js (5.5 MB): the release is 22% smaller and the GUI page loads about three times faster.
 
 ![Two onboarding-page variants proposed by the agent, side by side in the GUI](docs/images/compare.png)
 
@@ -28,7 +29,7 @@ Coding agents stop and ask a question mid-task, and those questions scatter acro
 
 ## Quick start
 
-Requirements: Node.js >= 22, macOS or Linux (Windows is not supported), Claude Code and / or Codex CLI.
+Requirements: Node.js >= 22, macOS or Linux (Windows is not supported), Claude Code (2.1.304 or later) and / or Codex CLI.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
@@ -46,6 +47,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 - **Plan approval**: approve (and continue in auto mode), instruct ("do this first") or reject. [Guide](docs/guide.md#plan-approval)
 - **Progress checkpoints**: answer the agent's session recap with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
 - **TUI**: the same screen in the terminal, `ukagai tui`. [Guide](docs/guide.md#the-tui)
+- **Answers as messages**: in an interactive Claude Code terminal the agent ends its turn instead of waiting, and your answer arrives as a message once it is idle (on by default, three ways to turn it off). [Guide](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **Codex CLI**: hooks plus a bridge for plan approval. [Guide](docs/guide.md#codex-cli)
 - **Settings page**: language, theme, notifications, plan auto-show, and the skill text the agent follows. [Guide](docs/guide.md#settings)
 - **Rich Markdown**: callouts, Mermaid, diffs, task lists and more in explanations and plans. [Guide](docs/guide.md#rich-markdown)
@@ -58,7 +60,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 
 ## Install options
 
-`install.sh` installs the binary and then runs `ukagai install`, which registers the hooks and the skill for every agent it finds (and backs up your settings first). `wget` works too.
+`install.sh` installs the binary and then runs `ukagai install`, which registers the hooks and the skill for every agent it finds (and backs up your settings first). For Claude Code it also places the ukagai mod as a small plugin of its own at `~/.claude/skills/ukagai-mod/` (skipped when the ukagai plugin is enabled, which brings the mod itself). `wget` works too.
 
 An agent counts as found when:
 
@@ -88,7 +90,7 @@ The old `--lang`, `--codex` and `--claude` are ignored with a warning, and `ukag
 
 A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. If you also ran `install.sh`, `ukagai install` removes its own registration so the hooks run once.
 
-**Update**: run the install command again. It re-registers only the agents that are already registered, and keeps their options (`--timeout`, `--observe`, `--no-autostart`, `--server`, `--data-dir`); to put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. A running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first) removes the hooks and the skill from both Claude Code and Codex CLI (`--claude` or `--codex` picks one) and stops the server once no hooks remain (if one agent fails, the other is still removed, the command exits 1 and the server is left running), then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
+**Update**: run the install command again. It re-registers only the agents that are already registered, and keeps their options (`--timeout`, `--observe`, `--no-autostart`, `--server`, `--data-dir`); to put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. A running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first) removes the hooks, the skill and the ukagai mod from both Claude Code and Codex CLI (`--claude` or `--codex` picks one) and stops the server once no hooks remain (if one agent fails, the other is still removed, the command exits 1 and the server is left running), then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
 
 Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troubleshooting)).
 
@@ -101,7 +103,8 @@ Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troublesho
 | `docs/spec/api.md` | Server API, state transitions, authorization |
 | `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
 | `docs/spec/markdown.md` | The Markdown dialect explanations and plans are written in |
-| `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 wake-up turns and the progress check) |
+| `docs/spec/codex-bridge.md` | The Codex bridge: plan approval and progress checkpoints through the Codex app-server |
+| `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 the mode after plan approval, wake-up turns and the progress check, 07 install from the release on every distribution path, 08 the edited skill is read without a permission prompt) |
 | `skills/ukagai-explain/` | The skill (`SKILL.md`) that teaches Claude how to write explanations, plus the `reference/` files it reads when needed |
 
 ## Development

@@ -198,11 +198,11 @@ th, td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vert
 th { background: var(--code); }
 pre { background: var(--code); padding: 8px 10px; border-radius: 6px; overflow-x: auto; margin: 6px 0; font-size: 12px; line-height: 1.5; }
 code { background: var(--code); border-radius: 3px; padding: 0 3px; white-space: normal; overflow-wrap: anywhere; hyphens: none; }
-pre code { background: none; padding: 0; white-space: pre; overflow-wrap: normal; }
+pre code { background: none; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff .add { background: var(--add); display: block; }
 .diff .del { background: var(--del); display: block; }
 .diff .hunk { background: var(--hunk); display: block; }
-.diff span { white-space: pre; }
+.diff span { white-space: pre-wrap; overflow-wrap: anywhere; }
 .mermaid-err { color: var(--red); font-size: 13px; margin-top: 6px; }
 /* pele reads --pele-* (colors switch with the theme tokens, no re-render). --pele-font is not set: render() gets the font so measuring and drawing agree */
 .mermaid-ok {
@@ -269,6 +269,7 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--fg); }
 .todo { border: 2px solid var(--blocker); background: color-mix(in srgb, var(--blocker) 8%, transparent); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 .todo-cap { font-size: 12px; font-weight: 700; color: var(--fg); }
 .codewrap { position: relative; }
+.codewrap > pre { padding-right: 64px; } /* wrapped lines stay clear of the copy button */
 .copy-btn { position: absolute; top: 12px; right: 6px; font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }
 
 /* Folding of long text (`.` or the header's "Show all" expands everything): the headline and the card bodies 2 lines (the card under the cursor is whole), the plan's scope 8 */
@@ -574,9 +575,20 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .md figure.doc-img figcaption { font-size: 12px; color: var(--fg); margin-top: 4px; }
 .md .img-missing { color: var(--fg); font-size: 12px; }
 .md figure.doc-frame { margin: 10px 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--code); }
-.doc-frame-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--fg); }
-.doc-frame-alt { font-weight: 700; flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.doc-frame-bar .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
+.doc-frame-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--fg); }
+/* The name group shrinks first (alt and file name end in an ellipsis); only when even that does not fit do whole items move to a second row */
+.doc-frame-name { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 12ch; }
+.doc-frame-alt { font-weight: 700; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-frame-bar .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; white-space: nowrap; flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open { white-space: nowrap; flex: none; }
+.doc-frame-bar svg { display: none; width: 14px; height: 14px; vertical-align: -2px; }
+/* The frame, not the window, decides: a column shows icon-only buttons (the text is the title / aria-label), a wide frame the text buttons */
+.md figure.doc-frame { container-type: inline-size; }
+@container (max-width: 440px) {
+  .doc-frame-bar .btn-text { display: none; }
+  .doc-frame-bar svg { display: inline-block; }
+  .doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open { padding: 2px 7px; line-height: 1; display: inline-flex; align-items: center; }
+}
 .doc-frame-full, .doc-frame-open, .frame-btn { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
 .doc-frame-open, .frame-btn { text-decoration: none; }
 .doc-frame-full:hover, .doc-frame-open:hover, .frame-btn:hover { border-color: var(--accent); }

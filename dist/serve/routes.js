@@ -4,7 +4,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { AnswerRequest, DEFAULT_SETTINGS, CheckpointRequest, PlanReadRequest, PlanInstructRequest, Settings, SkillPut, CreateDecisionRequest, DecisionStatus, EventInput, POLL_TIMEOUT_MS, PLAN_BLOCK_SUFFIX, isAllowedExplanationPath, isPlanFile, plansDir, isAllowedTranscriptPath, } from "../contract.js";
+import { AnswerRequest, DEFAULT_SETTINGS, CheckpointRequest, AckRequest, ConsumePlanGrantRequest, DecisionAckRequest, PlanReadRequest, PlanInstructRequest, PollRequest, ReleaseRequest, Settings, SkillPut, CreateDecisionRequest, DecisionStatus, EventInput, POLL_TIMEOUT_MS, PLAN_BLOCK_SUFFIX, isAllowedExplanationPath, isPlanFile, plansDir, isAllowedTranscriptPath, } from "../contract.js";
 import { VERSION } from "../version.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
@@ -440,8 +440,9 @@ export function createApp(deps) {
         }
         return c.json({ response: d.response });
     });
-    app.post("/api/decisions/:id/ack", auth("bearer"), jsonOnly, (c) => {
-        return c.json(store.ack(c.req.param("id")));
+    app.post("/api/decisions/:id/ack", auth("bearer"), jsonOnly, async (c) => {
+        const body = await parse(c, DecisionAckRequest);
+        return c.json(store.ack(c.req.param("id"), body.keep_plan_grant === true));
     });
     // The hook's budget for this leg ended; the agent is asked to call the tool again and the hook re-attaches (GET /api/sessions/:id/open)
     app.post("/api/decisions/:id/handoff", auth("bearer"), jsonOnly, async (c) => {
@@ -489,24 +490,53 @@ export function createApp(deps) {
         const toolUseId = c.req.query("tool_use_id");
         if (!fingerprint || !toolUseId)
             return c.json({ error: "fingerprint and tool_use_id are required" }, 400);
-        const open = store.findOpen(c.req.param("id"), c.req.query("agent_id") || undefined, fingerprint);
+        const open = store.openFor(c.req.param("id"), c.req.query("agent_id") || undefined, fingerprint, toolUseId);
         if (!open)
             return c.json({ error: "no open decision" }, 404);
-        return c.json({ decision: store.reattach(open, toolUseId) });
+        return c.json(open);
     });
-    // The human's reply to a progress checkpoint, for the agent's next tool call. Reading it consumes it
+    // The human's reply to a progress checkpoint, for the agent's next tool call. Reading it consumes it.
+    // `main=1` (the main agent's hook): when there is no reply but an answer is on its way as a message, `waiting` tells the hook to hold the tool back
     app.get("/api/sessions/:id/instruction", auth("bearer"), (c) => {
-        const instruction = store.consumeInstruction(c.req.param("id"));
-        return instruction ? c.json({ instruction }) : c.json({ error: "no instruction" }, 404);
+        const id = c.req.param("id");
+        const instruction = store.consumeInstruction(id);
+        if (instruction)
+            return c.json({ instruction });
+        const waiting = c.req.query("main") === "1" ? store.waitingFor(id) : undefined;
+        return waiting ? c.json({ waiting }) : c.json({ error: "no instruction" }, 404);
     });
-    app.get("/api/sessions/:id/pending-mode-switch", auth("bearer"), (c) => {
-        return c.json(store.getModeSwitch(c.req.param("id")));
+    // The ukagai mod's inbox (message delivery): it polls, takes one answer at a time, then acks or releases it. Any of the three counts as the mod being alive
+    const inboxReply = (c, r) => (r.http === 404 ? c.json({ error: "no such item" }, 404) : c.json({ status: r.status }, r.http));
+    app.post("/api/sessions/:id/inbox/poll", auth("bearer"), jsonOnly, async (c) => {
+        const body = await parse(c, PollRequest);
+        const r = store.inboxPoll(c.req.param("id"), body.owner, body.idle);
+        return r ? c.json(r) : c.body(null, 204);
     });
-    app.post("/api/sessions/:id/pending-mode-switch/consume", auth("bearer"), jsonOnly, (c) => {
-        return c.json({ consumed: store.consumeModeSwitch(c.req.param("id")) });
+    app.post("/api/sessions/:id/inbox/ack", auth("bearer"), jsonOnly, async (c) => {
+        const body = await parse(c, AckRequest);
+        return inboxReply(c, store.inboxAck(c.req.param("id"), body.owner, body.item_id));
     });
-    app.post("/api/sessions/:id/pending-mode-switch/ask", auth("bearer"), jsonOnly, (c) => {
-        return c.json({ ask: store.askModeSwitch(c.req.param("id")) });
+    app.post("/api/sessions/:id/inbox/release", auth("bearer"), jsonOnly, async (c) => {
+        const body = await parse(c, ReleaseRequest);
+        return inboxReply(c, store.inboxRelease(c.req.param("id"), body.owner, body.item_id, body.drop));
+    });
+    // A plan the human approved: the same plan is let through once. For message delivery the re-called ExitPlanMode (PreToolUse for a plain
+    // approval, PermissionRequest for "approve and auto"); for the waiting hook the PermissionRequest of "approve and auto". Both need the session and the plan's fingerprint to match
+    app.get("/api/sessions/:id/plan-grant", auth("bearer"), (c) => {
+        const fp = ConsumePlanGrantRequest.safeParse({ fingerprint: c.req.query("fingerprint") });
+        if (!fp.success)
+            return c.json({ error: "fingerprint is required" }, 400);
+        const grant = store.planGrant(c.req.param("id"), fp.data.fingerprint);
+        return grant ? c.json({ grant }) : c.json({ error: "no grant" }, 404);
+    });
+    app.post("/api/sessions/:id/plan-grant/consume", auth("bearer"), jsonOnly, async (c) => {
+        const body = await parse(c, ConsumePlanGrantRequest);
+        return c.json(store.consumePlanGrant(c.req.param("id"), body.fingerprint));
+    });
+    // The PreToolUse leaves an "approve and auto" grant to the PermissionRequest of the same call (once; a second hand writes it off)
+    app.post("/api/sessions/:id/plan-grant/hand", auth("bearer"), jsonOnly, async (c) => {
+        const body = await parse(c, ConsumePlanGrantRequest);
+        return c.json(store.handPlanGrant(c.req.param("id"), body.fingerprint));
     });
     app.get("/api/sessions/:id/pending-rewrite", auth("bearer"), (c) => {
         return c.json(store.getRewrite(c.req.param("id")));

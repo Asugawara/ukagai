@@ -48,6 +48,7 @@ export function normalizeConfig(rawIn) {
             browser: bool(obj(raw.notify).browser, d.notify.browser),
             title_badge: bool(obj(raw.notify).title_badge, d.notify.title_badge),
         },
+        claude: { message_delivery: bool(obj(raw.claude).message_delivery, d.claude.message_delivery) },
     };
 }
 /** Read `<data-dir>/config.json`. Missing or malformed file yields the defaults (never throws). */

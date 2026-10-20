@@ -1,4 +1,4 @@
-import { createReadStream, statSync } from "node:fs";
+import { closeSync, createReadStream, openSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { TRANSCRIPT_MAX_BYTES, isAllowedTranscriptPath } from "../contract.js";
@@ -19,10 +19,74 @@ const INTERRUPT_MARKER = /^\[Request interrupted by user/;
 function cut(text, max) {
     return text.length > max ? text.slice(0, max) + "…" : text;
 }
+function originKind(rec) {
+    const o = rec.origin;
+    return typeof o === "object" && o !== null ? o.kind : undefined;
+}
+/** All text of a transcript `user` record (a string content, or the text blocks) */
+function recordText(rec) {
+    const msg = rec.message;
+    if (!msg)
+        return "";
+    if (typeof msg.content === "string")
+        return msg.content;
+    if (!Array.isArray(msg.content))
+        return "";
+    const texts = [];
+    for (const block of msg.content) {
+        const b = block;
+        if (b && typeof b === "object" && b.type === "text" && typeof b.text === "string")
+            texts.push(b.text);
+    }
+    return texts.join("\n");
+}
+/** The most a delivery check reads (what was appended since the claim is small; this only bounds a lost offset) */
+const DELIVERY_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+/**
+ * Whether the transcript has, from byte `offset` on, a message a plugin submitted (`origin.kind` "plugin") carrying
+ * `[ukagai] (ref <ref>)`: the proof that a delivery reached the conversation. Unreadable or missing means false (a double
+ * delivery is better than a lost answer). `path` is a decision's transcript, already checked when the decision was registered. Reads only what was appended since `offset`, at most 8 MiB
+ */
+export function transcriptHasDelivery(path, offset, ref) {
+    let fd;
+    try {
+        const size = statSync(path).size;
+        const start = Math.max(0, Math.min(offset, size), size - DELIVERY_SCAN_MAX_BYTES);
+        if (size <= start)
+            return false;
+        fd = openSync(path, "r");
+        const buf = Buffer.alloc(size - start);
+        const n = readSync(fd, buf, 0, buf.length, start);
+        const needle = `[ukagai] (ref ${ref})`;
+        for (const line of buf.subarray(0, n).toString("utf8").split("\n")) {
+            if (!line.includes('"type":"user"') || !line.includes(ref))
+                continue;
+            try {
+                const rec = JSON.parse(line);
+                if (rec.type === "user" && originKind(rec) === "plugin" && recordText(rec).includes(needle))
+                    return true;
+            }
+            catch {
+                // a broken line, or the first one cut by the offset
+            }
+        }
+        return false;
+    }
+    catch {
+        return false;
+    }
+    finally {
+        if (fd !== undefined)
+            closeSync(fd);
+    }
+}
 /** The human-typed text of a transcript `user` record, or undefined if the line is not a human instruction */
 function humanText(rec) {
     // Sidechains are subagent prompts, meta records are harness text (caveats, agent messages), compact summaries are written by the model
     if (rec.isSidechain === true || rec.isMeta === true || rec.isCompactSummary === true)
+        return undefined;
+    // A message a plugin submitted (the ukagai mod delivering an answer) is not something the human typed
+    if (originKind(rec) === "plugin")
         return undefined;
     const msg = rec.message;
     if (!msg || msg.role !== "user")

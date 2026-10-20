@@ -1,3 +1,4 @@
+import { denyLine, denyOutput } from "./deny.js";
 /** Why a Bash call that opens a file for the human is refused */
 export const OPEN_DENY_REASON = "[ukagai] Do not open files for the human; they read ukagai. Reference the file from the explanation instead: ![alt](x.png) for an image, ![alt](x.html) for an HTML page (the GUI renders it in a sandboxed frame).";
 const OPENERS = new Set(["open", "xdg-open", "start"]);
@@ -46,9 +47,7 @@ export function openGuard(input, dataDir) {
             targets.push(a);
         }
         if (targets.some((t) => isFileTarget(t, dataDir))) {
-            return {
-                hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: OPEN_DENY_REASON },
-            };
+            return denyOutput({ line: denyLine("Not opened: the human reads files in ukagai, not in a viewer"), context: OPEN_DENY_REASON });
         }
     }
     return null;

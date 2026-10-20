@@ -36,7 +36,9 @@ export async function start(opts = {}) {
     if (!planRead.exists())
         planRead.seed(await listPlans(home));
     let planReady;
+    const settings = await SettingsStore.load(dataDir);
     const store = new Store({
+        messageDelivery: () => settings.get().claude.message_delivery,
         dir: dataDir,
         leaseGraceMs: opts.leaseGraceMs ?? LEASE_GRACE_MS,
         handoffGraceMs: opts.handoffGraceMs,
@@ -72,7 +74,6 @@ export async function start(opts = {}) {
         });
     });
     planReady = new PlanReady(store, planSessions, (event, data) => hub.broadcast(event, data), dataDir);
-    const settings = await SettingsStore.load(dataDir);
     const { lang } = settings.get();
     const token = randomBytes(32).toString("hex");
     let port = opts.port ?? DEFAULT_PORT;
