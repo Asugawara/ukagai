@@ -267,7 +267,7 @@ export class Store {
 
   /** The newest undelivered instruction of each session (at most CHECKPOINT_TTL_MS old) is still waiting after a restart */
   private restoreInstructions(): void {
-    const now = Date.now();
+    const now = this.clock();
     for (const d of this.decisions.values()) {
       const r = d.response;
       if (d.kind !== "checkpoint" || d.status !== "answered" || !r || r.delivered_at || (r.kind !== "instruct" && r.kind !== "stop")) continue;
@@ -529,7 +529,7 @@ export class Store {
     for (const [sid, ins] of this.instructions) {
       if (ins.decision_id !== decisionId) continue;
       // Typing starts a new turn: only for an agent that is still idle, and not for a reply the human gave long ago
-      if (this.sessions.get(sid)?.state !== "idle" || Date.now() - Date.parse(ins.created_at) > maxAgeMs || this.hasOpenAsync(sid)) return undefined;
+      if (this.sessions.get(sid)?.state !== "idle" || this.clock() - Date.parse(ins.created_at) > maxAgeMs || this.hasOpenAsync(sid)) return undefined;
       this.instructions.delete(sid);
       this.modBypass.delete(sid);
       return ins;
@@ -542,7 +542,8 @@ export class Store {
    * Claude Code agent calls no tool, so it is offered to the terminal delivery, which resolves with how it went
    */
   async queuePlanInstruction(sessionId: string, text: string): Promise<DeliveredVia> {
-    const created_at = new Date().toISOString();
+    // The store's clock, like a checkpoint reply's `decided_at`: the instruction's time limit is checked against it
+    const created_at = new Date(this.clock()).toISOString();
     const queued = this.instructions.get(sessionId);
     // A queued stop must still reach the agent; a queued reply or earlier plan instruction keeps its identity (so its checkpoint is marked delivered) and the texts are joined
     if (queued?.kind === "stop") throw new HttpError(409, "a stop is queued for this session");
@@ -1311,6 +1312,8 @@ export class Store {
     // An approval whose grant is gone would tell the agent "it will be allowed" for a plan that is not: it is not delivered
     if (this.approvalWithoutGrant(next)) {
       this.closeUndelivered(next, "superseded");
+      // An instruction that waited behind it in the hook queue may go now (as when a delivery completes)
+      if (this.sessions.get(sessionId)?.state === "idle" && !this.hasOpenAsync(sessionId)) this.offerToMod(sessionId);
       return this.inboxPoll(sessionId, owner, idle);
     }
     next.mod_owner = owner;

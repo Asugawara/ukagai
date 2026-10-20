@@ -882,7 +882,7 @@ test("instruction: a join renews the time limit of the item", () => {
   item.created_at = "2020-01-01T00:00:00.000Z"; // old enough to expire at once
   replyCheckpoint(h, 5, "two");
   assert.ok(item.created_at > "2026", "the newest text sets the clock");
-  h.store.checkLeases(Date.now() + 1000);
+  h.store.checkLeases(h.now() + 1000); // the store's clock: the reply's time is the store's too
   assert.equal(items.size, 1, "not expired");
 });
 

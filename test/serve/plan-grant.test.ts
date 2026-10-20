@@ -455,3 +455,39 @@ test("M5: calling a plan again whose approval was written off goes back to the h
   assert.equal(h.store.openFor(SID, undefined, FP, "toolu_again"), undefined);
   assert.equal(get(h, d).status, "answer_lost");
 });
+
+// ---- with the inbox instructions (a plan instruction that has no decision) ----
+
+test("a plan instruction sent while the approval waits for delivery waits behind it: the approval goes first, the instruction after the agent's next stop", async () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d);
+  h.event("Stop", { permission_mode: "plan" }); // the agent ended its turn after the deny: idle
+  assert.equal(await h.store.queuePlanInstruction(SID, "also check the tests"), "hook", "held back: an approval is on its way");
+  const first = h.poll(A, true);
+  assert.ok(first && "item" in first && first.item.item_id === d.id, "the approval first");
+  assert.match(first.item.text, /The human approved your plan/);
+  assert.deepEqual(h.poll(A, true), { held: { item_id: d.id } });
+  assert.deepEqual(h.store.inboxAck(SID, A, d.id), { http: 200, status: "answered" });
+  assert.ok(h.store.planGrant(SID, FP), "the grant is still there for the re-call");
+  h.event("Stop", { permission_mode: "plan" }); // the delivery turn ended
+  const next = h.poll(A, true);
+  assert.ok(next && "item" in next && next.item.item_id !== d.id, "then the instruction");
+  assert.match(next.item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) About the plan you are writing: also check the tests$/);
+});
+
+test("an approval whose grant was written off while an instruction waited behind it: the poll closes the approval and hands out the instruction at once", async () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d);
+  h.event("Stop", { permission_mode: "plan" });
+  assert.equal(await h.store.queuePlanInstruction(SID, "note"), "hook");
+  h.event("Stop", { permission_mode: "default" }); // the human left plan mode by hand: the grant is written off, the approval is still queued
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  assert.equal(get(h, d).status, "answer_submitted");
+  const r = h.poll(A, true);
+  assert.ok(r && "item" in r && r.item.item_id !== d.id, "not the approval: the instruction");
+  assert.match(r.item.text, /About the plan you are writing: note$/);
+  assert.equal(get(h, d).status, "answer_lost");
+  assert.equal(get(h, d).status_reason, "superseded");
+});
