@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { HerdrTerminal, replyLine, terminalLabel, TerminalTypeError } from "../../src/serve/terminal.js";
 
 const dir = mkdtempSync(join(tmpdir(), "ukagai-term-"));
-after(() => rmSync(dir, { recursive: true, force: true }));
+// A fake herdr that the server's poller started may still be running when the file ends, and its `>>` recreates argv.log after rmSync removed it (ENOTEMPTY)
+after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 const LIST = JSON.stringify({
   result: {
