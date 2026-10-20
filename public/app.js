@@ -3513,8 +3513,21 @@ function notifyArrival(d) {
   }
 }
 
+// Decisions whose "auto mode was not switched on" was toasted (once each; the initial list of a page load never toasts it)
+const autoNotAppliedToasted = new Set();
 function upsert(d) {
   const prev = decisions.get(d.id);
+  // The flag comes after the plan's card closed (the ExitPlanMode that went through), so the card never shows it: a toast does, whatever is shown,
+  // after the other toasts of this update
+  const autoNote = loaded && d.delivery_flag === "auto_not_applied" && prev?.delivery_flag !== "auto_not_applied" && !autoNotAppliedToasted.has(d.id);
+  if (autoNote) autoNotAppliedToasted.add(d.id);
+  try {
+    upsertDecision(d, prev);
+  } finally {
+    if (autoNote) toast(t("note_auto_not_applied"), { kind: "lost", ms: 6000 });
+  }
+}
+function upsertDecision(d, prev) {
   decisions.set(d.id, d);
   if (d.kind === "approve_plan") queueMicrotask(refreshShownVersions);
   if (!prev && d.status === "pending" && loaded) notifyArrival(d);

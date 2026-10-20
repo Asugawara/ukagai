@@ -157,6 +157,8 @@ export class App {
   private toast: { text: string; until: number } | null = null;
   private sending = new Set<string>();
   private sent = new Set<string>();
+  /** Decisions whose "auto mode was not switched on" was shown (once each) */
+  private autoNoted = new Set<string>();
   /** Server address (shown in the footer "cannot connect" message; set by index.ts) */
   server = "";
   /** The SSE stream is down (the safety poll then refetches the plans too) */
@@ -232,6 +234,11 @@ export class App {
     }
     if (d.kind === "checkpoint" && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) {
       this.showToast(t(this.lang, "checkpoint_delivered"), now);
+    }
+    // The flag comes after the plan's card closed (the ExitPlanMode that went through): a toast says it, once, whatever is shown
+    if (d.delivery_flag === "auto_not_applied" && prev?.delivery_flag !== "auto_not_applied" && !this.autoNoted.has(d.id)) {
+      this.autoNoted.add(d.id);
+      this.showToast(t(this.lang, "note_auto_not_applied"), now);
     }
     if (d.id === this.shownId) {
       if (d.status !== "pending") this.advance(now);
