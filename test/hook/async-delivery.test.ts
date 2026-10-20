@@ -29,7 +29,8 @@ It has to be decided.
 I recommend A. If C, choose B.
 `;
 
-const ASYNC_REASON =
+const ASYNC_LINE = "[ukagai, not a failure] Question sent to the human in ukagai: end your turn, the answer arrives as a message (see hook context).";
+const ASYNC_CONTEXT =
   "[ukagai] Your question is open in the ukagai GUI and is not answered yet. End your turn now: do not run other tools, do not call AskUserQuestion again and do not ask in prose. The human's answer will arrive later as a message that starts with [ukagai].";
 
 function t1(scratchpad: string, extra: Record<string, unknown> = {}) {
@@ -53,8 +54,9 @@ test("registered for message delivery: sends mod_owner, denies at once, never wa
     const r = await runHook(args(f, d), JSON.stringify(t1(sp)), undefined, { UKAGAI_MOD_OWNER: OWNER });
     assert.equal(r.code, 0);
     assert.deepEqual(JSON.parse(r.stdout), {
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ASYNC_REASON },
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ASYNC_LINE, additionalContext: ASYNC_CONTEXT },
     });
+    assert.ok(ASYNC_LINE.length <= 160 && !ASYNC_LINE.includes("\n"));
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.mod_owner, OWNER);
     assert.equal(create?.body.explanation.attached_via, "first_call");
@@ -97,7 +99,9 @@ test("the question is called again while a mod delivers its answer: deny, nothin
   const h: Handler = (req, res) => (req.method === "GET" && req.path.startsWith("/api/sessions/") && req.path.includes("/open?") ? json(res, 200, { delivering: { decision_id: "dec-async" } }) : false);
   await withServer(h, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(t1(sp, { tool_use_id: "toolu_again" })), undefined, { UKAGAI_MOD_OWNER: OWNER });
-    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, ASYNC_REASON);
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecisionReason, ASYNC_LINE);
+    assert.equal(out.additionalContext, ASYNC_CONTEXT);
     assert.ok(!f.calls.some((c) => c.method === "POST" && c.path === "/api/decisions"));
     assert.ok(!f.calls.some((c) => c.path.includes("/wait")));
   });

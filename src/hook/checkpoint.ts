@@ -9,7 +9,7 @@ const INSTRUCT_SUFFIX = "Follow this before continuing; do not ask for confirmat
 const STOP_REASON =
   "[ukagai] The human read your progress recap and asked you to stop. Do not run more tools: write a short status (done / in progress / next) and end your turn.";
 
-const WAITING_REASON =
+const WAITING_CONTEXT =
   "[ukagai] Your question or plan in ukagai is still open: its answer has not reached you yet. Do not run tools now: end your turn. The answer will arrive as a message that starts with [ukagai].";
 
 const ASK_REASON =
@@ -48,7 +48,7 @@ export async function checkpointInstruction(
         : false,
   ]);
   if (taken && "waiting" in taken) {
-    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: WAITING_REASON } };
+    return denyOutput({ line: denyLine("Your question in ukagai is not answered yet: end your turn, the answer arrives as a message"), context: WAITING_CONTEXT });
   }
   const ins = taken?.instruction;
   if (!ins) return ask ? ASK_OUTPUT : null;

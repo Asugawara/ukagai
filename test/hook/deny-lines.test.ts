@@ -212,13 +212,23 @@ test("deny line, plan instruction and plan rejection (with and without a reason)
 // ---- 7: checkpoint stop ----
 test("deny line, checkpoint stop", async () => {
   const h: Handler = (req, res) =>
-    req.path === "/api/sessions/s-1/instruction"
+    req.path.startsWith("/api/sessions/s-1/instruction")
       ? json(res, 200, { instruction: { decision_id: "d1", kind: "stop", text: "wait", created_at: NOW() } })
       : false;
   await withServer(h, async (f, d) => {
     const input = JSON.stringify({ session_id: "s-1", hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: {}, cwd: "/w" });
     const out = outOf((await runHook(["--checkpoint", "--server", f.url, "--data-dir", d], input)).stdout);
     assertLine(out, /The human read your progress recap and asked you to stop /, /asked you to stop\.[\s\S]*The human adds: wait$/);
+  });
+});
+
+// ---- message delivery: the question is on its way, and the main agent is held back ----
+test("deny line, waiting for a message-delivery answer", async () => {
+  const input = JSON.stringify({ session_id: "s-1", hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: {}, cwd: "/w" });
+  const h: Handler = (req, res) => (req.path.startsWith("/api/sessions/s-1/instruction") ? json(res, 200, { waiting: { decision_id: "d1", kind: "answer_question" } }) : false);
+  await withServer(h, async (f, d) => {
+    const out = outOf((await runHook(["--checkpoint", "--server", f.url, "--data-dir", d], input)).stdout);
+    assertLine(out, /Your question in ukagai is not answered yet:/, /answer has not reached you yet/);
   });
 });
 

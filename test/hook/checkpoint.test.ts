@@ -258,15 +258,16 @@ test("mode switch: an instruction text and the ask share one output", async () =
 
 // ---- the main agent is held back while an answer is on its way as a message ----
 
-const WAITING_REASON =
+const WAITING_LINE = "[ukagai, not a failure] Your question in ukagai is not answered yet: end your turn, the answer arrives as a message (see hook context).";
+const WAITING_CONTEXT =
   "[ukagai] Your question or plan in ukagai is still open: its answer has not reached you yet. Do not run tools now: end your turn. The answer will arrive as a message that starts with [ukagai].";
 const waiting: Handler = (req, res) =>
   req.path.startsWith("/api/sessions/s-1/instruction") ? json(res, 200, { waiting: { decision_id: "d-1", kind: "answer_question" } }) : false;
 
-test("waiting: the main agent's tool is denied with the exact reason, in the one GET of every other case", async () => {
+test("waiting: the main agent's tool is denied with the one-line reason and the context, in the one GET of every other case", async () => {
   await withServer(waiting, async (f, d) => {
     const r = await runHook(args(f, d), input("Bash"));
-    assert.deepEqual(JSON.parse(r.stdout), { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: WAITING_REASON } });
+    assert.deepEqual(JSON.parse(r.stdout), { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: WAITING_LINE, additionalContext: WAITING_CONTEXT } });
     assert.deepEqual(f.calls.map((c) => `${c.method} ${c.path}`), ["GET /api/sessions/s-1/instruction?main=1"]);
   });
 });

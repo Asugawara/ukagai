@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { skillName } from "./skill-name.js";
 import { RECENCY_WINDOW_MS, bodyHash, type PendingRewrite } from "../contract.js";
 import type { DenyTemplate } from "./options.js";
-import { DENY_LINE_MAX, denyLine } from "./deny.js";
+import { DENY_LINE_MAX, denyLine, type DenyText } from "./deny.js";
 
 // Implements the rules in docs/spec/explain.md.
 
@@ -1305,9 +1305,13 @@ export function handoffLine(kind: "answer_question" | "approve_plan"): string {
   return denyLine(`Still waiting for the human in ukagai: call ${kind === "approve_plan" ? "ExitPlanMode" : "AskUserQuestion"} again, unchanged`);
 }
 
-/** The deny of a question registered for message delivery: the agent ends its turn, the answer comes later as a `[ukagai]` message */
-export function asyncReason(): string {
-  return "[ukagai] Your question is open in the ukagai GUI and is not answered yet. End your turn now: do not run other tools, do not call AskUserQuestion again and do not ask in prose. The human's answer will arrive later as a message that starts with [ukagai].";
+/** The deny of a question registered for message delivery: the agent ends its turn, the answer comes later as a `[ukagai]` message (red line + hook context) */
+export function asyncDeny(): DenyText {
+  return {
+    line: denyLine("Question sent to the human in ukagai: end your turn, the answer arrives as a message"),
+    context:
+      "[ukagai] Your question is open in the ukagai GUI and is not answered yet. End your turn now: do not run other tools, do not call AskUserQuestion again and do not ask in prose. The human's answer will arrive later as a message that starts with [ukagai].",
+  };
 }
 
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {

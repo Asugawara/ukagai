@@ -14,7 +14,7 @@ import {
 } from "../contract.js";
 import type { Client } from "./client.js";
 import {
-  asyncReason,
+  asyncDeny,
   checkRewrite,
   denyReason,
   handoffReason,
@@ -370,7 +370,7 @@ export async function handleDecision(
   if (open && "delivering" in open) {
     // A mod is submitting the answer as a message right now: answering here as well would deliver it twice
     lg("delivering", { decision_id: open.delivering.decision_id });
-    return deny(asyncReason());
+    return denyOutput(asyncDeny());
   }
   if (open) {
     created = { id: open.id };
@@ -381,7 +381,7 @@ export async function handleDecision(
     if (fresh.delivery === "message") {
       // Registered for message delivery: nothing to wait for. The agent ends its turn; the answer comes as a message
       lg("async_registered", { decision_id: fresh.id });
-      return deny(asyncReason());
+      return denyOutput(asyncDeny());
     }
     created = fresh;
   }
