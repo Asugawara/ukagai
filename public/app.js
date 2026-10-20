@@ -1334,12 +1334,13 @@ const STATUS_KEYS = {
 const MSG_STATUS_KEYS = { answer_submitted: "status_message_queued", answered: "status_message_delivered", fallback: "status_fallback_message" };
 // The status line of a decision (null: none). A message-delivery decision says when the answer will reach the agent, and why it is held up
 function statusLine(d) {
+  // Also on a plan that was switched back to the waiting hook (it went through there, without auto)
+  if (d.delivery_flag === "auto_not_applied") return t("note_auto_not_applied");
   if (d.delivery === "message") {
     const lost = msgLostKey(d);
     if (lost) return t(lost, { title: clip(titleOf(d)), note: d.delivery_note ?? "" });
     const live = d.status === "pending" || d.status === "answer_submitted";
     if (live && d.delivery_flag === "no_agent") return t("note_no_agent");
-    if (d.delivery_flag === "auto_not_applied") return t("note_auto_not_applied");
     if (MSG_STATUS_KEYS[d.status]) {
       const text = t(MSG_STATUS_KEYS[d.status]);
       return d.status === "answer_submitted" && d.delivery_note ? `${text} — ${t("note_drop", { note: d.delivery_note })}` : text;

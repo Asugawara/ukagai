@@ -63,12 +63,13 @@ const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_
 /** The toast text for a decision that left `pending` (undefined: none) */
 function statusToast(d: Decision, lang: Lang): string | undefined {
   if (d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue") return t(lang, "checkpoint_sent");
+  // Also on a plan that was switched back to the waiting hook (it went through there, without auto)
+  if (d.delivery_flag === "auto_not_applied") return t(lang, "note_auto_not_applied");
   if (d.delivery === "message") {
     const reason = d.status_reason;
     if ((d.status === "answer_lost" || d.status === "cancelled") && reason !== undefined && MESSAGE_LOST_REASONS.includes(reason)) {
       return t(lang, `lost_${reason}` as MessageKey, { title: d.session.title ?? d.id.slice(0, 8), note: d.delivery_note ?? "" });
     }
-    if (d.delivery_flag === "auto_not_applied") return t(lang, "note_auto_not_applied");
     const key = MESSAGE_STATUS_KEY[d.status];
     if (key) {
       const text = t(lang, key);
