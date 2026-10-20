@@ -28,6 +28,7 @@ export function instructionText(id: string, ins: Pick<Instruction, "text" | "abo
 
 /** Several texts in one message: the ref once, then each text behind its own prefix, one per line block */
 export function instructionParts(id: string, parts: Pick<Instruction, "text" | "about">[]): string {
-  const body = parts.map((p) => `${p.about === "plan" ? PLAN_INSTRUCT_PREFIX : REPLY_PREFIX} ${p.text.trim()}`).join("\n");
+  // The message already starts with `[ukagai] (ref …)`: the inner tag of each prefix is dropped
+  const body = parts.map((p) => `${(p.about === "plan" ? PLAN_INSTRUCT_PREFIX : REPLY_PREFIX).replace(/^\[ukagai\] /, "")} ${p.text.trim()}`).join("\n");
   return `[ukagai] (ref ${deliveryRef(id)}) ${body}`;
 }

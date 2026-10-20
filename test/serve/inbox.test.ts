@@ -650,7 +650,7 @@ test("instruction: an idle session with a live mod gets the reply as a message (
   assert.equal(h.store.consumeInstruction(SID), undefined, "not left for the hook");
   assert.equal(h.poll(A, false), undefined, "nothing while the agent works");
   const item = instructionItem(h);
-  assert.match(item.text, new RegExp(`^\\[ukagai\\] \\(ref ${deliveryRef(item.item_id)}\\) \\[ukagai\\] Reply to your progress recap: run the e2e first\nthen the lint$`));
+  assert.match(item.text, new RegExp(`^\\[ukagai\\] \\(ref ${deliveryRef(item.item_id)}\\) Reply to your progress recap: run the e2e first\nthen the lint$`));
   assert.equal(get(h, cp).response?.delivered_at, undefined, "not delivered before the ack");
   assert.deepEqual(h.poll(A, true), { held: { item_id: item.item_id } });
   assert.deepEqual(h.store.inboxAck(SID, A, item.item_id), { http: 200, status: "answered" });
@@ -666,7 +666,7 @@ test("instruction: a plan instruction is worded with the plan prefix; a stop is 
   h.event("Stop");
   assert.equal(await h.store.queuePlanInstruction(SID, "split step 2"), "message");
   const item = instructionItem(h);
-  assert.match(item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) \[ukagai\] About the plan you are writing: split step 2$/);
+  assert.match(item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) About the plan you are writing: split step 2$/);
   h.store.inboxAck(SID, A, item.item_id);
   assert.equal(h.poll(A, true), undefined);
 
@@ -771,7 +771,7 @@ test("instruction: a plan instruction after an unclaimed reply is joined; both t
   const cp = instructed(h, "first reply");
   assert.equal(await h.store.queuePlanInstruction(SID, "plan note"), "message");
   const item = instructionItem(h);
-  assert.match(item.text, /Reply to your progress recap: first reply\n\[ukagai\] About the plan you are writing: plan note$/);
+  assert.match(item.text, /Reply to your progress recap: first reply\nAbout the plan you are writing: plan note$/);
   h.store.inboxAck(SID, A, item.item_id);
   assert.equal(get(h, cp).response?.delivered_via, "message");
 });
@@ -847,7 +847,7 @@ test("instruction: two joined checkpoint replies are both marked delivered by on
   const cp1 = instructed(h, "one");
   const cp2 = replyCheckpoint(h, 5, "two");
   const item = instructionItem(h);
-  assert.match(item.text, /recap: one\n\[ukagai\] Reply to your progress recap: two$/);
+  assert.match(item.text, /recap: one\nReply to your progress recap: two$/);
   h.store.inboxAck(SID, A, item.item_id);
   assert.equal(get(h, cp1).response?.delivered_via, "message");
   assert.equal(get(h, cp2).response?.delivered_via, "message");
@@ -871,7 +871,7 @@ test("instruction: a reply and a plan instruction in one message each keep their
   await h.store.queuePlanInstruction(SID, "plan note");
   replyCheckpoint(h, 5, "a reply");
   const item = instructionItem(h);
-  assert.match(item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) \[ukagai\] About the plan you are writing: plan note\n\[ukagai\] Reply to your progress recap: a reply$/);
+  assert.match(item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) About the plan you are writing: plan note\nReply to your progress recap: a reply$/);
 });
 
 test("instruction: a join renews the time limit of the item", () => {

@@ -446,7 +446,7 @@ test("a live mod polls the session: the reply goes to its inbox, nothing is type
   assert.equal(env.term.typed.length, 0, "herdr is not touched");
   assert.equal((await api(env, "/api/sessions/sess-1/instruction")).status, 404, "not left for the hook");
   const polled = (await (await inbox("poll", { owner, idle: true })).json()) as { item: { item_id: string; text: string } };
-  assert.match(polled.item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) \[ukagai\] Reply to your progress recap: run the e2e first\nthen the lint$/);
+  assert.match(polled.item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) Reply to your progress recap: run the e2e first\nthen the lint$/);
   assert.equal((await inbox("ack", { owner, item_id: polled.item.item_id })).status, 200);
   const got = await get(env, d.id);
   assert.equal(got.response?.delivered_via, "message");

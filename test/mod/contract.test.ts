@@ -169,7 +169,7 @@ test("a checkpoint reply: poll -> submit as a plugin message -> ack -> delivered
 
   await e.tick(); // claim + submit
   assert.equal(e.submits.length, 1);
-  assert.match(e.submits[0]!, /^\[ukagai\] \(ref [0-9a-f]{8}\) \[ukagai\] Reply to your progress recap: run the e2e first\nthen the lint$/);
+  assert.match(e.submits[0]!, /^\[ukagai\] \(ref [0-9a-f]{8}\) Reply to your progress recap: run the e2e first\nthen the lint$/);
   assert.equal((await e.decision(cp.id)).response?.delivered_via, undefined, "not delivered before the ack");
   await e.tick(); // ack
   assert.equal((await e.decision(cp.id)).response?.delivered_via, "message");
