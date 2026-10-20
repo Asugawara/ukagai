@@ -17,6 +17,7 @@ ukagai は、コーディングエージェントが人間に求める判断（C
 - **エージェントがリッチな Markdown で説明し、描画された状態で見られます。** 図（Mermaid）、diff、画像、そして UI やランディングページの案のような HTML ページ丸ごとがページ自身のスクリプトを実行しないサンドボックス化されたフレーム（全画面でのズーム表示や、スクリプトなしの新しいタブでの表示にも対応）で、選択肢のすぐ隣に表示されます。比べて決めるのが 1 か所で済みます。
 - **セッションもエージェントも横断する 1 つの受信箱。** Claude Code と Codex CLI、質問とプラン承認を、保留一覧と履歴つきで扱えます。
 - **MCP なし、毎ターンの文脈に何も足しません。** hooks とスキルがエージェント自身の `AskUserQuestion` / プラン承認を横取りし、ツール定義が文脈に居座ることはありません。
+- **GUI が軽い。** Mermaid の図は mermaid.js（5.5 MB）ではなく [pele](https://github.com/obsidianmd/pele)（682 KB）で描きます。リリースは 22% 小さくなり、GUI のページは約 3 倍速く読み込まれます。
 
 ![エージェントが提案した 2 つのオンボーディングページ案を GUI で並べて表示](docs/images/ja/compare.png)
 
@@ -103,7 +104,8 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 | `docs/spec/api.md` | サーバー API、状態遷移、認可 |
 | `docs/spec/explain.md` | エージェントが書く説明ファイルと、hook の検証ルール |
 | `docs/spec/markdown.md` | 説明とプランを書くための Markdown 方言 |
-| `docs/verification/` | 実環境での検証記録（01 質問の注入、02 Codex の hooks と hook の限界、03 E2E、04 プラン作成時の文脈、05 プランの指示と approve-and-auto、06 起こされたターンと進捗チェック） |
+| `docs/spec/codex-bridge.md` | Codex ブリッジ: Codex app-server 経由のプラン承認と進捗チェックポイント |
+| `docs/verification/` | 実環境での検証記録（01 質問の注入、02 Codex の hooks と hook の限界、03 E2E、04 プラン作成時の文脈、05 プランの指示と approve-and-auto、06 プラン承認後のモード、起こされたターンと進捗チェック、07 すべての配布経路でのリリースからのインストール、08 編集したスキルが権限プロンプトなしで読まれること） |
 | `skills/ukagai-explain/` | Claude に説明の書き方を教えるスキル（`SKILL.md`）と、必要なときに読む `reference/` のファイル |
 
 ## 開発

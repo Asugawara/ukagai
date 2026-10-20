@@ -17,6 +17,7 @@ ukagai intercepts the decisions a coding agent asks a human for (Claude Code's `
 - **The agent explains in rich Markdown and you see it rendered.** Diagrams (Mermaid), diffs, images and whole HTML pages, such as UI or landing-page variants in a sandboxed frame that runs no script of the page's own (full screen with zoom, or in a new tab without any script), appear next to the options, so you compare and decide in one place.
 - **One inbox across sessions and agents.** Claude Code and Codex CLI, questions and plan approvals, with a pending list and history.
 - **No MCP, nothing added to every turn.** Hooks and a skill intercept the agent's own `AskUserQuestion` / plan approval; no tool definitions sit in the context.
+- **A light GUI.** Mermaid diagrams are drawn by [pele](https://github.com/obsidianmd/pele) (682 KB) instead of mermaid.js (5.5 MB): the release is 22% smaller and the GUI page loads about three times faster.
 
 ![Two onboarding-page variants proposed by the agent, side by side in the GUI](docs/images/compare.png)
 
@@ -101,7 +102,8 @@ Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troublesho
 | `docs/spec/api.md` | Server API, state transitions, authorization |
 | `docs/spec/explain.md` | The explanation file the agent writes and the hook's validation rules |
 | `docs/spec/markdown.md` | The Markdown dialect explanations and plans are written in |
-| `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 wake-up turns and the progress check) |
+| `docs/spec/codex-bridge.md` | The Codex bridge: plan approval and progress checkpoints through the Codex app-server |
+| `docs/verification/` | Records of real-environment verification (01 question injection, 02 Codex hooks and hook limits, 03 E2E, 04 plan-writing context, 05 plan instruct and approve-and-auto, 06 the mode after plan approval, wake-up turns and the progress check, 07 install from the release on every distribution path, 08 the edited skill is read without a permission prompt) |
 | `skills/ukagai-explain/` | The skill (`SKILL.md`) that teaches Claude how to write explanations, plus the `reference/` files it reads when needed |
 
 ## Development
