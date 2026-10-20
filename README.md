@@ -29,7 +29,7 @@ Coding agents stop and ask a question mid-task, and those questions scatter acro
 
 ## Quick start
 
-Requirements: Node.js >= 22, macOS or Linux (Windows is not supported), Claude Code and / or Codex CLI.
+Requirements: Node.js >= 22, macOS or Linux (Windows is not supported), Claude Code (2.1.304 or later) and / or Codex CLI.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh

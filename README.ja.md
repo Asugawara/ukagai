@@ -29,7 +29,7 @@ ukagai は、コーディングエージェントが人間に求める判断（C
 
 ## クイックスタート
 
-必要なもの: Node.js 22 以上、macOS または Linux（Windows は非対応）、Claude Code と Codex CLI のどちらか（または両方）。
+必要なもの: Node.js 22 以上、macOS または Linux（Windows は非対応）、Claude Code（2.1.304 以上）と Codex CLI のどちらか（または両方）。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
