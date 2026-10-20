@@ -191,6 +191,16 @@ test("--observe: --observe on PreToolUse, AskUserQuestion in the PostToolUse mat
   assert.match(s.hooks.PostToolUse[0].matcher, /AskUserQuestion/);
 });
 
+test("PostToolUse matcher: the file tools and ExitPlanMode (a plan that went through without its grant uses it up); --observe adds AskUserQuestion instead", async () => {
+  const e = await setup();
+  await ukagai(e, ["install", "--settings", e.settings]);
+  const s = await readJson(e.settings);
+  assert.equal(s.hooks.PostToolUse[0].matcher, "Edit|Write|MultiEdit|NotebookEdit|ExitPlanMode");
+  assert.ok(!s.hooks.PostToolUse[0].hooks[0].args.includes("--observe"));
+  await ukagai(e, ["install", "--settings", e.settings, "--observe"]);
+  assert.equal((await readJson(e.settings)).hooks.PostToolUse[0].matcher, "Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion|ExitPlanMode");
+});
+
 test("--no-autostart: only on the SessionStart hook, not by default", async () => {
   const e = await setup();
   await ukagai(e, ["install", "--settings", e.settings]);

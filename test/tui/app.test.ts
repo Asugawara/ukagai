@@ -453,3 +453,21 @@ test("long recommendation: when over half the column height it is cut at 8 rows 
   short.upsert(decision(withExplanation(V2_MD)), t);
   assert.ok(!stripAnsi(renderFrame(short.view(t), size).text).includes("(. to expand)"));
 });
+
+test("auto mode not switched on: a toast once when the flag newly appears on a closed decision, whatever is shown; not for the startup list", () => {
+  const app = new App();
+  const shown = decision(withExplanation(V2_MD));
+  app.upsert(shown, t);
+  const plan = { ...decision(), id: "p1", kind: "approve_plan" as const, delivery: "message" as const, status: "answered" as const };
+  app.upsert(plan, (t += 10));
+  assert.equal(app.view(t).toast, null);
+  app.upsert({ ...plan, delivery_flag: "auto_not_applied" }, (t += 10));
+  assert.equal(app.view(t).toast, "The plan was approved but auto mode was not switched on");
+  assert.equal(app.view(t + 3000).toast, null);
+  app.upsert({ ...plan, delivery_flag: "auto_not_applied", grant_used_at: "x" }, (t += 4000));
+  assert.equal(app.view(t).toast, null, "not twice for the same decision");
+
+  const fresh = new App();
+  fresh.replacePending([{ ...plan, id: "p2", status: "pending", delivery_flag: "auto_not_applied" }], t);
+  assert.equal(fresh.view(t).toast, null, "the startup list");
+});

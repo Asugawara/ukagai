@@ -79,9 +79,10 @@ export function buildHookEntries(opts: BuildOptions): Record<string, MatcherGrou
 
   const preExtra = ["--budget", String(opts.timeout - 10), ...(opts.observe ? ["--observe"] : [])];
   const pre = mk(preExtra, opts.timeout, opts.observe ? {} : { statusMessage: STATUS_MESSAGE });
+  // ExitPlanMode: a plan that went through without its grant being used (Claude Code's own dialog) uses it up on the server
   const postMatcher = opts.observe
     ? `Edit|Write|MultiEdit|NotebookEdit|${DECISION_MATCHER}`
-    : "Edit|Write|MultiEdit|NotebookEdit";
+    : "Edit|Write|MultiEdit|NotebookEdit|ExitPlanMode";
   const post = mk(opts.observe ? ["--observe"] : [], 5, { async: true });
 
   return {

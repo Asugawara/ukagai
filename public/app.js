@@ -1334,6 +1334,8 @@ const STATUS_KEYS = {
 const MSG_STATUS_KEYS = { answer_submitted: "status_message_queued", answered: "status_message_delivered", fallback: "status_fallback_message" };
 // The status line of a decision (null: none). A message-delivery decision says when the answer will reach the agent, and why it is held up
 function statusLine(d) {
+  // Also on a plan that was switched back to the waiting hook (it went through there, without auto)
+  if (d.delivery_flag === "auto_not_applied") return t("note_auto_not_applied");
   if (d.delivery === "message") {
     const lost = msgLostKey(d);
     if (lost) return t(lost, { title: clip(titleOf(d)), note: d.delivery_note ?? "" });
@@ -3511,8 +3513,21 @@ function notifyArrival(d) {
   }
 }
 
+// Decisions whose "auto mode was not switched on" was toasted (once each; the initial list of a page load never toasts it)
+const autoNotAppliedToasted = new Set();
 function upsert(d) {
   const prev = decisions.get(d.id);
+  // The flag comes after the plan's card closed (the ExitPlanMode that went through), so the card never shows it: a toast does, whatever is shown,
+  // after the other toasts of this update
+  const autoNote = loaded && d.delivery_flag === "auto_not_applied" && prev?.delivery_flag !== "auto_not_applied" && !autoNotAppliedToasted.has(d.id);
+  if (autoNote) autoNotAppliedToasted.add(d.id);
+  try {
+    upsertDecision(d, prev);
+  } finally {
+    if (autoNote) toast(t("note_auto_not_applied"), { kind: "lost", ms: 6000 });
+  }
+}
+function upsertDecision(d, prev) {
   decisions.set(d.id, d);
   if (d.kind === "approve_plan") queueMicrotask(refreshShownVersions);
   if (!prev && d.status === "pending" && loaded) notifyArrival(d);

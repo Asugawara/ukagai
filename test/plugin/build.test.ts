@@ -46,6 +46,13 @@ test("hooks/claude.json names the ukagai mod; Codex's file and manifest do not",
   assert.ok(!files[".codex-plugin/plugin.json"]!.includes("mod"));
 });
 
+test("hooks/claude.json: PostToolUse also watches ExitPlanMode (a plan that went through without its grant uses it up)", () => {
+  const post = parse("hooks/claude.json").hooks.PostToolUse;
+  assert.equal(post.length, 1);
+  assert.equal(post[0].matcher, "Edit|Write|MultiEdit|NotebookEdit|ExitPlanMode");
+  assert.equal(post[0].hooks[0].async, true);
+});
+
 test("hooks/codex.json has the Codex events, matchers and timeouts", () => {
   const h = parse("hooks/codex.json").hooks;
   assert.deepEqual(Object.keys(h).sort(), [...new Set(CODEX_SPECS.map((s) => s.event))].sort());

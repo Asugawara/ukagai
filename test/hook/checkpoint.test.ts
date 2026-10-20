@@ -272,6 +272,17 @@ test("waiting: the main agent's tool is denied with the one-line reason and the 
   });
 });
 
+test("waiting for a plan: the one-line reason names the plan, the context is the same", async () => {
+  const plan: Handler = (req, res) =>
+    req.path.startsWith("/api/sessions/s-1/instruction") ? json(res, 200, { waiting: { decision_id: "d-1", kind: "approve_plan" } }) : false;
+  await withServer(plan, async (f, d) => {
+    const out = JSON.parse((await runHook(args(f, d), input("Bash"))).stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, "deny");
+    assert.equal(out.permissionDecisionReason, "[ukagai, not a failure] Your plan in ukagai is not decided yet: end your turn, the answer arrives as a message (see hook context).");
+    assert.equal(out.additionalContext, WAITING_CONTEXT);
+  });
+});
+
 test("waiting: a held-back tool does not use up the pending mode switch; the first tool that runs still asks", async () => {
   let held = true;
   const h: Handler = (req, res) =>

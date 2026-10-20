@@ -1305,8 +1305,15 @@ export function handoffLine(kind: "answer_question" | "approve_plan"): string {
   return denyLine(`Still waiting for the human in ukagai: call ${kind === "approve_plan" ? "ExitPlanMode" : "AskUserQuestion"} again, unchanged`);
 }
 
-/** The deny of a question registered for message delivery: the agent ends its turn, the answer comes later as a `[ukagai]` message (red line + hook context) */
-export function asyncDeny(): DenyText {
+/** The deny of a question or plan registered for message delivery: the agent ends its turn, the answer comes later as a `[ukagai]` message (red line + hook context) */
+export function asyncDeny(kind: "answer_question" | "approve_plan" = "answer_question"): DenyText {
+  if (kind === "approve_plan") {
+    return {
+      line: denyLine("Plan sent to the human in ukagai: stay in plan mode and end your turn, the decision arrives as a message"),
+      context:
+        "[ukagai] The plan is open for the human's review in the ukagai GUI. It is NOT approved. Stay in plan mode and do not implement. End your turn now. The human's decision will arrive later as a message that starts with [ukagai].",
+    };
+  }
   return {
     line: denyLine("Question sent to the human in ukagai: end your turn, the answer arrives as a message"),
     context:

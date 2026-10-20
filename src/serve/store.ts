@@ -12,7 +12,9 @@ import {
   MOD_FRESH_MS,
   MOD_GONE_MS,
   MOD_OWNER_RE,
+  PLAN_GRANT_TTL_MS,
   deliveryRef,
+  type PlanGrant,
   type PollResponse,
   type Waiting,
   checkpointFingerprint,
@@ -145,6 +147,12 @@ function firstQuestion(d: { request: Decision["request"] }): string | undefined 
   return qs?.[0]?.question;
 }
 
+/** The text of a plan request, trimmed ("" when there is none) */
+function planText(request: Decision["request"]): string {
+  const plan = (request as { plan?: unknown }).plan;
+  return typeof plan === "string" ? plan.trim() : "";
+}
+
 /** A running-subagent entry older than this is ignored (a lost SubagentStop or a killed task must not hide the plan forever) */
 export const SUBAGENT_TTL_MS = 60 * 60_000;
 /** A wake-up-due mark older than this is ignored */
@@ -259,7 +267,7 @@ export class Store {
 
   /** The newest undelivered instruction of each session (at most CHECKPOINT_TTL_MS old) is still waiting after a restart */
   private restoreInstructions(): void {
-    const now = Date.now();
+    const now = this.clock();
     for (const d of this.decisions.values()) {
       const r = d.response;
       if (d.kind !== "checkpoint" || d.status !== "answered" || !r || r.delivered_at || (r.kind !== "instruct" && r.kind !== "stop")) continue;
@@ -376,6 +384,10 @@ export class Store {
       this.emit("decision.created", decision);
       this.touchSession(session.session_id, { state: "waiting_decision", cwd: session.cwd, title: session.title });
     }
+    // A new plan of the main agent, whether it waits for message delivery or for the hook, replaces the session's earlier message-delivery
+    // ones: they close, and an approval of one no longer lets it through (the human decides again). A subagent's plan is not the main
+    // agent's next plan: it leaves them (the pending mode switch above is cleared by any plan, as before)
+    if (!denied && req.kind === "approve_plan" && session.agent_id === undefined) this.supersedePlans(decision);
     return { decision, created: true };
   }
 
@@ -518,7 +530,7 @@ export class Store {
     for (const [sid, ins] of this.instructions) {
       if (ins.decision_id !== decisionId) continue;
       // Typing starts a new turn: only for an agent that is still idle, and not for a reply the human gave long ago
-      if (this.sessions.get(sid)?.state !== "idle" || Date.now() - Date.parse(ins.created_at) > maxAgeMs || this.hasOpenAsync(sid)) return undefined;
+      if (this.sessions.get(sid)?.state !== "idle" || this.clock() - Date.parse(ins.created_at) > maxAgeMs || this.hasOpenAsync(sid)) return undefined;
       this.instructions.delete(sid);
       this.modBypass.delete(sid);
       return ins;
@@ -531,7 +543,8 @@ export class Store {
    * Claude Code agent calls no tool, so it is offered to the terminal delivery, which resolves with how it went
    */
   async queuePlanInstruction(sessionId: string, text: string): Promise<DeliveredVia> {
-    const created_at = new Date().toISOString();
+    // The store's clock, like a checkpoint reply's `decided_at`: the instruction's time limit is checked against it
+    const created_at = new Date(this.clock()).toISOString();
     const queued = this.instructions.get(sessionId);
     // A queued stop must still reach the agent; a queued reply or earlier plan instruction keeps its identity (so its checkpoint is marked delivered) and the texts are joined
     if (queued?.kind === "stop") throw new HttpError(409, "a stop is queued for this session");
@@ -588,6 +601,13 @@ export class Store {
     const d = this.findOpen(sessionId, agentId, fingerprint);
     if (!d) return undefined;
     if (d.delivery === "message") {
+      // An approval that no longer lets the plan through (revoked) must not come back through the waiting hook either: the human decides again
+      if (this.approvalWithoutGrant(d)) {
+        this.closeUndelivered(d, "superseded");
+        const after = d.status as DecisionStatus;
+        if (after !== "pending" && after !== "answer_submitted") return undefined;
+        return { delivering: { decision_id: d.id } }; // a live mod still holds it: its ack or release closes it
+      }
       if (d.status === "answer_submitted" && d.claim) {
         if (this.claimAlive(d, this.clock())) return { delivering: { decision_id: d.id } };
         this.settleDeadClaim(d);
@@ -654,7 +674,8 @@ export class Store {
   submitAnswer(id: string, patch: AnswerPatch): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
-    const decided_at = new Date().toISOString();
+    // The store's clock: a plan's grant lasts PLAN_GRANT_TTL_MS from this
+    const decided_at = new Date(this.clock()).toISOString();
     if ((patch.kind === "checkpoint") !== (d.kind === "checkpoint")) throw new HttpError(400, `this answer does not fit kind ${d.kind}`);
     if (patch.kind === "checkpoint") return this.answerCheckpoint(d, patch, decided_at);
     const needsKind = patch.kind === "answers" ? "answer_question" : patch.kind === "fallback" ? undefined : "approve_plan";
@@ -685,7 +706,8 @@ export class Store {
     this.transition(d, to);
     d.response = response;
     this.persist(d);
-    if (patch.kind === "approve" && patch.set_mode_auto) {
+    // A plan approved for message delivery switches to auto through its grant (the re-called ExitPlanMode's PermissionRequest), not on the first edit
+    if (patch.kind === "approve" && patch.set_mode_auto && d.delivery !== "message") {
       this.modeSwitches.set(d.session.session_id, { set_at: Date.now() });
     }
     if (patch.kind === "answers") this.rememberCannotAnswer(d, patch.answers);
@@ -943,7 +965,19 @@ export class Store {
       }
     }
     if (live && ev.hook_event_name === "Stop") this.offerQueuedInstruction(ev.session_id);
-    if (live && ev.hook_event_name === "SessionEnd") this.endMarks.set(ev.session_id, Number.isFinite(at) ? at : this.clock());
+    // ExitPlanMode went through without using the grant (Claude Code's own dialog, or no PermissionRequest): the session is out of plan mode, so no grant of it is wanted any more
+    if (live && ev.hook_event_name === "PostToolUse" && (ev as Record<string, unknown>).tool_name === "ExitPlanMode" && !ev.agent_id && !ev.observe) {
+      this.planExited(ev.session_id);
+    }
+    // The main agent's session is out of plan mode after the human decided (they left it by hand, or the plan went through some other way):
+    // an approval of that time lets nothing through any more. A late event built before the decision does not count
+    const mode = (ev as Record<string, unknown>).permission_mode;
+    if (live && typeof mode === "string" && mode !== "plan" && !ev.agent_id && Number.isFinite(at)) this.revokeGrantsBefore(ev.session_id, at);
+    if (live && ev.hook_event_name === "SessionEnd") {
+      this.endMarks.set(ev.session_id, Number.isFinite(at) ? at : this.clock());
+      // A delivered approval waits for no mod: it is written off now, so a restart within the grace cannot keep it (undelivered ones keep the grace)
+      for (const d of this.asyncOf(ev.session_id)) if (d.status === "answered") this.revokeGrant(d);
+    }
     if (ev.hook_event_name === "SessionEnd") this.endCheckpoints(ev.session_id, live);
     if (live) this.onSessionEvent?.(ev.session_id, ev.hook_event_name);
   }
@@ -1054,7 +1088,9 @@ export class Store {
   private wantsMessageDelivery(req: CreateDecisionRequest, now: number): boolean {
     const owner = req.mod_owner;
     if (owner === undefined || !MOD_OWNER_RE.test(owner)) return false;
-    if (req.kind !== "answer_question" || req.session.agent_id !== undefined || req.session.agent === "codex") return false;
+    if (req.kind === "checkpoint" || req.session.agent_id !== undefined || req.session.agent === "codex") return false;
+    // A plan without text would be identified by its file path alone: its approval must not become a pass for whatever the file holds next
+    if (req.kind === "approve_plan" && !planText(req.request)) return false;
     if (this.opts.messageDelivery && !this.opts.messageDelivery()) return false;
     const seen = this.ownerSeen.get(`${req.session.session_id}\0${owner}`);
     if (seen === undefined || now - seen > MOD_FRESH_MS) return false;
@@ -1138,6 +1174,9 @@ export class Store {
     delete d.human_prompt_at;
     delete d.close_reason;
     delete d.delivery_flag;
+    // "Approve and auto" switches through the grant, which a classic decision does not have: the plan still goes through the waiting hook,
+    // the mode does not switch, and the card says so (no pending mode switch: when in doubt, auto stays off)
+    if (d.kind === "approve_plan" && d.response?.approve === true && d.response.set_mode_auto) d.delivery_flag = "auto_not_applied";
     this.opts.log?.("message_to_classic", { session: d.session.session_id, decision: d.id });
   }
 
@@ -1150,6 +1189,11 @@ export class Store {
   }
 
   private completeDelivery(d: Decision): void {
+    // A superseded approval reached the agent anyway (its submit was already under way): it lets nothing through, so it is not an answer
+    if (d.close_reason === "superseded") {
+      this.loseDelivery(d, "superseded");
+      return;
+    }
     this.transition(d, "answered");
     d.response = { ...d.response!, delivered_at: new Date(this.clock()).toISOString(), delivered_via: "message" };
     delete d.claim;
@@ -1182,8 +1226,10 @@ export class Store {
     }
   }
 
-  /** Close a message-delivery decision whose answer has not been delivered (session_end, expired, typed_in_terminal) */
+  /** Close a message-delivery decision whose answer has not been delivered (session_end, expired, typed_in_terminal, superseded) */
   private closeUndelivered(d: Decision, reason: string): void {
+    // An approval that is not delivered lets nothing through any more, even while the mod still holds it
+    this.revokeGrant(d);
     if (d.status === "pending") {
       this.transition(d, "cancelled");
       d.status_reason = reason;
@@ -1224,7 +1270,10 @@ export class Store {
       // dying mod's last tick: it does not keep the session open (a live mod polls at least every MOD_BACKOFF_MAX_MS)
       for (const [k, at] of this.ownerSeen) if (k.startsWith(prefix) && at > endAt && now - at <= MOD_BACKOFF_MAX_MS) kept = true;
       if (kept) continue;
-      for (const d of this.asyncOf(sid)) if (LIVE.includes(d.status)) this.closeUndelivered(d, "session_end");
+      for (const d of this.asyncOf(sid)) {
+        if (LIVE.includes(d.status)) this.closeUndelivered(d, "session_end");
+        else this.revokeGrant(d);
+      }
     }
   }
 
@@ -1261,6 +1310,13 @@ export class Store {
       (d) => !d.claim && !d.close_reason && (d.delivery_attempts ?? 0) < DELIVERY_MAX_ATTEMPTS && (d.mod_owner === owner || !this.ownerAlive(sessionId, d.mod_owner, now)),
     );
     if (!next) return open.length === 0 ? this.pollInstruction(sessionId, owner, now) : undefined;
+    // An approval whose grant is gone would tell the agent "it will be allowed" for a plan that is not: it is not delivered
+    if (this.approvalWithoutGrant(next)) {
+      this.closeUndelivered(next, "superseded");
+      // An instruction that waited behind it in the hook queue may go now (as when a delivery completes)
+      if (this.sessions.get(sessionId)?.state === "idle" && !this.hasOpenAsync(sessionId)) this.offerToMod(sessionId);
+      return this.inboxPoll(sessionId, owner, idle);
+    }
     next.mod_owner = owner;
     next.claim = { owner, at: new Date(now).toISOString(), offset: this.transcriptSize(next) };
     this.persist(next);
@@ -1279,7 +1335,8 @@ export class Store {
     if (d.status !== "answer_submitted") return { http: 409, status: d.status };
     if (d.claim && d.claim.owner !== owner && this.claimAlive(d, this.clock())) return { http: 409, status: d.status };
     this.completeDelivery(d);
-    return { http: 200, status: d.status };
+    const after = d.status as DecisionStatus; // a superseded approval closes as answer_lost
+    return after === "answered" ? { http: 200, status: after } : { http: 409, status: after };
   }
 
   /** The mod could not submit: `drop` is the reason `$.prompt.submit` gave (absent when it threw) */
@@ -1481,6 +1538,100 @@ export class Store {
       this.returnToQueue(m, true);
     }
     return { http: 200, status: "answer_submitted" };
+  }
+
+  // ---- Plan grants (a plan approved for message delivery is let through once when ExitPlanMode is called again) ----
+
+  /** The grant `d` stands for, or undefined: an approval of a plan for message delivery, not used, not older than PLAN_GRANT_TTL_MS */
+  private grantOf(d: Decision, now: number): PlanGrant | undefined {
+    const r = d.response;
+    if (d.kind !== "approve_plan" || d.delivery !== "message" || r?.approve !== true || d.grant_used_at) return undefined;
+    if (d.status !== "answer_submitted" && d.status !== "answered") return undefined;
+    const decided = Date.parse(r.decided_at);
+    if (!Number.isFinite(decided) || now - decided > PLAN_GRANT_TTL_MS || !planText(d.request)) return undefined;
+    return r.set_mode_auto ? { decision_id: d.id, mode: "auto" } : { decision_id: d.id };
+  }
+
+  /** The newest grant of the session for this exact plan (session and fingerprint must both match) */
+  private findGrant(sessionId: string, fingerprint: string): { d: Decision; grant: PlanGrant } | undefined {
+    const now = this.clock();
+    let best: { d: Decision; grant: PlanGrant } | undefined;
+    for (const d of this.asyncOf(sessionId)) {
+      if (d.fingerprint !== fingerprint || d.session.agent_id !== undefined) continue;
+      const grant = this.grantOf(d, now);
+      if (grant && (!best || d.created_at > best.d.created_at)) best = { d, grant };
+    }
+    return best;
+  }
+
+  /** GET /api/sessions/:id/plan-grant: looks, does not use */
+  planGrant(sessionId: string, fingerprint: string): PlanGrant | undefined {
+    return this.findGrant(sessionId, fingerprint)?.grant;
+  }
+
+  /** POST /api/sessions/:id/plan-grant/consume: the re-called ExitPlanMode is let through, once. The decision is answered by it */
+  consumePlanGrant(sessionId: string, fingerprint: string): { consumed: true; mode?: "auto" } | { consumed: false } {
+    const hit = this.findGrant(sessionId, fingerprint);
+    if (!hit) return { consumed: false };
+    this.useGrant(hit.d);
+    return hit.grant.mode ? { consumed: true, mode: hit.grant.mode } : { consumed: true };
+  }
+
+  /** The grant is used: written down (it never lets anything through again), and an answer not delivered yet needs no delivery any more */
+  private useGrant(d: Decision): void {
+    d.grant_used_at = new Date(this.clock()).toISOString();
+    if (d.status === "answer_submitted") {
+      this.transition(d, "answered");
+      d.response = { ...d.response!, delivered_at: d.grant_used_at, delivered_via: "grant" };
+      delete d.claim;
+      delete d.close_reason;
+    }
+    this.persist(d);
+    this.emit("decision.updated", d);
+    this.notify(d.id);
+  }
+
+  /** The grant of `d` (if any) is written off without being used: it lets nothing through */
+  private revokeGrant(d: Decision): void {
+    if (!this.grantOf(d, this.clock())) return;
+    d.grant_used_at = new Date(this.clock()).toISOString();
+    // A mod is already submitting the approval ("it will be allowed"): its ack or the transcript check closes it as lost, not answered
+    if (d.status === "answer_submitted" && d.claim) d.close_reason ??= "superseded";
+    this.persist(d);
+    this.emit("decision.updated", d);
+  }
+
+  /** An approved plan for message delivery that no longer has its grant (used, written off or too old) */
+  private approvalWithoutGrant(d: Decision): boolean {
+    return d.kind === "approve_plan" && d.delivery === "message" && d.response?.approve === true && !this.grantOf(d, this.clock());
+  }
+
+  /** The grants of the session decided before `at` are written off */
+  private revokeGrantsBefore(sessionId: string, at: number): void {
+    for (const d of this.asyncOf(sessionId)) {
+      const decided = Date.parse(d.response?.decided_at ?? "");
+      if (Number.isFinite(decided) && decided < at) this.revokeGrant(d);
+    }
+  }
+
+  /** PostToolUse of the main agent's ExitPlanMode: every grant of the session is used up; one that asked for auto mode did not get it */
+  private planExited(sessionId: string): void {
+    const now = this.clock();
+    for (const d of this.asyncOf(sessionId)) {
+      const grant = d.session.agent_id === undefined ? this.grantOf(d, now) : undefined;
+      if (!grant) continue;
+      if (grant.mode === "auto") d.delivery_flag = "auto_not_applied";
+      this.useGrant(d);
+    }
+  }
+
+  /** A new plan for message delivery: the session's earlier ones close as `superseded` (their grants with them) */
+  private supersedePlans(current: Decision): void {
+    for (const d of this.asyncOf(current.session.session_id)) {
+      if (d === current || d.kind !== "approve_plan" || d.created_at > current.created_at) continue;
+      if (LIVE.includes(d.status)) this.closeUndelivered(d, "superseded");
+      else this.revokeGrant(d);
+    }
   }
 
   // ---- "Approve and auto" ----

@@ -1,5 +1,5 @@
 import { autostart, defaultDeps, type AutostartDeps } from "./autostart.js";
-import { EventInput, HookInputBase, parseDeliveryRef } from "../contract.js";
+import { EventInput, HookInputBase, decisionFingerprint, parseDeliveryRef, stripExplainBlocks } from "../contract.js";
 import type { Client } from "./client.js";
 import { join } from "node:path";
 import { copyReference } from "../skill/files.js";
@@ -91,12 +91,37 @@ export async function permissionRequest(raw: Record<string, unknown>, client: Cl
   const base = HookInputBase.safeParse(raw);
   if (!base.success) return null;
   const id = base.data.session_id;
+  // ExitPlanMode's own prompt: only a plan the human approved with "and auto" while it waited for message delivery is answered here, with the
+  // plan as updatedInput (without it Claude Code keeps its dialog). Anything else, including the pending mode switch, leaves Claude Code's dialog
+  if (raw["tool_name"] === "ExitPlanMode") return base.data.agent_id === undefined ? exitPlanGrant(raw, id, client) : null;
   if (!(await client.getPendingModeSwitch(id))) return null;
   if (!(await client.consumeModeSwitch(id))) return null;
   return {
     hookSpecificOutput: {
       hookEventName: "PermissionRequest",
       decision: { behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }] },
+    },
+  };
+}
+
+/** The session's "approve and auto" grant for this plan, used: allow + updatedInput + setMode auto. Null (Claude Code's dialog) on a miss or any failure */
+async function exitPlanGrant(raw: Record<string, unknown>, sessionId: string, client: Client): Promise<Out | null> {
+  // Outside plan mode the approval is stale (the human left plan mode, or the plan already went through): Claude Code's dialog asks the human
+  if (raw["permission_mode"] !== "plan") return null;
+  const toolInput = raw["tool_input"];
+  if (typeof toolInput !== "object" || toolInput === null || Array.isArray(toolInput)) return null;
+  const input = toolInput as Record<string, unknown>;
+  const plan = typeof input["plan"] === "string" ? stripExplainBlocks(input["plan"]) : "";
+  if (plan.trim() === "") return null;
+  const fingerprint = decisionFingerprint("approve_plan", { ...input, plan });
+  // A plain approval is the PreToolUse hook's to use: it is left alone here, so this prompt is the human's
+  if ((await client.getPlanGrant(sessionId, fingerprint))?.mode !== "auto") return null;
+  const used = await client.consumePlanGrant(sessionId, fingerprint);
+  if (!used.consumed || used.mode !== "auto") return null;
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PermissionRequest",
+      decision: { behavior: "allow", updatedInput: input, updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }] },
     },
   };
 }
