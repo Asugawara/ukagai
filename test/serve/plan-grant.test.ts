@@ -1,4 +1,5 @@
-// A plan approved while it waited for message delivery: its grant lets the same plan's re-called ExitPlanMode through once
+// A plan approved while it waited for message delivery: its grant lets the same plan's re-called ExitPlanMode through once.
+// One the waiting hook took with "approve and auto": its grant lets the PermissionRequest of the same ExitPlanMode switch to auto
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -88,19 +89,17 @@ test("a plan is registered for message delivery like a question; an empty plan i
 
 // ---- derivation ----
 
-test("an approval derives a grant (no mode / auto) and makes no pending mode switch; a rejection, an instruction or a classic approval derive none", () => {
+test("an approval derives a grant (no mode / auto); a rejection, an instruction or a classic approval its hook has not taken derive none", () => {
   const h = setup();
   const plain = h.plan("toolu_plain");
   assert.equal(h.store.planGrant(SID, FP), undefined, "not answered yet");
   h.approve(plain);
   assert.deepEqual(h.store.planGrant(SID, FP), { decision_id: plain.id });
-  assert.equal(h.store.getModeSwitch(SID).pending, false);
 
   const auto = setup();
   const a = auto.plan("toolu_auto");
   auto.approve(a, true);
   assert.deepEqual(auto.store.planGrant(SID, FP), { decision_id: a.id, mode: "auto" });
-  assert.equal(auto.store.getModeSwitch(SID).pending, false, "the grant switches to auto, not the first edit");
 
   const other = setup();
   const rejected = other.plan("toolu_r");
@@ -114,8 +113,7 @@ test("an approval derives a grant (no mode / auto) and makes no pending mode swi
   const c = classic.store.create(classic.req("toolu_c", PLAN, { mod_owner: undefined }), {}).decision;
   assert.equal(c.delivery, undefined);
   classic.approve(c, true);
-  assert.equal(classic.store.planGrant(SID, FP), undefined, "a classic approval goes back through the waiting hook");
-  assert.equal(classic.store.getModeSwitch(SID).pending, true, "classic keeps its pending mode switch");
+  assert.equal(classic.store.planGrant(SID, FP), undefined, "a classic approval goes back through the waiting hook first");
 });
 
 test("only the same session and the same plan can use the grant, only once, and not more than 12 hours after the approval", () => {
@@ -392,7 +390,7 @@ test("M1: a main-agent event out of plan mode after the approval writes the gran
   }
 });
 
-test("M2: a re-call that misses the grant goes back to the waiting hook; an auto approval then says auto was not applied, and makes no pending mode switch", () => {
+test("M2: a re-call that misses the grant goes back to the waiting hook; an auto approval then switches through the PermissionRequest like any classic one", () => {
   const h = setup();
   const d = h.plan();
   h.approve(d, true);
@@ -400,9 +398,12 @@ test("M2: a re-call that misses the grant goes back to the waiting hook; an auto
   assert.ok(open && "decision" in open, "classic re-attach: the approved plan goes through the hook");
   const after = get(h, d);
   assert.equal(after.delivery, undefined);
-  assert.equal(after.delivery_flag, "auto_not_applied");
-  assert.equal(h.store.getModeSwitch(SID).pending, false, "auto stays off");
-  assert.equal(h.store.planGrant(SID, FP), undefined);
+  assert.equal(after.delivery_flag, undefined);
+  assert.equal(h.store.planGrant(SID, FP), undefined, "nothing passes before the waiting hook takes the answer");
+  h.store.ack(d.id, true);
+  assert.deepEqual(h.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" });
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
+  assert.equal(get(h, d).delivery_flag, undefined);
 
   const plain = setup();
   const p = plain.plan();
@@ -549,4 +550,147 @@ test("L2: the same when the claiming mod went away and the transcript shows its 
   h.store.checkLeases();
   assert.equal(get(h, d).status, "answer_lost");
   assert.equal(get(h, d).status_reason, "superseded");
+});
+
+// ---- the waiting hook (classic): "approve and auto" goes through the PermissionRequest of the same ExitPlanMode ----
+
+/** A plan waited for by the hook (no mod), answered; `take` is the hook's ack (true: it leaves an auto grant to the PermissionRequest) */
+function classicPlan(h: H, opts: { toolUseId?: string; plan?: string; auto?: boolean; take?: boolean; keep?: boolean; agentId?: string } = {}): Decision {
+  const extra: Partial<CreateDecisionRequest> = { mod_owner: undefined };
+  const req = h.req(opts.toolUseId ?? "toolu_c", opts.plan ?? PLAN, extra);
+  if (opts.agentId) req.session = { ...req.session, agent_id: opts.agentId };
+  const d = h.store.create(req, {}).decision;
+  assert.equal(d.delivery, undefined);
+  h.approve(d, opts.auto ?? true);
+  if (opts.take !== false) h.store.ack(d.id, opts.keep ?? true);
+  return d;
+}
+
+test("classic: approve and auto derives an auto grant only once the hook took it and left it (ack with keep_plan_grant); the PermissionRequest uses it once", () => {
+  const h = setup();
+  const d = classicPlan(h, { take: false });
+  assert.equal(h.store.planGrant(SID, FP), undefined, "answer_submitted: the waiting hook has not taken it");
+  h.store.ack(d.id, true);
+  assert.deepEqual(h.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" });
+  assert.equal(get(h, d).grant_used_at, undefined);
+  assert.equal(get(h, d).response?.delivered_via, "hook");
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false }, "once");
+  const done = get(h, d);
+  assert.ok(done.grant_used_at);
+  assert.equal(done.status, "answered");
+  assert.equal(done.response?.delivered_via, "hook", "the hook delivered it; the grant only switched the mode");
+  assert.equal(done.delivery_flag, undefined);
+});
+
+test("classic: an approval the hook let through itself leaves no grant — a plain one, auto without keep_plan_grant (flagged), and a subagent's (flagged)", () => {
+  const plain = setup();
+  const p = classicPlan(plain, { auto: false });
+  assert.equal(plain.store.planGrant(SID, FP), undefined, "the PreToolUse allow used it");
+  assert.ok(get(plain, p).grant_used_at);
+  assert.equal(get(plain, p).delivery_flag, undefined);
+
+  const noKeep = setup();
+  const n = classicPlan(noKeep, { keep: false });
+  assert.equal(noKeep.store.planGrant(SID, FP), undefined);
+  assert.ok(get(noKeep, n).grant_used_at);
+  assert.equal(get(noKeep, n).delivery_flag, "auto_not_applied");
+
+  const sub = setup();
+  const s = classicPlan(sub, { agentId: "sub-1" });
+  assert.equal(sub.store.planGrant(SID, FP), undefined);
+  assert.ok(get(sub, s).grant_used_at, "a subagent's ExitPlanMode never gets the grant: keep_plan_grant is ignored");
+  assert.equal(get(sub, s).delivery_flag, "auto_not_applied");
+
+  const rejected = setup();
+  const r = rejected.store.create(rejected.req("toolu_r", PLAN, { mod_owner: undefined }), {}).decision;
+  rejected.store.submitAnswer(r.id, { kind: "reject", reason: "no" });
+  rejected.store.ack(r.id, true);
+  assert.equal(rejected.store.planGrant(SID, FP), undefined);
+  assert.equal(get(rejected, r).grant_used_at, undefined);
+});
+
+test("classic: the grant needs the same session and plan, and lasts 12 hours", () => {
+  const h = setup();
+  classicPlan(h);
+  const otherFp = decisionFingerprint("approve_plan", { plan: PLAN + "\nchanged\n", planFilePath: "/p/plan.md" });
+  assert.deepEqual(h.store.consumePlanGrant(SID, otherFp), { consumed: false });
+  assert.deepEqual(h.store.consumePlanGrant("another-session", FP), { consumed: false });
+  h.advance(PLAN_GRANT_TTL_MS + 1);
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+});
+
+test("classic: PostToolUse of ExitPlanMode, a main-agent event out of plan mode, SessionEnd and a newer main-agent plan write the grant off; a subagent's plan does not", () => {
+  const post = setup();
+  const p = classicPlan(post);
+  post.event("PostToolUse", { tool_name: "ExitPlanMode", agent_id: "sub-1" });
+  assert.ok(post.store.planGrant(SID, FP), "a subagent's PostToolUse leaves it");
+  post.event("PostToolUse", { tool_name: "ExitPlanMode" });
+  assert.equal(post.store.planGrant(SID, FP), undefined);
+  assert.equal(get(post, p).delivery_flag, "auto_not_applied", "the plan went through without the switch");
+
+  const mode = setup();
+  classicPlan(mode);
+  mode.event("Notification", { permission_mode: "plan" });
+  mode.event("Stop", { permission_mode: "acceptEdits", agent_id: "sub-1" });
+  assert.ok(mode.store.planGrant(SID, FP), "plan-mode and subagent events leave it");
+  mode.event("UserPromptSubmit", { permission_mode: "default" });
+  assert.equal(mode.store.planGrant(SID, FP), undefined);
+
+  const end = setup();
+  classicPlan(end);
+  end.event("SessionEnd");
+  assert.equal(end.store.planGrant(SID, FP), undefined, "a taken (answered) approval is written off at once");
+
+  const newer = setup();
+  classicPlan(newer);
+  newer.advance(1000);
+  newer.store.create(newer.req("toolu_sub", PLAN + "\nsub\n", { mod_owner: undefined, session: { ...newer.req("x").session, agent_id: "sub-1" } }), {});
+  assert.ok(newer.store.planGrant(SID, FP), "a subagent's plan is not the main agent's next plan");
+  newer.store.create(newer.req("toolu_next", PLAN + "\nnext\n", { mod_owner: undefined }), {});
+  assert.equal(newer.store.planGrant(SID, FP), undefined, "the human decides again");
+});
+
+test("classic: a grant left to the PermissionRequest survives a restart; an approval recorded before this kind of grant existed holds none", () => {
+  const h = setup();
+  const d = classicPlan(h);
+  h.store.close();
+  const again = setup({ dir: h.dir, start: h.now() + 1000 });
+  assert.deepEqual(again.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" });
+
+  // An older server acked classic approvals without the hook mark (and without grant_used_at): such a record lets nothing through
+  const old = setup();
+  const o = classicPlan(old, { take: false });
+  const legacy = { ...get(old, o), status: "answered", response: { ...get(old, o).response!, delivered_at: new Date(old.now()).toISOString() } };
+  old.store.close();
+  appendFileSync(join(old.dir, "decisions.jsonl"), JSON.stringify(legacy) + "\n");
+  const restarted = setup({ dir: old.dir, start: old.now() + 1000 });
+  assert.equal(restarted.store.get(o.id)?.status, "answered");
+  assert.equal(restarted.store.planGrant(SID, FP), undefined);
+});
+
+test("HTTP: the waiting hook's ack with keep_plan_grant leaves an auto grant; a plain ack uses it up; a malformed ack body is 400", async () => {
+  const { api, transcript } = await serve();
+  const register = async (toolUseId: string) => {
+    const r = await api("/api/decisions", {
+      body: { tool_use_id: toolUseId, kind: "approve_plan", session: { session_id: SID, cwd: "/nonexistent-ukagai-cwd", transcript_path: transcript, permission_mode: "plan" }, request: { plan: PLAN, planFilePath: "/p/plan.md" } },
+    });
+    const d = (await r.json()) as Decision;
+    assert.equal(d.delivery, undefined);
+    assert.equal((await api(`/api/decisions/${d.id}/answer`, { body: { approve: true, set_mode_auto: true } })).status, 200);
+    return d;
+  };
+  const q = `/api/sessions/${SID}/plan-grant?fingerprint=${FP}`;
+  const kept = await register("toolu_keep");
+  assert.equal((await api(`/api/decisions/${kept.id}/ack`, { body: { keep_plan_grant: "yes" } })).status, 400);
+  assert.equal((await api(`/api/decisions/${kept.id}/ack`, { body: { keep_plan_grant: true } })).status, 200);
+  assert.deepEqual(await (await api(q)).json(), { grant: { decision_id: kept.id, mode: "auto" } });
+  assert.deepEqual(await (await api(`/api/sessions/${SID}/plan-grant/consume`, { body: { fingerprint: FP } })).json(), { consumed: true, mode: "auto" });
+
+  const plain = await register("toolu_plain_ack");
+  assert.equal((await api(`/api/decisions/${plain.id}/ack`, { body: {} })).status, 200);
+  assert.equal((await api(q)).status, 404);
+  const after = (await (await api(`/api/decisions/${plain.id}`)).json()) as Decision;
+  assert.equal(after.delivery_flag, "auto_not_applied");
 });

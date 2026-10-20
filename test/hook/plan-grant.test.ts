@@ -1,10 +1,14 @@
 // A plan approved while it waited for message delivery: the re-called ExitPlanMode uses its grant (PreToolUse for a plain approval,
-// PermissionRequest for "approve and auto"). Every miss or failure leaves today's flow (PreToolUse) or Claude Code's dialog (PermissionRequest)
+// PermissionRequest for "approve and auto"). A plan the waiting hook took with "approve and auto" leaves its grant to the PermissionRequest.
+// Every miss or failure leaves today's flow (PreToolUse) or Claude Code's dialog (PermissionRequest)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PermissionRequestAllowExitPlan, PreToolUseAllow, decisionFingerprint } from "../../src/contract.js";
+import { PermissionRequestAllowExitPlan, PreToolUseAllow, decisionFingerprint, type Decision } from "../../src/contract.js";
+import { start } from "../../src/serve/index.js";
 import { dataDirWithToken, fakeServer, json, runHook, type Fake, type Handler } from "./helpers.js";
 
 const fx = (n: string) => JSON.parse(readFileSync(fileURLToPath(new URL(`../fixtures/${n}`, import.meta.url)), "utf8"));
@@ -33,7 +37,7 @@ const GRANT_PATH = `/api/sessions/${SID}/plan-grant?fingerprint=${FP}`;
 const CONSUME_PATH = `/api/sessions/${SID}/plan-grant/consume`;
 
 /** A server that holds one grant for the plan (mode none / auto) until it is consumed, and records the rest */
-function granting(mode?: "auto", opts: { pendingModeSwitch?: boolean } = {}): Handler {
+function granting(mode?: "auto"): Handler {
   let used = false;
   return (req, res) => {
     if (req.method === "GET" && req.path.startsWith(`/api/sessions/${SID}/plan-grant?`)) {
@@ -44,7 +48,6 @@ function granting(mode?: "auto", opts: { pendingModeSwitch?: boolean } = {}): Ha
       used = true;
       return json(res, 200, { consumed: true, ...(mode ? { mode } : {}) });
     }
-    if (req.method === "GET" && req.path.endsWith("/pending-mode-switch")) return json(res, 200, { pending: opts.pendingModeSwitch === true });
     return false;
   };
 }
@@ -142,7 +145,6 @@ test("PermissionRequest × ExitPlanMode × an auto grant → allow + updatedInpu
     assert.deepEqual(out, fx("permission-request-exit-plan-stdout.json"));
     assert.ok(PermissionRequestAllowExitPlan.safeParse(out).success);
     assert.deepEqual(f.calls.filter((c) => c.path === CONSUME_PATH).map((c) => c.body), [{ fingerprint: FP }]);
-    assert.ok(!f.calls.some((c) => c.path.includes("pending-mode-switch")));
     // used: a second prompt is Claude Code's
     assert.equal((await runHook(args(f, d), JSON.stringify(PERM))).stdout, "");
   });
@@ -157,18 +159,18 @@ test("PermissionRequest × ExitPlanMode: explanation blocks in the plan do not c
   });
 });
 
-test("PermissionRequest × ExitPlanMode: no grant, a plain grant, a subagent or an empty plan → no output; the pending mode switch is neither asked nor used", async () => {
+test("PermissionRequest × ExitPlanMode: no grant, a plain grant, a subagent or an empty plan → no output, nothing used", async () => {
   const cases: [Handler, Record<string, unknown>][] = [
-    [granting(undefined, { pendingModeSwitch: true }), { tool_input: { ...TOOL_INPUT, plan: "changed" } }],
-    [granting(undefined, { pendingModeSwitch: true }), {}],
-    [granting("auto", { pendingModeSwitch: true }), { agent_id: "sub-1" }],
-    [granting("auto", { pendingModeSwitch: true }), { tool_input: { plan: "  ", planFilePath: TOOL_INPUT.planFilePath } }],
+    [granting(), { tool_input: { ...TOOL_INPUT, plan: "changed" } }],
+    [granting(), {}],
+    [granting("auto"), { agent_id: "sub-1" }],
+    [granting("auto"), { tool_input: { plan: "  ", planFilePath: TOOL_INPUT.planFilePath } }],
   ];
   for (const [h, extra] of cases) {
     await withServer(h, async (f, d) => {
       const r = await runHook(args(f, d), JSON.stringify({ ...PERM, ...extra }));
       assert.equal(r.stdout, "", JSON.stringify(extra));
-      assert.ok(!f.calls.some((c) => c.path === CONSUME_PATH || c.path.includes("pending-mode-switch")), JSON.stringify(extra));
+      assert.ok(!f.calls.some((c) => c.path === CONSUME_PATH), JSON.stringify(extra));
     });
   }
 });
@@ -182,11 +184,11 @@ test("PermissionRequest × ExitPlanMode: server absent → no output (Claude Cod
   assert.equal(r.stdout, "");
 });
 
-test("PermissionRequest of another tool still uses the pending mode switch, never a plan grant", async () => {
-  await withServer(granting("auto", { pendingModeSwitch: true }), async (f, d) => {
-    const r = await runHook(args(f, d), JSON.stringify({ session_id: SID, transcript_path: "/t", cwd: "/c", hook_event_name: "PermissionRequest", tool_name: "Edit" }));
-    assert.deepEqual(JSON.parse(r.stdout).hookSpecificOutput.decision, { behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }] });
-    assert.ok(!f.calls.some((c) => c.path.includes("/plan-grant")));
+test("PermissionRequest of another tool → no output and no request, even with an auto grant for the session", async () => {
+  await withServer(granting("auto"), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify({ session_id: SID, transcript_path: "/t", cwd: "/c", hook_event_name: "PermissionRequest", tool_name: "Edit", permission_mode: "plan" }));
+    assert.equal(r.stdout, "");
+    assert.deepEqual(f.calls, []);
   });
 });
 
@@ -212,4 +214,89 @@ test("M3: with a mod, a subagent's ExitPlanMode outside plan mode is handled as 
     assert.equal(create?.body.mod_owner, undefined, "a subagent never asks for message delivery");
     assert.ok(!f.calls.some((c) => c.path.includes("/plan-grant")));
   });
+});
+
+// ---- the waiting hook (classic) with the real server: "approve and auto" goes through the PermissionRequest of the same ExitPlanMode ----
+
+async function realServer() {
+  const home = mkdtempSync(join(tmpdir(), "ukagai-pg-home-"));
+  const dataDir = mkdtempSync(join(tmpdir(), "ukagai-pg-data-"));
+  const tdir = join(home, ".claude", "projects", "p");
+  mkdirSync(tdir, { recursive: true });
+  const transcript_path = join(tdir, `${SID}.jsonl`);
+  writeFileSync(transcript_path, "");
+  const h = await start({ port: 0, dataDir, home });
+  const url = `http://127.0.0.1:${h.port}`;
+  const api = (path: string, body?: unknown) =>
+    fetch(url + path, { method: body === undefined ? "GET" : "POST", headers: { authorization: `Bearer ${h.token}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const hargs = ["--server", url, "--data-dir", dataDir, "--poll-timeout-ms", "500"];
+  const session = { session_id: SID, transcript_path, cwd: home };
+  /** The PreToolUse hook waits; the human answers in the GUI; the hook's result */
+  const answerWaiting = async (answer: object) => {
+    const hook = runHook(hargs, JSON.stringify({ ...PRE, ...session }));
+    let id: string | undefined;
+    for (let i = 0; i < 100 && !id; i++) {
+      const list = (await (await api("/api/decisions?status=pending")).json()) as Decision[];
+      id = list.find((d) => d.session.session_id === SID && d.kind === "approve_plan")?.id;
+      if (!id) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(id, "the plan was registered for the waiting hook");
+    assert.equal((await api(`/api/decisions/${id}/answer`, answer)).status, 200);
+    return { id, result: await hook };
+  };
+  const decision = async (id: string) => (await (await api(`/api/decisions/${id}`)).json()) as Decision;
+  const permission = () => runHook(hargs, JSON.stringify({ ...PERM, ...session }));
+  const cleanup = async () => {
+    await h.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  };
+  return { h, answerWaiting, decision, permission, cleanup };
+}
+
+test("classic, real server: approve and auto → the PreToolUse hook prints nothing; the PermissionRequest answers allow + updatedInput + setMode auto, once", async () => {
+  const s = await realServer();
+  try {
+    const { id, result } = await s.answerWaiting({ approve: true, set_mode_auto: true });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, "");
+    const taken = await s.decision(id);
+    assert.equal(taken.status, "answered");
+    assert.equal(taken.grant_used_at, undefined, "left to the PermissionRequest");
+    const out = JSON.parse((await s.permission()).stdout);
+    assert.deepEqual(out, fx("permission-request-exit-plan-stdout.json"));
+    assert.ok(PermissionRequestAllowExitPlan.safeParse(out).success);
+    const used = await s.decision(id);
+    assert.ok(used.grant_used_at);
+    assert.equal(used.delivery_flag, undefined);
+    assert.equal((await s.permission()).stdout, "", "used: a second prompt is Claude Code's");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("classic, real server: a plain approval → the PreToolUse hook allows; the grant is used up, so the PermissionRequest answers nothing", async () => {
+  const s = await realServer();
+  try {
+    const { id, result } = await s.answerWaiting({ approve: true });
+    assert.deepEqual(JSON.parse(result.stdout), { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: TOOL_INPUT } });
+    assert.ok((await s.decision(id)).grant_used_at);
+    assert.equal((await s.permission()).stdout, "");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("classic, real server: approve and auto, then the server is gone → the PermissionRequest prints nothing, exit 0 (Claude Code's dialog asks)", async () => {
+  const s = await realServer();
+  try {
+    const { result } = await s.answerWaiting({ approve: true, set_mode_auto: true });
+    assert.equal(result.stdout, "");
+    await s.h.close();
+    const r = await s.permission();
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout, "");
+  } finally {
+    await s.cleanup();
+  }
 });

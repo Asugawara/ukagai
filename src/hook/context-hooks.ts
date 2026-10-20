@@ -90,18 +90,10 @@ export async function sessionContext(
 export async function permissionRequest(raw: Record<string, unknown>, client: Client): Promise<Out | null> {
   const base = HookInputBase.safeParse(raw);
   if (!base.success) return null;
-  const id = base.data.session_id;
-  // ExitPlanMode's own prompt: only a plan the human approved with "and auto" while it waited for message delivery is answered here, with the
-  // plan as updatedInput (without it Claude Code keeps its dialog). Anything else, including the pending mode switch, leaves Claude Code's dialog
-  if (raw["tool_name"] === "ExitPlanMode") return base.data.agent_id === undefined ? exitPlanGrant(raw, id, client) : null;
-  if (!(await client.getPendingModeSwitch(id))) return null;
-  if (!(await client.consumeModeSwitch(id))) return null;
-  return {
-    hookSpecificOutput: {
-      hookEventName: "PermissionRequest",
-      decision: { behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }] },
-    },
-  };
+  // ExitPlanMode's own prompt: only a plan the human approved with "and auto" (waited for by the hook or delivered as a message) is answered
+  // here, with the plan as updatedInput (without it Claude Code keeps its dialog). Any other prompt is Claude Code's dialog
+  if (raw["tool_name"] !== "ExitPlanMode" || base.data.agent_id !== undefined) return null;
+  return exitPlanGrant(raw, base.data.session_id, client);
 }
 
 /** The session's "approve and auto" grant for this plan, used: allow + updatedInput + setMode auto. Null (Claude Code's dialog) on a miss or any failure */

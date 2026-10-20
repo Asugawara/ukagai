@@ -74,8 +74,6 @@ function defaultResponse(rec: Recorded, res: ServerResponse): void {
     json(res, 200, { id: "dec-1" });
   } else if (rec.path.startsWith("/api/events")) {
     res.writeHead(204).end();
-  } else if (rec.path.endsWith("/pending-mode-switch")) {
-    json(res, 200, { pending: false });
   } else if (rec.path.endsWith("/consume")) {
     json(res, 200, {});
   } else {

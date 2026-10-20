@@ -151,8 +151,9 @@ export class Client {
       : { kind: "error", status: 200, message: "unparseable wait response" };
   }
 
-  async ack(id: string): Promise<boolean> {
-    const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/ack`, undefined, SHORT_TIMEOUT_MS);
+  /** `keepPlanGrant`: an "approve and auto" grant is left to the PermissionRequest of the same ExitPlanMode (otherwise the server uses it up) */
+  async ack(id: string, keepPlanGrant = false): Promise<boolean> {
+    const r = await this.request("POST", `/api/decisions/${encodeURIComponent(id)}/ack`, keepPlanGrant ? { keep_plan_grant: true } : undefined, SHORT_TIMEOUT_MS);
     return r?.status === 200;
   }
 
@@ -187,7 +188,7 @@ export class Client {
     return d && typeof d.id === "string" ? d : null;
   }
 
-  /** The session's grant for this plan (the human approved it while it was registered for message delivery). Null on 404, any failure or an unexpected body */
+  /** The session's grant for this plan (the human approved it, and it was not let through yet). Null on 404, any failure or an unexpected body */
   async getPlanGrant(sessionId: string, fingerprint: string): Promise<PlanGrant | null> {
     const q = new URLSearchParams({ fingerprint });
     const r = await this.request("GET", `/api/sessions/${encodeURIComponent(sessionId)}/plan-grant?${q}`, undefined, SHORT_TIMEOUT_MS);
@@ -225,40 +226,6 @@ export class Client {
 
   async postEvent(event: Record<string, unknown>, timeoutMs: number): Promise<boolean> {
     const r = await this.request("POST", "/api/events", event, timeoutMs);
-    return r !== null && r.status >= 200 && r.status < 300;
-  }
-
-  /** On 200 the body is `{pending: boolean}`. Anything else is false */
-  async getPendingModeSwitch(sessionId: string): Promise<boolean> {
-    const r = await this.request(
-      "GET",
-      `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch`,
-      undefined,
-      SHORT_TIMEOUT_MS,
-    );
-    if (!r || r.status !== 200) return false;
-    return (Client.json(r.text) as { pending?: unknown } | undefined)?.pending === true;
-  }
-
-  /** True when the server says this is the first ask for the pending record (it asks at most once per record) */
-  async askModeSwitch(sessionId: string, timeoutMs: number = SHORT_TIMEOUT_MS): Promise<boolean> {
-    const r = await this.request(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/ask`,
-      undefined,
-      timeoutMs,
-    );
-    if (!r || r.status !== 200) return false;
-    return (Client.json(r.text) as { ask?: unknown } | undefined)?.ask === true;
-  }
-
-  async consumeModeSwitch(sessionId: string, timeoutMs: number = SHORT_TIMEOUT_MS): Promise<boolean> {
-    const r = await this.request(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/pending-mode-switch/consume`,
-      undefined,
-      timeoutMs,
-    );
     return r !== null && r.status >= 200 && r.status < 300;
   }
 
