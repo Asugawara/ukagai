@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.5.0](https://github.com/Asugawara/ukagai/compare/v0.4.0...v0.5.0) (2026-10-20)
+
+
+### Features
+
+* **contract:** add message-delivery types, constants and the claude.message_delivery setting ([8f75197](https://github.com/Asugawara/ukagai/commit/8f75197a8847e84c8e78a1688edaa26bcdeb0470))
+* **gui:** say when an approved plan did not switch to auto mode ([27d51b5](https://github.com/Asugawara/ukagai/commit/27d51b5dca5ab0030b3cad079fa32067b52c3cf9))
+* **gui:** show a toast for an instruction delivered as a message ([02ffb07](https://github.com/Asugawara/ukagai/commit/02ffb0757514169b6f7e1a07885eff764606fe57))
+* **gui:** show message-delivery status and add the Settings toggle ([00942d0](https://github.com/Asugawara/ukagai/commit/00942d0e7732816d325ae001a07445f21b836591))
+* **hook:** let the re-called ExitPlanMode through by its grant ([e5857de](https://github.com/Asugawara/ukagai/commit/e5857ded60f668cf190ea77423a98136b0d3044b))
+* **hook:** register questions for message delivery and hold tools back while an answer is on its way ([286f081](https://github.com/Asugawara/ukagai/commit/286f081ab3310edf21e98db5c312745685b5bdc8))
+* **install:** place the ukagai-mod skills-directory plugin ([56f63bf](https://github.com/Asugawara/ukagai/commit/56f63bf1cdd4069bd5b8c4dca8ec4bafe529df55))
+* **mod:** deliver ukagai answers with prompt.submit ([75a5549](https://github.com/Asugawara/ukagai/commit/75a5549b7c87b20a6aff9adce767a16773610b42))
+* **plugin:** ship the mod in the release tree and name it in hooks/claude.json ([8791abd](https://github.com/Asugawara/ukagai/commit/8791abd4ad132e4207ca06c2b16d3690beedd9d9))
+* **serve:** deliver answers through a per-session inbox for the ukagai mod ([8951eb7](https://github.com/Asugawara/ukagai/commit/8951eb75173c0f57ac77c636c5557d386605147f))
+* **serve:** deliver checkpoint replies and plan instructions through the mod's inbox ([20cb160](https://github.com/Asugawara/ukagai/commit/20cb160d2aaba4ce02997a18a10449162f998bac))
+* **serve:** derive one-time plan grants from approvals sent as messages ([e58a64c](https://github.com/Asugawara/ukagai/commit/e58a64c15216e30e5c6a8af9898ce640d27afc6e))
+
+
+### Bug Fixes
+
+* **explain:** stop denying natural undo wording, standard names, diagrams outside a Diagram heading and callouts in the Recommendation ([6244bd1](https://github.com/Asugawara/ukagai/commit/6244bd19999208041b13dbf45392998cb83c8c1f))
+* **gui:** ==mark== skips diagram text too, so a label such as a==b inside a diagram is not wrapped in an HTML &lt;mark&gt; that SVG does not draw ([5506d9b](https://github.com/Asugawara/ukagai/commit/5506d9bdcad48db12b53fd092cc978bb769186c5))
+* **gui:** a diagram label that equals an option label, a Terms entry, a risk word or a number stays drawn: the text decorations no longer wrap SVG text in HTML spans, which SVG does not draw (pele draws the diagram before the decorations run) ([81e2e10](https://github.com/Asugawara/ukagai/commit/81e2e10903929d2eb0cd085cb097e6139b541569))
+* **gui:** long lines in code blocks and diffs wrap instead of scrolling sideways (indentation kept, the add / del background covers the wrapped line) ([5f45733](https://github.com/Asugawara/ukagai/commit/5f45733f6b9f08ac0019c40ea29e41103c669cfb))
+* **gui:** say why an answer that a newer plan or the re-call time limit kept from the agent was not delivered ([6d7d7a8](https://github.com/Asugawara/ukagai/commit/6d7d7a8e76bfc826b431fd3ff77248f5aaf4d048))
+* **gui:** show that auto mode was not switched on for a plan that went back to the waiting hook ([019c251](https://github.com/Asugawara/ukagai/commit/019c251f6639e59da6e8314bb9db5396dcfe4cbc))
+* **gui:** the HTML frame bar never breaks inside a word: in a narrow frame (container query) Open in new tab and Full screen show only their Lucide icon (text kept as title / aria-label) so the alt and the file name stay readable; if even that does not fit, the names end in an ellipsis and whole items wrap ([83925df](https://github.com/Asugawara/ukagai/commit/83925dfa95808107fcaacac1c14c82d532e7d3e0))
+* **gui:** toast "auto mode was not switched on" once when a closed plan gets the flag ([3c605b4](https://github.com/Asugawara/ukagai/commit/3c605b49a896568ca58d3ea082429d92b1f8bae7))
+* hand an "approve and auto" plan grant to one PermissionRequest, once, for 60 seconds, and keep the Codex bridge's plan ack as before ([211b33f](https://github.com/Asugawara/ukagai/commit/211b33f0e00f201a17765f6548b8e93a293a61b7))
+* **hook:** answer ExitPlanMode's prompt only in plan mode, and leave a subagent's plan outside it as before ([7a6ccd9](https://github.com/Asugawara/ukagai/commit/7a6ccd96fc817244b26c99e72620d1382a24af4c))
+* **hook:** do not use up the pending mode switch when a held-back tool is denied ([ccbf945](https://github.com/Asugawara/ukagai/commit/ccbf94574e994b0832185d0febb28832d42b2f15))
+* **hook:** send the async and waiting denies as a red line plus hook context ([dc8b0ad](https://github.com/Asugawara/ukagai/commit/dc8b0ad92a370cdd2ec53497a75fb12a74bf86f2))
+* **hooks:** give the synchronous hooks a 10 s timeout ([4102473](https://github.com/Asugawara/ukagai/commit/410247352cc2cc2bb3c98b4db80d8e0840e36cfd))
+* **hook:** show one red line per deny and pass the instructions as hook context ([ce16453](https://github.com/Asugawara/ukagai/commit/ce1645314e77855d7fe16014d6e4e3bf52e77e99))
+* **launcher:** skip the node version probe for a node that already passed it ([66c031e](https://github.com/Asugawara/ukagai/commit/66c031e6f021c90ff2f469c1af5296fcf17d8ff7))
+* let a message-delivery plan grant pass only a re-call within 10 minutes of delivery, and write a handed grant off when the human types ([4c6945c](https://github.com/Asugawara/ukagai/commit/4c6945caa6527e30a621e4e860ca55aea69a78ef))
+* **mod:** give a claimed item back when the session ends mid-poll, and reset on a disabled restart ([a4bebb5](https://github.com/Asugawara/ukagai/commit/a4bebb5ac2544b482a989016ff916b905ea54583))
+* **mod:** keep delivering after /clear by starting a new session when session.end says clear ([4a58371](https://github.com/Asugawara/ukagai/commit/4a5837106dc19e9b456df612fa275c9cbe4a37d9))
+* **serve:** count a failed prompt submit and close a dying mod's session ([1ba100d](https://github.com/Asugawara/ukagai/commit/1ba100d460a92f9f9dbb9ae72ca9dbf45ca0ab88))
+* **serve:** drop the inner [ukagai] tag of each prefix in an inbox instruction ([4381afd](https://github.com/Asugawara/ukagai/commit/4381afd24987f24a5bdf0fadcf44bf8601612af6))
+* **serve:** keep every joined checkpoint and each text's prefix in an inbox instruction, and let the bypass expire ([998e837](https://github.com/Asugawara/ukagai/commit/998e837d4e522ac2a405b91246ee4d134b2528cb))
+* **serve:** keep instruction time limits on the store's clock, and hand out a waiting instruction once an approval without its grant is closed ([937ff5e](https://github.com/Asugawara/ukagai/commit/937ff5e66c08156420c2457673aa3223c5b2f7fa))
+* **serve:** let only the main agent's plan supersede, and close an approval as lost when its grant goes while the mod submits it ([b898ba5](https://github.com/Asugawara/ukagai/commit/b898ba5861bfce680723fd6e5c999acd28ae9bad))
+* **serve:** return inbox instructions to the queue when the mod is gone, and never drop one that is joined or claimed ([752e9ca](https://github.com/Asugawara/ukagai/commit/752e9ca2969c80cac505b6645771fa945f125c08))
+* **serve:** write off plan grants when a newer plan or a non-plan-mode event comes, and never deliver an approval without one ([c263f6b](https://github.com/Asugawara/ukagai/commit/c263f6b0025e239dea80880a504fb26a9738a30c))
+* **tui:** add the drop reason to the toast of an answer waiting for delivery ([22f986c](https://github.com/Asugawara/ukagai/commit/22f986c98b6b8caa895ba4fafd17aa55d2a1e00c))
+* write off a delivered plan grant nobody handed yet when the human types after the delivery ([0808f69](https://github.com/Asugawara/ukagai/commit/0808f6971969f918213a7d6a6feca56df8c436d9))
+
 ## [0.4.0](https://github.com/Asugawara/ukagai/compare/v0.3.0...v0.4.0) (2026-10-19)
 
 
