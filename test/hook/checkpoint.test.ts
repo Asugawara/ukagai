@@ -100,7 +100,7 @@ test("buildHookEntries: the checkpoint group sits next to the decision group", (
   assert.equal(e["PreToolUse"]?.[0]?.matcher, "AskUserQuestion|ExitPlanMode");
   const g = e["PreToolUse"]![1]!;
   assert.equal(g.matcher, "Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite");
-  assert.equal(g.hooks[0]?.timeout, 3);
+  assert.equal(g.hooks[0]?.timeout, 10);
   assert.equal(g.hooks[0]?.statusMessage, undefined);
   assert.equal(g.hooks[0]?.async, undefined);
   assert.ok(g.hooks[0]?.args.includes("--checkpoint"));

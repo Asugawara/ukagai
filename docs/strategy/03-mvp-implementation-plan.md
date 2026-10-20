@@ -164,8 +164,8 @@ GUI rendering: Markdown (headings, tables, code blocks), Mermaid (`mermaid.min.j
 | event | matcher | timeout (seconds) | sync / async |
 |---|---|---|---|
 | PreToolUse | `AskUserQuestion\|ExitPlanMode` | 3600 (adjust by the result of E1) | sync, with `statusMessage` |
-| PermissionRequest | `Write\|Edit` | 5 | sync |
-| SessionStart / SubagentStart | none | 5 | sync (to return `additionalContext`) |
+| PermissionRequest | `Write\|Edit` | 10 | sync |
+| SessionStart / SubagentStart | none | 10 | sync (to return `additionalContext`) |
 | UserPromptSubmit / Stop / SubagentStop | none | 5 | async |
 | PostToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` (also `AskUserQuestion\|ExitPlanMode` when `--observe`) | 5 | async |
 | SessionEnd | none | 2 | sync (budget 1.5 seconds. The POST gives up at 500 ms) |
