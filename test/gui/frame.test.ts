@@ -430,3 +430,59 @@ gui("a plan card shows the page through plan=<name>", async () => {
   await waitFor("overlay closed", `!document.querySelector(".overlay.frame")`);
   rmSync(join(home, ".claude", "plans", name), { force: true });
 });
+
+gui("the frame bar never breaks inside a word: two frames side by side in columns at 1280x800 (en and ja), narrower still", async () => {
+  writeFileSync(join(scratch, "ukagai", "variant-a.html"), SHORT);
+  writeFileSync(join(scratch, "ukagai", "variant-b.html"), SHORT);
+  const md = `---\nukagai: 1\n---\n## Why this decision is needed now\n\n::: columns\n![Variant A](variant-a.html)\n\n---\n\n![Variant B](variant-b.html)\n:::\n`;
+  ab("set", "viewport", "1280", "800");
+  ab("open", base + "/");
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  await seedDoc(md);
+  await waitFor("two frames", `document.querySelectorAll("${BG} figure.doc-frame").length === 2`, 15000);
+  // every bar item keeps its text on one line (a line box as tall as one line of text), whatever the width
+  const bar = () => ev<{ h: number[]; broken: string[]; rows: number[] }>(`JSON.stringify((() => {
+    const bars = [...document.querySelectorAll("${BG} .doc-frame-bar")], broken = [];
+    for (const b of bars) for (const e of b.querySelectorAll(".doc-frame-alt, .chip, .doc-frame-open, .doc-frame-full")) {
+      const lh = parseFloat(getComputedStyle(e).lineHeight) || parseFloat(getComputedStyle(e).fontSize) * 1.5;
+      if (e.getBoundingClientRect().height > lh + 12) broken.push(e.className + ":" + e.textContent);
+      if (e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).textOverflow !== "ellipsis") broken.push("clipped " + e.className);
+    }
+    return { h: bars.map((b) => Math.round(b.getBoundingClientRect().height)), broken, rows: bars.map((b) => new Set([...b.children].map((e) => { const r = e.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 2 / 4); })).size) };
+  })())`);
+  for (const lang of ["en", "ja"]) {
+    ev(`document.documentElement.dataset.lang = ${JSON.stringify(lang)}, "ok"`);
+    await sleep(300);
+    const r = bar();
+    assert.deepEqual(r.broken, [], `${lang}: ${JSON.stringify(r)}`);
+    assert.equal(r.h[0], r.h[1], `${lang}: bars of equal height ${r.h}`);
+    assert.deepEqual(r.rows, [1, 1], `${lang}: one row each`);
+    // the buttons are icon-only here (the text stays as title / aria-label) and the names are whole
+    const v = ev<{ icons: boolean[]; texts: boolean[]; cut: number; labels: string[] }>(`JSON.stringify((() => {
+      const btns = [...document.querySelectorAll("${BG} .doc-frame-open, ${BG} .doc-frame-full")], names = [...document.querySelectorAll("${BG} .doc-frame-alt, ${BG} .doc-frame-bar .chip")];
+      return { icons: btns.map((b) => getComputedStyle(b.querySelector("svg")).display !== "none"), texts: btns.map((b) => getComputedStyle(b.querySelector(".btn-text")).display !== "none"),
+        cut: names.filter((e) => e.scrollWidth > e.clientWidth).length, labels: btns.map((b) => b.title === b.getAttribute("aria-label") && b.title.length > 0 ? b.title : "") };
+    })())`);
+    assert.deepEqual(v.icons, [true, true, true, true], `${lang}: icons`);
+    assert.deepEqual(v.texts, [false, false, false, false], `${lang}: no button text`);
+    assert.equal(v.cut, 0, `${lang}: alt and chip not truncated`);
+    assert.ok(v.labels.every(Boolean), `${lang}: title and aria-label`);
+  }
+  ev(`document.documentElement.dataset.lang = "en", "ok"`);
+  for (const w of [1000, 820, 640]) {
+    ab("set", "viewport", String(w), "800");
+    await sleep(300);
+    const r = bar();
+    assert.deepEqual(r.broken, [], `${w}px: ${JSON.stringify(r)}`);
+  }
+  // one column: the frame is wide, so the buttons keep their text
+  await cancelAll();
+  await seedDoc(`---\nukagai: 1\n---\n## Why this decision is needed now\n\n![Variant A](variant-a.html)\n`);
+  await waitFor("wide frame", `document.querySelectorAll("${BG} figure.doc-frame").length === 1`, 15000);
+  ab("set", "viewport", "1440", "900");
+  await sleep(300);
+  assert.equal(text(`${BG} .doc-frame-open`), "Open in new tab");
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("${BG} .doc-frame-open .btn-text")).display !== "none" && getComputedStyle(document.querySelector("${BG} .doc-frame-open svg")).display === "none"`), true);
+  assert.deepEqual(bar().broken, []);
+  ab("set", "viewport", "1440", "900");
+});

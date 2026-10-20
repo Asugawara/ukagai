@@ -154,14 +154,14 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   });
 }
 
-async function seedDoc(markdown: string, question: string, file = "ex.md"): Promise<{ id: string }> {
+async function seedDoc(markdown: string, question: string, file = "ex.md", labels = ["A (Recommended)", "B"]): Promise<{ id: string }> {
   const docPath = join(scratch, "ukagai", file);
   writeFileSync(docPath, markdown);
   const d = await api("/api/decisions", {
     tool_use_id: `toolu_md_${process.pid}_${Date.now()}`,
     kind: "answer_question",
     session: { session_id: "00000000-0000-0000-0009-000000000001", cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl"), scratchpad_dir: scratch },
-    request: { questions: [{ question, header: "Store", multiSelect: false, options: [{ label: "A (Recommended)", description: "A" }, { label: "B", description: "B" }] }] },
+    request: { questions: [{ question, header: "Store", multiSelect: false, options: labels.map((label) => ({ label, description: label })) }] },
     explanation: { path: docPath, markdown, has: { mermaid: true, table: true, diff: true }, match: "question", attached_via: "first_call" },
   });
   assert.ok(d.id, `cannot create decision: ${JSON.stringify(d)}`);
@@ -477,4 +477,46 @@ gui("screenshots: the rich explanation in light and dark", async () => {
     await cancelAll();
   }
   ab("set", "media", "light");
+});
+
+gui("an option label, a Terms entry and a risk word equal to a diagram label leave the SVG text drawn", async () => {
+  const q = "Which service owns the call, API or Queue?";
+  const md = `---\nukagai: 1\nquestion: ${q}\ntitle: Service check\nrecommended: API\nreversibility: reversible\nscope: file\n---\n\n## Why this decision is needed now\n\n**API** takes the call, and the API is the only writer: 3 MB per request.\n\n\`\`\`mermaid\nsequenceDiagram\n  participant API\n  participant Queue\n  API->>Queue: 3 MB\n\`\`\`\n\n## Options\n\n| Option | What happens if chosen | Risks and how to undo |\n|---|---|---|\n| API (Recommended) | The API handles the call | Revert the file |\n| Queue | The Queue handles the call | Revert the file |\n\n## Terms\n\n- **Queue**: a buffer between two services\n`;
+  await seedDoc(md, q, "svg.md", ["API (Recommended)", "Queue"]);
+  ab("open", base + "/");
+  await waitFor("diagram", `document.querySelectorAll("${BG} .mermaid-ok > svg").length >= 1`, 15000);
+  // nothing in the SVG is replaced by an HTML span (SVG draws none), and the participant texts are still there
+  assert.equal(count(`${BG} .mermaid-ok svg span`), 0);
+  assert.equal(count(`${BG} .mermaid-ok svg .optref, ${BG} .mermaid-ok svg .term, ${BG} .mermaid-ok svg .num`), 0);
+  const labels = ev<string[]>(`JSON.stringify([...document.querySelectorAll("${BG} .mermaid-ok svg text")].map((e) => e.textContent.trim()))`);
+  assert.ok(labels.filter((l) => l === "API").length >= 1, `API drawn: ${labels}`);
+  assert.ok(labels.filter((l) => l === "Queue").length >= 1, `Queue drawn: ${labels}`);
+  // the prose outside the diagram is still decorated
+  assert.ok(count(`${BG} strong.optref`) >= 1);
+});
+
+const LONG_LINE = "const veryLong = " + "abcdefghij".repeat(30) + ";";
+const CODE_MD = (head: string) => `${head}\n\nBody.\n\n\`\`\`ts\n${LONG_LINE}\n\`\`\`\n\n\`\`\`diff\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n-${LONG_LINE}\n+${LONG_LINE}x\n\`\`\`\n\n\`\`\`ts title="src/long.ts"\n${LONG_LINE}\n\`\`\`\n`;
+const noSideScroll = () => ev<{ w: number; c: number }[]>(`JSON.stringify([...document.querySelectorAll("${BG} pre")].map((p) => ({ w: p.scrollWidth, c: p.clientWidth })))`);
+
+gui("long lines in code blocks wrap instead of scrolling sideways (explanation and plan, 1280x800)", async () => {
+  ab("set", "viewport", "1280", "800");
+  await seedDoc(CODE_MD("---\nukagai: 1\n---\n## Why this decision is needed now"), QUESTION, "code.md");
+  ab("open", base + "/");
+  await waitFor("code blocks", `document.querySelectorAll("${BG} pre").length >= 3`, 15000);
+  let pres = noSideScroll();
+  assert.ok(pres.length >= 3);
+  for (const p of pres) assert.ok(p.w <= p.c, `explanation: scrollWidth ${p.w} > clientWidth ${p.c}`);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("${BG} pre code")).whiteSpace === "pre-wrap"`), true);
+  // the diff lines wrap and the background still covers the whole (wrapped) line
+  assert.equal(ev<boolean>(`(() => { const a = document.querySelector("${BG} pre.diff .add"), l = parseFloat(getComputedStyle(a).lineHeight); return a.getBoundingClientRect().height > l * 1.5 && getComputedStyle(a).backgroundColor !== "rgba(0, 0, 0, 0)"; })()`), true);
+  await cancelAll();
+  const name = "code-plan.md";
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  await planSession("code-plan");
+  writeFileSync(join(home, ".claude", "plans", name), CODE_MD("# Code plan\n\n## One"));
+  await waitFor("plan code blocks", `document.querySelectorAll("${BG} pre").length >= 3`, 8000);
+  pres = noSideScroll();
+  for (const p of pres) assert.ok(p.w <= p.c, `plan: scrollWidth ${p.w} > clientWidth ${p.c}`);
+  rmSync(join(home, ".claude", "plans", name), { force: true });
 });

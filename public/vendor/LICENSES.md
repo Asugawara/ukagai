@@ -45,7 +45,7 @@ Generated from `package-lock.json` (non-dev packages); each license matches the 
 
 ## Icons
 
-The settings page icons are [Lucide](https://lucide.dev) 0.554.0 (ISC; portions derived from Feather, MIT). Only the path data of `settings`, `bell`, `file-text`, `clock`, `book-open`, `plug`, `chevron-left`, `square-pen`, `eye`, `git-compare`, `rotate-ccw`, `undo-2` and `save` is copied, into `public/icons.js`.
+The settings page and HTML frame bar icons are [Lucide](https://lucide.dev) 0.554.0 (ISC; portions derived from Feather, MIT). Only the path data of `settings`, `bell`, `file-text`, `clock`, `book-open`, `plug`, `chevron-left`, `external-link`, `maximize`, `square-pen`, `eye`, `git-compare`, `rotate-ccw`, `undo-2` and `save` is copied, into `public/icons.js`.
 
 ```text
 ISC License
