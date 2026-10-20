@@ -79,7 +79,9 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   // First run (no plans-read.json): plans already on disk are not new
   if (!planRead.exists()) planRead.seed(await listPlans(home));
   let planReady: PlanReady | undefined;
+  const settings = await SettingsStore.load(dataDir);
   const store = new Store({
+    messageDelivery: () => settings.get().claude.message_delivery,
     dir: dataDir,
     leaseGraceMs: opts.leaseGraceMs ?? LEASE_GRACE_MS,
     handoffGraceMs: opts.handoffGraceMs,
@@ -117,7 +119,6 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
 
   planReady = new PlanReady(store, planSessions, (event, data) => hub.broadcast(event, data), dataDir);
 
-  const settings = await SettingsStore.load(dataDir);
   const { lang } = settings.get();
   const token = randomBytes(32).toString("hex");
 

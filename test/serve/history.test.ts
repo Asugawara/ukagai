@@ -1,9 +1,9 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectHistory } from "../../src/serve/history.js";
+import { collectHistory, transcriptHasDelivery } from "../../src/serve/history.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const roots: string[] = [];
@@ -230,4 +230,47 @@ test("GET /api/decisions/:id/history: unreadable transcript gives the empty hist
   const r = await fetch(`${env.url}/api/decisions/${d.id}/history`, { headers: { authorization: `Bearer ${env.h.token}` } });
   assert.equal(r.status, 200);
   assert.deepEqual(await r.json(), { session_id: "gone", total: 0, first: null, recent: [] });
+});
+
+// ---- messages the ukagai mod delivered ----
+
+const pluginMessage = (text: string, extra: Record<string, unknown> = {}) =>
+  user([{ type: "text", text: `The ukagai-mod plugin sent a message:\n${text}` }], { origin: { kind: "plugin", name: "ukagai-mod" }, promptSource: "system", ...extra });
+
+test("a message a plugin submitted is not one of the human's instructions", async () => {
+  const home = tmp();
+  const { session } = transcript(home, [
+    user("first typed instruction", { origin: { kind: "human" } }),
+    pluginMessage("[ukagai] (ref a1b2c3d4) The human answered your question in the ukagai GUI:\n- \"q\": \"A\""),
+    user("second typed instruction"),
+  ]);
+  const h = await collectHistory(session, { home });
+  assert.equal(h.total, 2);
+  assert.deepEqual(h.recent.map((r) => r.text), ["first typed instruction", "second typed instruction"]);
+});
+
+test("transcriptHasDelivery: the plugin's message with the ref, appended after the offset, and nothing else", () => {
+  const home = tmp();
+  const earlier = [user("typed"), pluginMessage("[ukagai] (ref a1b2c3d4) before the claim")];
+  const { path } = transcript(home, earlier);
+  const offset = statSync(path).size;
+  assert.equal(transcriptHasDelivery(path, 0, "a1b2c3d4"), true);
+  assert.equal(transcriptHasDelivery(path, offset, "a1b2c3d4"), false, "the line sits before the offset");
+  appendFileSync(path, JSON.stringify(pluginMessage("[ukagai] (ref ffffffff) another decision")) + "\n");
+  assert.equal(transcriptHasDelivery(path, offset, "a1b2c3d4"), false, "another ref");
+  appendFileSync(path, JSON.stringify(user("[ukagai] (ref a1b2c3d4) typed by a person", { origin: { kind: "human" } })) + "\n");
+  assert.equal(transcriptHasDelivery(path, offset, "a1b2c3d4"), false, "the same words from a human");
+  appendFileSync(path, JSON.stringify(pluginMessage("[ukagai] (ref a1b2c3d4) the delivery")) + "\n");
+  assert.equal(transcriptHasDelivery(path, offset, "a1b2c3d4"), true);
+  // content as a plain string works too
+  appendFileSync(path, JSON.stringify({ ...user("x"), message: { role: "user", content: "[ukagai] (ref 11111111) plain" }, origin: { kind: "plugin" } }) + "\n");
+  assert.equal(transcriptHasDelivery(path, offset, "11111111"), true);
+});
+
+test("transcriptHasDelivery: a missing file, an offset past the end and broken lines give false", () => {
+  const home = tmp();
+  assert.equal(transcriptHasDelivery(join(home, "nope.jsonl"), 0, "a1b2c3d4"), false);
+  const { path } = transcript(home, ["{not json a1b2c3d4", pluginMessage("[ukagai] (ref a1b2c3d4) x")]);
+  assert.equal(transcriptHasDelivery(path, 0, "a1b2c3d4"), true, "a broken line is skipped");
+  assert.equal(transcriptHasDelivery(path, 10_000_000, "a1b2c3d4"), false);
 });

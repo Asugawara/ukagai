@@ -329,3 +329,32 @@ test("reload: the running set and the wake-up mark come back from events.jsonl",
   assert.equal(c.isWaitingOnSubagents("s1"), false);
   c.close();
 });
+
+test("an answer waiting for the mod to deliver it is as pending as the question: the plan does not pop up over it, and does once it is delivered or no mod is there", async () => {
+  const e = await boot();
+  const owner = "0123456789abcdef";
+  await e.event("Stop");
+  e.plan(COMPLETE);
+  await until(() => e.updates.some((u) => u.name === "fox.md" && u.ready));
+  assert.equal((await e.listed())!.ready, true);
+
+  await e.api("/api/sessions/s1/inbox/poll", { owner, idle: false });
+  const r = await e.api("/api/decisions", {
+    tool_use_id: "toolu_async",
+    kind: "answer_question",
+    mod_owner: owner,
+    session: { session_id: "s1", cwd: "/w", transcript_path: e.transcript },
+    request: { questions: [{ question: "Which one, A or B?", header: "Choice", options: [{ label: "A" }, { label: "B" }], multiSelect: false }] },
+  });
+  const d = (await r.json()) as Decision;
+  assert.equal(d.delivery, "message");
+  assert.equal((await e.detail()).ready, false, "the question is open");
+
+  await e.api(`/api/decisions/${d.id}/answer`, { answers: { "Which one, A or B?": "A" } });
+  assert.equal((await e.detail()).ready, false, "answered, but not delivered yet");
+  assert.equal(e.updates.at(-1)!.ready, false);
+
+  await e.api("/api/sessions/s1/inbox/poll", { owner, idle: true });
+  await e.api("/api/sessions/s1/inbox/ack", { owner, item_id: d.id });
+  assert.equal((await e.detail()).ready, true, "delivered: the agent moves on");
+});
