@@ -58,7 +58,8 @@ const MESSAGE_STATUS_KEY: Record<string, MessageKey> = {
   answered: "status_message_delivered",
   fallback: "status_fallback_message",
 };
-const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal"];
+// `superseded` only for an answer that was not delivered (a newer plan, or the re-call time limit); a pending plan a newer one replaced is just cancelled
+const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded"];
 
 /** The toast text for a decision that left `pending` (undefined: none) */
 function statusToast(d: Decision, lang: Lang): string | undefined {
@@ -67,7 +68,7 @@ function statusToast(d: Decision, lang: Lang): string | undefined {
   if (d.delivery_flag === "auto_not_applied") return t(lang, "note_auto_not_applied");
   if (d.delivery === "message") {
     const reason = d.status_reason;
-    if ((d.status === "answer_lost" || d.status === "cancelled") && reason !== undefined && MESSAGE_LOST_REASONS.includes(reason)) {
+    if ((d.status === "answer_lost" || (d.status === "cancelled" && reason !== "superseded")) && reason !== undefined && MESSAGE_LOST_REASONS.includes(reason)) {
       return t(lang, `lost_${reason}` as MessageKey, { title: d.session.title ?? d.id.slice(0, 8), note: d.delivery_note ?? "" });
     }
     const key = MESSAGE_STATUS_KEY[d.status];

@@ -471,3 +471,23 @@ test("auto mode not switched on: a toast once when the flag newly appears on a c
   fresh.replacePending([{ ...plan, id: "p2", status: "pending", delivery_flag: "auto_not_applied" }], t);
   assert.equal(fresh.view(t).toast, null, "the startup list");
 });
+
+test("an answer a newer plan or the re-call time limit kept from the agent (superseded) is toasted in en and ja; a pending plan a newer one replaced is just cancelled", () => {
+  const EN = "Cache plan: your answer was not delivered: a newer plan replaced it, or the time to call the plan again ran out. The agent's next plan asks you again";
+  const JA = "Cache plan: 回答は届けていません。新しいプランに置き換わったか、プランを呼び直す期限が過ぎました。エージェントの次のプランで、もう一度聞きます";
+  for (const [lang, text] of [["en", EN], ["ja", JA]] as const) {
+    const app = new App();
+    app.lang = lang;
+    const plan = { ...decision(), id: "p1", kind: "approve_plan" as const, delivery: "message" as const, session: { ...decision().session, title: "Cache plan" } };
+    app.upsert({ ...plan, status: "pending" }, (t += 10));
+    app.answered({ ...plan, status: "answer_submitted" }, (t += 10));
+    app.upsert({ ...plan, status: "answer_lost", status_reason: "superseded" }, (t += 4000));
+    assert.equal(app.view(t).toast, text, lang);
+  }
+  const cancelled = new App();
+  const p2 = { ...decision(), id: "p2", kind: "approve_plan" as const, delivery: "message" as const };
+  cancelled.upsert({ ...p2, status: "pending" }, (t += 10));
+  cancelled.answered({ ...p2, status: "answer_submitted" }, (t += 10));
+  cancelled.upsert({ ...p2, status: "cancelled", status_reason: "superseded" }, (t += 4000));
+  assert.notEqual(cancelled.view(t).toast, EN);
+});
