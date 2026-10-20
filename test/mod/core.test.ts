@@ -324,3 +324,27 @@ test("a garbled 200 body is a failure, not an exception", async () => {
   await s.tick();
   assert.equal(f.calls.length, 1, "backing off");
 });
+
+test("end() while a poll is in flight: the item it returns is not submitted and its claim is released once, without a drop", async () => {
+  const f = fake();
+  const s = createSession(f.host, CONFIG, () => "o".repeat(16));
+  await s.start();
+  f.replies.poll.push(item("it-1"));
+  const real = f.host.fetch;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  f.host.fetch = async (url, init) => {
+    if (url.endsWith("/poll")) await gate;
+    return real(url, init);
+  };
+  const ticking = s.tick();
+  await flush();
+  s.end();
+  release();
+  await ticking;
+  await flush();
+  assert.deepEqual(f.submits, []);
+  const releases = f.calls.filter((c) => c.url.endsWith("/release"));
+  assert.equal(releases.length, 1);
+  assert.deepEqual(releases[0]!.body, { owner: "o".repeat(16), item_id: "it-1" });
+});

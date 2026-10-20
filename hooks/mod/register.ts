@@ -30,6 +30,9 @@ export const register = (on: On): void => {
   on("session.start", async ($, e, next) => {
     try {
       timer?.cancel();
+      // a re-run that ends up disabled must not leave the earlier session for a later /clear to rebuild
+      session = undefined;
+      rebuild = undefined;
       const read = async (path: string): Promise<string | undefined> => $.fs.read(path).catch(() => undefined);
       const env = { UKAGAI_DISABLE: await $.env.get("UKAGAI_DISABLE"), UKAGAI_MOD: await $.env.get("UKAGAI_MOD") };
       const config = parseConfig(await read(`${$.plugin.root}/hooks/mod/config.json`), await $.env.get("HOME"));

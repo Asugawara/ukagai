@@ -102,9 +102,16 @@ export function createSession(host: Host, config: Config, newOwner: () => string
     }
   }
 
+  /** A claimed item the mod will not submit (it ended meanwhile): give the claim back at once, no drop; a failure is left to the claim's expiry */
+  async function giveBack(session: string, id: string): Promise<void> {
+    records.delete(id);
+    await post(session, "release", { owner, item_id: id });
+  }
+
   async function deliver(id: string, text: string): Promise<void> {
     let next: Record_;
     const session = records.get(id)?.session_id ?? "";
+    if (stopped) return giveBack(session, id);
     try {
       const r = await host.submit(text);
       if ("drop" in r) {
@@ -146,6 +153,12 @@ export function createSession(host: Host, config: Config, newOwner: () => string
       return true;
     }
     const held = json.held?.item_id;
+    if (stopped) {
+      // end() came while this request was in flight: nothing is submitted any more
+      const gone = json.item?.item_id;
+      if (typeof gone === "string") await giveBack(session, gone);
+      return false;
+    }
     if (typeof held === "string") {
       if (!records.has(held)) records.set(held, { session_id: session, state: "release" });
       return false;

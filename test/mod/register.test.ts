@@ -6,7 +6,7 @@ import { register } from "../../hooks/mod/register.js";
 type Hook = (...a: any[]) => Promise<unknown>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /** A fake `$` and the hooks `register` hands to `on`. `clear()` is what Claude Code does on /clear: session.end with reason "clear", no session.start */
-function setup() {
+function setup(env: Record<string, string> = {}) {
   const hooks: Record<string, Hook> = {};
   register(((event: string, hook: Hook) => void (hooks[event] = hook)) as never);
   const polls: Array<{ session: string; owner: string }> = [];
@@ -25,7 +25,7 @@ function setup() {
     session: { id: async () => sessionId },
     fs: { read: async (p: string) => (p.endsWith("/token") ? "tok\n" : p.endsWith("config.json") ? JSON.stringify({ dataDir: "/d" }) : Promise.reject(new Error("no"))) },
     env: {
-      get: async (n: string) => (n === "HOME" ? "/home" : undefined),
+      get: async (n: string) => (n === "HOME" ? "/home" : env[n]),
       set: (_n: string, v: string | undefined) => void owners.push(v),
     },
     plugin: { root: "/plugin" },
@@ -47,6 +47,7 @@ function setup() {
   return {
     start: () => hooks["session.start"]!($, { isInteractive: true, surface: "terminal" }, next),
     end: (reason: string) => hooks["session.end"]!($, { reason, sessionId }, next),
+    setEnv: (k: string, v: string) => void (env[k] = v),
     setSession: (id: string) => void (sessionId = id),
     polls,
     owners,
@@ -99,4 +100,16 @@ test("session.end before any session.start does not throw", async () => {
   const m = setup();
   await m.end("clear");
   assert.equal(m.live().length, 0);
+});
+
+test("a session.start that runs again disabled leaves nothing for a later /clear to rebuild", async () => {
+  const m = setup();
+  await m.start();
+  m.setEnv("UKAGAI_MOD", "off");
+  await m.start();
+  assert.equal(m.live().length, 0);
+  await m.end("clear");
+  assert.equal(m.live().length, 0);
+  await m.tick();
+  assert.deepEqual(m.polls, []);
 });
