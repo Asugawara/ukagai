@@ -466,3 +466,14 @@ test("terminal_delivery off clears the terminal label of sessions (at once and f
   await until(() => env.h.store.listSessions().find((x) => x.session_id === "sess-1")?.terminal !== undefined);
   void d;
 });
+
+test("claude.message_delivery: on by default, read from config.json, a bad value falls back to the default, and a PUT without the group keeps it on", async () => {
+  assert.equal(DEFAULT_SETTINGS.claude.message_delivery, true);
+  assert.deepEqual(await getSettings(await boot()), DEFAULT_SETTINGS);
+  const off = await boot({ config: JSON.stringify({ claude: { message_delivery: false } }) });
+  assert.equal((await getSettings(off)).claude.message_delivery, false);
+  const bad = await boot({ config: JSON.stringify({ claude: { message_delivery: "no" } }) });
+  assert.equal((await getSettings(bad)).claude.message_delivery, true);
+  const missing = await boot({ config: JSON.stringify({ lang: "ja" }) });
+  assert.equal((await getSettings(missing)).claude.message_delivery, true);
+});
