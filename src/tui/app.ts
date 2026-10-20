@@ -52,6 +52,28 @@ const STATUS_KEY: Record<string, MessageKey> = {
   fallback: "status_fallback",
   cancelled: "status_cancelled",
 };
+/** A decision whose answer comes as a message from the ukagai mod (delivery "message") has its own words for where it stands */
+const MESSAGE_STATUS_KEY: Record<string, MessageKey> = {
+  answer_submitted: "status_message_queued",
+  answered: "status_message_delivered",
+  fallback: "status_fallback_message",
+};
+const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal"];
+
+/** The toast text for a decision that left `pending` (undefined: none) */
+function statusToast(d: Decision, lang: Lang): string | undefined {
+  if (d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue") return t(lang, "checkpoint_sent");
+  if (d.delivery === "message") {
+    const reason = d.status_reason;
+    if ((d.status === "answer_lost" || d.status === "cancelled") && reason !== undefined && MESSAGE_LOST_REASONS.includes(reason)) {
+      return t(lang, `lost_${reason}` as MessageKey, { title: d.session.title ?? d.id.slice(0, 8), note: d.delivery_note ?? "" });
+    }
+    const key = MESSAGE_STATUS_KEY[d.status];
+    if (key) return t(lang, key);
+  }
+  const key = STATUS_KEY[d.status];
+  return key ? t(lang, key) : undefined;
+}
 
 export class App {
   /** Display language (set by index.ts) */
@@ -199,8 +221,8 @@ export class App {
     this.decisions.set(d.id, d);
     if (d.kind === "approve_plan") this.staleVersions();
     if (d.status !== "pending" && this.sent.has(d.id)) {
-      const key = d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[d.status];
-      if (key) this.showToast(t(this.lang, key), now);
+      const text = statusToast(d, this.lang);
+      if (text) this.showToast(text, now);
       if (d.status !== "answer_submitted") this.sent.delete(d.id);
     }
     if (d.kind === "checkpoint" && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) {
@@ -1284,8 +1306,7 @@ export class App {
     this.sending.delete(updated.id);
     this.sent.add(updated.id);
     this.decisions.set(updated.id, updated);
-    const key = updated.kind === "checkpoint" && updated.status === "answered" && updated.response?.kind !== "continue" ? "checkpoint_sent" : STATUS_KEY[updated.status];
-    this.showToast(t(this.lang, key ?? "sent"), now);
+    this.showToast(statusToast(updated, this.lang) ?? t(this.lang, "sent"), now);
     if (updated.id === this.shownId) this.advance(now);
   }
 
