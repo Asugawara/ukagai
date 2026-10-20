@@ -923,10 +923,73 @@ test("human prompt (audit T3): after a hand, the human's UserPromptSubmit (plan 
   const unhanded = setup();
   const u = unhanded.plan();
   unhanded.approve(u, true);
-  unhanded.poll(A, true);
-  unhanded.store.inboxAck(SID, A, u.id);
+  unhanded.poll(A, false);
   unhanded.event("UserPromptSubmit", { permission_mode: "plan" });
-  assert.ok(unhanded.store.planGrant(SID, FP), "a grant not handed yet is left (the human may ask for the re-call)");
+  assert.ok(unhanded.store.planGrant(SID, FP), "an undelivered grant not handed yet is left (the human may ask for the re-call)");
+});
+
+test("human prompt (audit L2): a delivered grant nobody handed yet is written off by the human typing after the delivery; the re-call that follows is a new card", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  h.poll(A, true);
+  h.store.inboxAck(SID, A, d.id);
+  // the delivery's own re-call was lost (or went through Claude Code's dialog, where the human may have said no); later the human types
+  h.advance(3 * 60 * 1000);
+  h.poll(A, false);
+  h.store.addEvent({ session_id: SID, transcript_path: "/t", cwd: "/w/proj", hook_event_name: "UserPromptSubmit", received_at: new Date(Date.parse(get(h, d).response!.delivered_at!) - 1).toISOString(), permission_mode: "plan" } as never);
+  h.event("UserPromptSubmit", { permission_mode: "plan", delivered_ref: d.id.slice(0, 8) });
+  h.event("UserPromptSubmit", { permission_mode: "plan", wakeup: true });
+  assert.ok(h.store.planGrant(SID, FP), "a prompt built before the delivery, the mod's own delivery and a wake-up leave it");
+  h.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  h.advance(30_000);
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: false });
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+  assert.equal(h.store.openFor(SID, undefined, FP, "toolu_again"), undefined);
+  const fresh = h.plan("toolu_again");
+  assert.notEqual(fresh.id, d.id);
+  assert.equal(fresh.status, "pending", "a new card for the human");
+
+  // without mode too: the PreToolUse's consume misses
+  const plain = setup();
+  const p = plain.plan();
+  plain.approve(p);
+  plain.poll(A, true);
+  plain.store.inboxAck(SID, A, p.id);
+  plain.advance(60_000);
+  plain.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.deepEqual(plain.store.consumePlanGrant(SID, FP), { consumed: false });
+});
+
+test("human prompt (audit T9): an undelivered approval survives the human typing and passes a re-call inside the deadline; right after delivery the normal flow passes", () => {
+  const u = setup();
+  const d = u.plan();
+  u.approve(d);
+  u.advance(2 * 60 * 1000);
+  u.poll(A, false);
+  u.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.equal(get(u, d).status, "answer_submitted");
+  assert.deepEqual(u.store.consumePlanGrant(SID, FP), { consumed: true });
+
+  const ua = setup();
+  const da = ua.plan();
+  ua.approve(da, true);
+  ua.advance(60_000);
+  ua.poll(A, false);
+  ua.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.deepEqual(ua.store.handPlanGrant(SID, FP), { handed: true });
+  assert.deepEqual(ua.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
+
+  const n = setup();
+  const dn = n.plan();
+  n.approve(dn, true);
+  n.poll(A, true);
+  n.store.inboxAck(SID, A, dn.id);
+  n.advance(5000);
+  assert.deepEqual(n.store.handPlanGrant(SID, FP), { handed: true });
+  n.advance(1000);
+  assert.deepEqual(n.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
 });
 
 test("human prompt: a classic grant handed by the ack is written off by the human typing too; the classic flow (ack → PermissionRequest) is unchanged", () => {

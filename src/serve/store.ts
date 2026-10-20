@@ -968,7 +968,7 @@ export class Store {
         const receivedAt = Number.isFinite(at) ? at : Infinity;
         this.cancelPending(ev.session_id, receivedAt);
         this.humanPrompted(ev.session_id, receivedAt, ev.received_at);
-        this.revokeHandedGrants(ev.session_id, receivedAt);
+        this.revokeGrantsOnHumanPrompt(ev.session_id, receivedAt);
         this.stoppedSessions.delete(ev.session_id);
         this.dropQueuedStop(ev.session_id);
       }
@@ -1652,14 +1652,18 @@ export class Store {
   }
 
   /**
-   * The human typed (plan mode too): an auto grant handed to a PermissionRequest before that and not used is written off. Between a
-   * PreToolUse that hands it and its PermissionRequest nobody types; a prompt in between means that PermissionRequest missed the server and
-   * Claude Code's own dialog asked
+   * The human typed (plan mode too), after `at` was built: two kinds of grant are written off.
+   * - An auto grant handed to a PermissionRequest and not used. Between a PreToolUse that hands it and its PermissionRequest nobody types;
+   *   a prompt in between means that PermissionRequest missed the server and Claude Code's own dialog asked.
+   * - A grant whose approval was delivered as a message before the prompt and that nobody handed yet. Its re-call belongs to the delivery's
+   *   own turn; a prompt after it means that re-call was lost or went through Claude Code's own dialog (where the human may have said no).
+   * An undelivered approval keeps its grant: the human typing "call ExitPlanMode again" is how it is meant to be used
    */
-  private revokeHandedGrants(sessionId: string, at: number): void {
+  private revokeGrantsOnHumanPrompt(sessionId: string, at: number): void {
     for (const d of this.plansOf(sessionId)) {
       const handed = Date.parse(d.grant_handed_at ?? "");
-      if (Number.isFinite(handed) && handed < at) this.revokeGrant(d);
+      const delivered = d.delivery === "message" && d.response?.delivered_via === "message" ? Date.parse(d.response.delivered_at ?? "") : NaN;
+      if ((Number.isFinite(handed) && handed < at) || (d.grant_handed_at === undefined && Number.isFinite(delivered) && delivered < at)) this.revokeGrant(d);
     }
   }
 
