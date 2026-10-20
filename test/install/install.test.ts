@@ -67,7 +67,14 @@ test("install into empty settings: all events, exec form, statusMessage, --budge
   assert.equal(h.timeout, 3600);
   assert.equal(s.hooks.PermissionRequest.length, 1);
   assert.equal(s.hooks.PermissionRequest[0].matcher, undefined, "PermissionRequest matches every tool");
-  assert.equal(s.hooks.PermissionRequest[0].hooks[0].timeout, 5);
+  assert.equal(s.hooks.PermissionRequest[0].hooks[0].timeout, 10);
+  assert.equal(s.hooks.SessionStart[0].hooks[0].timeout, 10);
+  assert.equal(s.hooks.SubagentStart[0].hooks[0].timeout, 10);
+  const pre2 = s.hooks.PreToolUse.filter((g: any) => g.matcher !== "AskUserQuestion|ExitPlanMode");
+  assert.equal(pre2.length, 2, "checkpoint + plan-context groups");
+  for (const g of pre2) assert.equal(g.hooks[0].timeout, 10);
+  const prompt = s.hooks.UserPromptSubmit.find((g: any) => !g.hooks[0].async);
+  assert.equal(prompt.hooks[0].timeout, 10);
   assert.equal(s.hooks.PermissionRequest[0].hooks[0].async, undefined);
   assert.equal(s.hooks.SessionEnd[0].hooks[0].timeout, 2);
   assert.equal(s.hooks.Stop[0].hooks[0].async, true);

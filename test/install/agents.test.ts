@@ -439,3 +439,27 @@ test("when every agent fails, no config.json is created and there is no lang: or
   assert.ok(!(await exists(join(e.data, "config.json"))));
   assert.doesNotMatch(r.out, /^(lang|next):/m);
 });
+
+test("install --refresh rewrites the timeouts of managed Claude entries that an older release registered", async () => {
+  const e = await setup();
+  await registerBoth(e, ["--timeout", "600"]);
+  const settings = JSON.parse(await read(claudeSettings(e)));
+  const OLD: Record<string, number> = { PermissionRequest: 5, SessionStart: 5, SubagentStart: 5 };
+  for (const [event, groups] of Object.entries<any[]>(settings.hooks)) {
+    for (const g of groups) {
+      for (const h of g.hooks) {
+        if (event in OLD) h.timeout = OLD[event];
+        else if (h.args.includes("--checkpoint") || h.args.includes("--plan-context")) h.timeout = 3;
+      }
+    }
+  }
+  await writeFile(claudeSettings(e), JSON.stringify(settings, null, 2) + "\n");
+  const r = await ukagai(e, ["install", "--refresh", "--codex-home", e.codex]);
+  assert.equal(r.code, 0, r.err);
+  const after = JSON.parse(await read(claudeSettings(e)));
+  for (const h of after.hooks.PermissionRequest.concat(after.hooks.SessionStart, after.hooks.SubagentStart).flatMap((g: any) => g.hooks)) assert.equal(h.timeout, 10);
+  const pre = after.hooks.PreToolUse as any[];
+  assert.equal(pre.find((g) => g.hooks[0].args.includes("--checkpoint"))?.hooks[0].timeout, 10);
+  assert.equal(pre.find((g) => g.hooks[0].args.includes("--plan-context"))?.hooks[0].timeout, 10);
+  assert.equal(after.hooks.UserPromptSubmit.find((g: any) => g.hooks[0].args.includes("--plan-context")).hooks[0].timeout, 10);
+});

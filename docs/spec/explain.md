@@ -302,7 +302,7 @@ Two triggers, one command. Plan mode the agent enters itself calls `EnterPlanMod
 | `PreToolUse` | `EnterPlanMode` | the agent enters plan mode |
 | `UserPromptSubmit` (sync, next to the async observe entry) | none | the hook input has `permission_mode: "plan"` (`HookEvent` carries it) |
 
-Both are sync, `timeout: 3`, no statusMessage, omitted with `install --observe`. The command never calls the server and exits 0 in every case; a failure prints nothing. It injects **at most once per session**: a marker file `<data-dir>/plan-context/<session_id>` is created with `wx`; if it exists nothing is printed, any other marker error (read-only dir, unset HOME) means inject. Output (the tool / prompt proceeds; no `permissionDecision`, like the checkpoint path), with `hookEventName` = the event's name:
+Both are sync, `timeout: 10`, no statusMessage, omitted with `install --observe`. The command never calls the server and exits 0 in every case; a failure prints nothing. It injects **at most once per session**: a marker file `<data-dir>/plan-context/<session_id>` is created with `wx`; if it exists nothing is printed, any other marker error (read-only dir, unset HOME) means inject. Output (the tool / prompt proceeds; no `permissionDecision`, like the checkpoint path), with `hookEventName` = the event's name:
 
 ```
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"<text>"}}
@@ -596,7 +596,7 @@ The loop guard of section 5 does **not** apply while the session has a memo: a s
 
 ## 16. Checkpoint instruction (`hook --checkpoint`)
 
-Not part of the explanation flow: a second `PreToolUse` group (matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite`, `timeout: 3`, sync, no statusMessage; omitted with `install --observe`). The hook reads stdin, calls `GET /api/sessions/:id/instruction` once (700 ms timeout) and exits 0 in every case. No explanation logic, no observe POST, nothing logged on 404.
+Not part of the explanation flow: a second `PreToolUse` group (matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite`, `timeout: 10`, sync, no statusMessage; omitted with `install --observe`). The hook reads stdin, calls `GET /api/sessions/:id/instruction` once (700 ms timeout) and exits 0 in every case. No explanation logic, no observe POST, nothing logged on 404.
 
 | Server reply | Hook output |
 |---|---|

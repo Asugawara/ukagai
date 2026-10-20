@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const LAUNCHER_SRC = resolve("bin/ukagai");
 const SH = "/bin/sh";
@@ -26,7 +26,7 @@ function tree(): { root: string; launcher: string; home: string; tools: string; 
   const launcher = join(root, "bin", "ukagai");
   writeFileSync(launcher, src, { mode: 0o755 });
   writeFileSync(join(root, "dist", "cli.js"), "process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), launcher: process.env.UKAGAI_LAUNCHER }));\n");
-  for (const t of ["dirname", "readlink", "cat", "tr", "sleep", "timeout"]) {
+  for (const t of ["dirname", "readlink", "cat", "tr", "sleep", "timeout", "find", "mv", "rm", "ls", "dd"]) {
     for (const d of ["/usr/bin", "/bin", "/opt/homebrew/bin"]) {
       if (existsSync(join(d, t))) {
         symlinkSync(join(d, t), join(tools, t));
@@ -189,4 +189,221 @@ test("known locations include fnm's macOS directory (a path with a space)", () =
   const r = run(t, ["x"]);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout).argv, ["x"]);
+});
+
+/**
+ * A fake node that counts its version probes in <path>.probes. The file starts with a blank line, not "#!": the launcher
+ * never notes a script (it may be a shim), and the shell still runs a file without a shebang as a script.
+ */
+function countingNode(where: string, version: string): string {
+  // the launcher only notes a file named node: a name that does not end in /node is made a directory holding one
+  const path = basename(where) === "node" ? where : join(where, "node");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `\n#!/bin/sh\nif [ "$1" = "-p" ]; then echo probe >>"${path}.probes"; echo ${version}; exit 0; fi\nexec "${process.execPath}" "$@"\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+const probes = (node: string): number => (existsSync(`${node}.probes`) ? readFileSync(`${node}.probes`, "utf8").trim().split("\n").length : 0);
+
+test("fast path: the first run probes the cached node once and notes it; later runs exec it with no probe", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = countingNode(join(t.dir, "cached-node"), "22.5.0");
+  writeFileSync(join(data, "node-path"), node + "\n");
+  for (let i = 0; i < 3; i++) {
+    const r = run(t, ["hook", String(i)], { env: { UKAGAI_DATA_DIR: data } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout).argv, ["hook", String(i)]);
+  }
+  assert.equal(probes(node), 1);
+  assert.equal(readFileSync(join(data, "node-ok"), "utf8").split("\n")[0], node);
+});
+
+test("fast path: UKAGAI_NODE is noted too", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = countingNode(join(t.dir, "env-node"), "23.0.0");
+  for (let i = 0; i < 2; i++) assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data, UKAGAI_NODE: node } }).status, 0);
+  assert.equal(probes(node), 1);
+});
+
+test("fast path: a note for another path is ignored (node-path changed)", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const a = countingNode(join(t.dir, "node-a"), "22.1.0");
+  const b = countingNode(join(t.dir, "node-b"), "22.2.0");
+  writeFileSync(join(data, "node-path"), a + "\n");
+  run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } });
+  writeFileSync(join(data, "node-path"), b + "\n");
+  const r = run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(probes(b), 1);
+  assert.equal(readFileSync(join(data, "node-ok"), "utf8").split("\n")[0], b);
+});
+
+test("fail-open: a noted node that was deleted or made non-executable makes hook print nothing and exit 0", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = countingNode(join(t.dir, "gone-node"), "22.5.0");
+  writeFileSync(join(data, "node-path"), node + "\n");
+  assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } }).status, 0);
+  chmodSync(node, 0o644);
+  const input = JSON.stringify({ hook_event_name: "PreToolUse" });
+  for (const step of ["not executable", "deleted"]) {
+    if (step === "deleted") rmSync(node);
+    const r = run(t, ["hook", "--checkpoint"], { env: { UKAGAI_DATA_DIR: data }, input });
+    assert.equal(r.status, 0, step);
+    assert.equal(r.stdout, "", step);
+  }
+  const start = run(t, ["hook"], { env: { UKAGAI_DATA_DIR: data }, input: JSON.stringify({ hook_event_name: "SessionStart" }) });
+  assert.match(start.stdout, /Node\.js 22 or newer was not found/);
+});
+
+test("fast path: the hot path starts one node and no sleep / watchdog", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = countingNode(join(t.dir, "hot-node"), "22.5.0");
+  writeFileSync(join(data, "node-path"), node + "\n");
+  run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } });
+  // a `sleep` / `timeout` that leaves a trace would show up when the hot path used them
+  for (const tool of ["sleep", "timeout"]) {
+    rmSync(join(t.tools, tool), { force: true });
+    writeFileSync(join(t.tools, tool), `#!/bin/sh\necho ${tool} >>"${t.dir}/spawned"\nexit 1\n`, { mode: 0o755 });
+  }
+  const r = run(t, ["y"], { env: { UKAGAI_DATA_DIR: data } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(join(t.dir, "spawned")), false);
+  assert.equal(probes(node), 1);
+});
+
+const PRE = JSON.stringify({ hook_event_name: "PreToolUse" });
+const noted = (data: string): string[] => readFileSync(join(data, "node-ok"), "utf8").split("\n");
+
+test("fast path: the note holds the path and a fingerprint (real path + ls line)", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = countingNode(join(t.dir, "fp-node"), "22.5.0");
+  writeFileSync(join(data, "node-path"), node + "\n");
+  run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } });
+  const [path, fp] = noted(data);
+  assert.equal(path, node);
+  assert.ok(fp.startsWith(node + " "), fp);
+});
+
+test("fast path: a symlink retargeted to an older node with an older mtime is probed again and rejected (hook silent, exit 0)", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const long = new Date(Date.now() - 365 * 86_400_000);
+  mkdirSync(join(t.dir, "v22"));
+  mkdirSync(join(t.dir, "v18"));
+  const n22 = countingNode(join(t.dir, "v22", "node"), "22.5.0");
+  const n18 = countingNode(join(t.dir, "v18", "node"), "18.0.0");
+  utimesSync(n18, long, long);
+  const link = join(t.dir, "node-link");
+  symlinkSync(n22, link);
+  writeFileSync(join(data, "node-path"), link + "\n");
+  assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } }).status, 0);
+  assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } }).status, 0);
+  assert.equal(probes(n22), 1);
+  rmSync(link);
+  symlinkSync(n18, link); // brew link --overwrite style: the old target keeps its old mtime
+  const r = run(t, ["hook", "--checkpoint"], { env: { UKAGAI_DATA_DIR: data }, input: PRE });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, "");
+  assert.equal(probes(n18), 1);
+});
+
+test("fast path: a node replaced in place by an older one with an older mtime is probed again and rejected", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = countingNode(join(t.dir, "inplace-node"), "22.5.0");
+  writeFileSync(join(data, "node-path"), node + "\n");
+  run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } });
+  countingNode(node, "18.0.0");
+  const long = new Date(Date.now() - 365 * 86_400_000);
+  utimesSync(node, long, long);
+  const r = run(t, ["hook", "--checkpoint"], { env: { UKAGAI_DATA_DIR: data }, input: PRE });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, "");
+  assert.equal(probes(node), 2);
+});
+
+test("fast path: a note older than a day is probed again once, then fast again", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = countingNode(join(t.dir, "aged-node"), "22.5.0");
+  writeFileSync(join(data, "node-path"), node + "\n");
+  const go = () => assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } }).status, 0);
+  go();
+  go();
+  assert.equal(probes(node), 1);
+  const old = new Date(Date.now() - 2 * 86_400_000);
+  utimesSync(join(data, "node-ok"), old, old);
+  go();
+  assert.equal(probes(node), 2);
+  go();
+  go();
+  assert.equal(probes(node), 2);
+});
+
+test("fast path: a shim (script path, /shims/ directory, volta-shim symlink) is probed on every call and never noted", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  mkdirSync(join(t.dir, "shims"));
+  const shimScript = join(t.dir, "shims", "node");
+  writeFileSync(shimScript, `#!/bin/sh\nif [ "$1" = "-p" ]; then echo probe >>"${shimScript}.probes"; echo 22.5.0; exit 0; fi\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+  const shimsDir = join(t.dir, "x", "shims");
+  mkdirSync(shimsDir, { recursive: true });
+  const inShims = countingNode(join(shimsDir, "node"), "22.5.0"); // not a script, named node: only the directory rules it out
+  const volta = join(t.dir, "volta-shim");
+  const voltaCounter = countingNode(join(t.dir, "volta-dir", "node"), "22.5.0"); // probes are logged next to this path
+  renameSync(voltaCounter, volta);
+  const voltaLink = join(t.dir, "node");
+  symlinkSync(volta, voltaLink);
+  for (const [shim, counter] of [
+    [shimScript, shimScript],
+    [inShims, inShims],
+    [voltaLink, voltaCounter],
+  ] as const) {
+    writeFileSync(join(data, "node-path"), shim + "\n");
+    for (let i = 0; i < 3; i++) assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } }).status, 0);
+    assert.equal(probes(counter), 3, shim);
+    assert.equal(existsSync(join(data, "node-ok")), false, shim);
+  }
+});
+
+test("fast path: a script named node is never noted even when nothing else marks it as a shim", () => {
+  const t = tree();
+  const data = join(t.dir, "data");
+  mkdirSync(data);
+  const node = join(t.dir, "node");
+  writeFileSync(node, `#!/bin/sh\nif [ "$1" = "-p" ]; then echo probe >>"${node}.probes"; echo 22.5.0; exit 0; fi\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(data, "node-path"), node + "\n");
+  for (let i = 0; i < 2; i++) assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } }).status, 0);
+  assert.equal(probes(node), 2);
+});
+
+test("fast path: when find (or ls) is missing the note is not trusted and the node is probed", () => {
+  for (const tool of ["find", "ls"]) {
+    const t = tree();
+    const data = join(t.dir, "data");
+    mkdirSync(data);
+    const node = countingNode(join(t.dir, `no-${tool}-node`), "22.5.0");
+    writeFileSync(join(data, "node-path"), node + "\n");
+    run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } });
+    assert.equal(probes(node), 1);
+    rmSync(join(t.tools, tool));
+    for (let i = 0; i < 2; i++) assert.equal(run(t, ["x"], { env: { UKAGAI_DATA_DIR: data } }).status, 0);
+    assert.equal(probes(node), 3, tool);
+  }
 });
