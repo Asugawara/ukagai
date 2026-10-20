@@ -35,8 +35,8 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 34 fixtures", () => {
-  assert.equal(mdFiles.length, 34);
+test("there are 41 fixtures", () => {
+  assert.equal(mdFiles.length, 41);
 });
 
 for (const f of mdFiles) {
@@ -608,6 +608,54 @@ test("undo vocabulary: bad words pass, undo words pass, 'gone' fails", () => {
   assert.deepEqual(validateExplanation(risk("The data is gone.")).missing, ["undo"]);
   assert.ok(UNDO_BAD_WORDS.test("it cannot be restored"));
   assert.ok(!UNDO_BAD_WORDS.test("restore from git"));
+});
+
+test("undo: Japanese phrasings and English counterparts pass; consequences stay denied", () => {
+  const risk = (cell: string) => GOOD.replace("| B | a | Revert it |", `| B | a | ${cell} |`);
+  for (const ok of [
+    "戻し方: 不要（何も変えない）", "あとでマージし直せます", "PR はいつでもマージできます", "後からいつでも同じ手順で直せる", "いつでも再開できる",
+    "別の home は終わったら消す。残るものはない", "`ukagai uninstall` で止められる", "購入を解除すれば戻る", "別の PR で足せば補えます", "close すれば消える", "取り消しは不要",
+    "Uninstall it with the package manager.", "You can switch back to the old build.", "Set it back to 30.", "Turn it off in the settings.",
+  ]) {
+    assert.equal(validateExplanation(risk(ok)).valid, true, ok);
+  }
+  for (const bad of [
+    "CI が落ちたまま main に入るのを止められない", "課金が始まる", "あとで問題になる", "あとで顧客に気づかれる", "後から差分が見つかるかもしれない", "作り直しになる",
+    "このモードでは並列実行することはできない", "後から機能を足せる", "公開後はいつでも誰でも見られる", "書き直す必要があり 2 日かかる", "見直すコストが大きい",
+    "何も変わらないまま期限が切れてデータが消える", "止めれば顧客の決済が止まる", "後から差し替えられると困る", "不要になったら消すのを忘れがち",
+    "Adds a dependency and about 1.5 days.", "Users may notice later.", "It disables the cache for everyone.", "This will turn off caching for everyone.",
+    "The flag will turn them off for every tenant.", "It will set them back two weeks.", "Customers can uninstall the app, but their data is deleted.",
+    "Users switch back to the old UI and complain.", "We would have to redo the migration.", "The job resumes automatically.",
+  ]) {
+    assert.deepEqual(validateExplanation(risk(bad)).missing, ["undo"], bad);
+  }
+  // the narrow cannot-undo phrase is painted red; a bare "cannot" sentence is in neither list
+  assert.ok(UNDO_BAD_WORDS.test("後から前後を比べることはできない"));
+  assert.ok(!UNDO_BAD_WORDS.test("このモードでは並列実行することはできない"));
+  assert.ok(!UNDO_WORDS.test("このモードでは並列実行することはできない"));
+  // a copied hint says nothing
+  assert.deepEqual(validateExplanation(risk("Undo: <how>")).missing, ["undo"]);
+  assert.equal(validateExplanation(risk("Undo: git revert abc123")).valid, true);
+});
+
+test("recommend_long: callout lines are not counted; plain text still is", () => {
+  const callout = "\n> [!CAUTION] Heads up\n> " + "This detail is long on purpose. ".repeat(14).trim() + "\n";
+  assert.equal(validateExplanation(GOOD.replace("I recommend A. If C, choose B.", "I recommend A. If C, choose B." + callout)).valid, true);
+  const long = "I recommend A. " + "It is simple and reversible. ".repeat(14) + "If C, choose B.";
+  assert.deepEqual(validateExplanation(GOOD.replace("I recommend A. If C, choose B.", long)).missing, ["recommend_long"]);
+});
+
+test("diagram: a Mermaid block in any section counts; a copied placeholder or a bare reason does not", () => {
+  const base = GOOD.replace(/reversibility: .*/, "reversibility: costly") + "## What I checked\n- read the code\n";
+  const seq = "```mermaid\nsequenceDiagram\n  participant A as agent\n  participant S as server\n  A->>S: push\n  S-->>A: ack\n  A->>S: pull\n```\n";
+  assert.deepEqual(validateExplanation(base.replace("| B | a | Revert it |\n", "| B | a | Revert it |\n\n" + seq)).missing, []);
+  const note = (line: string) => base.replace("| B | a | Revert it |\n", `| B | a | Revert it |\n\n${line}\n`);
+  for (const bad of ["No diagram: <why> (when one is required and none fits)", "**No diagram:** <why>", "No diagram: <your reason>", "No diagram: `<why>` and more"]) {
+    assert.deepEqual(validateExplanation(note(bad)).missing, ["diagram"], bad);
+  }
+  for (const ok of ["No diagram: both options change one file and the table says it all.", "図なし: 手順ではなく 2 案の比較だけのため。", "**No diagram:** the table already shows the whole choice."]) {
+    assert.deepEqual(validateExplanation(note(ok)).missing, [], ok);
+  }
 });
 
 test("against_weak: a Counterargument inside the Recommendation is flagged; a real one is not", () => {

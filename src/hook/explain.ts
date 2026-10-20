@@ -41,10 +41,10 @@ export const COLUMN_RISK = /risk|リスク/i;
 
 /** Phrases that say the change cannot be undone. Checked before UNDO_WORDS. */
 export const UNDO_BAD_WORDS =
-  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と/i;
+  /\b(cannot|can't|can not|couldn't|won't) be (undone|restored|reverted|recovered|rolled back)\b|\bno way back\b|\birreversibl[ey]\b|\bunrecoverable\b|\bpermanent(ly)?\b|戻せない|戻せません|元に戻らない|元に戻せない|復元できない|取り消せない|二度と|(後から|あとから|後で|あとで)[^。]{0,20}?ことはでき(ない|ません)/i;
 /** Phrases that say how to undo. */
 export const UNDO_WORDS =
-  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元/i;
+  /\b(undo|undone|revert|reverted|roll ?back|rolled back|restore|restored|reinstall|recreate|re-run|rerun|git (checkout|revert|reset|stash)|delete the|remove the|ukagai uninstall)\b|(?:^|[.;:]\s+|\b(?:you|we) can |\bby )(?:uninstall|switch back|turn (?:it|them) off|(?:change|set|turn) (?:it|them) back)\b|戻せ|戻る|戻す|元に戻|消せ|やり直|再実行|再作成|復元|戻し方|取り消し(は|の)?不要|直せ(?!ない|ません)|補え(?!ない|ません)|再開(でき|すれば|するときは|するには)|(いつでも|あとで|後で|後から)[^。]{0,20}?(マージ|merge|push|入れ替え|差し替え|切り替え|試|戻|直|消|止め|閉じ|続け|独立|外|有効|無効|再開|再)[^。]{0,6}?(でき(る|ます)|られ(る|ます)|(?<![さかまわたなばがら])れ(る|ます)|[えけげせてねべめ](る|ます)|足せば|直す)(?!と困|が困|のは困)|(止め|解除|閉じ|消し|削除)るには|(解除|閉じ|消し|削除)れば|(止め|解除|閉じ|消し|削除)られ(?!ない|ません)|(終わったら|不要になったら)[^。]{0,10}?(止め|消(す(?!の)|せば|して)|閉じ|削除)|close すれば|何も(変わら(ない|ず)(?!まま)|残ら|有効化され|外に出)|残るもの(は|が)(ない|ありません)/i;
 
 export type MissingCode =
   | "file"
@@ -111,7 +111,7 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   table: "the options table (first column is the label; columns for what happens if chosen and for risks and how to undo; one row per option)",
   todo: 'the "What you need to do" section (with a code block of commands)',
   recommend: 'the "Recommendation" section',
-  recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters)',
+  recommend_long: 'the "Recommendation" section is too long (at most 5 sentences and 400 characters; callout lines are not counted)',
   recommend_cond: 'a condition in "Recommendation" under which another option is right (write it as "if ... choose B", "when ...", "unless ...", etc.)',
   recommend_name:
     'the first sentence of "Recommendation" must name the recommended option by its label (quote its first words), not by position; do not refer to options by position ("the first one", "plan A")',
@@ -120,10 +120,10 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
   cell_long: "a cell in the options table is too long (at most 160 characters per cell)",
   coined_term:
     "internal identifiers the reader cannot know (plan codes, phase / gate / worker names). Say what each is in plain words, or define it under Terms",
-  undo: "each risk cell must say how to undo (or that it cannot be undone)",
+  undo: 'each risk cell must say how to undo, or that it cannot be undone (e.g. "Undo: git revert <commit>", "Undo: nothing to do", "Cannot be undone: the email is sent")',
   why_long: 'the "Why this decision is needed now" section is too long (at most 600 characters; put details in "What I checked")',
   diagram:
-    'a "Diagram" section with a Mermaid diagram that shows a sequence of 3+ steps between 2+ actors, a state machine with 4+ states, or a data flow between 3+ components (if none does, write one line under Options: "No diagram: <why>")',
+    'a Mermaid diagram (in any section) that shows a sequence of 3+ steps between 2+ actors, a state machine with 4+ states, or a data flow between 3+ components (if none does, write one line under Options: "No diagram: <your reason>")',
   diagram_trivial:
     "remove the diagram: it only branches into the options or has 4 or fewer nodes, and the Options table already says it (draw only what the table cannot: a sequence between actors, a state machine, a data flow)",
   checked: 'the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes)',
@@ -353,7 +353,9 @@ function tableOk(t: Table, labels: string[] | undefined): boolean {
 function tableUndoOk(t: Table, blocker: boolean): boolean {
   const risk = columnsOf(t)[1];
   const fixed = Object.values(BLOCKER_LABELS).flatMap((names) => names.map(normalizeLabel));
-  return t.rows.every((r) => (blocker && fixed.includes(normalizeLabel(r[0] ?? ""))) || (UNDO_BAD_WORDS.test(r[risk] ?? "") || UNDO_WORDS.test(r[risk] ?? "")));
+  // A copied hint (`Undo: <how>`) says nothing: blank it before looking for undo words
+  const said = (cell: string): string => cell.replace(/\bundo:\s*<[^>]*>/gi, "");
+  return t.rows.every((r) => (blocker && fixed.includes(normalizeLabel(r[0] ?? ""))) || UNDO_BAD_WORDS.test(said(r[risk] ?? "")) || UNDO_WORDS.test(said(r[risk] ?? "")));
 }
 
 /** Length limits (spec 3.2). Characters are code points after NFKC */
@@ -470,16 +472,13 @@ function hasContent(lines: string[], s: Section): boolean {
   return lines.slice(s.start + 1, s.end).some((l) => l.trim() !== "");
 }
 
-function sectionHasMermaid(blocks: FenceBlock[], s: Section): boolean {
-  return blocks.some((b) => b.lang === "mermaid" && b.start > s.start && b.start < s.end);
-}
-
 /** A line under Options that says why no diagram is drawn ("No diagram: <reason>", "図なし: <理由>") */
 const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
 
 function hasNoDiagramNote(lines: string[], inFence: boolean[], s: Section): boolean {
   for (let i = s.start + 1; i < s.end; i++) {
-    if (!inFence[i] && NO_DIAGRAM_NOTE.test(lines[i]!)) return true;
+    const m = inFence[i] ? null : NO_DIAGRAM_NOTE.exec(lines[i]!);
+    if (m && !/^[*_\x60\s]*</.test(m[1]!)) return true; // a copied placeholder (`No diagram: <why>`) gives no reason
   }
   return false;
 }
@@ -655,7 +654,7 @@ export const COINED_TOKEN = /\b[A-Z]{1,4}\d{0,3}-[A-Z0-9]{1,4}\b|\b[A-Z]{1,4}\d{
 
 /** Well-known code shapes blanked out before scanning: fiscal years, CVE ids, cloud regions, PCI-DSS, elliptic curves (`P-256`), MPEG-4, PM2.5 */
 export const COINED_SKIP =
-  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b/g;
+  /\bFY\d{2,4}\b|\bCVE-\d{4}-\d+\b|\b(?:US|EU|AP|SA|CA|ME|AF|ASIA|EUROPE|NORTHAMERICA)-[A-Z]+-?\d\b|\bPCI-DSS\b|\bP-?\d{3}\b|\bMPEG-\d\b|\bPM2\.5\b|\b(?:RS|HS|ES|PS)(?:256|384|512)\b|\bPG\d{2}\b|\bL\d+-L?\d+\b|#L\d+|\bV\d{3,}\b|\b[Ss]tage \d+(?= passed)|(?:ステップ|フェーズ|段階|工程|ラウンド)\s?\d+(?=\s?[件個本])|(?:[\w.-]+\/){2,}[\w.-]*|[\w-]+\.(?:md|txt|ts|tsx|js|mjs|py|rb|rs|go|json|ya?ml|toml|sh|sql|html)\b/g;
 
 const PHASE_WORDS = ["Phase", "Step", "Stage", "Sprint", "Milestone", "Gate", "Track", "Wave", "Round", "Batch", "Lane"];
 const anyCase = (w: string): string => [...w].map((c) => `[${c.toUpperCase()}${c.toLowerCase()}]`).join("");
@@ -945,7 +944,8 @@ export function validateExplanation(
     if (!recommend || !hasContent(lines, recommend)) missing.push("recommend");
     else {
       const text = sectionText(lines, inFence, recommend);
-      if (cpLength(text) > LIMITS.recommendChars || countSentences(text) > LIMITS.recommendSentences) {
+      const counted = condText(text);
+      if (cpLength(counted) > LIMITS.recommendChars || countSentences(counted) > LIMITS.recommendSentences) {
         missing.push("recommend_long");
       }
       if (!RECOMMEND_COND.test(condText(text))) missing.push("recommend_cond");
@@ -967,9 +967,8 @@ export function validateExplanation(
     (!scopeKnown || !revKnown || rev !== "reversible" || scope === "machine" || scope === "external");
   const trivial = blocker ? null : trivialDiagram(blocks, lines, okTables.flatMap((t) => t.rows.map((r) => r[0] ?? "")));
   if (diagramRequired && trivial === null) {
-    const diagram = findSection(headings, lines.length, SECTION.diagram);
     const noted = options !== null && hasNoDiagramNote(lines, inFence, options);
-    if ((!diagram || !sectionHasMermaid(blocks, diagram)) && !noted) missing.push("diagram");
+    if (!blocks.some((b) => b.lang === "mermaid") && !noted) missing.push("diagram");
   }
   if (trivial !== null) missing.push("diagram_trivial");
 

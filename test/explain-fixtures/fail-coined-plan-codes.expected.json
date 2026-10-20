@@ -1,0 +1,12 @@
+{
+  "valid": false,
+  "missing": [
+    "coined_term"
+  ],
+  "has": {
+    "mermaid": false,
+    "diff": false,
+    "table": true
+  },
+  "question": "次の作業をどの順で進めますか？"
+}

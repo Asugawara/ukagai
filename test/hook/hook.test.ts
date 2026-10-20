@@ -1214,15 +1214,18 @@ test("hook.log rotates to hook.log.1 past 1 MB and never throws without a data d
   hookLog("t", {});
 });
 
-test("UserPromptSubmit: a <task-notification> prompt posts wakeup: true; a normal prompt posts no wakeup; the prompt text is never posted", async () => {
+test("UserPromptSubmit: a <task-notification> or <agent-message> prompt posts wakeup: true; a normal prompt posts no wakeup; the prompt text is never posted", async () => {
   await withServer(() => false, async (f, d) => {
     const prompt = (p: string) => JSON.stringify({ ...stop("x"), hook_event_name: "UserPromptSubmit", prompt: p });
     await runHook(args(f, d), prompt("<task-notification>\n<task-id>b1</task-id>SECRET-BODY</task-notification>"));
     await runHook(args(f, d), prompt("[SYSTEM NOTIFICATION - not from the user] a monitor fired"));
     await runHook(args(f, d), prompt("please fix the bug SECRET-BODY"));
     await runHook(args(f, d), prompt(`${"x".repeat(450)}<task-notification>`)); // beyond the first 400 characters: a human quoting it
+    await runHook(args(f, d), prompt('<agent-message from="a1">\n[Subagent hand-back] done'));
+    await runHook(args(f, d), prompt('  \n <agent-message from="a1">\nhand-back'));
+    await runHook(args(f, d), prompt('why does <agent-message from="a1"> show up?')); // quoted after other text: a human
     const evs = f.calls.filter((c) => c.path === "/api/events").map((c) => c.body);
-    assert.deepEqual(evs.map((e) => e.wakeup), [true, true, undefined, undefined]);
+    assert.deepEqual(evs.map((e) => e.wakeup), [true, true, undefined, undefined, true, true, undefined]);
     for (const e of evs) assert.equal(JSON.stringify(e).includes("SECRET-BODY"), false);
     assert.equal(evs.some((e) => "prompt" in e), false);
   });

@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": true,
+    "diff": false,
+    "table": true
+  },
+  "question": "共有サーバーに設定を同期してよいですか？"
+}

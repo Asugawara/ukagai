@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  COINED_ALLOW, COINED_PHASE_EN, COINED_PHASE_JA, COINED_SKIP, COINED_TOKEN, extractCoined,
+  COINED_ALLOW, COINED_PHASE_EN, COINED_PHASE_JA, COINED_SKIP, COINED_TOKEN, UNDO_BAD_WORDS, UNDO_WORDS, extractCoined,
 } from "../../src/hook/explain.js";
 
 const APP = readFileSync(new URL("../../public/app.js", import.meta.url), "utf8");
@@ -41,4 +41,16 @@ test("app.js termDefines: 12 characters, and a pointer defines nothing", () => {
   assert.equal(copy.termDefines("the gate"), false);
   assert.equal(copy.termDefines("plan の行 plan の行 plan の行"), false);
   assert.equal(copy.termDefines("see plan, the plan item"), false);
+});
+
+test("app.js undo word lists == src/hook/explain.ts: regex sources and flags", () => {
+  const read = (name: string): RegExp => {
+    const m = new RegExp(`^const ${name} =\\s*\\n?\\s*/(.*)/([a-z]*);$`, "m").exec(APP);
+    assert.ok(m, `${name} literal in app.js`);
+    return new RegExp(m![1]!, m![2]);
+  };
+  assert.equal(read("UNDO_BAD_WORDS").source, UNDO_BAD_WORDS.source);
+  assert.equal(read("UNDO_BAD_WORDS").flags, UNDO_BAD_WORDS.flags);
+  assert.equal(read("UNDO_WORDS").source, UNDO_WORDS.source);
+  assert.equal(read("UNDO_WORDS").flags, UNDO_WORDS.flags);
 });

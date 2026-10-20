@@ -14,12 +14,28 @@ const PASS = [
 // As specified: made-up work item codes and ticket ids stay hits
 const HIT = ["W3", "P1", "W-T2", "FT4", "TM28", "P-GH", "PR-123", "JIRA-123", "SEV-1", "Phase 2", "Gate B", "Step 1", "Sprint 5", "第3章", "第 3 段階", "フェーズ2"];
 
+// Standard names and locators that are not plan codes (spec 3.8)
+const PASS_SHAPES = [
+  "RS256", "HS256", "HS512", "ES384", "PS512", "PG15", "L116-125", "L10-L12", "#L42", "V023", "V023__add_keys.sql", "V027_ai_chat_runner_lease.py",
+  "pre-commit stage 52 passed", "ステップ 56 件", "工程 4 個", "reports/resume/S9-integration.md", "scratchpad/reports/chat/VR-DEV.md", "VR-DEV.md", "W3.sh",
+];
+// The skips stay narrow: these are still hits
+const HIT_SHAPES = ["W-T2/FT4", "Stage 3", "ステップ 3", "計画 v2 の U3", "M6 の D1", "D0", "plans/W-T2", "S1/fix"];
+
 test("coined check: ordinary codes (the Q6 false-positive table) are not hits", () => {
   for (const w of PASS) assert.deepEqual(extractCoined(w), [], w);
 });
 
 test("coined check: plan codes and ticket ids are still hits", () => {
   for (const w of HIT) assert.ok(extractCoined(w).length > 0, w);
+});
+
+test("coined check: standard names, locators and paths are skipped", () => {
+  for (const w of PASS_SHAPES) assert.deepEqual(extractCoined(w), [], w);
+});
+
+test("coined check: the new skips keep plan codes as hits", () => {
+  for (const w of HIT_SHAPES) assert.ok(extractCoined(w).length > 0, w);
 });
 
 test("coined check: Q5-01 is reported whole; CVE ids and regions are skipped", () => {
