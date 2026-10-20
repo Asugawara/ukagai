@@ -81,7 +81,7 @@ async function setup() {
   const inbox = (action: string, body: object) => api(`/api/sessions/${SESSION}/inbox/${action}`, body);
   const event = (extra: Record<string, unknown>) =>
     api("/api/events", { ...session, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString(), ...extra });
-  return { mod, tick, ask, decision, inbox, event, api, submits, result };
+  return { mod, tick, ask, decision, inbox, event, api, submits, result, session };
 }
 
 test("poll -> register -> answer -> poll -> submit -> ref event -> ack", async () => {
@@ -151,4 +151,28 @@ test("the wire shapes of the three routes", async () => {
     body: JSON.stringify({ owner: OWNER, idle: true }),
   });
   assert.equal(noAuth.status, 401);
+});
+
+test("a checkpoint reply: poll -> submit as a plugin message -> ack -> delivered via message", async () => {
+  const e = await setup();
+  await e.tick(); // the owner is seen in the session
+  assert.equal((await e.event({ hook_event_name: "Stop" })).status, 204); // the agent is idle
+  const cp = (await (
+    await e.api("/api/decisions", {
+      tool_use_id: "checkpoint:sess-mod:1",
+      kind: "checkpoint",
+      session: e.session,
+      request: { recap: "recap", recap_at: "2026-10-04T01:00:00.000Z" },
+    })
+  ).json()) as { id: string };
+  assert.equal((await e.api(`/api/decisions/${cp.id}/answer`, { kind: "instruct", text: "run the e2e first\nthen the lint" })).status, 200);
+
+  await e.tick(); // claim + submit
+  assert.equal(e.submits.length, 1);
+  assert.match(e.submits[0]!, /^\[ukagai\] \(ref [0-9a-f]{8}\) Reply to your progress recap: run the e2e first\nthen the lint$/);
+  assert.equal((await e.decision(cp.id)).response?.delivered_via, undefined, "not delivered before the ack");
+  await e.tick(); // ack
+  assert.equal((await e.decision(cp.id)).response?.delivered_via, "message");
+  await e.tick();
+  assert.equal(e.submits.length, 1, "delivered once");
 });

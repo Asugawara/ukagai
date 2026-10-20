@@ -2304,7 +2304,7 @@ async function sendPlanInstruct(pd, dr, text) {
   try {
     const { delivered_via } = await post(`/api/plans/${encodeURIComponent(planNameOf(pd.id))}/instruct`, { text });
     dr.instruct = "";
-    toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : "plan_instruct_sent"), { kind: "ok" });
+    toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : delivered_via === "message" ? "plan_instruct_message" : "plan_instruct_sent"), { kind: "ok" });
   } catch (e) {
     if (e.status === 409) toast(t("plan_instruct_stop_queued"), { kind: "lost", ms: 4000 }); // a stop is queued for the session
     else if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));

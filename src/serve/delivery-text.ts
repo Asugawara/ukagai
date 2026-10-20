@@ -1,4 +1,5 @@
-import { deliveryRef, type Decision } from "../contract.js";
+import { deliveryRef, PLAN_INSTRUCT_PREFIX, type Decision, type Instruction } from "../contract.js";
+import { REPLY_PREFIX } from "./terminal.js";
 
 /**
  * The text the ukagai mod submits as a message once the human answered a decision registered for message delivery.
@@ -15,4 +16,19 @@ export function deliveryText(d: Pick<Decision, "id" | "kind" | "response">): str
     return `${lead}The human answered your question in the ukagai GUI:\n${lines.join("\n")}`;
   }
   return `${lead}The human answered in the ukagai GUI.`;
+}
+
+/**
+ * The text the mod submits for an instruction (a progress checkpoint reply or a plan instruction): the same prefix the terminal line
+ * has, behind the ref. `id` is the inbox item's id. Newlines in the human's text stay (a message is not a single terminal line).
+ */
+export function instructionText(id: string, ins: Pick<Instruction, "text" | "about">): string {
+  return instructionParts(id, [ins]);
+}
+
+/** Several texts in one message: the ref once, then each text behind its own prefix, one per line block */
+export function instructionParts(id: string, parts: Pick<Instruction, "text" | "about">[]): string {
+  // The message already starts with `[ukagai] (ref …)`: the inner tag of each prefix is dropped
+  const body = parts.map((p) => `${(p.about === "plan" ? PLAN_INSTRUCT_PREFIX : REPLY_PREFIX).replace(/^\[ukagai\] /, "")} ${p.text.trim()}`).join("\n");
+  return `[ukagai] (ref ${deliveryRef(id)}) ${body}`;
 }

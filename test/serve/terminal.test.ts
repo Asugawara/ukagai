@@ -1,7 +1,7 @@
 // HerdrTerminal against a fake `herdr` first on PATH: it records its argv and prints canned JSON.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HerdrTerminal, replyLine, terminalLabel, TerminalTypeError } from "../../src/serve/terminal.js";
@@ -95,4 +95,30 @@ test("a missing herdr binary means no terminal (never throws)", async () => {
   assert.equal(await t.find("sess-1"), undefined);
   assert.equal(errors.length, 1, "the failure is reported to the logger, not thrown");
   assert.equal(await t.status({ kind: "herdr", pane_id: "w1:p1" }), "unknown");
+});
+
+test("a session with a live mod: the checkpoint reply is not typed (herdr is never asked to send); without one it is", async () => {
+  const { start } = await import("../../src/serve/index.js");
+  for (const withMod of [true, false]) {
+    const f = fake();
+    const data = mkdtempSync(join(dir, "serve-"));
+    const h = await start({ port: 0, dataDir: data, home: data, terminal: new HerdrTerminal(f.bin), terminalPollMs: 10 });
+    try {
+      const call = (path: string, body: unknown) =>
+        fetch(`http://127.0.0.1:${h.port}${path}`, { method: "POST", headers: { authorization: `Bearer ${h.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+      mkdirSync(join(data, ".claude", "projects", "p"), { recursive: true });
+      const transcript = join(data, ".claude", "projects", "p", "t.jsonl");
+      writeFileSync(transcript, "");
+      if (withMod) await call("/api/sessions/sess-1/inbox/poll", { owner: "0123456789abcdef", idle: false });
+      await call("/api/events", { session_id: "sess-1", transcript_path: transcript, cwd: "/w", hook_event_name: "Stop", received_at: new Date().toISOString() });
+      const cp = (await (await call("/api/decisions", { tool_use_id: "checkpoint:sess-1:x", kind: "checkpoint", session: { session_id: "sess-1", cwd: "/w", transcript_path: transcript }, request: { recap: "r", recap_at: "2026-10-04T01:00:00.000Z" } })).json()) as { id: string };
+      await call(`/api/decisions/${cp.id}/answer`, { kind: "instruct", text: "go on" });
+      const sentNow = () => f.argv().some((a) => a.includes("send-text"));
+      for (let i = 0; i < 75 && !(sentNow() || (withMod && i >= 15)); i++) await new Promise((r) => setTimeout(r, 20)); // typing is slow under load; the mod case only needs a quiet moment
+      const sent = sentNow();
+      assert.equal(sent, !withMod);
+    } finally {
+      await h.close();
+    }
+  }
 });
