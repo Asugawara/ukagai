@@ -1339,6 +1339,7 @@ function statusLine(d) {
     if (lost) return t(lost, { title: clip(titleOf(d)), note: d.delivery_note ?? "" });
     const live = d.status === "pending" || d.status === "answer_submitted";
     if (live && d.delivery_flag === "no_agent") return t("note_no_agent");
+    if (d.delivery_flag === "auto_not_applied") return t("note_auto_not_applied");
     if (MSG_STATUS_KEYS[d.status]) {
       const text = t(MSG_STATUS_KEYS[d.status]);
       return d.status === "answer_submitted" && d.delivery_note ? `${text} — ${t("note_drop", { note: d.delivery_note })}` : text;

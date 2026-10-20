@@ -307,6 +307,7 @@ export const MESSAGES = {
     lost_expired: "{title}: not delivered within 12 hours",
     lost_undeliverable: "{title}: could not be delivered ({note})",
     lost_typed_in_terminal: "{title}: you answered in the terminal, so the GUI answer was not sent",
+    note_auto_not_applied: "The plan was approved but auto mode was not switched on",
   },
   ja: {
     pending: "保留",
@@ -613,6 +614,7 @@ export const MESSAGES = {
     lost_expired: "{title}: 12 時間以内に届けられませんでした",
     lost_undeliverable: "{title}: 届けられませんでした（{note}）",
     lost_typed_in_terminal: "{title}: 端末で答えたので、GUI の回答は届けていません",
+    note_auto_not_applied: "承認しましたが auto mode には切り替わりませんでした",
   },
 };
 
