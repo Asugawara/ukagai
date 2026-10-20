@@ -11,8 +11,12 @@ waited=0
 
 while :; do
   # newest run first, so a rerun of the same commit wins over the earlier attempt
+  # a transient gh error is retried until the timeout; the gate never opens on it
   run="$(gh run list --workflow ci.yml --event push --branch main --commit "$sha" --limit 1 \
-    --json databaseId,status,conclusion --jq '.[0] | select(. != null) | "\(.databaseId) \(.status) \(.conclusion)"')"
+    --json databaseId,status,conclusion --jq '.[0] | select(. != null) | "\(.databaseId) \(.status) \(.conclusion)"')" || {
+    echo "gh run list failed (waited ${waited}s); retrying" >&2
+    run=""
+  }
   if [ -z "$run" ]; then
     echo "no ci run for $sha yet (waited ${waited}s)"
   else
