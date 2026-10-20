@@ -113,8 +113,9 @@ test("a session with a live mod: the checkpoint reply is not typed (herdr is nev
       await call("/api/events", { session_id: "sess-1", transcript_path: transcript, cwd: "/w", hook_event_name: "Stop", received_at: new Date().toISOString() });
       const cp = (await (await call("/api/decisions", { tool_use_id: "checkpoint:sess-1:x", kind: "checkpoint", session: { session_id: "sess-1", cwd: "/w", transcript_path: transcript }, request: { recap: "r", recap_at: "2026-10-04T01:00:00.000Z" } })).json()) as { id: string };
       await call(`/api/decisions/${cp.id}/answer`, { kind: "instruct", text: "go on" });
-      await new Promise((r) => setTimeout(r, 300));
-      const sent = f.argv().some((a) => a.includes("send-text"));
+      const sentNow = () => f.argv().some((a) => a.includes("send-text"));
+      for (let i = 0; i < 75 && !(sentNow() || (withMod && i >= 15)); i++) await new Promise((r) => setTimeout(r, 20)); // typing is slow under load; the mod case only needs a quiet moment
+      const sent = sentNow();
       assert.equal(sent, !withMod);
     } finally {
       await h.close();

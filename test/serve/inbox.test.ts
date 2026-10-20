@@ -771,7 +771,7 @@ test("instruction: a plan instruction after an unclaimed reply is joined; both t
   const cp = instructed(h, "first reply");
   assert.equal(await h.store.queuePlanInstruction(SID, "plan note"), "message");
   const item = instructionItem(h);
-  assert.match(item.text, /Reply to your progress recap: first reply\nplan note$/);
+  assert.match(item.text, /Reply to your progress recap: first reply\n\[ukagai\] About the plan you are writing: plan note$/);
   h.store.inboxAck(SID, A, item.item_id);
   assert.equal(get(h, cp).response?.delivered_via, "message");
 });
@@ -832,4 +832,70 @@ test("instruction: a UserPromptSubmit carrying an inbox item's ref is the mod, n
   h.store.submitAnswer(cp.id, { kind: "checkpoint", answer: "stop" } as never);
   h.event("UserPromptSubmit", { delivered_ref: deliveryRef(item.item_id) });
   assert.equal(h.store.consumeInstruction(SID)?.kind, "stop", "not dropped by the mod's prompt");
+});
+
+// ---- fix2: joined checkpoints, bypass expiry, prefixes, renewed clock ----
+
+function replyCheckpoint(h: H, n: number, text: string): Decision {
+  const cp = h.store.create({ tool_use_id: `checkpoint:j${n}`, kind: "checkpoint", session: { session_id: SID, cwd: "/w/proj", transcript_path: h.transcript }, request: { recap: "r", recap_at: `2026-10-04T0${n}:00:00.000Z` } } as never, {}).decision;
+  h.store.submitAnswer(cp.id, { kind: "checkpoint", answer: "instruct", text } as never);
+  return cp;
+}
+
+test("instruction: two joined checkpoint replies are both marked delivered by one ack", () => {
+  const h = setup();
+  const cp1 = instructed(h, "one");
+  const cp2 = replyCheckpoint(h, 5, "two");
+  const item = instructionItem(h);
+  assert.match(item.text, /recap: one\n\[ukagai\] Reply to your progress recap: two$/);
+  h.store.inboxAck(SID, A, item.item_id);
+  assert.equal(get(h, cp1).response?.delivered_via, "message");
+  assert.equal(get(h, cp2).response?.delivered_via, "message");
+});
+
+test("instruction: joined checkpoints that go back to the hook queue are all marked delivered when it delivers them", () => {
+  const h = setup();
+  const cp1 = instructed(h, "one");
+  const cp2 = replyCheckpoint(h, 5, "two");
+  h.advance(MOD_GONE_MS + 1);
+  h.store.checkLeases(h.now());
+  assert.ok(h.store.consumeInstruction(SID));
+  assert.equal(get(h, cp1).response?.delivered_via, "hook");
+  assert.equal(get(h, cp2).response?.delivered_via, "hook");
+});
+
+test("instruction: a reply and a plan instruction in one message each keep their prefix, in either order", async () => {
+  const h = setup();
+  h.poll(A, false);
+  h.event("Stop");
+  await h.store.queuePlanInstruction(SID, "plan note");
+  replyCheckpoint(h, 5, "a reply");
+  const item = instructionItem(h);
+  assert.match(item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) \[ukagai\] About the plan you are writing: plan note\n\[ukagai\] Reply to your progress recap: a reply$/);
+});
+
+test("instruction: a join renews the time limit of the item", () => {
+  const h = setup();
+  instructed(h, "one");
+  const items = (h.store as unknown as { messageInstructions: Map<string, { created_at: string }> }).messageInstructions;
+  const item = [...items.values()][0]!;
+  item.created_at = "2020-01-01T00:00:00.000Z"; // old enough to expire at once
+  replyCheckpoint(h, 5, "two");
+  assert.ok(item.created_at > "2026", "the newest text sets the clock");
+  h.store.checkLeases(Date.now() + 1000);
+  assert.equal(items.size, 1, "not expired");
+});
+
+test("instruction: the bypass after five failures ends by itself after MOD_GONE_MS", () => {
+  const h = setup();
+  instructed(h, "old");
+  for (let i = 0; i < DELIVERY_MAX_ATTEMPTS; i++) h.store.inboxRelease(SID, A, instructionItem(h).item_id, "dropped");
+  h.poll(A, false);
+  assert.equal(h.store.hasLiveMod(SID), false, "bypassed");
+  h.advance(MOD_GONE_MS - 1000);
+  h.poll(A, false);
+  assert.equal(h.store.hasLiveMod(SID), false, "still bypassed");
+  h.advance(2000);
+  h.poll(A, false);
+  assert.equal(h.store.hasLiveMod(SID), true, "the mod gets another chance");
 });

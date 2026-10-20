@@ -39,7 +39,7 @@ import {
   type SessionState,
   type SessionSummary,
 } from "../contract.js";
-import { deliveryText, instructionText } from "./delivery-text.js";
+import { deliveryText, instructionParts } from "./delivery-text.js";
 import { transcriptHasDelivery } from "./history.js";
 import type { SseEventName } from "./sse.js";
 
@@ -78,6 +78,11 @@ type MessageInstruction = {
   session_id: string;
   transcript_path: string | undefined;
   source: Instruction;
+  /** The texts in the order they were answered, each worded with its own prefix (a reply and a plan instruction may be joined) */
+  parts: { text: string; about?: "plan" }[];
+  /** Every checkpoint the item answers: all are marked delivered when it closes */
+  decision_ids: string[];
+  /** When the newest text was answered (a join renews it) */
   created_at: string;
   claim?: { owner: string; at: string; offset: number };
   /** The transcript size at the first claim: a plugin line with the ref after it means a submit got in */
@@ -187,7 +192,9 @@ export class Store {
   /** ref of an inbox instruction -> session: a prompt that starts with it is the mod's delivery, not the human (kept after the item closes: the hook's event can arrive after the ack) */
   private instructionRefs = new Map<string, string>();
   /** Sessions whose inbox delivery was given up: their next instruction is not offered to the mod again until one reaches the agent */
-  private modBypass = new Set<string>();
+  private modBypass = new Map<string, number>();
+  /** First checkpoint of a joined instruction -> the others it carries, marked delivered with it */
+  private joinedIds = new Map<string, string[]>();
 
   // Aggregates rebuilt from events
   private escapedQuestions = 0;
@@ -355,11 +362,12 @@ export class Store {
     const stale = this.instructions.get(session.session_id);
     if (!denied && req.kind === "approve_plan" && stale?.about === "plan" && stale.decision_id === "") {
       this.instructions.delete(session.session_id);
+      this.modBypass.delete(session.session_id);
       this.opts.log?.("plan_instruction_dropped", { session: session.session_id, decision: decision.id });
     }
     if (!denied && req.kind === "approve_plan") {
       for (const [id, m] of this.messageInstructions) {
-        if (m.session_id !== session.session_id || m.claim || m.source.about !== "plan" || m.source.decision_id !== "") continue;
+        if (m.session_id !== session.session_id || m.claim || m.decision_ids.length > 0 || !m.parts.every((x) => x.about === "plan")) continue;
         this.messageInstructions.delete(id);
         this.opts.log?.("plan_instruction_dropped", { session: session.session_id, decision: decision.id });
       }
@@ -474,6 +482,7 @@ export class Store {
     if (!d) throw new HttpError(404, "decision not found");
     if (d.kind !== "checkpoint" || d.status !== "answered" || d.response?.delivered_at) return d;
     if (this.instructions.get(d.session.session_id)?.decision_id === id) this.instructions.delete(d.session.session_id);
+    this.modBypass.delete(d.session.session_id);
     this.setStatus(d, "answer_lost");
     this.persist(d);
     this.emit("decision.updated", d);
@@ -492,6 +501,11 @@ export class Store {
   }
 
   private markDelivered(decisionId: string, via: DeliveredVia): void {
+    const joined = this.joinedIds.get(decisionId);
+    if (joined) {
+      this.joinedIds.delete(decisionId);
+      for (const x of joined) this.markDelivered(x, via);
+    }
     const d = this.decisions.get(decisionId);
     if (!d?.response || d.response.delivered_at) return;
     d.response = { ...d.response, delivered_at: new Date().toISOString(), delivered_via: via };
@@ -973,6 +987,7 @@ export class Store {
     const ins = this.instructions.get(sessionId);
     if (ins?.kind !== "stop") return;
     this.instructions.delete(sessionId);
+    this.modBypass.delete(sessionId);
     this.markDelivered(ins.decision_id, "noop"); // nothing left to stop
   }
 
@@ -994,6 +1009,7 @@ export class Store {
     if (ins.kind === "stop") {
       // The agent stopped on its own before the deny could reach it: nothing to stop
       this.instructions.delete(sessionId);
+      this.modBypass.delete(sessionId);
       this.markDelivered(ins.decision_id, "noop");
       this.stoppedSessions.add(sessionId);
       return;
@@ -1309,7 +1325,11 @@ export class Store {
   /** A mod polled the session lately and the message-delivery switch is on: an instruction can go to it instead of the terminal */
   hasLiveMod(sessionId: string): boolean {
     if (this.opts.messageDelivery && !this.opts.messageDelivery()) return false;
-    if (this.modBypass.has(sessionId)) return false;
+    const bypassAt = this.modBypass.get(sessionId);
+    if (bypassAt !== undefined) {
+      if (this.clock() - bypassAt < MOD_GONE_MS) return false;
+      this.modBypass.delete(sessionId); // a mod that failed five times gets another chance after a while
+    }
     return this.liveOwner(sessionId, MOD_FRESH_MS, this.clock());
   }
 
@@ -1335,13 +1355,14 @@ export class Store {
     }
     this.instructions.delete(sessionId);
     if (existing) {
-      const text = `${existing.source.text}\n${ins.text}`.slice(0, INSTRUCTION_MAX_CHARS);
-      existing.source = { ...existing.source, text, decision_id: existing.source.decision_id || ins.decision_id };
+      existing.parts.push({ text: ins.text, ...(ins.about ? { about: ins.about } : {}) });
+      if (ins.decision_id) existing.decision_ids.push(ins.decision_id);
+      existing.created_at = ins.created_at; // the newest text renews the time limit
       return true;
     }
     const transcript_path = d?.session.transcript_path ?? this.sessions.get(sessionId)?.transcript_path;
     const id = randomUUID();
-    this.messageInstructions.set(id, { id, session_id: sessionId, transcript_path, source: ins, created_at: ins.created_at, attempts: 0 });
+    this.messageInstructions.set(id, { id, session_id: sessionId, transcript_path, source: ins, parts: [{ text: ins.text, ...(ins.about ? { about: ins.about } : {}) }], decision_ids: ins.decision_id ? [ins.decision_id] : [], created_at: ins.created_at, attempts: 0 });
     this.instructionRefs.set(deliveryRef(id), sessionId);
     if (this.instructionRefs.size > 500) this.instructionRefs.delete(this.instructionRefs.keys().next().value!);
     return true;
@@ -1363,7 +1384,7 @@ export class Store {
   /** The delivery is over: the checkpoint it answers (if any) is marked delivered, and an instruction that waited behind it goes next */
   private completeInstruction(m: MessageInstruction, offerNext = true): void {
     this.messageInstructions.delete(m.id);
-    if (m.source.decision_id) this.markDelivered(m.source.decision_id, "message");
+    for (const id of m.decision_ids) this.markDelivered(id, "message");
     if (offerNext && this.sessions.get(m.session_id)?.state === "idle" && !this.hasOpenAsync(m.session_id)) this.offerToMod(m.session_id);
   }
 
@@ -1379,9 +1400,13 @@ export class Store {
       this.opts.log?.("instruction_dropped", { session: sid, item: m.id });
       return;
     }
-    const text = queued ? `${m.source.text}\n${queued.text}`.slice(0, INSTRUCTION_MAX_CHARS) : m.source.text;
-    this.instructions.set(sid, { ...m.source, text, decision_id: m.source.decision_id || queued?.decision_id || "" });
-    if (bypass) this.modBypass.add(sid);
+    // One slot, one prefix: the texts are joined (the prefix of the first one stays); the checkpoints all stay with it
+    const ids = [...m.decision_ids, ...(queued?.decision_id ? [queued.decision_id, ...(this.joinedIds.get(queued.decision_id) ?? [])] : [])];
+    const text = [...m.parts.map((x) => x.text), ...(queued ? [queued.text] : [])].join("\n").slice(0, INSTRUCTION_MAX_CHARS);
+    const about = m.parts[0]?.about;
+    this.instructions.set(sid, { decision_id: ids[0] ?? "", kind: "instruct", text, created_at: m.source.created_at, ...(about ? { about } : {}) });
+    if (ids[0]) this.joinedIds.set(ids[0], ids.slice(1));
+    if (bypass) this.modBypass.set(sid, this.clock());
     if (this.sessions.get(sid)?.state === "idle") this.offerQueuedInstruction(sid);
   }
 
@@ -1418,7 +1443,7 @@ export class Store {
       if (this.hasOpenAsync(sessionId)) return undefined;
       m.claim = { owner, at: new Date(now).toISOString(), offset: m.transcript_path ? this.transcriptSizeOf(m.transcript_path) : 0 };
       m.first_offset ??= m.claim.offset;
-      return { item: { item_id: m.id, text: instructionText(m.id, m.source) } };
+      return { item: { item_id: m.id, text: instructionParts(m.id, m.parts) } };
     }
     return undefined;
   }

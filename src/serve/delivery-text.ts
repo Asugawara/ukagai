@@ -23,5 +23,11 @@ export function deliveryText(d: Pick<Decision, "id" | "kind" | "response">): str
  * has, behind the ref. `id` is the inbox item's id. Newlines in the human's text stay (a message is not a single terminal line).
  */
 export function instructionText(id: string, ins: Pick<Instruction, "text" | "about">): string {
-  return `[ukagai] (ref ${deliveryRef(id)}) ${ins.about === "plan" ? PLAN_INSTRUCT_PREFIX : REPLY_PREFIX} ${ins.text.trim()}`;
+  return instructionParts(id, [ins]);
+}
+
+/** Several texts in one message: the ref once, then each text behind its own prefix, one per line block */
+export function instructionParts(id: string, parts: Pick<Instruction, "text" | "about">[]): string {
+  const body = parts.map((p) => `${p.about === "plan" ? PLAN_INSTRUCT_PREFIX : REPLY_PREFIX} ${p.text.trim()}`).join("\n");
+  return `[ukagai] (ref ${deliveryRef(id)}) ${body}`;
 }
