@@ -69,7 +69,10 @@ function statusToast(d: Decision, lang: Lang): string | undefined {
       return t(lang, `lost_${reason}` as MessageKey, { title: d.session.title ?? d.id.slice(0, 8), note: d.delivery_note ?? "" });
     }
     const key = MESSAGE_STATUS_KEY[d.status];
-    if (key) return t(lang, key);
+    if (key) {
+      const text = t(lang, key);
+      return d.status === "answer_submitted" && d.delivery_note ? `${text} — ${t(lang, "note_drop", { note: d.delivery_note })}` : text;
+    }
   }
   const key = STATUS_KEY[d.status];
   return key ? t(lang, key) : undefined;
