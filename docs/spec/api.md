@@ -454,7 +454,7 @@ A question of a Claude Code session whose terminal runs the ukagai mod is not wa
 | `MOD_POLL_MS` / `MOD_BACKOFF_MAX_MS` | 1 s / 5 s | The mod's tick; the longest wait between its requests while they fail (1, 2, 4, 5 s) |
 | `MOD_FRESH_MS` | 15 s | A mod polled the session this recently: it can deliver. Decisions are registered for message delivery and tools are held back only then |
 | `MOD_CLAIM_STALE_MS` | 30 s | An owner not seen for this long is gone: its claim ends and the session's other owner takes its items over |
-| `MOD_END_GRACE_MS` | 10 s | After a `SessionEnd`, a mod that polled the session within this time keeps the decisions open |
+| `MOD_END_GRACE_MS` | 10 s | How long after a `SessionEnd` the server waits before it checks whether the decisions stay open (a poll after the event, the last one at most `MOD_BACKOFF_MAX_MS` old, keeps them) |
 | `MOD_GONE_MS` | 120 s | No mod polled the session for this long: `delivery_flag: "no_agent"` (never within this time of the server's start) |
 | `MESSAGE_TTL_MS` | 12 h | From `created_at` the decision expires (`expired`) |
 | `DELIVERY_MAX_ATTEMPTS` | 5 | Dropped deliveries before `undeliverable` |
@@ -490,7 +490,7 @@ A question of a Claude Code session whose terminal runs the ukagai mod is not wa
 
 **The human types in the terminal.** The session's next non-ref, non-wake-up `UserPromptSubmit` cancels the session's `pending` decisions created no later than the prompt (`received_at` is the time the hook built the event; a late event does not cancel a decision registered after it; this applies to ordinary decisions too). An `answer_submitted` message-delivery decision: with a live mod in the session, `human_prompt_at` is set (the answer is still delivered after the human's turn); without one it closes as `typed_in_terminal`.
 
-**`SessionEnd`** marks the session. After `MOD_END_GRACE_MS` its message-delivery decisions close (`session_end`) unless some owner polled that session after the event. The owner is not compared: another session's `SessionEnd` (a nested `claude -p`) does not touch it, a `--resume` of the same session keeps polling, and `/clear` makes the mod poll under a new session id so the old one closes.
+**`SessionEnd`** marks the session. After `MOD_END_GRACE_MS` its message-delivery decisions close (`session_end`) unless some owner polled that session after the event **and** its last poll is no older than `MOD_BACKOFF_MAX_MS` when the check runs (a live mod polls every second; the exclusion drops the one last poll of a mod that was dying). The owner is not compared: another session's `SessionEnd` (a nested `claude -p`) does not touch it, a `--resume` of the same session keeps polling, and `/clear` makes the mod poll under a new session id so the old one closes.
 
 **Holding the tools back.** `GET /api/sessions/:id/instruction?main=1` answers 200 `{ "waiting": { "decision_id", "kind" } }` (the oldest) when the session has a mod seen within `MOD_FRESH_MS` and a message-delivery decision that is `pending`, or `answer_submitted` without a claim and without `human_prompt_at`. The main agent's checkpoint hook then denies its tool call ("the answer has not reached you yet; end your turn"); a subagent never sends `main=1`. No live mod, a claim in flight, or a human prompt since the answer: the tools run.
 
