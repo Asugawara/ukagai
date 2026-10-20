@@ -206,13 +206,15 @@ test("server that always returns 204: hands off once less than poll + 5 seconds 
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
   const h: Handler = (req, res) => {
     if (req.path.includes("/wait")) {
-      setTimeout(() => res.writeHead(204).end(), 400);
+      setTimeout(() => res.writeHead(204).end(), 1500);
       return true;
     }
     return false;
   };
+  // margin = 3 + 5 = 8 s. Budget 9.2 leaves 1.2 s of slack before the first wait (a loaded runner may be slow to get there), and one
+  // 1.5 s wait always pushes the remaining time below the margin, so exactly one wait happens
   await withServer(h, async (f, d) => {
-    const r = await runHook(args(f, d, "--budget", "6.3", "--poll-timeout-ms", "1000"), JSON.stringify(t1(sp)));
+    const r = await runHook(args(f, d, "--budget", "9.2", "--poll-timeout-ms", "3000"), JSON.stringify(t1(sp)));
     assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny");
     assert.equal(f.calls.filter((c) => c.path.includes("/wait")).length, 1);
     assert.ok(f.calls.at(-1)?.path.endsWith("/handoff"));
