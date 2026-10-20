@@ -58,3 +58,25 @@ shift+tab from `acceptEdits` into plan, then `{"approve":true}`: hook inputs `Po
 - ExitPlanMode with the server already down at the first call (only the stop after the ack, section 4).
 - A grant left behind by an unreachable `PermissionRequest` and a later same-plan ExitPlanMode (the residual risk in the implementer's report, 7).
 - Other models; only sonnet was run.
+
+## Re-check after 211b33f (grant hand-off: once, 60 seconds)
+
+- Date: 2026-10-20. Build: `211b33f`, `npm run build` on a clean tree (`git status` empty at build time; files edited in the work tree afterwards by another session are not in the verified build). Claude Code 2.1.304 (sonnet), same setup as above (port 4919, `--setting-sources project,local`, logging hook, no real settings written).
+- `settings-slow2.json` is `settings-slow.json` with a hold script that sleeps 1.5 s before it counts the acked records. The first hold script raced with the use of the previous grant and did not hold the second and third runs; those runs went through in auto and are not counted below.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Classic, `--permission-mode plan`, "approve and auto": no dialog, `auto` afterwards; `grant_handed_at` and `grant_used_at` both set | ✓ |
+| 2 | Mod, asynchronous "approve and auto": ends in `auto`; `grant_handed_at` set by the re-called ExitPlanMode | ✓ |
+| 3a | Server killed between the ack and the `PermissionRequest`, "Tell Claude what to change", server restarted, ExitPlanMode re-called 28 s after the hand-off (inside the window): not auto, a new card, old grant gone | ✓ |
+| 3b | Same, re-called 71 s after the hand-off (outside the window): not auto, a new card, old grant gone | ✓ |
+| 4 | Plain approval (no mode): no dialog, back to the pre-plan mode, no grant left | ✓ |
+
+1. **Classic auto** (decision fa6ec76c): `delivered_at` …16:28.800Z = `grant_handed_at` …28.800Z, `grant_used_at` …28.912Z. Hook inputs: `PreToolUse plan ExitPlanMode` → `PermissionRequest plan ExitPlanMode` → `PostToolUse auto ExitPlanMode` → `Write`/`Bash` in `auto`. Debug log: the ukagai `PermissionRequest` hook returned `allow` with `updatedPermissions` `setMode auto / session`. `GET …/plan-grant` → 404 afterwards.
+2. **Mod** (decision fe0a36ff, `delivered_via: "message"`): answer …24:58.491Z, `delivered_at` …25:00.493Z, `grant_handed_at` …25:01.345Z (the re-called ExitPlanMode's PreToolUse), `grant_used_at` …25:01.485Z. Hook inputs: `PreToolUse plan ExitPlanMode` → `UserPromptSubmit plan` → `PreToolUse plan ExitPlanMode` → `PermissionRequest` → `PostToolUse auto ExitPlanMode` → `auto` Write/Bash. The hook does not log its requests, so the call of `plan-grant/hand` is read from `grant_handed_at`, which only that endpoint sets on the message path.
+3. **Declined after the ack.**
+   - 3a (decision d9684017): acked and handed at …19:17.648Z, the server was killed 2 s later, and the PermissionRequest hook printed nothing, so Claude Code showed its own dialog (fail-open). After "Tell Claude what to change" and a restart, the re-call at …19:44.3Z (28 s after the hand-off) stayed in plan mode: no `PermissionRequest` for that call, a new pending decision (7f63d382), the old decision got `grant_used_at` …19:44.290Z (invalidated at the second hand-off) and `GET …/plan-grant` → 404.
+   - 3b (decision b9d211c8): handed at …22:26.610Z, killed 2 s later, dialog, "Tell Claude…", restart at …23:35Z, re-call at …23:37Z (71 s after). Again a new pending decision (bf0efa24) and no `PermissionRequest`. The old grant → 404 with `grant_used_at` absent (it expired; nothing consumed it).
+4. **Plain approval** (decision bf0efa24): `{"approve":true}` → `PostToolUse default ExitPlanMode`, no `PermissionRequest` for ExitPlanMode, status line `manual mode on`; `grant_used_at` equals `delivered_at`, `grant_handed_at` absent, lookup → 404.
+
+Not run: the window boundary (60 s ± a few ms) and a Codex plan approval.
