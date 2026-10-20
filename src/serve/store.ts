@@ -13,6 +13,7 @@ import {
   MOD_GONE_MS,
   MOD_OWNER_RE,
   PLAN_GRANT_HAND_WINDOW_MS,
+  PLAN_GRANT_RECALL_MS,
   PLAN_GRANT_TTL_MS,
   deliveryRef,
   type PlanGrant,
@@ -967,6 +968,7 @@ export class Store {
         const receivedAt = Number.isFinite(at) ? at : Infinity;
         this.cancelPending(ev.session_id, receivedAt);
         this.humanPrompted(ev.session_id, receivedAt, ev.received_at);
+        this.revokeHandedGrants(ev.session_id, receivedAt);
         this.stoppedSessions.delete(ev.session_id);
         this.dropQueuedStop(ev.session_id);
       }
@@ -1554,8 +1556,9 @@ export class Store {
 
   /**
    * The grant `d` stands for, or undefined: an approval of a plan, not used, not older than PLAN_GRANT_TTL_MS. For message delivery from
-   * the answer on; for the waiting hook only once the hook took the answer (`answered` by its ack) and handed it to the PermissionRequest.
-   * A grant handed to the PermissionRequest (`grant_handed_at`) lasts PLAN_GRANT_HAND_WINDOW_MS from then
+   * the answer on, for PLAN_GRANT_RECALL_MS after the approval was delivered (before that, after the human decided); for the waiting hook
+   * only once the hook took the answer (`answered` by its ack) and handed it to the PermissionRequest. A grant handed to the PermissionRequest
+   * (`grant_handed_at`) lasts PLAN_GRANT_HAND_WINDOW_MS from then
    */
   private grantOf(d: Decision, now: number): PlanGrant | undefined {
     const r = d.response;
@@ -1567,6 +1570,7 @@ export class Store {
     if (!ready) return undefined;
     const decided = Date.parse(r.decided_at);
     if (!Number.isFinite(decided) || now - decided > PLAN_GRANT_TTL_MS || !planText(d.request)) return undefined;
+    if (d.delivery === "message" && !(now - Date.parse(r.delivered_at ?? r.decided_at) <= PLAN_GRANT_RECALL_MS)) return undefined;
     if (d.grant_handed_at !== undefined && !(now - Date.parse(d.grant_handed_at) <= PLAN_GRANT_HAND_WINDOW_MS)) return undefined;
     return r.set_mode_auto ? { decision_id: d.id, mode: "auto" } : { decision_id: d.id };
   }
@@ -1645,6 +1649,18 @@ export class Store {
   /** An approved plan for message delivery that no longer has its grant (used, written off or too old) */
   private approvalWithoutGrant(d: Decision): boolean {
     return d.kind === "approve_plan" && d.delivery === "message" && d.response?.approve === true && !this.grantOf(d, this.clock());
+  }
+
+  /**
+   * The human typed (plan mode too): an auto grant handed to a PermissionRequest before that and not used is written off. Between a
+   * PreToolUse that hands it and its PermissionRequest nobody types; a prompt in between means that PermissionRequest missed the server and
+   * Claude Code's own dialog asked
+   */
+  private revokeHandedGrants(sessionId: string, at: number): void {
+    for (const d of this.plansOf(sessionId)) {
+      const handed = Date.parse(d.grant_handed_at ?? "");
+      if (Number.isFinite(handed) && handed < at) this.revokeGrant(d);
+    }
   }
 
   /** The grants of the session decided before `at` are written off */

@@ -36,8 +36,15 @@ export const MOD_GONE_MS = 120_000;
 export const MESSAGE_TTL_MS = 12 * 3600 * 1000;
 /** Drops of a delivery before it is given up */
 export const DELIVERY_MAX_ATTEMPTS = 5;
-/** An approval of a plan lets the same plan through once (a re-called ExitPlanMode, or the PermissionRequest of "approve and auto"), for this long after the human decided */
+/** An approval of a plan lets the same plan through once (a re-called ExitPlanMode, or the PermissionRequest of "approve and auto"), never longer than this after the human decided (the outer bound of the limits below) */
 export const PLAN_GRANT_TTL_MS = 12 * 3600 * 1000;
+/**
+ * A plan approved for message delivery is let through only by a re-call this soon after the approval was delivered (before delivery: after
+ * the human decided). The approval message says "call ExitPlanMode once more" and the agent does at once; a grant left over after that
+ * (the re-call never reached the server, Claude Code's own dialog asked and the human may have said no) must not pass the plan hours later.
+ * An approval still undelivered past it is not delivered any more ("it will be allowed" would be wrong): the plan goes back to the human
+ */
+export const PLAN_GRANT_RECALL_MS = 10 * 60 * 1000;
 /**
  * An "approve and auto" grant handed to the PermissionRequest of one ExitPlanMode (the PreToolUse printed nothing) lasts this long from then.
  * That hook runs right after the PreToolUse (its own timeout is 10 s); the slack is for a slow process start under load. A grant it did not

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MOD_CLAIM_STALE_MS, MOD_END_GRACE_MS, MOD_FRESH_MS, PLAN_GRANT_HAND_WINDOW_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
+import { MOD_CLAIM_STALE_MS, MOD_END_GRACE_MS, MOD_FRESH_MS, PLAN_GRANT_HAND_WINDOW_MS, PLAN_GRANT_RECALL_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 import { Store } from "../../src/serve/store.js";
 
@@ -116,7 +116,7 @@ test("an approval derives a grant (no mode / auto); a rejection, an instruction 
   assert.equal(classic.store.planGrant(SID, FP), undefined, "a classic approval goes back through the waiting hook first");
 });
 
-test("only the same session and the same plan can use the grant, only once, and not more than 12 hours after the approval", () => {
+test("only the same session and the same plan can use the grant, only once, and only a re-call soon after the approval (PLAN_GRANT_RECALL_MS)", () => {
   const h = setup();
   const d = h.plan();
   h.approve(d);
@@ -131,11 +131,12 @@ test("only the same session and the same plan can use the grant, only once, and 
   const late = setup();
   const l = late.plan();
   late.approve(l);
-  late.advance(PLAN_GRANT_TTL_MS - 1000);
-  assert.ok(late.store.planGrant(SID, FP), "still within 12 hours");
-  late.advance(2000);
+  late.advance(PLAN_GRANT_RECALL_MS);
+  assert.ok(late.store.planGrant(SID, FP), "undelivered: still within the deadline after the human decided");
+  late.advance(1);
   assert.equal(late.store.planGrant(SID, FP), undefined);
   assert.deepEqual(late.store.consumePlanGrant(SID, FP), { consumed: false });
+  assert.ok(PLAN_GRANT_RECALL_MS < PLAN_GRANT_TTL_MS, "12 hours stays the outer bound");
 });
 
 // ---- using it ----
@@ -817,4 +818,126 @@ test("audit L1: the Codex bridge's ack of a plan approved with auto keeps the re
   k.approve(kd, true);
   k.store.ack(kd.id, true);
   assert.equal(k.store.planGrant(SID, FP), undefined);
+});
+
+// ---- re-audit S1': a grant for message delivery is for the re-call right after delivery; a human prompt after a hand writes it off ----
+
+test("recall deadline: the grant lasts PLAN_GRANT_RECALL_MS from the delivery; a delivered approval re-called at once still passes (auto and without mode)", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  h.advance(PLAN_GRANT_RECALL_MS - 60_000);
+  assert.ok(h.poll(A, true), "delivered late but within the deadline");
+  h.store.inboxAck(SID, A, d.id);
+  h.advance(PLAN_GRANT_RECALL_MS);
+  assert.deepEqual(h.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" }, "counted from the delivery");
+  h.advance(1);
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+
+  const now = setup();
+  const n = now.plan();
+  now.approve(n, true);
+  now.poll(A, true);
+  now.store.inboxAck(SID, A, n.id);
+  now.advance(5000);
+  assert.deepEqual(now.store.handPlanGrant(SID, FP), { handed: true });
+  now.advance(2000);
+  assert.deepEqual(now.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
+
+  const plain = setup();
+  const p = plain.plan();
+  plain.approve(p);
+  plain.poll(A, true);
+  plain.store.inboxAck(SID, A, p.id);
+  plain.advance(5000);
+  assert.deepEqual(plain.store.consumePlanGrant(SID, FP), { consumed: true });
+});
+
+test("recall deadline (audit T7): the first re-call never reached the server; hours later the same plan is not handed and goes to the human", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  h.poll(A, true);
+  h.store.inboxAck(SID, A, d.id);
+  // outage: nothing of the first re-call reaches the server; Claude Code's own dialog asks and the human says no
+  h.advance(2 * 3600 * 1000);
+  h.poll(A, false);
+  h.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: false });
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+  assert.equal(h.store.openFor(SID, undefined, FP, "toolu_again"), undefined, "nothing open: the re-call registers anew");
+  const fresh = h.plan("toolu_again");
+  assert.notEqual(fresh.id, d.id);
+  assert.equal(fresh.status, "pending", "a new card for the human");
+});
+
+test("recall deadline (audit T1): an auto grant an old PreToolUse never handed is gone after the deadline, so a newer hook starts from nothing", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  h.poll(A, true);
+  h.store.inboxAck(SID, A, d.id);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false }, "an old hook: unhanded, refused");
+  h.advance(PLAN_GRANT_RECALL_MS + 1);
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: false });
+  assert.equal(get(h, d).status, "answered");
+});
+
+test("recall deadline: an approval still undelivered past it is not delivered ('it will be allowed' would be wrong) and closes; a re-call of it registers anew", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  h.advance(PLAN_GRANT_RECALL_MS + 1);
+  assert.equal(h.poll(A, true), undefined, "poll does not hand it out");
+  assert.equal(get(h, d).status, "answer_lost");
+  assert.equal(get(h, d).status_reason, "superseded");
+
+  const r = setup();
+  const rd = r.plan();
+  r.approve(rd, true);
+  r.advance(PLAN_GRANT_RECALL_MS + 1);
+  assert.equal(r.store.openFor(SID, undefined, FP, "toolu_again"), undefined, "openFor closes it and answers 404");
+  assert.equal(get(r, rd).status, "answer_lost");
+});
+
+test("human prompt (audit T3): after a hand, the human's UserPromptSubmit (plan mode too) writes the handed grant off; the mod's delivery, a wake-up and a prompt built before the hand do not", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  h.poll(A, true);
+  h.store.inboxAck(SID, A, d.id);
+  h.advance(1000);
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: true });
+  h.store.addEvent({ session_id: SID, transcript_path: "/t", cwd: "/w/proj", hook_event_name: "UserPromptSubmit", received_at: new Date(h.now() - 500).toISOString(), permission_mode: "plan" } as never);
+  h.event("UserPromptSubmit", { permission_mode: "plan", delivered_ref: d.id.slice(0, 8) });
+  h.event("UserPromptSubmit", { permission_mode: "plan", wakeup: true });
+  h.event("Stop", { permission_mode: "plan" });
+  assert.deepEqual(h.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" }, "none of these is the human after the hand");
+  h.advance(5000);
+  h.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+  assert.ok(get(h, d).grant_used_at);
+
+  const unhanded = setup();
+  const u = unhanded.plan();
+  unhanded.approve(u, true);
+  unhanded.poll(A, true);
+  unhanded.store.inboxAck(SID, A, u.id);
+  unhanded.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.ok(unhanded.store.planGrant(SID, FP), "a grant not handed yet is left (the human may ask for the re-call)");
+});
+
+test("human prompt: a classic grant handed by the ack is written off by the human typing too; the classic flow (ack → PermissionRequest) is unchanged", () => {
+  const h = setup();
+  classicPlan(h);
+  h.advance(1000);
+  h.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+
+  const c = setup();
+  classicPlan(c);
+  c.advance(2000);
+  assert.deepEqual(c.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
 });
