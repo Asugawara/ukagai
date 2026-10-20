@@ -7,7 +7,7 @@ The GUI served by `ukagai serve`. Static files, no build step. `GET /` returns `
 - `i18n.js` — ES module with `MESSAGES = { en, ja }`, `t(key, vars?)` and `applyStatic()`. Both languages must have the same key set (tested). Keys are English snake_case; `{name}` marks a variable.
 - `app.js` — ES module. API calls, SSE, rendering. Text from outside is inserted with `textContent`. Every display string goes through `t()`.
 - `sanitize.js` — the HTML sanitizer for marked output (`sanitize`: tag / attribute / link allowlist on the parsed DOM), an ES module shared by `app.js` and `settings.js` (the skill preview).
-- `icons.js` — Lucide icons (ISC, see `vendor/LICENSES.md`) for the settings page: `icon(name)` builds an `<svg>` with `createElementNS` (stroke `currentColor`, `data-icon` = name).
+- `icons.js` — Lucide icons (ISC, see `vendor/LICENSES.md`) for the settings page and the HTML frame bar (icon-only Open in new tab / Full screen in a narrow frame): `icon(name)` builds an `<svg>` with `createElementNS` (stroke `currentColor`, `data-icon` = name).
 - `app.css` — system fonts. The body grid is banner / header / main. Below the header, two columns (background 3fr / decision 340–520px), one column below 900px (decision first). Dark mode follows `prefers-color-scheme`.
 - `vendor/` — `pele.global.js` (the Mermaid renderer) and `marked.umd.js` (committed; no CDN). The only CDN use is optional syntax highlighting: highlight.js from cdnjs (`github` / `github-dark` by `prefers-color-scheme`); without network code blocks stay plain.
 
