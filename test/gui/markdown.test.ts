@@ -494,3 +494,29 @@ gui("an option label, a Terms entry and a risk word equal to a diagram label lea
   // the prose outside the diagram is still decorated
   assert.ok(count(`${BG} strong.optref`) >= 1);
 });
+
+const LONG_LINE = "const veryLong = " + "abcdefghij".repeat(30) + ";";
+const CODE_MD = (head: string) => `${head}\n\nBody.\n\n\`\`\`ts\n${LONG_LINE}\n\`\`\`\n\n\`\`\`diff\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n-${LONG_LINE}\n+${LONG_LINE}x\n\`\`\`\n\n\`\`\`ts title="src/long.ts"\n${LONG_LINE}\n\`\`\`\n`;
+const noSideScroll = () => ev<{ w: number; c: number }[]>(`JSON.stringify([...document.querySelectorAll("${BG} pre")].map((p) => ({ w: p.scrollWidth, c: p.clientWidth })))`);
+
+gui("long lines in code blocks wrap instead of scrolling sideways (explanation and plan, 1280x800)", async () => {
+  ab("set", "viewport", "1280", "800");
+  await seedDoc(CODE_MD("---\nukagai: 1\n---\n## Why this decision is needed now"), QUESTION, "code.md");
+  ab("open", base + "/");
+  await waitFor("code blocks", `document.querySelectorAll("${BG} pre").length >= 3`, 15000);
+  let pres = noSideScroll();
+  assert.ok(pres.length >= 3);
+  for (const p of pres) assert.ok(p.w <= p.c, `explanation: scrollWidth ${p.w} > clientWidth ${p.c}`);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("${BG} pre code")).whiteSpace === "pre-wrap"`), true);
+  // the diff lines wrap and the background still covers the whole (wrapped) line
+  assert.equal(ev<boolean>(`(() => { const a = document.querySelector("${BG} pre.diff .add"), l = parseFloat(getComputedStyle(a).lineHeight); return a.getBoundingClientRect().height > l * 1.5 && getComputedStyle(a).backgroundColor !== "rgba(0, 0, 0, 0)"; })()`), true);
+  await cancelAll();
+  const name = "code-plan.md";
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  await planSession("code-plan");
+  writeFileSync(join(home, ".claude", "plans", name), CODE_MD("# Code plan\n\n## One"));
+  await waitFor("plan code blocks", `document.querySelectorAll("${BG} pre").length >= 3`, 8000);
+  pres = noSideScroll();
+  for (const p of pres) assert.ok(p.w <= p.c, `plan: scrollWidth ${p.w} > clientWidth ${p.c}`);
+  rmSync(join(home, ".claude", "plans", name), { force: true });
+});
