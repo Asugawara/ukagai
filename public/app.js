@@ -1334,7 +1334,7 @@ const STATUS_KEYS = {
 const MSG_STATUS_KEYS = { answer_submitted: "status_message_queued", answered: "status_message_delivered", fallback: "status_fallback_message" };
 // The status line of a decision (null: none). A message-delivery decision says when the answer will reach the agent, and why it is held up
 function statusLine(d) {
-  // Also on a plan that was switched back to the waiting hook (it went through there, without auto)
+  // The plan went through without auto mode: the waiting hook's ack or ExitPlanMode's PostToolUse used its grant without switching
   if (d.delivery_flag === "auto_not_applied") return t("note_auto_not_applied");
   if (d.delivery === "message") {
     const lost = msgLostKey(d);

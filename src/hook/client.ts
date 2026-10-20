@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ConsumePlanGrantResponse,
+  HandPlanGrantResponse,
   Instruction,
   PendingRewrite,
   PlanGrant,
@@ -203,6 +204,14 @@ export class Client {
     if (!r || r.status !== 200) return { consumed: false };
     const parsed = ConsumePlanGrantResponse.safeParse(Client.json(r.text));
     return parsed.success ? parsed.data : { consumed: false };
+  }
+
+  /** Leave this plan's auto grant to the PermissionRequest of the same call. False on a miss (none, or handed before: now written off) or any failure */
+  async handPlanGrant(sessionId: string, fingerprint: string): Promise<boolean> {
+    const r = await this.request("POST", `/api/sessions/${encodeURIComponent(sessionId)}/plan-grant/hand`, { fingerprint }, SHORT_TIMEOUT_MS);
+    if (!r || r.status !== 200) return false;
+    const parsed = HandPlanGrantResponse.safeParse(Client.json(r.text));
+    return parsed.success && parsed.data.handed;
   }
 
   async cancel(id: string, timeoutMs: number): Promise<boolean> {

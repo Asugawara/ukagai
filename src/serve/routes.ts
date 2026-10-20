@@ -577,6 +577,11 @@ export function createApp(deps: AppDeps): Hono {
     const body = await parse(c, ConsumePlanGrantRequest);
     return c.json(store.consumePlanGrant(c.req.param("id"), body.fingerprint));
   });
+  // The PreToolUse leaves an "approve and auto" grant to the PermissionRequest of the same call (once; a second hand writes it off)
+  app.post("/api/sessions/:id/plan-grant/hand", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, ConsumePlanGrantRequest);
+    return c.json(store.handPlanGrant(c.req.param("id"), body.fingerprint));
+  });
 
   app.get("/api/sessions/:id/pending-rewrite", auth("bearer"), (c) => {
     return c.json(store.getRewrite(c.req.param("id")));

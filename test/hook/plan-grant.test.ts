@@ -35,16 +35,30 @@ async function withServer<T>(handler: Handler, fn: (f: Fake, dataDir: string) =>
 const args = (f: Fake, dataDir: string) => ["--server", f.url, "--data-dir", dataDir];
 const GRANT_PATH = `/api/sessions/${SID}/plan-grant?fingerprint=${FP}`;
 const CONSUME_PATH = `/api/sessions/${SID}/plan-grant/consume`;
+const HAND_PATH = `/api/sessions/${SID}/plan-grant/hand`;
 
-/** A server that holds one grant for the plan (mode none / auto) until it is consumed, and records the rest */
-function granting(mode?: "auto"): Handler {
+/**
+ * A server that holds one grant for the plan (mode none / auto) until it is consumed, and records the rest. An auto grant is consumed only
+ * once handed (`handed: true` starts it handed, as the waiting hook's ack does); a second hand writes it off
+ */
+function granting(mode?: "auto", opts: { handed?: boolean } = {}): Handler {
   let used = false;
+  let handed = opts.handed === true;
   return (req, res) => {
     if (req.method === "GET" && req.path.startsWith(`/api/sessions/${SID}/plan-grant?`)) {
       return req.path === GRANT_PATH && !used ? json(res, 200, { grant: { decision_id: "dec-plan", ...(mode ? { mode } : {}) } }) : json(res, 404, { error: "no grant" });
     }
+    if (req.method === "POST" && req.path === HAND_PATH) {
+      if (used || mode !== "auto" || req.body?.fingerprint !== FP) return json(res, 200, { handed: false });
+      if (handed) {
+        used = true;
+        return json(res, 200, { handed: false });
+      }
+      handed = true;
+      return json(res, 200, { handed: true });
+    }
     if (req.method === "POST" && req.path === CONSUME_PATH) {
-      if (used || req.body?.fingerprint !== FP) return json(res, 200, { consumed: false });
+      if (used || req.body?.fingerprint !== FP || (mode === "auto" && !handed)) return json(res, 200, { consumed: false });
       used = true;
       return json(res, 200, { consumed: true, ...(mode ? { mode } : {}) });
     }
@@ -65,13 +79,37 @@ test("PreToolUse: a plain grant → consumed, allow + updatedInput (the plan as 
   });
 });
 
-test("PreToolUse: a grant with auto → no output and the grant is left for the PermissionRequest", async () => {
+test("PreToolUse: a grant with auto → handed to the PermissionRequest, no output; that PermissionRequest then answers allow + setMode auto", async () => {
   await withServer(granting("auto"), async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(PRE), undefined, { UKAGAI_MOD_OWNER: OWNER });
     assert.equal(r.code, 0);
     assert.equal(r.stdout, "");
     assert.ok(f.calls.some((c) => c.path === GRANT_PATH));
+    assert.deepEqual(f.calls.filter((c) => c.path === HAND_PATH).map((c) => c.body), [{ fingerprint: FP }]);
     assert.ok(!f.calls.some((c) => c.path === CONSUME_PATH || c.path === "/api/decisions" || c.path.includes("/open?")));
+    assert.deepEqual(JSON.parse((await runHook(args(f, d), JSON.stringify(PERM))).stdout), fx("permission-request-exit-plan-stdout.json"));
+  });
+});
+
+test("PreToolUse: an auto grant handed before (its PermissionRequest did not use it; the human may have said no in Claude Code's dialog) → written off, the plan goes to the human (registered)", async () => {
+  for (const owner of [{ UKAGAI_MOD_OWNER: OWNER }, undefined]) {
+    await withServer(granting("auto", { handed: true }), async (f, d) => {
+      const r = await runHook([...args(f, d), "--budget", "30"], JSON.stringify(PRE), undefined, owner);
+      assert.equal(r.code, 0);
+      assert.equal(f.calls.filter((c) => c.path === HAND_PATH).length, 1);
+      assert.ok(f.calls.some((c) => c.path.includes("/open?")));
+      assert.equal(f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions")?.body.kind, "approve_plan", "a new card for the human");
+      assert.equal((await runHook(args(f, d), JSON.stringify(PERM))).stdout, "", "the written-off grant lets nothing through");
+    });
+  }
+});
+
+test("PreToolUse: a hand that fails (server gone in between) → today's flow, never an output that skips the human", async () => {
+  const h: Handler = (req, res) =>
+    req.path === GRANT_PATH ? json(res, 200, { grant: { decision_id: "dec-plan", mode: "auto" } }) : req.path === HAND_PATH ? json(res, 500, { error: "boom" }) : false;
+  await withServer(h, async (f, d) => {
+    await runHook([...args(f, d), "--budget", "30"], JSON.stringify(PRE), undefined, { UKAGAI_MOD_OWNER: OWNER });
+    assert.ok(f.calls.some((c) => c.method === "POST" && c.path === "/api/decisions"));
   });
 });
 
@@ -138,8 +176,8 @@ test("PreToolUse: server absent → no output, exit 0 (fail open)", async () => 
 
 // ---- PermissionRequest ----
 
-test("PermissionRequest × ExitPlanMode × an auto grant → allow + updatedInput + setMode auto (fixture), consumed once", async () => {
-  await withServer(granting("auto"), async (f, d) => {
+test("PermissionRequest × ExitPlanMode × an auto grant handed to it → allow + updatedInput + setMode auto (fixture), consumed once", async () => {
+  await withServer(granting("auto", { handed: true }), async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(PERM));
     const out = JSON.parse(r.stdout);
     assert.deepEqual(out, fx("permission-request-exit-plan-stdout.json"));
@@ -152,7 +190,7 @@ test("PermissionRequest × ExitPlanMode × an auto grant → allow + updatedInpu
 
 test("PermissionRequest × ExitPlanMode: explanation blocks in the plan do not change which grant it is", async () => {
   const withBlock = { ...PERM, tool_input: { ...TOOL_INPUT, plan: `${TOOL_INPUT.plan}\n<!-- ukagai-explain -->\n---\nquestion: q\n---\nbody\n<!-- /ukagai-explain -->\n` } };
-  await withServer(granting("auto"), async (f, d) => {
+  await withServer(granting("auto", { handed: true }), async (f, d) => {
     const out = JSON.parse((await runHook(args(f, d), JSON.stringify(withBlock))).stdout);
     assert.equal(out.hookSpecificOutput.decision.behavior, "allow");
     assert.deepEqual(out.hookSpecificOutput.decision.updatedInput, withBlock.tool_input, "the plan goes back as Claude Code sent it");
@@ -163,7 +201,7 @@ test("PermissionRequest × ExitPlanMode: no grant, a plain grant, a subagent or 
   const cases: [Handler, Record<string, unknown>][] = [
     [granting(), { tool_input: { ...TOOL_INPUT, plan: "changed" } }],
     [granting(), {}],
-    [granting("auto"), { agent_id: "sub-1" }],
+    [granting("auto", { handed: true }), { agent_id: "sub-1" }],
     [granting("auto"), { tool_input: { plan: "  ", planFilePath: TOOL_INPUT.planFilePath } }],
   ];
   for (const [h, extra] of cases) {
@@ -173,6 +211,14 @@ test("PermissionRequest × ExitPlanMode: no grant, a plain grant, a subagent or 
       assert.ok(!f.calls.some((c) => c.path === CONSUME_PATH), JSON.stringify(extra));
     });
   }
+});
+
+test("PermissionRequest × ExitPlanMode × an auto grant nobody handed to it (no PreToolUse of this call left it) → no output: the consume is refused", async () => {
+  await withServer(granting("auto"), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(PERM));
+    assert.equal(r.stdout, "");
+    assert.equal(f.calls.filter((c) => c.path === CONSUME_PATH).length, 1);
+  });
 });
 
 test("PermissionRequest × ExitPlanMode: server absent → no output (Claude Code's dialog), exit 0", async () => {
@@ -232,12 +278,12 @@ async function realServer() {
   const hargs = ["--server", url, "--data-dir", dataDir, "--poll-timeout-ms", "500"];
   const session = { session_id: SID, transcript_path, cwd: home };
   /** The PreToolUse hook waits; the human answers in the GUI; the hook's result */
-  const answerWaiting = async (answer: object) => {
-    const hook = runHook(hargs, JSON.stringify({ ...PRE, ...session }));
+  const answerWaiting = async (answer: object, toolUseId = PRE.tool_use_id as string) => {
+    const hook = runHook(hargs, JSON.stringify({ ...PRE, ...session, tool_use_id: toolUseId }));
     let id: string | undefined;
     for (let i = 0; i < 100 && !id; i++) {
       const list = (await (await api("/api/decisions?status=pending")).json()) as Decision[];
-      id = list.find((d) => d.session.session_id === SID && d.kind === "approve_plan")?.id;
+      id = list.find((d) => d.session.session_id === SID && d.kind === "approve_plan" && d.tool_use_id === toolUseId)?.id;
       if (!id) await new Promise((r) => setTimeout(r, 50));
     }
     assert.ok(id, "the plan was registered for the waiting hook");
@@ -251,7 +297,7 @@ async function realServer() {
     rmSync(home, { recursive: true, force: true });
     rmSync(dataDir, { recursive: true, force: true });
   };
-  return { h, answerWaiting, decision, permission, cleanup };
+  return { h, api, hargs, session, answerWaiting, decision, permission, cleanup };
 }
 
 test("classic, real server: approve and auto → the PreToolUse hook prints nothing; the PermissionRequest answers allow + updatedInput + setMode auto, once", async () => {
@@ -296,6 +342,44 @@ test("classic, real server: approve and auto, then the server is gone → the Pe
     const r = await s.permission();
     assert.equal(r.code, 0);
     assert.equal(r.stdout, "");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("classic, real server: a re-call after the PermissionRequest missed the handed grant (Claude Code's dialog asked) → not let through: a new card for the human", async () => {
+  const s = await realServer();
+  try {
+    const { id, result } = await s.answerWaiting({ approve: true, set_mode_auto: true });
+    assert.equal(result.stdout, "");
+    // The PermissionRequest never reached the server; the human answered Claude Code's own dialog. The agent calls the same plan again
+    const again = await s.answerWaiting({ approve: false, reason: "not this one" }, "toolu_recall");
+    assert.notEqual(again.id, id, "registered anew");
+    assert.equal(JSON.parse(again.result.stdout).hookSpecificOutput.permissionDecision, "deny");
+    assert.ok((await s.decision(id)).grant_used_at, "the first grant is written off");
+    assert.equal((await s.permission()).stdout, "");
+  } finally {
+    await s.cleanup();
+  }
+});
+
+test("message delivery, real server: approve and auto → the re-called ExitPlanMode's PreToolUse hands the grant and prints nothing; its PermissionRequest answers allow + setMode auto", async () => {
+  const s = await realServer();
+  try {
+    assert.equal((await s.api(`/api/sessions/${SID}/inbox/poll`, { owner: OWNER, idle: false })).status, 204);
+    const created = (await (await s.api("/api/decisions", {
+      tool_use_id: "toolu_async", kind: "approve_plan", session: { ...s.session, permission_mode: "plan" }, request: TOOL_INPUT, mod_owner: OWNER,
+    })).json()) as Decision;
+    assert.equal(created.delivery, "message");
+    assert.equal((await s.api(`/api/decisions/${created.id}/answer`, { approve: true, set_mode_auto: true })).status, 200);
+    const pre = await runHook(s.hargs, JSON.stringify({ ...PRE, ...s.session }), undefined, { UKAGAI_MOD_OWNER: OWNER });
+    assert.equal(pre.code, 0);
+    assert.equal(pre.stdout, "");
+    assert.ok((await s.decision(created.id)).grant_handed_at);
+    assert.deepEqual(JSON.parse((await s.permission()).stdout), fx("permission-request-exit-plan-stdout.json"));
+    const used = await s.decision(created.id);
+    assert.ok(used.grant_used_at);
+    assert.equal(used.response?.delivered_via, "grant");
   } finally {
     await s.cleanup();
   }

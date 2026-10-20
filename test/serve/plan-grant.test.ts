@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MOD_CLAIM_STALE_MS, MOD_END_GRACE_MS, MOD_FRESH_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
+import { MOD_CLAIM_STALE_MS, MOD_END_GRACE_MS, MOD_FRESH_MS, PLAN_GRANT_HAND_WINDOW_MS, PLAN_GRANT_TTL_MS, decisionFingerprint, type CreateDecisionRequest, type Decision } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 import { Store } from "../../src/serve/store.js";
 
@@ -147,6 +147,7 @@ test("using the grant answers the decision (delivered_via grant) and ends the mo
   const item = h.poll(A, true);
   assert.ok(item && "item" in item, "the mod holds the approval");
   assert.match(item.item.text, /The human approved your plan in the ukagai GUI\. Call ExitPlanMode once more with the same plan/);
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: true });
   assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
   const done = get(h, d);
   assert.equal(done.status, "answered");
@@ -180,6 +181,7 @@ test("the grant comes back from the decision record after a restart, and a used 
   h.store.close();
   const again = setup({ dir: h.dir, start: h.now() + 60_000 });
   assert.deepEqual(again.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" });
+  assert.deepEqual(again.store.handPlanGrant(SID, FP), { handed: true });
   assert.deepEqual(again.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
   again.store.close();
   const third = setup({ dir: h.dir, start: h.now() + 120_000 });
@@ -214,6 +216,7 @@ test("PostToolUse of the main agent's ExitPlanMode uses up the session's grant; 
   const used = setup();
   const u = used.plan();
   used.approve(u, true);
+  used.store.handPlanGrant(SID, FP);
   used.store.consumePlanGrant(SID, FP);
   used.event("PostToolUse", { tool_name: "ExitPlanMode" });
   assert.equal(get(used, u).delivery_flag, undefined, "the PermissionRequest switched the mode");
@@ -321,6 +324,11 @@ test("HTTP: GET plan-grant looks without using; POST plan-grant/consume uses it 
   assert.equal((await api(`/api/sessions/${SID}/plan-grant/consume`, { body: { fingerprint: FP }, auth: false })).status, 401);
   assert.equal((await api(`/api/sessions/${SID}/plan-grant/consume`, { body: {} })).status, 400);
   assert.deepEqual(await (await api(`/api/sessions/other/plan-grant/consume`, { body: { fingerprint: FP } })).json(), { consumed: false });
+  assert.deepEqual(await (await api(`/api/sessions/${SID}/plan-grant/consume`, { body: { fingerprint: FP } })).json(), { consumed: false }, "an auto grant nobody handed to a PermissionRequest");
+  assert.equal((await api(`/api/sessions/${SID}/plan-grant/hand`, { body: { fingerprint: FP }, auth: false })).status, 401);
+  assert.equal((await api(`/api/sessions/${SID}/plan-grant/hand`, { body: {} })).status, 400);
+  assert.deepEqual(await (await api(`/api/sessions/other/plan-grant/hand`, { body: { fingerprint: FP } })).json(), { handed: false });
+  assert.deepEqual(await (await api(`/api/sessions/${SID}/plan-grant/hand`, { body: { fingerprint: FP } })).json(), { handed: true });
   assert.deepEqual(await (await api(`/api/sessions/${SID}/plan-grant/consume`, { body: { fingerprint: FP } })).json(), { consumed: true, mode: "auto" });
   assert.deepEqual(await (await api(`/api/sessions/${SID}/plan-grant/consume`, { body: { fingerprint: FP } })).json(), { consumed: false });
   assert.equal((await api(q)).status, 404);
@@ -376,6 +384,7 @@ test("M1: a main-agent event out of plan mode after the approval writes the gran
   h.event("Stop");
   h.event("UserPromptSubmit", { permission_mode: "default" }, "another-session");
   assert.deepEqual(h.store.planGrant(SID, FP), { decision_id: d.id, mode: "auto" }, "the regular re-call in plan mode still finds it");
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: true });
   assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
 
   for (const mode of ["default", "acceptEdits", "auto", "bypassPermissions"]) {
@@ -610,13 +619,15 @@ test("classic: an approval the hook let through itself leaves no grant — a pla
   assert.equal(get(rejected, r).grant_used_at, undefined);
 });
 
-test("classic: the grant needs the same session and plan, and lasts 12 hours", () => {
+test("classic: the grant needs the same session and plan, and lasts only the hand window after the ack", () => {
   const h = setup();
   classicPlan(h);
   const otherFp = decisionFingerprint("approve_plan", { plan: PLAN + "\nchanged\n", planFilePath: "/p/plan.md" });
   assert.deepEqual(h.store.consumePlanGrant(SID, otherFp), { consumed: false });
   assert.deepEqual(h.store.consumePlanGrant("another-session", FP), { consumed: false });
-  h.advance(PLAN_GRANT_TTL_MS + 1);
+  h.advance(PLAN_GRANT_HAND_WINDOW_MS);
+  assert.ok(h.store.planGrant(SID, FP), "still in the window");
+  h.advance(1);
   assert.equal(h.store.planGrant(SID, FP), undefined);
   assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
 });
@@ -693,4 +704,117 @@ test("HTTP: the waiting hook's ack with keep_plan_grant leaves an auto grant; a 
   assert.equal((await api(q)).status, 404);
   const after = (await (await api(`/api/decisions/${plain.id}`)).json()) as Decision;
   assert.equal(after.delivery_flag, "auto_not_applied");
+});
+
+// ---- audit R4 S1: an auto grant is handed to one PermissionRequest, once, for PLAN_GRANT_HAND_WINDOW_MS ----
+
+test("hand: an auto grant for message delivery is handed once; the PermissionRequest uses it inside the window; nobody can use it unhanded", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false }, "not handed: no PermissionRequest was left it");
+  assert.deepEqual(h.store.handPlanGrant("another-session", FP), { handed: false });
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: true });
+  assert.equal(get(h, d).grant_handed_at, new Date(h.now()).toISOString(), "the store's clock");
+  h.advance(PLAN_GRANT_HAND_WINDOW_MS);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: true, mode: "auto" });
+
+  const plain = setup();
+  const p = plain.plan();
+  plain.approve(p);
+  assert.deepEqual(plain.store.handPlanGrant(SID, FP), { handed: false }, "a grant without mode is the PreToolUse's own");
+  assert.equal(get(plain, p).grant_handed_at, undefined);
+  assert.deepEqual(plain.store.consumePlanGrant(SID, FP), { consumed: true });
+});
+
+test("hand: a second hand (the PermissionRequest did not use the first) writes the grant off; the plan goes back to the human", () => {
+  const h = setup();
+  const d = h.plan();
+  h.approve(d, true);
+  h.poll(A, true);
+  h.store.inboxAck(SID, A, d.id);
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: true });
+  // Claude Code's own dialog asked (the PermissionRequest missed the server); the agent calls the same plan again
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: false });
+  assert.ok(get(h, d).grant_used_at);
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+  assert.equal(h.store.openFor(SID, undefined, FP, "toolu_again"), undefined, "nothing open: the re-call registers anew");
+  const fresh = h.plan("toolu_again");
+  assert.notEqual(fresh.id, d.id);
+  assert.equal(fresh.status, "pending");
+});
+
+test("hand: past the window a handed auto grant is gone, hours later and after a restart too (audit R1, R1b); the plan-mode events in between change nothing", () => {
+  const h = setup();
+  classicPlan(h);
+  h.event("Stop", { permission_mode: "plan" });
+  h.event("Notification", { permission_mode: "plan" });
+  h.advance(PLAN_GRANT_HAND_WINDOW_MS + 1);
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: false });
+  h.advance(3 * 3600 * 1000);
+  h.event("UserPromptSubmit", { permission_mode: "plan" });
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+
+  const r = setup();
+  const kept = classicPlan(r);
+  r.store.close();
+  const within = setup({ dir: r.dir, start: r.now() + 1000 });
+  assert.deepEqual(within.store.planGrant(SID, FP), { decision_id: kept.id, mode: "auto" }, "a quick restart keeps the window");
+  within.store.close();
+  const late = setup({ dir: r.dir, start: r.now() + 60_001 });
+  assert.equal(late.store.planGrant(SID, FP), undefined);
+  assert.equal(late.store.get(kept.id)?.status, "answered");
+});
+
+test("hand: a classic auto grant was handed by the ack, so a re-call's hand writes it off (audit Q1)", () => {
+  const h = setup();
+  const d = classicPlan(h);
+  assert.ok(get(h, d).grant_handed_at);
+  assert.deepEqual(h.store.handPlanGrant(SID, FP), { handed: false });
+  assert.ok(get(h, d).grant_used_at);
+  assert.deepEqual(h.store.consumePlanGrant(SID, FP), { consumed: false });
+});
+
+test("hand: the plan went through Claude Code's own dialog after its window: PostToolUse still flags auto_not_applied", () => {
+  const h = setup();
+  const d = classicPlan(h);
+  h.advance(PLAN_GRANT_HAND_WINDOW_MS + 5000);
+  h.event("PostToolUse", { tool_name: "ExitPlanMode", permission_mode: "plan" });
+  assert.equal(get(h, d).delivery_flag, "auto_not_applied");
+  assert.ok(get(h, d).grant_used_at);
+});
+
+test("the waiting hook's ack writes delivered_at with the store's clock", () => {
+  const h = setup();
+  const d = classicPlan(h, { take: false });
+  h.advance(5000);
+  h.store.ack(d.id, true);
+  assert.equal(get(h, d).response?.delivered_at, new Date(h.now()).toISOString());
+  assert.equal(get(h, d).grant_handed_at, new Date(h.now()).toISOString());
+});
+
+test("audit L1: the Codex bridge's ack of a plan approved with auto keeps the record as before: no hook mark, no flag, no grant", () => {
+  const h = setup();
+  const req = h.req("toolu_codex", PLAN, { mod_owner: undefined });
+  req.session = { ...req.session, agent: "codex" };
+  const d = h.store.create(req, {}).decision;
+  h.approve(d, true);
+  h.store.ack(d.id);
+  const after = get(h, d);
+  assert.equal(after.status, "answered");
+  assert.equal(after.response?.delivered_via, undefined);
+  assert.equal(after.delivery_flag, undefined);
+  assert.equal(after.grant_handed_at, undefined);
+  assert.equal(h.store.planGrant(SID, FP), undefined);
+  // and with keep_plan_grant (no Codex caller sends it) nothing is handed either
+  const k = setup();
+  const kreq = k.req("toolu_codex_k", PLAN, { mod_owner: undefined });
+  kreq.session = { ...kreq.session, agent: "codex" };
+  const kd = k.store.create(kreq, {}).decision;
+  k.approve(kd, true);
+  k.store.ack(kd.id, true);
+  assert.equal(k.store.planGrant(SID, FP), undefined);
 });

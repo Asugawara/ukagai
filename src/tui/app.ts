@@ -63,7 +63,7 @@ const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_
 /** The toast text for a decision that left `pending` (undefined: none) */
 function statusToast(d: Decision, lang: Lang): string | undefined {
   if (d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue") return t(lang, "checkpoint_sent");
-  // Also on a plan that was switched back to the waiting hook (it went through there, without auto)
+  // The plan went through without auto mode: the waiting hook's ack or ExitPlanMode's PostToolUse used its grant without switching
   if (d.delivery_flag === "auto_not_applied") return t(lang, "note_auto_not_applied");
   if (d.delivery === "message") {
     const reason = d.status_reason;

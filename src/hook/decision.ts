@@ -372,14 +372,17 @@ export async function handleDecision(
 
   const fingerprint = decisionFingerprint(kind, regInput);
   // The human approved this very plan (while it waited for message delivery): the call goes through once (the grant). "Approve and auto" is
-  // left to the PermissionRequest that follows (only it can switch the mode), so this hook prints nothing for it. Unreachable server: on as before
+  // handed to the PermissionRequest that follows (only it can switch the mode), so this hook prints nothing for it. The server hands it once:
+  // a grant handed before (its PermissionRequest did not use it) is written off and the plan goes on to the human. Unreachable server: on as before
   if (kind === "approve_plan" && !input.agent_id && "plan" in parsed && parsed.plan.trim() !== "") {
     const grant = await client.getPlanGrant(input.session_id, fingerprint);
     if (grant?.mode === "auto") {
-      lg("plan_grant_auto", { decision_id: grant.decision_id });
-      return null;
-    }
-    if (grant && (await client.consumePlanGrant(input.session_id, fingerprint)).consumed) {
+      if (await client.handPlanGrant(input.session_id, fingerprint)) {
+        lg("plan_grant_auto", { decision_id: grant.decision_id });
+        return null;
+      }
+      lg("plan_grant_not_handed", { decision_id: grant.decision_id });
+    } else if (grant && (await client.consumePlanGrant(input.session_id, fingerprint)).consumed) {
       lg("plan_grant_used", { decision_id: grant.decision_id });
       return allow(toolInput);
     }

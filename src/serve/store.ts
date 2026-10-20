@@ -12,6 +12,7 @@ import {
   MOD_FRESH_MS,
   MOD_GONE_MS,
   MOD_OWNER_RE,
+  PLAN_GRANT_HAND_WINDOW_MS,
   PLAN_GRANT_TTL_MS,
   deliveryRef,
   type PlanGrant,
@@ -766,21 +767,23 @@ export class Store {
   }
 
   /**
-   * The waiting hook took the answer. A plan approval's grant is used by the hook's own allow, unless the hook leaves an "approve and auto"
-   * grant of the main agent to the PermissionRequest of the same ExitPlanMode (`keepPlanGrant`), the only place the mode can switch
+   * The waiting hook (or the Codex bridge) took the answer. A Claude plan approval's grant is used by the hook's own allow, unless the hook
+   * hands an "approve and auto" grant of the main agent to the PermissionRequest of the same ExitPlanMode (`keepPlanGrant`), the only place
+   * the mode can switch. A Codex plan has no grant and no auto mode: its record stays as it was
    */
   ack(id: string, keepPlanGrant = false): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
     if (d.delivery === "message") throw new HttpError(409, "a message-delivery decision is acknowledged by the mod");
     this.transition(d, "answered");
-    d.response = { ...d.response!, delivered_at: new Date().toISOString() };
-    if (d.kind === "approve_plan" && d.response.approve === true) {
+    const at = new Date(this.clock()).toISOString();
+    d.response = { ...d.response!, delivered_at: at };
+    if (d.kind === "approve_plan" && d.response.approve === true && d.session.agent !== "codex") {
       // the mark of an approval the hook took: only such a record holds a grant for the waiting hook (an older record has none)
       d.response.delivered_via = "hook";
-      const grant = this.grantOf(d, this.clock());
-      if (!(keepPlanGrant && grant?.mode === "auto" && d.session.agent_id === undefined)) {
-        d.grant_used_at = new Date(this.clock()).toISOString();
+      if (keepPlanGrant && d.response.set_mode_auto && d.session.agent_id === undefined && planText(d.request)) d.grant_handed_at = at;
+      else {
+        d.grant_used_at = at;
         if (d.response.set_mode_auto) d.delivery_flag = "auto_not_applied";
       }
     }
@@ -1551,15 +1554,20 @@ export class Store {
 
   /**
    * The grant `d` stands for, or undefined: an approval of a plan, not used, not older than PLAN_GRANT_TTL_MS. For message delivery from
-   * the answer on; for the waiting hook only once the hook took the answer (`answered` by its ack) and left the grant to the PermissionRequest
+   * the answer on; for the waiting hook only once the hook took the answer (`answered` by its ack) and handed it to the PermissionRequest.
+   * A grant handed to the PermissionRequest (`grant_handed_at`) lasts PLAN_GRANT_HAND_WINDOW_MS from then
    */
   private grantOf(d: Decision, now: number): PlanGrant | undefined {
     const r = d.response;
     if (d.kind !== "approve_plan" || r?.approve !== true || d.grant_used_at) return undefined;
-    const ready = d.delivery === "message" ? d.status === "answer_submitted" || d.status === "answered" : d.status === "answered" && r.delivered_via === "hook";
+    const ready =
+      d.delivery === "message"
+        ? d.status === "answer_submitted" || d.status === "answered"
+        : d.status === "answered" && r.delivered_via === "hook" && d.grant_handed_at !== undefined;
     if (!ready) return undefined;
     const decided = Date.parse(r.decided_at);
     if (!Number.isFinite(decided) || now - decided > PLAN_GRANT_TTL_MS || !planText(d.request)) return undefined;
+    if (d.grant_handed_at !== undefined && !(now - Date.parse(d.grant_handed_at) <= PLAN_GRANT_HAND_WINDOW_MS)) return undefined;
     return r.set_mode_auto ? { decision_id: d.id, mode: "auto" } : { decision_id: d.id };
   }
 
@@ -1580,12 +1588,34 @@ export class Store {
     return this.findGrant(sessionId, fingerprint)?.grant;
   }
 
-  /** POST /api/sessions/:id/plan-grant/consume: the re-called ExitPlanMode is let through, once. The decision is answered by it */
+  /**
+   * POST /api/sessions/:id/plan-grant/consume: the plan is let through, once (the decision is answered by it). A grant without mode by the
+   * re-called ExitPlanMode's PreToolUse; an auto one only by the PermissionRequest it was handed to (plan-grant/hand, or the waiting hook's ack)
+   */
   consumePlanGrant(sessionId: string, fingerprint: string): { consumed: true; mode?: "auto" } | { consumed: false } {
     const hit = this.findGrant(sessionId, fingerprint);
-    if (!hit) return { consumed: false };
+    if (!hit || (hit.grant.mode === "auto" && hit.d.grant_handed_at === undefined)) return { consumed: false };
     this.useGrant(hit.d);
     return hit.grant.mode ? { consumed: true, mode: hit.grant.mode } : { consumed: true };
+  }
+
+  /**
+   * POST /api/sessions/:id/plan-grant/hand: the re-called ExitPlanMode's PreToolUse leaves an auto grant to its PermissionRequest (and prints
+   * nothing). Once only: a grant handed before means that PermissionRequest did not use it (Claude Code's own dialog asked, and the human may
+   * have said no), so it is written off and the plan goes back to the human
+   */
+  handPlanGrant(sessionId: string, fingerprint: string): { handed: boolean } {
+    const hit = this.findGrant(sessionId, fingerprint);
+    if (!hit || hit.grant.mode !== "auto") return { handed: false };
+    if (hit.d.grant_handed_at !== undefined) {
+      this.revokeGrant(hit.d);
+      this.opts.log?.("plan_grant_handed_twice", { session: sessionId, decision: hit.d.id });
+      return { handed: false };
+    }
+    hit.d.grant_handed_at = new Date(this.clock()).toISOString();
+    this.persist(hit.d);
+    this.emit("decision.updated", hit.d);
+    return { handed: true };
   }
 
   /** The grant is used: written down (it never lets anything through again), and an answer not delivered yet needs no delivery any more */
@@ -1625,13 +1655,18 @@ export class Store {
     }
   }
 
-  /** PostToolUse of the main agent's ExitPlanMode: every grant of the session is used up; one that asked for auto mode did not get it */
+  /**
+   * PostToolUse of the main agent's ExitPlanMode: every grant of the session is used up; one that asked for auto mode did not get it (a grant
+   * handed to a PermissionRequest that did not use it counts too, even past its window: the plan went through Claude Code's own dialog)
+   */
   private planExited(sessionId: string): void {
     const now = this.clock();
     for (const d of this.plansOf(sessionId)) {
-      const grant = d.session.agent_id === undefined ? this.grantOf(d, now) : undefined;
-      if (!grant) continue;
-      if (grant.mode === "auto") d.delivery_flag = "auto_not_applied";
+      if (d.session.agent_id !== undefined) continue;
+      const grant = this.grantOf(d, now);
+      const handed = !grant && d.grant_handed_at !== undefined && !d.grant_used_at && d.response?.approve === true;
+      if (!grant && !handed) continue;
+      if (grant?.mode === "auto" || handed) d.delivery_flag = "auto_not_applied";
       this.useGrant(d);
     }
   }

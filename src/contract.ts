@@ -38,6 +38,12 @@ export const MESSAGE_TTL_MS = 12 * 3600 * 1000;
 export const DELIVERY_MAX_ATTEMPTS = 5;
 /** An approval of a plan lets the same plan through once (a re-called ExitPlanMode, or the PermissionRequest of "approve and auto"), for this long after the human decided */
 export const PLAN_GRANT_TTL_MS = 12 * 3600 * 1000;
+/**
+ * An "approve and auto" grant handed to the PermissionRequest of one ExitPlanMode (the PreToolUse printed nothing) lasts this long from then.
+ * That hook runs right after the PreToolUse (its own timeout is 10 s); the slack is for a slow process start under load. A grant it did not
+ * use (the server was out of reach, Claude Code's dialog asked and the human may have said no) must not let the same plan through later
+ */
+export const PLAN_GRANT_HAND_WINDOW_MS = 60 * 1000;
 /** Characters of the decision id in a delivery text's ref */
 export const DELIVERY_REF_LEN = 8;
 /** The mod's identifier of one Claude Code process (`UKAGAI_MOD_OWNER`) */
@@ -398,6 +404,8 @@ export const Decision = z.object({
   delivery_flag: z.enum(["no_agent", "auto_not_applied"]).optional(),
   /** approve_plan: the approval's one-time pass for the same plan (the grant) was used or revoked */
   grant_used_at: z.string().optional(),
+  /** approve_plan, "approve and auto": the grant was handed to the PermissionRequest of one ExitPlanMode (once only; PLAN_GRANT_HAND_WINDOW_MS) */
+  grant_handed_at: z.string().optional(),
 });
 export type Decision = z.infer<typeof Decision>;
 
@@ -414,6 +422,9 @@ export const ConsumePlanGrantResponse = z.union([
   z.object({ consumed: z.literal(false) }),
 ]);
 export type ConsumePlanGrantResponse = z.infer<typeof ConsumePlanGrantResponse>;
+/** POST /api/sessions/:id/plan-grant/hand (body: ConsumePlanGrantRequest). `handed: false` = no auto grant, or it was handed before and is now written off */
+export const HandPlanGrantResponse = z.object({ handed: z.boolean() });
+export type HandPlanGrantResponse = z.infer<typeof HandPlanGrantResponse>;
 
 /** POST /api/decisions/:id/ack (the waiting hook). `keep_plan_grant`: an "approve and auto" grant is left to the PermissionRequest of the same ExitPlanMode */
 export const DecisionAckRequest = z.object({ keep_plan_grant: z.literal(true).optional() });
