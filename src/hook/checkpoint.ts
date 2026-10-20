@@ -37,19 +37,19 @@ export async function checkpointInstruction(
   // In auto the human already got what they wanted: drop the record rather than let it answer an unrelated prompt later
   // The main agent (no agent_id) is also held back while an answer is on its way as a message; a subagent's tools are not
   const main = input["agent_id"] === undefined;
-  const [taken, ask] = await Promise.all([
-    main
-      ? client.takeInstructionOrWaiting(sessionId, CHECKPOINT_TIMEOUT_MS)
-      : client.takeInstruction(sessionId, CHECKPOINT_TIMEOUT_MS).then((i) => (i ? { instruction: i } : null)),
-    mayAsk && prompting
-      ? client.askModeSwitch(sessionId, CHECKPOINT_TIMEOUT_MS)
-      : mayAsk && mode === "auto"
-        ? client.consumeModeSwitch(sessionId, CHECKPOINT_TIMEOUT_MS).then(() => false)
-        : false,
-  ]);
+  const taken = main
+    ? await client.takeInstructionOrWaiting(sessionId, CHECKPOINT_TIMEOUT_MS)
+    : await client.takeInstruction(sessionId, CHECKPOINT_TIMEOUT_MS).then((i) => (i ? { instruction: i } : null));
   if (taken && "waiting" in taken) {
+    // the tool does not run, so the mode-switch record stays for the first tool that does
     return denyOutput({ line: denyLine("Your question in ukagai is not answered yet: end your turn, the answer arrives as a message"), context: WAITING_CONTEXT });
   }
+  const ask =
+    mayAsk && prompting
+      ? await client.askModeSwitch(sessionId, CHECKPOINT_TIMEOUT_MS)
+      : mayAsk && mode === "auto"
+        ? await client.consumeModeSwitch(sessionId, CHECKPOINT_TIMEOUT_MS).then(() => false)
+        : false;
   const ins = taken?.instruction;
   if (!ins) return ask ? ASK_OUTPUT : null;
   const text = ins.text.trim();

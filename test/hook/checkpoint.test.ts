@@ -272,6 +272,24 @@ test("waiting: the main agent's tool is denied with the one-line reason and the 
   });
 });
 
+test("waiting: a held-back tool does not use up the pending mode switch; the first tool that runs still asks", async () => {
+  let held = true;
+  const h: Handler = (req, res) =>
+    req.path.startsWith("/api/sessions/s-1/instruction") && held
+      ? json(res, 200, { waiting: { decision_id: "d-1", kind: "answer_question" } })
+      : req.method === "POST" && req.path === `${MODE_SWITCH}/ask`
+        ? json(res, 200, { ask: true })
+        : false;
+  await withServer(h, async (f, d) => {
+    const denied = JSON.parse((await runHook(args(f, d), modeInput("Edit", "acceptEdits"))).stdout).hookSpecificOutput;
+    assert.equal(denied.permissionDecision, "deny");
+    assert.equal(modeCalls(f).length, 0, "the deny asked nothing");
+    held = false;
+    assert.deepEqual(JSON.parse((await runHook(args(f, d), modeInput("Edit", "acceptEdits"))).stdout), ASK);
+    assert.equal(modeCalls(f, "/ask").length, 1);
+  });
+});
+
 test("waiting: a subagent asks without main=1 and is never held back", async () => {
   await withServer(waiting, async (f, d) => {
     const r = await runHook(args(f, d), input("Bash", { agent_id: "sub-1" }));
