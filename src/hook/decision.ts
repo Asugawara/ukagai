@@ -16,10 +16,16 @@ import {
   checkRewrite,
   denyReason,
   handoffReason,
+  handoffLine,
   type RewriteIssue,
   multiDenyReason,
+  multiDenyLine,
+  explainDenyLine,
+  planDenyLine,
   explainDir,
   findExplanation,
+  findUsedExplanation,
+  fileUsedLabel,
   type FoundExplanation,
   markUsed,
   MISSING_LABELS,
@@ -32,9 +38,10 @@ import {
   validatePlan,
   type Validation,
 } from "./explain.js";
+import { denyLine, denyOutput, type DenyText } from "./deny.js";
 import type { HookOptions } from "./options.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { findPlanFile, readBlockFor } from "./plan-file.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hookLog } from "./log.js";
@@ -54,16 +61,6 @@ const FINAL_STATUSES = new Set([401, 404, 410]);
 const ACK_RETRY_DELAY_MS = 1000;
 
 const NO_HAS = { mermaid: false, table: false, diff: false };
-
-function deny(reason: string): Out {
-  return {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  };
-}
 
 function allow(updatedInput: Record<string, unknown>): Out {
   return {
@@ -106,9 +103,17 @@ export function buildOutput(
     if (!response.answers) return null;
     return allow({ ...toolInput, answers: response.answers });
   }
-  if (response.instruct === true) return deny(planInstructReason(response.text ?? ""));
+  if (response.instruct === true) {
+    return denyOutput({ line: denyLine("Plan not approved yet: the human asked for something first"), context: planInstructReason(response.text ?? "") });
+  }
   if (response.approve === true) return allow(toolInput);
-  if (response.approve === false) return deny(response.reason?.trim() ? response.reason : planRejectedNoReason());
+  if (response.approve === false) {
+    const reason = response.reason?.trim();
+    return denyOutput({
+      line: denyLine("The human rejected the plan"),
+      context: reason ? `[ukagai] The human rejected the plan and wrote: ${reason}` : planRejectedNoReason(),
+    });
+  }
   return null;
 }
 
@@ -128,13 +133,13 @@ type Ctx = {
 type Explained = { explanation: Explanation; usedPath?: string } | { out: Out | null };
 
 /** Record a deny that carries no explanation, then answer with it. Null (fall back) when the server cannot record it */
-async function denyAndRecord(c: Ctx, reason: string, missing: string[]): Promise<Out | null> {
+async function denyAndRecord(c: Ctx, text: DenyText, missing: string[]): Promise<Out | null> {
   const reg = await c.client.createDecision({ ...c.base, status: "denied_explain", missing });
   if (!reg) {
     c.lg("create_decision_failed", c.failMsg());
     return null;
   }
-  return deny(reason);
+  return denyOutput(text, c.input.agent ?? c.opts.agent);
 }
 
 /** The human's edited skill as the deny reasons should name it (nothing when there is none or it cannot be read: fail open) */
@@ -180,14 +185,20 @@ async function explainQuestion(c: Ctx, data: AskUserQuestionInput): Promise<Expl
         now - Date.parse(d.created_at) <= DENY_LINK_WINDOW_MS,
     );
   if (data.questions.length > 1 && !multiGuarded) {
-    return { out: await denyAndRecord(c, multiDenyReason(data.questions.length, input.agent), ["multi"]) };
+    return { out: await denyAndRecord(c, { line: multiDenyLine(data.questions.length), context: multiDenyReason(data.questions.length, input.agent) }, ["multi"]) };
   }
   let found: FoundExplanation | null;
+  let fallbackDir: string | undefined;
   if (planHit) {
     const block = planHit.block ?? (await readBlockFor(planHit.file, q0.question));
     found = block ? { path: planHit.file + PLAN_BLOCK_SUFFIX, markdown: block.body, match: "question" } : null;
   } else {
     found = await findExplanation(dir, q0.question);
+    // A resumed session may have been told the data-dir location while this call carries a scratchpad: look there too
+    if (!found && input.scratchpad_dir) {
+      fallbackDir = explainDir(undefined, opts.dataDir, input.session_id);
+      found = await findExplanation(fallbackDir, q0.question);
+    }
   }
   const labels = q0.options.map((o) => o.label);
   const v = found
@@ -228,11 +239,20 @@ async function explainQuestion(c: Ctx, data: AskUserQuestionInput): Promise<Expl
   }
   const own = v ? v.missing : ["file" as const];
   const codes = [...own, ...rewriteIssues.map((i) => i.code).filter((c) => !own.includes(c))];
+  // No file for this call: an earlier ask of the same question may have consumed one (renamed it `.used.md`)
+  const used = !found && !planFile ? ((await findUsedExplanation(dir, q0.question)) ?? (fallbackDir ? await findUsedExplanation(fallbackDir, q0.question) : null)) : null;
+  if (!found) lg("explain_not_found", { dir, fallback: fallbackDir, used: used ? basename(used) : undefined });
   const reason = denyReason(opts.denyTemplate, {
     ...(planFile ? { planFile } : { path: join(dir, "explain.md") }),
     question: q0.question,
     missing: [
-      ...own.map((c) => (c === "coined_term" && found ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0) : MISSING_LABELS[c])),
+      ...own.map((c) =>
+        c === "file" && used
+          ? fileUsedLabel(used)
+          : c === "coined_term" && found
+            ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0)
+            : MISSING_LABELS[c],
+      ),
       ...rewriteIssues.map((i) => i.text),
     ],
     codes,
@@ -241,7 +261,7 @@ async function explainQuestion(c: Ctx, data: AskUserQuestionInput): Promise<Expl
     blocker: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "blocker" : false,
     quiz: found ? parseFrontMatter(toLines(found.markdown)).fields["type"] === "quiz" : false,
   });
-  return { out: await denyAndRecord(c, reason, codes) };
+  return { out: await denyAndRecord(c, { line: explainDenyLine({ codes, ...(planFile ? { planFile } : {}), used: used !== null }), context: reason }, codes) };
 }
 
 async function explainPlan(c: Ctx, plan: string): Promise<Explained> {
@@ -267,7 +287,7 @@ async function explainPlan(c: Ctx, plan: string): Promise<Explained> {
   }
   if (prior.length > 0) return { explanation: noExplanation("loop_guard") };
   const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => MISSING_LABELS[m]), agent: input.agent, ...skillRefParam(c) });
-  return { out: await denyAndRecord(c, reason, v.missing) };
+  return { out: await denyAndRecord(c, { line: planDenyLine(), context: reason }, v.missing) };
 }
 
 /** First sight of a question: validate its explanation (deny when it is missing or unfit) and register the decision */
@@ -371,7 +391,7 @@ export async function handleDecision(
         // the server cannot record the hand-off is it a real failure and Claude Code's own prompt takes over
         if (await client.handoff(created.id, input.session_id)) {
           lg("handoff", { decision_id: created.id });
-          return deny(handoffReason(kind, input.agent));
+          return denyOutput({ line: handoffLine(kind), context: handoffReason(kind, input.agent) }, input.agent ?? opts.agent);
         }
         lg("fallback_budget", { decision_id: created.id, ...failMsg() });
         await client.answerFallback(created.id);

@@ -1,8 +1,9 @@
 import { readdir, readFile, rename, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { skillName } from "./skill-name.js";
 import { RECENCY_WINDOW_MS, bodyHash, type PendingRewrite } from "../contract.js";
 import type { DenyTemplate } from "./options.js";
+import { DENY_LINE_MAX, denyLine } from "./deny.js";
 
 // Implements the rules in docs/spec/explain.md.
 
@@ -1073,6 +1074,32 @@ export async function findExplanation(
   return null;
 }
 
+/** The newest `<name>.used.md` of `dir` whose `question:` equals the question (an earlier ask of it consumed the file), or null */
+export async function findUsedExplanation(dir: string, question: string): Promise<string | null> {
+  let names: string[];
+  try {
+    names = (await readdir(dir)).filter((n) => n.endsWith(".used.md"));
+  } catch {
+    return null;
+  }
+  let best: { path: string; mtimeMs: number } | null = null;
+  for (const n of names) {
+    const path = join(dir, n);
+    try {
+      const [markdown, st] = await Promise.all([readFile(path, "utf8"), stat(path)]);
+      if (parseFrontMatter(toLines(markdown)).fields["question"] === question && (!best || st.mtimeMs > best.mtimeMs)) best = { path, mtimeMs: st.mtimeMs };
+    } catch {
+      // ignore unreadable files
+    }
+  }
+  return best?.path ?? null;
+}
+
+/** The `Missing:` entry for a question whose file was renamed `.used.md` by an earlier ask */
+export function fileUsedLabel(path: string): string {
+  return `a new explanation file: ${basename(path)} was used by the earlier ask of this question; write a new one for what the human said since`;
+}
+
 /** Rename `<name>.md` to `<name>.used.md` and return the new path */
 export async function markUsed(path: string): Promise<string> {
   const used = path.replace(/\.md$/, "") + ".used.md";
@@ -1202,7 +1229,7 @@ function templateBlock(p: DenyParams): string {
         `## ${SECTION.recommendation[0]}`,
         "(the option you recommend and why; the last sentence names the condition that makes another option right)",
         `## ${SECTION.assumptions[0]}  (one premise per bullet)`,
-        `## ${SECTION.diagram[0]}  (Mermaid; for anything not reversible, or scope machine / external)`,
+        `## ${SECTION.diagram[0]}  (Mermaid, or one line "No diagram: <your reason>" under Options; for anything not reversible, or scope machine / external)`,
         `## ${SECTION.checked[0]}  (commands run and files read; evidence as [^1]: ... cited from the body; not needed for reversible + file)`,
       ];
   return "```\n" + body.join("\n") + "\n```";
@@ -1234,6 +1261,49 @@ export function handoffReason(kind: "answer_question" | "approve_plan", agent: s
     tagged(`The human has not answered yet; the question stays open in ukagai. ${call} to keep waiting for the answer. Do not ask in prose and do not change the question.`),
     agent,
   );
+}
+
+/** One-line counterparts of the deny reasons (the Claude Code red line); the reasons themselves become the hook context */
+function fixesLine(head: string, codes: string[]): string {
+  const n = codes.length;
+  const base = `${head} needs ${n} fix${n === 1 ? "" : "es"}`;
+  const full = denyLine(`${base}: ${codes.join(", ")}`);
+  if (full.length <= DENY_LINE_MAX) return full;
+  // Truncate the code list with an ellipsis so the line stays one terminal line
+  let list = codes.join(", ");
+  while (list.length > 0) {
+    list = list.slice(0, -1);
+    const line = denyLine(`${base}: ${list.trimEnd()}…`);
+    if (line.length <= DENY_LINE_MAX) return line;
+  }
+  return denyLine(base);
+}
+
+/** The red line of a question denied for its explanation: no file (`used`: an earlier ask consumed it), or a file that needs fixes */
+export function explainDenyLine(p: { codes: string[]; planFile?: string; used?: boolean }): string {
+  const plan = p.planFile !== undefined;
+  if (p.codes.length === 1 && p.codes[0] === "file") {
+    if (plan) return denyLine("Question not shown to the human yet: the plan file has no explanation block for it");
+    return denyLine(
+      p.used ? "Question not shown to the human yet: its explanation file was used by the earlier ask" : "Question not shown to the human yet: it has no explanation file",
+    );
+  }
+  return fixesLine(plan ? "Question not shown to the human yet: its explanation block in the plan file" : "Question not shown to the human yet: its explanation file", p.codes);
+}
+
+/** The red line of an ExitPlanMode denied for a missing "Scope and reversibility" section */
+export function planDenyLine(): string {
+  return denyLine('Plan not shown to the human yet: it needs a "Scope and reversibility" section');
+}
+
+/** The red line of a call with several questions */
+export function multiDenyLine(count: number): string {
+  return denyLine(`Questions not shown to the human yet: ask one per call (this call had ${count})`);
+}
+
+/** The red line of the hand-off deny */
+export function handoffLine(kind: "answer_question" | "approve_plan"): string {
+  return denyLine(`Still waiting for the human in ukagai: call ${kind === "approve_plan" ? "ExitPlanMode" : "AskUserQuestion"} again, unchanged`);
 }
 
 function composeReason(template: DenyTemplate, p: DenyParams, missingText: string, withTail: boolean): string {

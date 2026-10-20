@@ -42,15 +42,16 @@ test("stop: deny with the reason (+ text when given)", async () => {
   await withServer(ins("stop", ""), async (f, d) => {
     const out = JSON.parse((await runHook(args(f, d), input("Edit"))).stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
+    assert.equal(out.permissionDecisionReason, "[ukagai, not a failure] The human read your progress recap and asked you to stop (see hook context).");
     assert.equal(
-      out.permissionDecisionReason,
+      out.additionalContext,
       "[ukagai] The human read your progress recap and asked you to stop. Do not run more tools: write a short status (done / in progress / next) and end your turn.",
     );
   });
   await withServer(ins("stop", "wait for review"), async (f, d) => {
     const out = JSON.parse((await runHook(args(f, d), input("Write"))).stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.match(out.permissionDecisionReason, /asked you to stop\..*\nThe human adds: wait for review$/s);
+    assert.match(out.additionalContext, /asked you to stop\..*\nThe human adds: wait for review$/s);
   });
 });
 

@@ -44,6 +44,9 @@ test("fixture: stdout passes the allow / deny schema and mix-ups are rejected", 
   assert.ok(PreToolUseAllow.safeParse(fx("t1-stdout.json")).success);
   assert.ok(PreToolUseAllow.safeParse(fx("t5-stdout.json")).success);
   assert.ok(PreToolUseDeny.safeParse(fx("t4-stdout.json")).success);
+  const t6 = PreToolUseDeny.safeParse(fx("t6-stdout.json"));
+  assert.ok(t6.success);
+  assert.match(t6.data.hookSpecificOutput.additionalContext ?? "", /^\[ukagai/);
   assert.ok(!PreToolUseDeny.safeParse(fx("t1-stdout.json")).success);
   assert.ok(!PreToolUseAllow.safeParse(fx("t4-stdout.json")).success);
 });

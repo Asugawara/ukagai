@@ -1,5 +1,6 @@
 import { PLAN_INSTRUCT_PREFIX } from "../contract.js";
 import type { Client } from "./client.js";
+import { denyLine, denyOutput } from "./deny.js";
 
 /** The common path is a single 404; the hook as a whole must stay well under a second */
 export const CHECKPOINT_TIMEOUT_MS = 700;
@@ -42,13 +43,10 @@ export async function checkpointInstruction(
   if (!ins) return ask ? ASK_OUTPUT : null;
   const text = ins.text.trim();
   if (ins.kind === "stop") {
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: text === "" ? STOP_REASON : `${STOP_REASON}\nThe human adds: ${text}`,
-      },
-    };
+    return denyOutput({
+      line: denyLine("The human read your progress recap and asked you to stop"),
+      context: text === "" ? STOP_REASON : `${STOP_REASON}\nThe human adds: ${text}`,
+    });
   }
   if (text === "") return ask ? ASK_OUTPUT : null;
   const lead = ins.about === "plan" ? PLAN_INSTRUCT_PREFIX : "[ukagai] The human read your progress recap and says:";

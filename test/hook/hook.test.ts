@@ -121,8 +121,9 @@ test("--budget 30 (default poll timeout) hands off without polling: deny asking 
     assert.equal(r.code, 0);
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
+    assert.equal(out.permissionDecisionReason, "[ukagai, not a failure] Still waiting for the human in ukagai: call AskUserQuestion again, unchanged (see hook context).");
     assert.equal(
-      out.permissionDecisionReason,
+      out.additionalContext,
       "[ukagai, not a failure] The human has not answered yet; the question stays open in ukagai. Call AskUserQuestion again now with exactly the same question and options to keep waiting for the answer. Do not ask in prose and do not change the question.",
     );
     assert.ok(!f.calls.some((c) => c.path.includes("/wait")));
@@ -159,7 +160,7 @@ test("handoff of an ExitPlanMode names ExitPlanMode", async () => {
   const input = { ...t1(tmpDir()), tool_name: "ExitPlanMode", tool_input: { plan, planFilePath: "/x/plan.md" }, permission_mode: "plan" };
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d, "--budget", "30"), JSON.stringify(input));
-    const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
+    const reason = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     assert.match(reason, /Call ExitPlanMode again now with the same plan to keep waiting/);
     assert.ok(f.calls.some((c) => c.path.endsWith("/handoff")));
   });
@@ -248,8 +249,8 @@ test("no explanation file → deny (absolute save path and verbatim question) an
     assert.equal(r.code, 0);
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.ok(out.permissionDecisionReason.includes(join(sp, "ukagai", "explain.md")));
-    assert.ok(out.permissionDecisionReason.includes(Q));
+    assert.ok(out.additionalContext.includes(join(sp, "ukagai", "explain.md")));
+    assert.ok(out.additionalContext.includes(Q));
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.status, "denied_explain");
     assert.deepEqual(create?.body.missing, ["file"]);
@@ -262,7 +263,7 @@ test("malformed explanation → the deny reason names the missing items", async 
   writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q).replace(/\| B .*\n/, ""));
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
-    const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
+    const reason = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     assert.match(reason, /options table/);
   });
   assert.ok(existsSync(join(sp, "ukagai", "e.md")), "a defective file is not renamed");
@@ -272,7 +273,7 @@ test("--deny-template B gives the variant B wording", async () => {
   const sp = tmpDir();
   await withServer(() => false, async (f, d) => {
     const r = await runHook(args(f, d, "--deny-template", "B"), JSON.stringify(t1(sp)));
-    assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /Could you write/);
+    assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /Could you write/);
   });
 });
 
@@ -372,7 +373,7 @@ test("plan mode + plan file without a block → deny with the plan-mode text and
     const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    const reason: string = out.permissionDecisionReason;
+    const reason: string = out.additionalContext;
     assert.ok(reason.includes(e.planPath));
     assert.match(reason, /In plan mode the explanation goes into your plan file/);
     assert.ok(reason.includes(BLOCK_OPEN) && reason.includes(BLOCK_CLOSE));
@@ -410,10 +411,10 @@ test("plan mode + invalid block (no Options table) → deny names the missing it
     const r = await runHook(args(f, d), JSON.stringify(planInput(e)), e.home);
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.match(out.permissionDecisionReason, /In plan mode the explanation goes into your plan file/);
+    assert.match(out.additionalContext, /In plan mode the explanation goes into your plan file/);
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.ok(create?.body.missing.includes("table"));
-    assert.match(out.permissionDecisionReason, /Missing: [^.]*(table|Options)/i);
+    assert.match(out.additionalContext, /Missing: [^.]*(table|Options)/i);
   });
 });
 
@@ -528,7 +529,7 @@ test("T5 real fixture (no scope section): denied the first time; the second (wit
     const r = await runHook(args(f, d), JSON.stringify(input));
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.match(out.permissionDecisionReason, /Scope and reversibility/);
+    assert.match(out.additionalContext, /Scope and reversibility/);
     assert.equal(f.calls.find((c) => c.method === "POST")?.body.status, "denied_explain");
   });
   const h: Handler = (req, res) =>
@@ -552,15 +553,17 @@ test("ExitPlanMode rejection → deny + reason; approval with set_mode_auto is a
     const r = await runHook(args(f, d), JSON.stringify(planWith(GOOD_PLAN)));
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.equal(out.permissionDecisionReason, "x");
+    assert.equal(out.permissionDecisionReason, "[ukagai, not a failure] The human rejected the plan (see hook context).");
+    assert.equal(out.additionalContext, "[ukagai] The human rejected the plan and wrote: x");
   });
   for (const response of [{ approve: false }, { approve: false, reason: "  " }]) {
     await withServer(h(response), async (f, d) => {
       const r = await runHook(args(f, d), JSON.stringify(planWith(GOOD_PLAN)));
       const out = JSON.parse(r.stdout).hookSpecificOutput;
       assert.equal(out.permissionDecision, "deny");
+      assert.equal(out.permissionDecisionReason, "[ukagai, not a failure] The human rejected the plan (see hook context).");
       assert.equal(
-        out.permissionDecisionReason,
+        out.additionalContext,
         "[ukagai] The human rejected the plan without giving a reason. Revise the plan (look for what a reader would object to) or ask one question about what to change, then call ExitPlanMode again.",
       );
     });
@@ -861,7 +864,7 @@ test("multiple questions → deny even with an explanation file (one question pe
     const r = await runHook(args(f, d), JSON.stringify(multiInput(sp)));
     const out = JSON.parse(r.stdout).hookSpecificOutput;
     assert.equal(out.permissionDecision, "deny");
-    assert.match(out.permissionDecisionReason, /Ask one question per AskUserQuestion call \(this call had 2\)/);
+    assert.match(out.additionalContext, /Ask one question per AskUserQuestion call \(this call had 2\)/);
     const create = f.calls.find((c) => c.method === "POST" && c.path === "/api/decisions");
     assert.equal(create?.body.status, "denied_explain");
     assert.deepEqual(create?.body.missing, ["multi"]);
@@ -919,7 +922,7 @@ async function runWithMemo(md: string, memo: unknown) {
   });
 }
 
-const reasonOf = (out: any): string => out.hookSpecificOutput.permissionDecisionReason;
+const reasonOf = (out: any): string => out.hookSpecificOutput.additionalContext;
 const consumed = (f: Fake) => f.calls.some((c) => c.method === "POST" && c.path.endsWith("/pending-rewrite/consume"));
 const withTerms = (defs: string) => explanationFor(Q).replace("It has to be decided.", "The step must be idempotent.") + defs;
 

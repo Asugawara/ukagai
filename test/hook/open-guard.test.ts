@@ -16,7 +16,8 @@ const denied = async (cmd: string) => {
   assert.equal(r.code, 0);
   const out = JSON.parse(r.stdout).hookSpecificOutput;
   assert.equal(out.permissionDecision, "deny", cmd);
-  assert.equal(out.permissionDecisionReason, OPEN_DENY_REASON);
+  assert.equal(out.permissionDecisionReason, "[ukagai, not a failure] Not opened: the human reads files in ukagai, not in a viewer (see hook context).");
+  assert.equal(out.additionalContext, OPEN_DENY_REASON);
 };
 const passes = async (cmd: string, tool = "Bash") => {
   const r = await runHook(args(), bash(cmd, tool));
