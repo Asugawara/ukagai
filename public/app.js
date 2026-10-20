@@ -2502,7 +2502,7 @@ function softHyphens(root) {
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const escAttr = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const SKIP_RICH = "pre, .term, .term-undef, .optref, .fn, .fn-n, button, .risk-bad, .risk-undo, .num, .cbadge";
+const SKIP_RICH = "pre, svg, .term, .term-undef, .optref, .fn, .fn-n, button, .risk-bad, .risk-undo, .num, .cbadge";
 
 // Wrap every match of the global regex `re` in text nodes under root; make(m) returns the node to put in, or null to leave the text
 function wrapText(root, re, make, skip = SKIP_RICH) {
@@ -2552,7 +2552,7 @@ function undefMarks(root, tokens) {
 // Option labels: a <strong> / <code> that is exactly a label (any length); plain text for labels of 3+ characters
 function optMarks(root, opts) {
   for (const e of root.querySelectorAll("strong, code")) {
-    if (e.closest("pre, .optref")) continue;
+    if (e.closest("pre, svg, .optref")) continue;
     const o = opts.find((x) => sameLabel(x.label, e.textContent ?? ""));
     if (o) { e.classList.add("optref"); e.style.setProperty("--oc", o.color); }
   }
