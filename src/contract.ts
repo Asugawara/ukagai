@@ -132,6 +132,8 @@ export const PreToolUseDeny = z.object({
     hookEventName: z.literal("PreToolUse"),
     permissionDecision: z.literal("deny"),
     permissionDecisionReason: z.string(),
+    /** Claude Code: the full instructions, while the reason is the one red line (Codex: absent, the reason carries them) */
+    additionalContext: z.string().optional(),
   }),
 });
 export type PreToolUseDeny = z.infer<typeof PreToolUseDeny>;

@@ -135,6 +135,24 @@ test("deny texts for Codex say request_user_input, never AskUserQuestion or the 
   assert.ok(reason3.includes("request_user_input") && !reason3.includes("AskUserQuestion"), reason3);
 });
 
+test("Codex keeps the full text as the reason: no explanation file → no additionalContext, hand-off likewise", async () => {
+  const s = await realServer();
+  const input = rui();
+  const r = await runHook(a(s.url, s.dataDir), JSON.stringify(input));
+  const out = JSON.parse(r.stdout).hookSpecificOutput;
+  assert.equal(out.permissionDecision, "deny");
+  assert.ok(out.permissionDecisionReason.startsWith("[ukagai, not a failure] "), out.permissionDecisionReason);
+  assert.ok(out.permissionDecisionReason.includes("request_user_input"));
+  assert.ok(out.permissionDecisionReason.includes("Save to:"));
+  assert.equal("additionalContext" in out, false);
+  const input2 = { ...rui(), session_id: "handoff-session" };
+  writeFile(join(s.dataDir, "explain", input2.session_id, "e.md"), explanationFor(Q));
+  const r2 = await runHook(a(s.url, s.dataDir, "--budget", "30"), JSON.stringify(input2));
+  const out2 = JSON.parse(r2.stdout).hookSpecificOutput;
+  assert.match(out2.permissionDecisionReason, /^\[ukagai, not a failure\] The human has not answered yet/);
+  assert.equal("additionalContext" in out2, false);
+});
+
 test("explanation present + GUI answer through the API → deny whose reason carries `<question> = <answer>`", async () => {
   const s = await realServer();
   const input = rui();

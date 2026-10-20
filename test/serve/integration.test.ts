@@ -211,7 +211,8 @@ test("(handoff) budget end hands off with a deny; the second hook run re-attache
   assert.equal(first.code, 0);
   const deny = JSON.parse(first.stdout).hookSpecificOutput;
   assert.equal(deny.permissionDecision, "deny");
-  assert.match(deny.permissionDecisionReason, /^\[ukagai, not a failure\] The human has not answered yet/);
+  assert.match(deny.permissionDecisionReason, /^\[ukagai, not a failure\] Still waiting/);
+  assert.match(deny.additionalContext, /The human has not answered yet/);
   const pending = (await (await call(env, "/api/decisions?status=pending")).json()) as any[];
   assert.equal(pending.length, 1);
   const id = pending[0].id;

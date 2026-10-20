@@ -1,0 +1,8 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "[ukagai, not a failure] Question not shown to the human yet: it has no explanation file (see hook context).",
+    "additionalContext": "[ukagai, not a failure] First read skill ukagai-explain (if you have not). Before AskUserQuestion, write an explanation file the human can decide from. Missing: the explanation file itself."
+  }
+}

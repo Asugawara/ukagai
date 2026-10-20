@@ -506,7 +506,7 @@ The body is `{"error":"<short description>"}`.
 |---|---|
 | Answer (allow) | `test/fixtures/t1-stdout.json`. `updatedInput` is `tool_input` plus `answers` |
 | Plan approval (allow) | `test/fixtures/t5-stdout.json`. `updatedInput` is `tool_input` as is |
-| deny | `test/fixtures/t4-stdout.json`. The reason is in `permissionDecisionReason` |
+| deny | `test/fixtures/t6-stdout.json`. Claude Code: a one-line `permissionDecisionReason` (the red line the human sees) and the full instructions in `additionalContext`. Codex: the full text in `permissionDecisionReason` only |
 | Approve and switch to auto (PermissionRequest) | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":[{"type":"setMode","mode":"auto","destination":"session"}]}}}` |
 | SessionStart / SubagentStart | `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}` |
 | Answer in the terminal / cannot connect / budget exhausted | No output, exit 0 |

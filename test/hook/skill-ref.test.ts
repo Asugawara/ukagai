@@ -228,7 +228,8 @@ const codexRui = () =>
     .filter((l) => l.startsWith("{") && l.includes('"hook_event_name"'))
     .map((l) => JSON.parse(l))
     .find((e) => e.hook_event_name === "PreToolUse");
-const reasonOf = (stdout: string): string => JSON.parse(stdout).hookSpecificOutput.permissionDecisionReason;
+/** Claude: the full text is the hook context. Codex keeps it as the reason (`codex: true`) */
+const reasonOf = (stdout: string, codex = false): string => JSON.parse(stdout).hookSpecificOutput[codex ? "permissionDecisionReason" : "additionalContext"];
 
 async function denyRun(input: unknown, d: string, ...extra: string[]) {
   const f = await fakeServer();
@@ -270,7 +271,7 @@ test("hook deny (Codex): the reason names <data-dir>/skill/SKILL.md once, says r
   const d = dataWithSkill("# mine\n");
   const { r } = await denyRun(codexRui(), d, "--agent", "codex");
   assert.equal(r.code, 0);
-  const reason = reasonOf(r.stdout);
+  const reason = reasonOf(r.stdout, true);
   assert.equal(reason.split(join(d, "skill", "SKILL.md")).length - 1, 1, reason);
   assert.ok(reason.includes("request_user_input"));
   assert.ok(!reason.includes("AskUserQuestion"));
