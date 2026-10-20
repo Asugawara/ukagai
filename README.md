@@ -47,6 +47,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 - **Plan approval**: approve (and continue in auto mode), instruct ("do this first") or reject. [Guide](docs/guide.md#plan-approval)
 - **Progress checkpoints**: answer the agent's session recap with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
 - **TUI**: the same screen in the terminal, `ukagai tui`. [Guide](docs/guide.md#the-tui)
+- **Answers as messages**: in an interactive Claude Code terminal the agent ends its turn instead of waiting, and your answer arrives as a message once it is idle (on by default, three ways to turn it off). [Guide](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **Codex CLI**: hooks plus a bridge for plan approval. [Guide](docs/guide.md#codex-cli)
 - **Settings page**: language, theme, notifications, plan auto-show, and the skill text the agent follows. [Guide](docs/guide.md#settings)
 - **Rich Markdown**: callouts, Mermaid, diffs, task lists and more in explanations and plans. [Guide](docs/guide.md#rich-markdown)
@@ -59,7 +60,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 
 ## Install options
 
-`install.sh` installs the binary and then runs `ukagai install`, which registers the hooks and the skill for every agent it finds (and backs up your settings first). `wget` works too.
+`install.sh` installs the binary and then runs `ukagai install`, which registers the hooks and the skill for every agent it finds (and backs up your settings first). For Claude Code it also places the ukagai mod as a small plugin of its own at `~/.claude/skills/ukagai-mod/` (skipped when the ukagai plugin is enabled, which brings the mod itself). `wget` works too.
 
 An agent counts as found when:
 
@@ -89,7 +90,7 @@ The old `--lang`, `--codex` and `--claude` are ignored with a warning, and `ukag
 
 A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. If you also ran `install.sh`, `ukagai install` removes its own registration so the hooks run once.
 
-**Update**: run the install command again. It re-registers only the agents that are already registered, and keeps their options (`--timeout`, `--observe`, `--no-autostart`, `--server`, `--data-dir`); to put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. A running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first) removes the hooks and the skill from both Claude Code and Codex CLI (`--claude` or `--codex` picks one) and stops the server once no hooks remain (if one agent fails, the other is still removed, the command exits 1 and the server is left running), then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
+**Update**: run the install command again. It re-registers only the agents that are already registered, and keeps their options (`--timeout`, `--observe`, `--no-autostart`, `--server`, `--data-dir`); to put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. A running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first) removes the hooks, the skill and the ukagai mod from both Claude Code and Codex CLI (`--claude` or `--codex` picks one) and stops the server once no hooks remain (if one agent fails, the other is still removed, the command exits 1 and the server is left running), then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
 
 Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troubleshooting)).
 

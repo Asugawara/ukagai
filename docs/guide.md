@@ -138,6 +138,18 @@ When the agent calls `AskUserQuestion` or `ExitPlanMode`, the `PreToolUse` hook 
 
 The hook waits in one-hour legs: at the end of a leg it asks the agent to call the tool again and re-attaches to the same open question, so the question never falls back to the terminal while the server is up. If the server is unreachable, the hook prints nothing and Claude Code falls back to its normal prompt (a failed wait is retried for up to 120 seconds first).
 
+### Answers as messages (the ukagai mod)
+
+In an interactive Claude Code terminal (2.1.304 or later) ukagai can stop making the agent wait. The hook registers the decision and tells the agent to end its turn; your answer then arrives as a message that starts with `[ukagai]`, sent by the ukagai mod once the agent is idle. The card shows "Will reach the agent as a message when it is idle" and then "Delivered as a message". It is on by default. Everywhere else (`claude -p`, the Agent SDK, Desktop, the VS Code chat, subagents, Codex, a managed policy that blocks mods) the hook waits as described above.
+
+The mod is a small plugin that carries no hooks. With the marketplace plugin it comes with `ukagai@ukagai`; with `install.sh` / `ukagai install` it is placed at `~/.claude/skills/ukagai-mod/` (Claude Code loads it every session as `ukagai-mod@skills-dir`; `ukagai uninstall` removes it and `ukagai doctor` reports it). Three ways to turn it off:
+
+- the toggle on the Settings page (takes effect for the next decision, no restart);
+- `UKAGAI_MOD=0` in the environment of `claude` (the mod does nothing in that process);
+- `claude plugin disable ukagai-mod@skills-dir`.
+
+`UKAGAI_DISABLE=1` stops both the hook and the mod.
+
 Every abnormal exit (and each retry) is recorded as one JSON line in `<data-dir>/hook.log` (ids, status and error text only, never the question or answer; rotated at 1 MB; the last 3 lines are shown by `doctor`).
 
 ## Troubleshooting
