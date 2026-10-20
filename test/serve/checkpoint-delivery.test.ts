@@ -433,3 +433,34 @@ test("Codex: a Stop event after a Codex answer does not offer the instruction (s
   assert.deepEqual(offered, []);
   assert.deepEqual(env.term.typed, []);
 });
+
+test("a live mod polls the session: the reply goes to its inbox, nothing is typed, the ack marks it delivered via message", async () => {
+  const env = await setup();
+  const owner = "0123456789abcdef";
+  const inbox = (action: string, body: object) => api(env, `/api/sessions/sess-1/inbox/${action}`, body);
+  assert.equal((await inbox("poll", { owner, idle: false })).status, 204);
+  await event(env, "Stop");
+  const d = await checkpoint(env);
+  await answer(env, d, { kind: "instruct", text: "run the e2e first\nthen the lint" });
+  await sleep(150);
+  assert.equal(env.term.typed.length, 0, "herdr is not touched");
+  assert.equal((await api(env, "/api/sessions/sess-1/instruction")).status, 404, "not left for the hook");
+  const polled = (await (await inbox("poll", { owner, idle: true })).json()) as { item: { item_id: string; text: string } };
+  assert.match(polled.item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) \[ukagai\] Reply to your progress recap: run the e2e first\nthen the lint$/);
+  assert.equal((await inbox("ack", { owner, item_id: polled.item.item_id })).status, 200);
+  const got = await get(env, d.id);
+  assert.equal(got.response?.delivered_via, "message");
+  assert.ok(got.response?.delivered_at);
+});
+
+test("a plan instruction with a live mod answers delivered_via message and is not typed", async () => {
+  const env = await setup();
+  const owner = "0123456789abcdef";
+  await api(env, "/api/sessions/sess-1/inbox/poll", { owner, idle: false });
+  await event(env, "Stop");
+  const r = await api(env, "/api/sessions/sess-1/inbox/poll", { owner, idle: true });
+  assert.equal(r.status, 204);
+  assert.equal(env.h.store.hasLiveMod("sess-1"), true);
+  assert.equal(await env.h.store.queuePlanInstruction("sess-1", "split step 2"), "message");
+  assert.equal(env.term.typed.length, 0);
+});

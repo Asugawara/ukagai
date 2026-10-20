@@ -39,7 +39,7 @@ import {
   type SessionState,
   type SessionSummary,
 } from "../contract.js";
-import { deliveryText } from "./delivery-text.js";
+import { deliveryText, instructionText } from "./delivery-text.js";
 import { transcriptHasDelivery } from "./history.js";
 import type { SseEventName } from "./sse.js";
 
@@ -69,6 +69,18 @@ export type StoreOptions = {
   messageDelivery?: () => boolean;
   /** The clock of the message-delivery rules (default Date.now; tests drive it) */
   now?: () => number;
+};
+
+/** An instruction in the mod's inbox (the text is built from `source` when it is claimed) */
+type MessageInstruction = {
+  /** Its ref (the first characters) leads the delivery text */
+  id: string;
+  session_id: string;
+  transcript_path: string | undefined;
+  source: Instruction;
+  created_at: string;
+  claim?: { owner: string; at: string; offset: number };
+  attempts: number;
 };
 
 /** What an inbox request answers: the HTTP status and, for 200 / 409, the decision's status */
@@ -168,6 +180,8 @@ export class Store {
   private ownerSeen = new Map<string, number>();
   /** session -> when its SessionEnd arrived (epoch ms): its message-delivery decisions close unless a mod keeps polling it */
   private endMarks = new Map<string, number>();
+  /** Instructions (a checkpoint reply, a plan instruction) handed to a live mod instead of the hook / the terminal: item id -> item, one per session */
+  private messageInstructions = new Map<string, MessageInstruction>();
 
   // Aggregates rebuilt from events
   private escapedQuestions = 0;
@@ -499,6 +513,7 @@ export class Store {
         : { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
       : { decision_id: "", kind: "instruct", text, created_at, about: "plan" };
     this.instructions.set(sessionId, ins);
+    if (this.sessions.get(sessionId)?.state === "idle" && !this.hasOpenAsync(sessionId) && this.offerToMod(sessionId)) return "message";
     if (this.sessions.get(sessionId)?.state !== "idle" || !this.deliverPlanInstruction || this.hasOpenAsync(sessionId)) return "hook";
     try {
       return (await this.deliverPlanInstruction(sessionId, ins)) ? "terminal" : "hook";
@@ -670,7 +685,7 @@ export class Store {
     this.emit("decision.updated", d);
     try {
       this.onCheckpointAnswered?.(d);
-      if (claude && patch.answer === "instruct" && this.sessions.get(d.session.session_id)?.state === "idle" && !this.hasOpenAsync(d.session.session_id)) this.onCheckpointDeliverable?.(d);
+      if (claude && patch.answer === "instruct" && this.sessions.get(d.session.session_id)?.state === "idle" && !this.hasOpenAsync(d.session.session_id) && !this.offerToMod(d.session.session_id)) this.onCheckpointDeliverable?.(d);
     } catch {
       // A subscriber must not break the answer
     }
@@ -922,6 +937,7 @@ export class Store {
   /** The session ended: its pending checkpoints and the instruction nobody can receive any more are dropped */
   private endCheckpoints(sessionId: string, live: boolean): void {
     this.instructions.delete(sessionId);
+    this.dropMessageInstructions(sessionId);
     this.wakeupTurns.delete(sessionId);
     this.stoppedSessions.delete(sessionId);
     this.modeSwitches.delete(sessionId);
@@ -945,6 +961,8 @@ export class Store {
     if (!ins) return;
     // Typing now would start a turn whose first prompt cancels the question that waits for its answer: the reply stays queued for the next tool call
     if (this.hasOpenAsync(sessionId)) return;
+    // A live mod delivers it as a message; without one it is typed into the terminal below
+    if (this.offerToMod(sessionId)) return;
     // A plan instruction has no decision behind it: type it now that the agent is idle
     if (ins.about === "plan" && ins.decision_id === "") {
       void Promise.resolve(this.deliverPlanInstruction?.(sessionId, ins)).catch(() => {});
@@ -1198,12 +1216,14 @@ export class Store {
     const open = this.asyncOf(sessionId).filter((d) => d.status === "answer_submitted");
     const held = open.find((d) => d.claim?.owner === owner);
     if (held) return { held: { item_id: held.id } };
+    const heldInstruction = this.heldInstruction(sessionId, owner);
+    if (heldInstruction) return { held: { item_id: heldInstruction } };
     if (!idle) return undefined;
     // Its own items first-come by age; the items of an owner that is gone (a reload) are taken over
     const next = open.find(
       (d) => !d.claim && !d.close_reason && (d.delivery_attempts ?? 0) < DELIVERY_MAX_ATTEMPTS && (d.mod_owner === owner || !this.ownerAlive(sessionId, d.mod_owner, now)),
     );
-    if (!next) return undefined;
+    if (!next) return open.length === 0 ? this.pollInstruction(sessionId, owner, now) : undefined;
     next.mod_owner = owner;
     next.claim = { owner, at: new Date(now).toISOString(), offset: this.transcriptSize(next) };
     this.persist(next);
@@ -1214,6 +1234,7 @@ export class Store {
   /** The mod's `$.prompt.submit` succeeded: the answer is delivered (idempotent) */
   inboxAck(sessionId: string, owner: string, itemId: string): InboxResult {
     this.markSeen(sessionId, owner);
+    if (this.messageInstructions.has(itemId)) return this.ackInstruction(sessionId, owner, itemId);
     const d = this.inboxItem(sessionId, itemId);
     if (!d) return { http: 404 };
     if (d.delivery !== "message") return { http: 409, status: d.status };
@@ -1227,6 +1248,7 @@ export class Store {
   /** The mod could not submit: `drop` is the reason `$.prompt.submit` gave (absent when it threw) */
   inboxRelease(sessionId: string, owner: string, itemId: string, drop?: string): InboxResult {
     this.markSeen(sessionId, owner);
+    if (this.messageInstructions.has(itemId)) return this.releaseInstruction(sessionId, owner, itemId, drop);
     const d = this.inboxItem(sessionId, itemId);
     if (!d) return { http: 404 };
     if (d.delivery !== "message") return { http: 409, status: d.status };
@@ -1259,6 +1281,107 @@ export class Store {
       }
     }
     return { http: 200, status: d.status };
+  }
+
+  // ---- Message delivery of instructions (a checkpoint reply, a plan instruction): no decision is waiting, so no decision carries the state ----
+
+  /** A mod polled the session lately and the message-delivery switch is on: an instruction can go to it instead of the terminal */
+  hasLiveMod(sessionId: string): boolean {
+    if (this.opts.messageDelivery && !this.opts.messageDelivery()) return false;
+    return this.liveOwner(sessionId, MOD_FRESH_MS, this.clock());
+  }
+
+  /** Moves the session's queued instruction (not a stop) to the mod's inbox. True when it went; false leaves the queue as it was */
+  offerToMod(sessionId: string): boolean {
+    const ins = this.instructions.get(sessionId);
+    if (!ins || ins.kind !== "instruct" || !this.hasLiveMod(sessionId)) return false;
+    const d = ins.decision_id ? this.decisions.get(ins.decision_id) : undefined;
+    if (d?.session.agent === "codex") return false;
+    const transcript_path = d?.session.transcript_path ?? this.sessions.get(sessionId)?.transcript_path;
+    this.instructions.delete(sessionId);
+    this.dropMessageInstructions(sessionId); // one per session, newest wins
+    const id = randomUUID();
+    this.messageInstructions.set(id, { id, session_id: sessionId, transcript_path, source: ins, created_at: ins.created_at, attempts: 0 });
+    return true;
+  }
+
+  private dropMessageInstructions(sessionId: string): void {
+    for (const [id, m] of this.messageInstructions) if (m.session_id === sessionId) this.messageInstructions.delete(id);
+  }
+
+  private instructionTranscriptHas(m: MessageInstruction, offset: number): boolean {
+    return m.transcript_path !== undefined && transcriptHasDelivery(m.transcript_path, offset, deliveryRef(m.id));
+  }
+
+  private heldInstruction(sessionId: string, owner: string): string | undefined {
+    for (const m of this.messageInstructions.values()) if (m.session_id === sessionId && m.claim?.owner === owner) return m.id;
+    return undefined;
+  }
+
+  /** The delivery is over: the checkpoint it answers (if any) is marked delivered */
+  private completeInstruction(m: MessageInstruction): void {
+    this.messageInstructions.delete(m.id);
+    if (m.source.decision_id) this.markDelivered(m.source.decision_id, "message");
+  }
+
+  /** Given up (too many drops, or too old): the hook gets it at the next tool call, unless a newer instruction took its place */
+  private requeueInstructionFromMod(m: MessageInstruction): void {
+    this.messageInstructions.delete(m.id);
+    this.requeueInstruction(m.session_id, m.source);
+  }
+
+  private pollInstruction(sessionId: string, owner: string, now: number): PollResponse | undefined {
+    for (const m of [...this.messageInstructions.values()]) {
+      if (m.session_id !== sessionId) continue;
+      if (now - Date.parse(m.created_at) >= CHECKPOINT_TTL_MS) {
+        this.messageInstructions.delete(m.id); // too old to start a turn with
+        continue;
+      }
+      if (m.claim && this.ownerAlive(sessionId, m.claim.owner, now)) continue;
+      if (m.claim && this.instructionTranscriptHas(m, m.claim.offset)) {
+        this.completeInstruction(m); // the gone mod's submit got in
+        continue;
+      }
+      if (this.hasOpenAsync(sessionId)) return undefined;
+      m.claim = { owner, at: new Date(now).toISOString(), offset: m.transcript_path ? this.transcriptSizeOf(m.transcript_path) : 0 };
+      return { item: { item_id: m.id, text: instructionText(m.id, m.source) } };
+    }
+    return undefined;
+  }
+
+  private transcriptSizeOf(path: string): number {
+    try {
+      return statSync(path).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  private ackInstruction(sessionId: string, owner: string, itemId: string): InboxResult {
+    const m = this.messageInstructions.get(itemId);
+    if (!m || m.session_id !== sessionId) return { http: 404 };
+    if (m.claim && m.claim.owner !== owner && this.ownerAlive(sessionId, m.claim.owner, this.clock())) return { http: 409, status: "answer_submitted" };
+    this.completeInstruction(m);
+    return { http: 200, status: "answered" };
+  }
+
+  private releaseInstruction(sessionId: string, owner: string, itemId: string, drop?: string): InboxResult {
+    const m = this.messageInstructions.get(itemId);
+    if (!m || m.session_id !== sessionId) return { http: 404 };
+    if (!m.claim) return { http: 200, status: "answer_submitted" };
+    if (m.claim.owner !== owner && this.ownerAlive(sessionId, m.claim.owner, this.clock())) return { http: 409, status: "answer_submitted" };
+    // Without a drop the submit may still have got in: the transcript says
+    if (drop === undefined && this.instructionTranscriptHas(m, m.claim.offset)) {
+      this.completeInstruction(m);
+      return { http: 200, status: "answered" };
+    }
+    delete m.claim;
+    m.attempts++;
+    if (m.attempts >= DELIVERY_MAX_ATTEMPTS) {
+      this.opts.log?.("instruction_undeliverable", { session: sessionId, item: m.id });
+      this.requeueInstructionFromMod(m);
+    }
+    return { http: 200, status: "answer_submitted" };
   }
 
   // ---- "Approve and auto" ----

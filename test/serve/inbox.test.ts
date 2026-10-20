@@ -625,3 +625,105 @@ test("a decision closed for good no longer suppresses", () => {
   h.store.inboxAck(SID, A, d.id);
   assert.equal(h.store.hasOpenAsync(SID), false);
 });
+
+// ---- instructions (a checkpoint reply, a plan instruction) delivered by the mod ----
+
+/** An idle session with a live mod and an answered checkpoint "instruct" */
+function instructed(h: H, text = "run the e2e first\nthen the lint"): Decision {
+  h.poll(A, false);
+  h.event("Stop");
+  const cp = h.store.create({ tool_use_id: "checkpoint:1", kind: "checkpoint", session: { session_id: SID, cwd: "/w/proj", transcript_path: h.transcript }, request: { recap: "recap", recap_at: "2026-10-04T01:00:00.000Z" } } as never, {}).decision;
+  h.store.submitAnswer(cp.id, { kind: "checkpoint", answer: "instruct", text } as never);
+  return cp;
+}
+
+function instructionItem(h: H): { item_id: string; text: string } {
+  const r = h.poll(A, true);
+  assert.ok(r && "item" in r, "an instruction item");
+  return r.item;
+}
+
+test("instruction: an idle session with a live mod gets the reply as a message (ref + reply prefix, newlines kept), and the hook queue is empty", () => {
+  const h = setup();
+  const cp = instructed(h);
+  assert.equal(h.store.consumeInstruction(SID), undefined, "not left for the hook");
+  assert.equal(h.poll(A, false), undefined, "nothing while the agent works");
+  const item = instructionItem(h);
+  assert.match(item.text, new RegExp(`^\\[ukagai\\] \\(ref ${deliveryRef(item.item_id)}\\) \\[ukagai\\] Reply to your progress recap: run the e2e first\nthen the lint$`));
+  assert.equal(get(h, cp).response?.delivered_at, undefined, "not delivered before the ack");
+  assert.deepEqual(h.poll(A, true), { held: { item_id: item.item_id } });
+  assert.deepEqual(h.store.inboxAck(SID, A, item.item_id), { http: 200, status: "answered" });
+  assert.equal(get(h, cp).response?.delivered_via, "message");
+  assert.ok(get(h, cp).response?.delivered_at);
+  assert.equal(h.poll(A, true), undefined);
+  assert.deepEqual(h.store.inboxAck(SID, A, item.item_id), { http: 404 });
+});
+
+test("instruction: a plan instruction is worded with the plan prefix; a stop is never put in the inbox", async () => {
+  const h = setup();
+  h.poll(A, false);
+  h.event("Stop");
+  assert.equal(await h.store.queuePlanInstruction(SID, "split step 2"), "message");
+  const item = instructionItem(h);
+  assert.match(item.text, /^\[ukagai\] \(ref [0-9a-f]{8}\) \[ukagai\] About the plan you are writing: split step 2$/);
+  h.store.inboxAck(SID, A, item.item_id);
+  assert.equal(h.poll(A, true), undefined);
+
+  const cp = h.store.create({ tool_use_id: "checkpoint:2", kind: "checkpoint", session: { session_id: SID, cwd: "/w/proj", transcript_path: h.transcript }, request: { recap: "r", recap_at: "2026-10-04T02:00:00.000Z" } } as never, {}).decision;
+  h.event("UserPromptSubmit");
+  h.store.submitAnswer(cp.id, { kind: "checkpoint", answer: "stop" } as never);
+  assert.equal(h.poll(A, true), undefined);
+  assert.equal(h.store.consumeInstruction(SID)?.kind, "stop");
+});
+
+test("instruction: without a live mod it stays queued for the hook; a working agent keeps it for the hook too", async () => {
+  const h = setup();
+  h.event("Stop");
+  assert.equal(await h.store.queuePlanInstruction(SID, "a"), "hook", "no mod ever polled");
+  assert.ok(h.store.consumeInstruction(SID));
+  h.poll(A, false);
+  h.advance(MOD_FRESH_MS + 1);
+  assert.equal(await h.store.queuePlanInstruction(SID, "b"), "hook", "the mod was seen too long ago");
+  h.store.consumeInstruction(SID);
+  h.poll(A, false);
+  h.event("UserPromptSubmit");
+  assert.equal(await h.store.queuePlanInstruction(SID, "c"), "hook", "the agent works: the next tool call delivers it");
+  assert.ok(h.store.consumeInstruction(SID));
+});
+
+test("instruction: a release the transcript confirms closes it; the owner's death settles it by the transcript; five drops give it back to the hook", () => {
+  const h = setup();
+  const cp = instructed(h, "go on");
+  const first = instructionItem(h);
+  appendFileSync(h.transcript, JSON.stringify({ type: "user", origin: { kind: "plugin" }, message: { role: "user", content: [{ type: "text", text: `${first.text}` }] } }) + "\n");
+  assert.deepEqual(h.store.inboxRelease(SID, A, first.item_id), { http: 200, status: "answered" });
+  assert.equal(get(h, cp).response?.delivered_via, "message");
+
+  const h2 = setup();
+  const cp2 = instructed(h2, "go on");
+  const item2 = instructionItem(h2);
+  appendFileSync(h2.transcript, JSON.stringify({ type: "user", origin: { kind: "plugin" }, message: { role: "user", content: [{ type: "text", text: item2.text }] } }) + "\n");
+  h2.advance(MOD_CLAIM_STALE_MS + 1);
+  assert.equal(h2.poll(B, true), undefined, "settled by the transcript, not handed out again");
+  assert.equal(get(h2, cp2).response?.delivered_via, "message");
+
+  const h3 = setup();
+  const cp3 = instructed(h3, "go on");
+  for (let i = 0; i < DELIVERY_MAX_ATTEMPTS; i++) {
+    const it = instructionItem(h3);
+    assert.deepEqual(h3.store.inboxRelease(SID, A, it.item_id, "dropped"), { http: 200, status: "answer_submitted" });
+  }
+  assert.equal(h3.poll(A, true), undefined, "given up");
+  assert.equal(h3.store.consumeInstruction(SID)?.decision_id, cp3.id, "back in the hook's queue");
+});
+
+test("instruction: another live owner's claim answers 409; SessionEnd drops the item", () => {
+  const h = setup();
+  instructed(h, "go on");
+  const item = instructionItem(h);
+  h.poll(B, false);
+  assert.deepEqual(h.store.inboxAck(SID, B, item.item_id), { http: 409, status: "answer_submitted" });
+  h.event("SessionEnd");
+  assert.equal(h.poll(A, true), undefined);
+  assert.deepEqual(h.store.inboxAck(SID, A, item.item_id), { http: 404 });
+});

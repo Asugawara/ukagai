@@ -47,6 +47,7 @@ export function startCheckpointDelivery(opts: DeliveryOptions): void {
 
   store.deliverPlanInstruction = async (sid, queued) => {
     if (settings && !settings.get().checkpoints.terminal_delivery) return false;
+    if (store.hasLiveMod(sid)) return false; // the mod delivers it as a message, nothing is typed
     const found = await refreshTerminal(sid);
     if (!found) return false;
     let status = found.status;
@@ -84,6 +85,10 @@ export function startCheckpointDelivery(opts: DeliveryOptions): void {
     const sid = d.session.session_id;
     const text = d.response?.text;
     if (!text) return;
+    if (store.offerToMod(sid) || store.hasLiveMod(sid)) {
+      log("terminal_delivery_skipped", { decision: d.id, reason: "mod" }); // the mod delivers it as a message
+      return;
+    }
     const found = await refreshTerminal(sid);
     if (!found) {
       log("terminal_not_found", { decision: d.id, session: sid });
