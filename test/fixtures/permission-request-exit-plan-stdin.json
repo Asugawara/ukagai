@@ -13,12 +13,5 @@
   "tool_input": {
     "plan": "# Plan: create the T5 verification note\n\n## Context\nAs part of keeping verification files in `verification/`, create `verification/t5-note.md` and write a single line.\n\n## Changes\n- New: `/Users/user/dev/ukagai/verification/t5-note.md`\n- Content: `T5 verification note` (one line, trailing newline)\n- `verification/` exists and `t5-note.md` does not (checked with ls). No risk of overwriting.\n\n## Split\nDo not split. Writing one line to one file costs less than spinning up a worker. Routine work (haiku-level).\n\n## Verification\n- Use `Read` to confirm `verification/t5-note.md` contains only the single line `T5 verification note`.\n- Do not commit (not requested).\n\n## Scope and reversibility\nReversibility: reversible\nScope: file\nOne new file. Deleting it undoes it.\n",
     "planFilePath": "/Users/user/.claude/plans/verification-t5-note-md-t5-1-curried-valiant.md"
-  },
-  "permission_suggestions": [
-    {
-      "type": "setMode",
-      "mode": "acceptEdits",
-      "destination": "session"
-    }
-  ]
+  }
 }
