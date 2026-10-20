@@ -426,7 +426,7 @@ test("/api/metrics: (b) baseline, (d) after_deny / plan_mode exclusion, escaped_
   assert.equal(m.a.total, 1);
 });
 
-test("session state and pending-mode-switch", async () => {
+test("session state", async () => {
   const env = await setup();
   const base = { session_id: "sess-1", transcript_path: join(env.home, ".claude", "projects", "p", "s.jsonl"), cwd: "/x" };
   const ev = (name: string) => api(env, "/api/events", { body: { ...base, hook_event_name: name, received_at: new Date().toISOString() } });
@@ -438,42 +438,12 @@ test("session state and pending-mode-switch", async () => {
   assert.equal(await state(), "waiting_decision");
   await ev("Stop");
   assert.equal(await state(), "idle");
-  const pms = () => api(env, "/api/sessions/sess-1/pending-mode-switch").then((r) => r.json()) as Promise<{ pending: boolean }>;
-  assert.equal((await pms()).pending, false);
   const a = await api(env, `/api/decisions/${d.id}/answer`, { body: { approve: true, set_mode_auto: true } });
   assert.equal(a.status, 200);
   await ev("UserPromptSubmit");
   assert.equal(await state(), "working");
-  assert.equal((await pms()).pending, true);
-  const ask = async () => (await (await api(env, "/api/sessions/sess-1/pending-mode-switch/ask", { body: {} })).json()) as { ask: boolean };
-  assert.deepEqual(await ask(), { ask: true });
-  assert.deepEqual(await ask(), { ask: false });
-  assert.equal((await pms()).pending, true);
-  const c1 = await api(env, "/api/sessions/sess-1/pending-mode-switch/consume", { body: {} });
-  assert.deepEqual(await c1.json(), { consumed: true });
-  const c2 = await api(env, "/api/sessions/sess-1/pending-mode-switch/consume", { body: {} });
-  assert.deepEqual(await c2.json(), { consumed: false });
-  assert.equal((await pms()).pending, false);
-  assert.deepEqual(await ask(), { ask: false });
   await ev("SessionEnd");
   assert.equal(await state(), "ended");
-});
-
-test("pending-mode-switch/ask: once per record, false without one, true again after a new approval, needs Bearer and JSON", async () => {
-  const env = await setup();
-  const ask = async () => (await (await api(env, "/api/sessions/sess-1/pending-mode-switch/ask", { body: {} })).json()) as { ask: boolean };
-  assert.deepEqual(await ask(), { ask: false });
-  const approve = async (toolUseId: string) => {
-    const d = await register(env, toolUseId, { kind: "approve_plan", request: { plan: "p", planFilePath: "/x/plan.md" } });
-    assert.equal((await api(env, `/api/decisions/${d.id}/answer`, { body: { approve: true, set_mode_auto: true } })).status, 200);
-  };
-  await approve("toolu_plan_a");
-  assert.deepEqual(await ask(), { ask: true });
-  assert.deepEqual(await ask(), { ask: false });
-  await approve("toolu_plan_b");
-  assert.deepEqual(await ask(), { ask: true });
-  assert.equal((await api(env, "/api/sessions/sess-1/pending-mode-switch/ask", { body: {}, auth: false })).status, 401);
-  assert.equal((await api(env, "/api/sessions/sess-1/pending-mode-switch/ask", { body: {}, contentType: null })).status, 415);
 });
 
 test("decision.created arrives over SSE", async () => {

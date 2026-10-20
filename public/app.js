@@ -639,9 +639,11 @@ function placeToasts() {
 
 const clip = (s, n = 40) => (s.length > n ? s.slice(0, n) + "…" : s);
 const LOST_KEYS = { answer_lost: "lost_answer_lost", hook_disconnected: "lost_hook_disconnected", cancelled: "lost_cancelled", fallback: "lost_fallback" };
-// A decision whose answer comes as a message from the ukagai mod (delivery "message"): its own words for what happened to it
-const MSG_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal"];
-const msgLostKey = (d) => (d.delivery === "message" && (d.status === "answer_lost" || d.status === "cancelled") && MSG_LOST_REASONS.includes(d.status_reason) ? `lost_${d.status_reason}` : null);
+// A decision whose answer comes as a message from the ukagai mod (delivery "message"): its own words for what happened to it.
+// `superseded` only for an answer that was not delivered (a newer plan, or the re-call time limit); a pending plan a newer one replaced is just cancelled
+const MSG_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded"];
+const msgLostKey = (d) =>
+  d.delivery === "message" && (d.status === "answer_lost" || (d.status === "cancelled" && d.status_reason !== "superseded")) && MSG_LOST_REASONS.includes(d.status_reason) ? `lost_${d.status_reason}` : null;
 // When the status of a decision that is not shown changes
 function notifyBackground(prev, d) {
   if (!prev || prev.status === d.status) return;
@@ -1334,7 +1336,7 @@ const STATUS_KEYS = {
 const MSG_STATUS_KEYS = { answer_submitted: "status_message_queued", answered: "status_message_delivered", fallback: "status_fallback_message" };
 // The status line of a decision (null: none). A message-delivery decision says when the answer will reach the agent, and why it is held up
 function statusLine(d) {
-  // Also on a plan that was switched back to the waiting hook (it went through there, without auto)
+  // The plan went through without auto mode: the waiting hook's ack or ExitPlanMode's PostToolUse used its grant without switching
   if (d.delivery_flag === "auto_not_applied") return t("note_auto_not_applied");
   if (d.delivery === "message") {
     const lost = msgLostKey(d);

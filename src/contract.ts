@@ -13,8 +13,6 @@ export const LEASE_GRACE_MS = 10000;
 export const HANDOFF_GRACE_MS = 120000;
 export const DENY_LINK_WINDOW_MS = 120000;
 export const RECENCY_WINDOW_MS = 600000;
-/** How long an "approve and auto" record lasts before it expires */
-export const MODE_SWITCH_TTL_MS = 60 * 60 * 1000;
 /** If UserPromptSubmit / Stop arrives within this time after the lease expires, the decision is cancelled */
 export const CANCEL_WINDOW_MS = 10000;
 /** A checkpoint nobody answered expires after this long */
@@ -38,8 +36,21 @@ export const MOD_GONE_MS = 120_000;
 export const MESSAGE_TTL_MS = 12 * 3600 * 1000;
 /** Drops of a delivery before it is given up */
 export const DELIVERY_MAX_ATTEMPTS = 5;
-/** An approval of a plan registered for message delivery lets the same plan through once, for this long after the human decided */
+/** An approval of a plan lets the same plan through once (a re-called ExitPlanMode, or the PermissionRequest of "approve and auto"), never longer than this after the human decided (the outer bound of the limits below) */
 export const PLAN_GRANT_TTL_MS = 12 * 3600 * 1000;
+/**
+ * A plan approved for message delivery is let through only by a re-call this soon after the approval was delivered (before delivery: after
+ * the human decided). The approval message says "call ExitPlanMode once more" and the agent does at once; a grant left over after that
+ * (the re-call never reached the server, Claude Code's own dialog asked and the human may have said no) must not pass the plan hours later.
+ * An approval still undelivered past it is not delivered any more ("it will be allowed" would be wrong): the plan goes back to the human
+ */
+export const PLAN_GRANT_RECALL_MS = 10 * 60 * 1000;
+/**
+ * An "approve and auto" grant handed to the PermissionRequest of one ExitPlanMode (the PreToolUse printed nothing) lasts this long from then.
+ * That hook runs right after the PreToolUse (its own timeout is 10 s); the slack is for a slow process start under load. A grant it did not
+ * use (the server was out of reach, Claude Code's dialog asked and the human may have said no) must not let the same plan through later
+ */
+export const PLAN_GRANT_HAND_WINDOW_MS = 60 * 1000;
 /** Characters of the decision id in a delivery text's ref */
 export const DELIVERY_REF_LEN = 8;
 /** The mod's identifier of one Claude Code process (`UKAGAI_MOD_OWNER`) */
@@ -396,10 +407,12 @@ export const Decision = z.object({
   delivery_attempts: z.number().int().nonnegative().optional(),
   /** message delivery: the reason of the last drop */
   delivery_note: z.string().optional(),
-  /** message delivery: `no_agent` = no mod has polled the session for MOD_GONE_MS; `auto_not_applied` = the plan was approved with auto mode, but ExitPlanMode went through without ukagai switching the mode */
+  /** `no_agent` (message delivery) = no mod has polled the session for MOD_GONE_MS; `auto_not_applied` = the plan was approved with auto mode, but ExitPlanMode went through without ukagai switching the mode */
   delivery_flag: z.enum(["no_agent", "auto_not_applied"]).optional(),
-  /** message delivery, approve_plan: the approval's one-time pass for the same plan (the grant) was used or revoked */
+  /** approve_plan: the approval's one-time pass for the same plan (the grant) was used or revoked */
   grant_used_at: z.string().optional(),
+  /** approve_plan, "approve and auto": the grant was handed to the PermissionRequest of one ExitPlanMode (once only; PLAN_GRANT_HAND_WINDOW_MS) */
+  grant_handed_at: z.string().optional(),
 });
 export type Decision = z.infer<typeof Decision>;
 
@@ -416,6 +429,13 @@ export const ConsumePlanGrantResponse = z.union([
   z.object({ consumed: z.literal(false) }),
 ]);
 export type ConsumePlanGrantResponse = z.infer<typeof ConsumePlanGrantResponse>;
+/** POST /api/sessions/:id/plan-grant/hand (body: ConsumePlanGrantRequest). `handed: false` = no auto grant, or it was handed before and is now written off */
+export const HandPlanGrantResponse = z.object({ handed: z.boolean() });
+export type HandPlanGrantResponse = z.infer<typeof HandPlanGrantResponse>;
+
+/** POST /api/decisions/:id/ack (the waiting hook). `keep_plan_grant`: an "approve and auto" grant is left to the PermissionRequest of the same ExitPlanMode */
+export const DecisionAckRequest = z.object({ keep_plan_grant: z.literal(true).optional() });
+export type DecisionAckRequest = z.infer<typeof DecisionAckRequest>;
 
 /** Body of a 200 from GET /api/sessions/:id/open: the open decision to re-attach to, or one a live mod is delivering right now */
 export type OpenResponse = { decision: Decision } | { delivering: { decision_id: string } };
@@ -574,20 +594,6 @@ export const Metrics = z.object({
   }),
 });
 export type Metrics = z.infer<typeof Metrics>;
-
-/** GET /api/sessions/:id/pending-mode-switch */
-export const PendingModeSwitch = z.union([
-  z.object({ pending: z.literal(false) }),
-  z.object({ pending: z.literal(true), set_at: z.string(), expires_at: z.string() }),
-]);
-export type PendingModeSwitch = z.infer<typeof PendingModeSwitch>;
-
-/** POST /api/sessions/:id/pending-mode-switch/consume. True if there was an unconsumed record */
-export const ConsumeModeSwitchResponse = z.object({ consumed: z.boolean() });
-export type ConsumeModeSwitchResponse = z.infer<typeof ConsumeModeSwitchResponse>;
-/** True once per record: the checkpoint hook asks the human at most once per approval */
-export const AskModeSwitchResponse = z.object({ ask: z.boolean() });
-export type AskModeSwitchResponse = z.infer<typeof AskModeSwitchResponse>;
 
 // ---- "Cannot answer" ----
 

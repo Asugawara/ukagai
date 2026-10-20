@@ -546,7 +546,7 @@ test("T5 real fixture (no scope section): denied the first time; the second (wit
   });
 });
 
-test("ExitPlanMode rejection → deny + reason; approval with set_mode_auto is allow (the hook does nothing)", async () => {
+test("ExitPlanMode rejection → deny + reason; a plain approval is allow and its ack leaves no grant", async () => {
   const h = (response: object): Handler => (req, res) =>
     req.path.includes("/wait") ? json(res, 200, { response: { via: "gui", decided_at: NOW(), ...response } }) : false;
   await withServer(h({ approve: false, reason: "x" }), async (f, d) => {
@@ -568,10 +568,49 @@ test("ExitPlanMode rejection → deny + reason; approval with set_mode_auto is a
       );
     });
   }
-  await withServer(h({ approve: true, set_mode_auto: true }), async (f, d) => {
+  await withServer(h({ approve: true }), async (f, d) => {
     const r = await runHook(args(f, d), JSON.stringify(planWith(GOOD_PLAN)));
     assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow");
-    assert.equal(f.calls.filter((c) => c.path.includes("pending-mode-switch")).length, 0);
+    assert.deepEqual(f.calls.find((c) => c.path.endsWith("/ack"))?.body, {}, "the server uses the grant up: the allow let the plan through");
+  });
+});
+
+test("ExitPlanMode approve and auto (waiting hook, plan mode): ack with keep_plan_grant, no output; the PermissionRequest switches the mode", async () => {
+  const h: Handler = (req, res) =>
+    req.path.includes("/wait") ? json(res, 200, { response: { via: "gui", approve: true, set_mode_auto: true, decided_at: NOW() } }) : false;
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planWith(GOOD_PLAN)));
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout, "");
+    assert.deepEqual(f.calls.filter((c) => c.path.endsWith("/ack")).map((c) => c.body), [{ keep_plan_grant: true }]);
+    assert.ok(!f.calls.some((c) => c.path.includes("plan-grant/consume")), "the PreToolUse hook never uses the grant itself");
+  });
+});
+
+test("ExitPlanMode approve and auto that no PermissionRequest can take (a subagent, outside plan mode) → allow, and the ack uses the grant up", async () => {
+  const h: Handler = (req, res) =>
+    req.path.includes("/wait") ? json(res, 200, { response: { via: "gui", approve: true, set_mode_auto: true, decided_at: NOW() } }) : false;
+  for (const extra of [{ agent_id: "sub-1", agent_type: "Plan" }, { permission_mode: "default" }]) {
+    await withServer(h, async (f, d) => {
+      const r = await runHook(args(f, d), JSON.stringify({ ...planWith(GOOD_PLAN), ...extra }));
+      assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "allow", JSON.stringify(extra));
+      assert.deepEqual(f.calls.find((c) => c.path.endsWith("/ack"))?.body, {}, JSON.stringify(extra));
+    });
+  }
+});
+
+test("ExitPlanMode approve and auto whose ack fails → no output (Claude Code's dialog asks the human)", async () => {
+  const h: Handler = (req, res) =>
+    req.path.includes("/wait")
+      ? json(res, 200, { response: { via: "gui", approve: true, set_mode_auto: true, decided_at: NOW() } })
+      : req.path.endsWith("/ack")
+        ? json(res, 500, { error: "boom" })
+        : false;
+  await withServer(h, async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(planWith(GOOD_PLAN)));
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout, "");
+    assert.equal(f.calls.filter((c) => c.path.endsWith("/ack")).length, 2, "one retry");
   });
 });
 
@@ -584,44 +623,12 @@ const perm = (extra = {}) => ({
   ...extra,
 });
 
-test("PermissionRequest: pending-mode-switch present → emits setMode auto and consumes it", async () => {
-  const h: Handler = (req, res) =>
-    req.method === "GET" && req.path === "/api/sessions/s1/pending-mode-switch" ? json(res, 200, { pending: true }) : false;
-  await withServer(h, async (f, d) => {
-    const r = await runHook(args(f, d), JSON.stringify(perm()));
-    assert.deepEqual(JSON.parse(r.stdout), {
-      hookSpecificOutput: {
-        hookEventName: "PermissionRequest",
-        decision: { behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }] },
-      },
-    });
-    assert.ok(f.calls.some((c) => c.method === "POST" && c.path === "/api/sessions/s1/pending-mode-switch/consume"));
-  });
-});
-
-for (const tool_name of ["Bash", "WebFetch"]) {
-  test(`PermissionRequest (${tool_name}): pending-mode-switch present → emits setMode auto and consumes it`, async () => {
-    const h: Handler = (req, res) =>
-      req.method === "GET" && req.path === "/api/sessions/s1/pending-mode-switch" ? json(res, 200, { pending: true }) : false;
-    await withServer(h, async (f, d) => {
-      const r = await runHook(args(f, d), JSON.stringify(perm({ tool_name })));
-      assert.deepEqual(JSON.parse(r.stdout), {
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: { behavior: "allow", updatedPermissions: [{ type: "setMode", mode: "auto", destination: "session" }] },
-        },
-      });
-      assert.ok(f.calls.some((c) => c.method === "POST" && c.path === "/api/sessions/s1/pending-mode-switch/consume"));
-    });
-  });
-}
-
-test("PermissionRequest: no pending record → empty for Write, Bash and WebFetch, and nothing is consumed", async () => {
+test("PermissionRequest of a tool other than ExitPlanMode → empty and no request (Claude Code's dialog)", async () => {
   await withServer(() => false, async (f, d) => {
-    for (const tool_name of ["Write", "Bash", "WebFetch"]) {
-      assert.equal((await runHook(args(f, d), JSON.stringify(perm({ tool_name })))).stdout, "");
+    for (const tool_name of ["Write", "Edit", "Bash", "WebFetch"]) {
+      assert.equal((await runHook(args(f, d), JSON.stringify(perm({ tool_name })))).stdout, "", tool_name);
     }
-    assert.ok(!f.calls.some((c) => c.path.endsWith("/consume")));
+    assert.deepEqual(f.calls, []);
   });
 });
 

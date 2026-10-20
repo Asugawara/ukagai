@@ -145,18 +145,50 @@ test("GUI auto note: the flag set after the plan went through (ExitPlanMode's Po
   assert.equal(await notes(), 0);
 });
 
-test("GUI auto note: a plan switched back to the hook's wait (its grant lookup failed) is toasted once, not again on the hook's ack", { skip: HAS_BROWSER ? false : "agent-browser is not installed" }, async () => {
+test("GUI auto note: a plan switched back to the hook's wait is not flagged; an ack that keeps the grant for the PermissionRequest toasts nothing, one that uses it up toasts once", { skip: HAS_BROWSER ? false : "agent-browser is not installed" }, async () => {
+  const kept = await approvedAutoPlan();
+  await recordToasts();
+  // The re-called ExitPlanMode missed the grant: the decision goes back to the long-poll, and "approve and auto" still switches through the PermissionRequest
+  const open = await api(`/api/sessions/${kept.sid}/open?fingerprint=${kept.fingerprint}&tool_use_id=toolu_again_${seq}`);
+  assert.equal(open.status, 200);
+  assert.equal(open.json.decision.delivery_flag, undefined);
+  assert.equal((await api(`/api/decisions/${kept.id}/wait?timeout_ms=1000`)).status, 200);
+  assert.equal((await api(`/api/decisions/${kept.id}/ack`, { keep_plan_grant: true })).status, 200);
+  assert.deepEqual((await api(`/api/sessions/${kept.sid}/plan-grant/consume`, { fingerprint: kept.fingerprint })).json, { consumed: true, mode: "auto" });
+  await sleep(1000);
+  assert.equal((await api(`/api/decisions/${kept.id}`)).json.delivery_flag, undefined);
+  assert.equal(await notes(), 0, "auto mode was switched on");
+
+  // The waiting hook let the plan through itself (a subagent's, or outside plan mode): its ack uses the grant up and flags it, once
+  const used = await approvedAutoPlan();
+  await recordToasts();
+  assert.equal((await api(`/api/sessions/${used.sid}/open?fingerprint=${used.fingerprint}&tool_use_id=toolu_again_${seq}`)).status, 200);
+  assert.equal((await api(`/api/decisions/${used.id}/wait?timeout_ms=1000`)).status, 200);
+  assert.equal((await api(`/api/decisions/${used.id}/ack`, {})).status, 200);
+  assert.equal((await api(`/api/decisions/${used.id}`)).json.delivery_flag, "auto_not_applied");
+  await waitFor("the note toast", `window.__toasts.includes(${JSON.stringify(NOTE)})`);
+  const post = await api("/api/events", { session_id: used.sid, transcript_path: used.transcript, cwd: ROOT, hook_event_name: "PostToolUse", tool_name: "ExitPlanMode", permission_mode: "default", received_at: new Date().toISOString() });
+  assert.equal(post.status, 204);
+  await sleep(1000);
+  assert.equal(await notes(), 1, "once for the same decision");
+});
+
+test("GUI lost note: an approval a newer plan kept from the agent (superseded before delivery) is toasted, not closed silently", { skip: HAS_BROWSER ? false : "agent-browser is not installed" }, async () => {
   const p = await approvedAutoPlan();
   await recordToasts();
-  // The re-called ExitPlanMode missed the grant: the decision goes back to the long-poll, flagged
-  const open = await api(`/api/sessions/${p.sid}/open?fingerprint=${p.fingerprint}&tool_use_id=toolu_again_${seq}`);
-  assert.equal(open.status, 200);
-  assert.equal(open.json.decision.delivery_flag, "auto_not_applied");
-  await waitFor("the note toast", `window.__toasts.includes(${JSON.stringify(NOTE)})`);
-  // The hook takes the approval and acks it: another update of the same flagged decision
-  assert.equal((await api(`/api/decisions/${p.id}/wait?timeout_ms=1000`)).status, 200);
-  assert.equal((await api(`/api/decisions/${p.id}/ack`, {})).status, 200);
-  await sleep(1000);
-  assert.equal((await api(`/api/decisions/${p.id}`)).json.status, "answered");
-  assert.equal(await notes(), 1, "once for the same decision");
+  // The agent's next plan arrives before the mod delivered the approval: the approval closes without delivery
+  const next = (await api("/api/decisions", {
+    tool_use_id: `toolu_auto_note_next_${process.pid}_${seq}`,
+    kind: "approve_plan",
+    session: { session_id: p.sid, cwd: ROOT, transcript_path: p.transcript, permission_mode: "plan" },
+    request: { plan: `${PLAN}\nnewer ${seq}\n`, planFilePath: join(home, ".claude", "plans", `auto-note-next-${seq}.md`) },
+    mod_owner: OWNER,
+  })).json;
+  assert.equal(next.delivery, "message", JSON.stringify(next));
+  const old = (await api(`/api/decisions/${p.id}`)).json;
+  assert.equal(old.status, "answer_lost");
+  assert.equal(old.status_reason, "superseded");
+  const LOST = "your answer was not delivered: a newer plan replaced it, or the time to call the plan again ran out";
+  await waitFor("the lost toast", `window.__toasts.some((x) => x.includes(${JSON.stringify(LOST)}))`);
+  assert.equal(await notes(), 0, "not the auto note");
 });

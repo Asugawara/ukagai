@@ -588,7 +588,7 @@ Cannot answer — <reason>: <detail>
 
 `parseCannotAnswer` (`src/contract.ts`) reads it; an unknown reason is not a Cannot answer.
 
-**Memo.** When the server stores such an answer it keeps one memo per session (a later one overwrites): `{question, reason, terms, body_hash, at}`, where `body_hash` is the SHA-256 of the answered explanation without its front matter (`bodyHash`). The hook reads it with `GET /api/sessions/:id/pending-rewrite` before it checks the next AskUserQuestion explanation (a missing explanation skips it; an unreachable server or a bad body means no memo, so the hook stays fail-open). The memo is held in server memory (lost on restart, like `pending-mode-switch`).
+**Memo.** When the server stores such an answer it keeps one memo per session (a later one overwrites): `{question, reason, terms, body_hash, at}`, where `body_hash` is the SHA-256 of the answered explanation without its front matter (`bodyHash`). The hook reads it with `GET /api/sessions/:id/pending-rewrite` before it checks the next AskUserQuestion explanation (a missing explanation skips it; an unreachable server or a bad body means no memo, so the hook stays fail-open). The memo is held in server memory (lost on restart).
 
 **Enforcement.** With a memo, the hook denies the explanation (the sentences are added to the usual deny reason) when:
 

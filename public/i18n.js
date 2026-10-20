@@ -307,6 +307,7 @@ export const MESSAGES = {
     lost_expired: "{title}: not delivered within 12 hours",
     lost_undeliverable: "{title}: could not be delivered ({note})",
     lost_typed_in_terminal: "{title}: you answered in the terminal, so the GUI answer was not sent",
+    lost_superseded: "{title}: your answer was not delivered: a newer plan replaced it, or the time to call the plan again ran out. The agent's next plan asks you again",
     note_auto_not_applied: "The plan was approved but auto mode was not switched on",
   },
   ja: {
@@ -614,6 +615,7 @@ export const MESSAGES = {
     lost_expired: "{title}: 12 時間以内に届けられませんでした",
     lost_undeliverable: "{title}: 届けられませんでした（{note}）",
     lost_typed_in_terminal: "{title}: 端末で答えたので、GUI の回答は届けていません",
+    lost_superseded: "{title}: 回答は届けていません。新しいプランに置き換わったか、プランを呼び直す期限が過ぎました。エージェントの次のプランで、もう一度聞きます",
     note_auto_not_applied: "承認しましたが auto mode には切り替わりませんでした",
   },
 };

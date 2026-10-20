@@ -371,15 +371,18 @@ export async function handleDecision(
   }
 
   const fingerprint = decisionFingerprint(kind, regInput);
-  // The human approved this very plan while it waited for message delivery: the call goes through once (the grant). "Approve and auto" is
-  // left to the PermissionRequest that follows (only it can switch the mode), so this hook prints nothing for it. Unreachable server: on as before
+  // The human approved this very plan (while it waited for message delivery): the call goes through once (the grant). "Approve and auto" is
+  // handed to the PermissionRequest that follows (only it can switch the mode), so this hook prints nothing for it. The server hands it once:
+  // a grant handed before (its PermissionRequest did not use it) is written off and the plan goes on to the human. Unreachable server: on as before
   if (kind === "approve_plan" && !input.agent_id && "plan" in parsed && parsed.plan.trim() !== "") {
     const grant = await client.getPlanGrant(input.session_id, fingerprint);
     if (grant?.mode === "auto") {
-      lg("plan_grant_auto", { decision_id: grant.decision_id });
-      return null;
-    }
-    if (grant && (await client.consumePlanGrant(input.session_id, fingerprint)).consumed) {
+      if (await client.handPlanGrant(input.session_id, fingerprint)) {
+        lg("plan_grant_auto", { decision_id: grant.decision_id });
+        return null;
+      }
+      lg("plan_grant_not_handed", { decision_id: grant.decision_id });
+    } else if (grant && (await client.consumePlanGrant(input.session_id, fingerprint)).consumed) {
       lg("plan_grant_used", { decision_id: grant.decision_id });
       return allow(toolInput);
     }
@@ -463,22 +466,28 @@ export async function handleDecision(
       }
       failStreakStart = undefined;
       failCount = 0;
-      const out = build(kind, toolInput, r.response);
-      if (!out) {
+      // "Approve and auto" of the main agent's plan in plan mode: only the PermissionRequest of this same ExitPlanMode can switch the mode.
+      // The ack leaves it the grant and this hook prints nothing; without the server that hook prints nothing either, and Claude Code's dialog asks
+      const toPermission =
+        build === buildOutput && kind === "approve_plan" && r.response.approve === true && r.response.set_mode_auto === true &&
+        !input.agent_id && input.permission_mode === "plan" && "plan" in parsed && parsed.plan.trim() !== "";
+      const out = toPermission ? null : build(kind, toolInput, r.response);
+      if (!out && !toPermission) {
         lg("no_answer_output", { decision_id: created.id, message: `via=${r.response.via}` });
         return null;
       }
       // The human's answer is already submitted: one retry before giving up on the ack
-      let acked = await client.ack(created.id);
+      let acked = await client.ack(created.id, toPermission);
       if (!acked) {
         lg("ack_retry", { decision_id: created.id, ...failMsg() });
         await sleep(ACK_RETRY_DELAY_MS);
-        acked = await client.ack(created.id);
+        acked = await client.ack(created.id, toPermission);
       }
       if (!acked) {
         lg("ack_failed", { decision_id: created.id, ...failMsg() });
         return null;
       }
+      if (toPermission) lg("plan_auto_to_permission_request", { decision_id: created.id });
       return out;
     }
   } finally {

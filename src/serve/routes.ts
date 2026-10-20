@@ -10,6 +10,7 @@ import {
   CheckpointRequest,
   AckRequest,
   ConsumePlanGrantRequest,
+  DecisionAckRequest,
   PlanReadRequest,
   PlanInstructRequest,
   PollRequest,
@@ -485,8 +486,9 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ response: d.response });
   });
 
-  app.post("/api/decisions/:id/ack", auth("bearer"), jsonOnly, (c) => {
-    return c.json(store.ack(c.req.param("id")));
+  app.post("/api/decisions/:id/ack", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, DecisionAckRequest);
+    return c.json(store.ack(c.req.param("id"), body.keep_plan_grant === true));
   });
 
   // The hook's budget for this leg ended; the agent is asked to call the tool again and the hook re-attaches (GET /api/sessions/:id/open)
@@ -563,8 +565,8 @@ export function createApp(deps: AppDeps): Hono {
     return inboxReply(c, store.inboxRelease(c.req.param("id"), body.owner, body.item_id, body.drop));
   });
 
-  // A plan the human approved while it was registered for message delivery: the re-called ExitPlanMode with the same plan is let through once
-  // (PreToolUse for a plain approval, PermissionRequest for "approve and auto"). Both need the session and the plan's fingerprint to match
+  // A plan the human approved: the same plan is let through once. For message delivery the re-called ExitPlanMode (PreToolUse for a plain
+  // approval, PermissionRequest for "approve and auto"); for the waiting hook the PermissionRequest of "approve and auto". Both need the session and the plan's fingerprint to match
   app.get("/api/sessions/:id/plan-grant", auth("bearer"), (c) => {
     const fp = ConsumePlanGrantRequest.safeParse({ fingerprint: c.req.query("fingerprint") });
     if (!fp.success) return c.json({ error: "fingerprint is required" }, 400);
@@ -575,17 +577,10 @@ export function createApp(deps: AppDeps): Hono {
     const body = await parse(c, ConsumePlanGrantRequest);
     return c.json(store.consumePlanGrant(c.req.param("id"), body.fingerprint));
   });
-
-  app.get("/api/sessions/:id/pending-mode-switch", auth("bearer"), (c) => {
-    return c.json(store.getModeSwitch(c.req.param("id")));
-  });
-
-  app.post("/api/sessions/:id/pending-mode-switch/consume", auth("bearer"), jsonOnly, (c) => {
-    return c.json({ consumed: store.consumeModeSwitch(c.req.param("id")) });
-  });
-
-  app.post("/api/sessions/:id/pending-mode-switch/ask", auth("bearer"), jsonOnly, (c) => {
-    return c.json({ ask: store.askModeSwitch(c.req.param("id")) });
+  // The PreToolUse leaves an "approve and auto" grant to the PermissionRequest of the same call (once; a second hand writes it off)
+  app.post("/api/sessions/:id/plan-grant/hand", auth("bearer"), jsonOnly, async (c) => {
+    const body = await parse(c, ConsumePlanGrantRequest);
+    return c.json(store.handPlanGrant(c.req.param("id"), body.fingerprint));
   });
 
   app.get("/api/sessions/:id/pending-rewrite", auth("bearer"), (c) => {
