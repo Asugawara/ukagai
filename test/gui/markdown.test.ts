@@ -23,6 +23,7 @@ let token = "";
 let serve: ChildProcess | undefined;
 let base = "";
 let opened = false;
+const projects: string[] = []; // throwaway project directories of the tests
 const session = `ukagai-md-${process.pid}-${Date.now().toString(36)}`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -143,7 +144,7 @@ before(async () => {
 after(async () => {
   if (opened) { try { ab("close"); } catch {} }
   serve?.kill();
-  for (const d of [home, top]) if (d) rmSync(d, { recursive: true, force: true });
+  for (const d of [home, top, ...projects]) if (d) rmSync(d, { recursive: true, force: true });
 });
 
 function gui(name: string, fn: (t: TestContext) => Promise<void>) {
@@ -154,13 +155,13 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   });
 }
 
-async function seedDoc(markdown: string, question: string, file = "ex.md", labels = ["A (Recommended)", "B"]): Promise<{ id: string }> {
+async function seedDoc(markdown: string, question: string, file = "ex.md", labels = ["A (Recommended)", "B"], cwd = ROOT): Promise<{ id: string }> {
   const docPath = join(scratch, "ukagai", file);
   writeFileSync(docPath, markdown);
   const d = await api("/api/decisions", {
     tool_use_id: `toolu_md_${process.pid}_${Date.now()}`,
     kind: "answer_question",
-    session: { session_id: "00000000-0000-0000-0009-000000000001", cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl"), scratchpad_dir: scratch },
+    session: { session_id: "00000000-0000-0000-0009-000000000001", cwd, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl"), scratchpad_dir: scratch },
     request: { questions: [{ question, header: "Store", multiSelect: false, options: labels.map((label) => ({ label, description: label })) }] },
     explanation: { path: docPath, markdown, has: { mermaid: true, table: true, diff: true }, match: "question", attached_via: "first_call" },
   });
@@ -264,6 +265,178 @@ gui("every construct renders (callouts, tasks, details, code, badges, mark, colu
   ev(`document.querySelector("${BG} .fileref").click(), "ok"`);
   await waitFor("copied", `window.__clip.length === 1 && window.__clip[0] === "src/contract.ts:12"`);
   await waitFor("toast", `[...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("Copied"))`);
+});
+
+gui("file refs are short chips (full path in the DOM, title and copy); ▸ opens the numbered lines with the referenced ones marked; the plan drawer has no ▸", async () => {
+  const proj = mkdtempSync(join(tmpdir(), "ukagai-refs-"));
+  projects.push(proj);
+  mkdirSync(join(proj, "src", "deep", "nested", "dir"), { recursive: true });
+  writeFileSync(join(proj, "src", "deep", "nested", "dir", "articles.py"), Array.from({ length: 30 }, (_, i) => `row ${i + 1} = ${i + 1}`).join("\n") + "\n");
+  writeFileSync(join(proj, ".env"), "TOKEN=invented\n");
+  // a file that really exists next to the project: only the containment check can make it "not found"
+  const outside = `ukagai-outside-${process.pid}.txt`;
+  writeFileSync(join(proj, "..", outside), "OUTSIDE=invented\n");
+  projects.push(join(proj, "..", outside));
+  const REF = "src/deep/nested/dir/articles.py";
+  const plan = `# Refs plan\n\n## Context\n\nLook at \`${REF}:12\` first.\n\nThen \`${REF}:12-14\`, \`.env:1\`, \`../${outside}:1\`, and run \`npm test\`.\n`;
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_refs_${process.pid}_${Date.now()}`,
+    kind: "approve_plan",
+    session: { session_id: "00000000-0000-0000-0009-000000000002", cwd: proj, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan, planFilePath: "/p/refs-plan.md" },
+  });
+  assert.ok(d.id, `cannot create decision: ${JSON.stringify(d)}`);
+  void api(`/api/decisions/${d.id}/wait?timeout_ms=60000`).catch(() => {});
+  ab("open", base + "/");
+  await waitFor("chips", `document.querySelectorAll("${BG} code.short").length === 4`, 15000);
+  // short: the closest folder, the name and the line are on screen; the folders above are hidden but stay in the text, the title and the copy
+  assert.equal(ev<string>(`document.querySelector("${BG} code.short").innerText`), "dir/articles.py:12");
+  assert.equal(text(`${BG} code.short`), `${REF}:12`);
+  assert.equal(ev<string>(`document.querySelector("${BG} code.short").title`), `${REF}:12`);
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("${BG} code.short .fr-up")).display`), "none");
+  assert.equal(ev<boolean>(`+getComputedStyle(document.querySelector("${BG} code.short .fr-base")).fontWeight >= 700`), true);
+  assert.equal(count(`${BG} code.short .fr-line`), 4);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("${BG} code")].filter((c) => c.textContent === "npm test").every((c) => !c.classList.contains("cbadge"))`), true);
+  ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; return "ok"; })()`);
+  ev(`document.querySelector("${BG} code.short").click(), "ok"`);
+  await waitFor("copied the full path", `window.__clip.length === 1 && window.__clip[0] === "${REF}:12"`);
+  // ▸: one button per reference with a line, collapsed; it opens the lines under the paragraph and a second click closes them
+  assert.equal(count(`${BG} .fr-toggle`), 4);
+  assert.equal(ev<boolean>(`document.querySelector("${BG} .fr-toggle").getAttribute("aria-expanded") === "false"`), true);
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[0].click(), "ok"`);
+  await waitFor("snippet", `document.querySelectorAll("${BG} .src-snip .src-row").length === 11`);
+  assert.deepEqual(texts(`${BG} .src-snip .src-row.hit .src-n`), ["12"]);
+  assert.equal(text(`${BG} .src-snip .src-row.hit .src-t`), "row 12 = 12");
+  assert.equal(text(`${BG} .src-snip .src-head`), `${REF.slice(0, REF.lastIndexOf("/") + 1)}articles.pyL12`);
+  assert.equal(ev<boolean>(`document.querySelector("${BG} .fr-toggle").getAttribute("aria-expanded") === "true"`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("${BG} .src-row.hit")).backgroundColor !== getComputedStyle(document.querySelector("${BG} .src-row:not(.hit)")).backgroundColor`), true);
+  assert.equal(ev<boolean>(`document.querySelector("${BG} .fr-toggle").closest("p").nextElementSibling.classList.contains("src-snip")`), true);
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[1].click(), "ok"`);
+  await waitFor("range snippet", `document.querySelectorAll("${BG} .src-snip").length === 2 && document.querySelectorAll("${BG} .src-row.hit").length === 4`);
+  assert.equal(text(`${BG} .src-snip:last-of-type .src-head .src-range`) || "", "L12–14");
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[0].click(), "ok"`);
+  await waitFor("closed", `document.querySelectorAll("${BG} .src-snip").length === 1 && document.querySelector("${BG} .fr-toggle").getAttribute("aria-expanded") === "false"`);
+  // a hidden file and a path out of the project are "not found" (no difference between the two)
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[2].click(), document.querySelectorAll("${BG} .fr-toggle")[3].click(), "ok"`);
+  await waitFor("both missing", `document.querySelectorAll("${BG} .src-snip.missing").length === 2`);
+  assert.equal(text(`${BG} .src-snip.missing`), "Not found. The file is outside the project, hidden, secret, binary, too large, or the line is past its end.");
+  assert.equal(ev<boolean>(`document.querySelector("${BG}").textContent.includes("TOKEN=invented") || document.querySelector("${BG}").textContent.includes("OUTSIDE=invented")`), false);
+  ab("set", "media", "light");
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[0].click(), document.querySelector("${BG} .fr-toggle").scrollIntoView({ block: "center" }), "ok"`);
+  await waitFor("snippet again", `document.querySelectorAll("${BG} .src-snip .src-row.hit").length >= 1`);
+  await sleep(300);
+  ab("screenshot", join(SHOTS, "file-ref-snippet.png"));
+  await cancelAll();
+
+  // The plan drawer has no session, so no working directory: the short chip only
+  const name = "refs-drawer.md";
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  await planSession("refs-drawer");
+  writeFileSync(join(home, ".claude", "plans", name), plan);
+  await waitFor("drawer chips", `document.querySelectorAll("${BG} code.short").length === 4`, 8000);
+  assert.equal(ev<string>(`document.querySelector("${BG} code.short").innerText`), "dir/articles.py:12");
+  assert.equal(count(`${BG} .fr-toggle`), 0);
+  rmSync(join(home, ".claude", "plans", name), { force: true });
+});
+
+/** The shared table of what is a file reference (the TUI test reads the same file) */
+const REF_CASES = JSON.parse(readFileSync(new URL("./fixtures/fileref-cases.json", import.meta.url), "utf8")) as { chip: string[]; plain: string[] };
+
+gui("what is a file reference: the table shared with the TUI decides, in an explanation and in a plan", async () => {
+  const list = [...REF_CASES.chip, ...REF_CASES.plain.filter((x) => !x.includes("`"))].map((c) => `- \`${c}\``).join("\n");
+  await seedDoc(`---\nukagai: 1\nquestion: ${QUESTION}\n---\n\n## Why this decision is needed now\n\nThe table:\n\n${list}\n`, QUESTION);
+  ab("open", base + "/");
+  await waitFor("references", `document.querySelectorAll("${BG} li code").length === ${REF_CASES.chip.length + REF_CASES.plain.filter((x) => !x.includes("`")).length}`, 15000);
+  assert.deepEqual(texts(`${BG} li code.fileref`), REF_CASES.chip);
+  assert.deepEqual(texts(`${BG} li code:not(.fileref)`), REF_CASES.plain.filter((x) => !x.includes("`")));
+  await cancelAll();
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_refcases_${process.pid}_${Date.now()}`,
+    kind: "approve_plan",
+    session: { session_id: "00000000-0000-0000-0009-000000000003", cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan: `# Cases\n\n## One\n\n${list}\n`, planFilePath: "/p/cases.md" },
+  });
+  void api(`/api/decisions/${d.id}/wait?timeout_ms=60000`).catch(() => {});
+  ab("open", base + "/");
+  await waitFor("plan references", `document.querySelectorAll("${BG} li code").length === ${REF_CASES.chip.length + REF_CASES.plain.filter((x) => !x.includes("`")).length}`, 15000);
+  assert.deepEqual(texts(`${BG} li code.cbadge`), REF_CASES.chip);
+});
+
+gui("▸ works wherever a reference is shown: What only you know, Assumptions, the Why text; an option card keeps no stray ▸", async () => {
+  const proj = mkdtempSync(join(tmpdir(), "ukagai-refs2-"));
+  projects.push(proj);
+  mkdirSync(join(proj, "src"), { recursive: true });
+  writeFileSync(join(proj, "src", "cache.ts"), Array.from({ length: 30 }, (_, i) => `const row${i + 1} = ${i + 1};`).join("\n") + "\n");
+  const md = `---
+ukagai: 1
+question: ${QUESTION}
+title: Refs everywhere
+recommended: Sqlite
+reversibility: costly
+scope: repo
+---
+
+## Why this decision is needed now
+
+The reader is at \`src/cache.ts:5\` and it needs a schema before the release.
+
+## What only you know
+
+- Whether \`src/cache.ts:12\` is still used by the nightly job
+- If the figure in \`src/cache.ts:20-22\` includes the archive
+
+## Assumptions
+
+- The loop at \`src/cache.ts:8\` stays as it is
+- One process writes at a time
+
+## Options
+
+| Option | What happens if chosen | Risks and how to undo |
+|---|---|---|
+| Sqlite (Recommended) | Replaces \`src/cache.ts:3\` with a table | Revert \`src/cache.ts:3\` |
+| Flat files | Keeps \`src/cache.ts:3\` | Restore from git |
+
+## Recommendation
+
+I recommend **Sqlite** because it is simpler. Another option is right if the nightly job needs files.
+`;
+  const { id: refsId } = await seedDoc(md, QUESTION, "refs2.md", ["Sqlite (Recommended)", "Flat files"], proj);
+  ab("open", base + "/");
+  await waitFor("rendered", `document.querySelectorAll(".fr-toggle").length >= 3`, 15000);
+  // No card (right column) holds a ▸ button or a stray ▸ character
+  assert.equal(count("#decision .fr-toggle"), 0);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("#decision .opt")].every((o) => !o.textContent.includes("▸"))`), true);
+  // Every ▸ on the page opens its own snippet with the referenced lines marked, and closes it again
+  const n = count(".fr-toggle");
+  assert.ok(n >= 3, `${n} buttons`);
+  for (let i = 0; i < n; i++) {
+    ev(`document.querySelectorAll(".fr-toggle")[${i}].click(), "ok"`);
+    await waitFor(`snippet ${i}`, `document.querySelectorAll(".src-snip .src-row.hit").length >= 1 && document.querySelectorAll(".fr-toggle")[${i}].getAttribute("aria-expanded") === "true"`);
+    ev(`document.querySelectorAll(".fr-toggle")[${i}].click(), "ok"`);
+    await waitFor(`closed ${i}`, `document.querySelectorAll(".src-snip").length === 0 && document.querySelectorAll(".fr-toggle")[${i}].getAttribute("aria-expanded") === "false"`);
+  }
+  // The buttons of the unknowns and the assumptions are among them
+  const where = ev<string[]>(`JSON.stringify([...document.querySelectorAll(".fr-toggle")].map((b) => b.closest("li")?.textContent.slice(0, 12) ?? b.closest("p")?.textContent.slice(0, 12) ?? "?"))`);
+  assert.ok(where.some((w) => w.startsWith("Whether")) && where.some((w) => w.startsWith("The loop")), JSON.stringify(where));
+  // The head of a snippet reads as one path
+  ev(`document.querySelectorAll(".fr-toggle")[0].click(), "ok"`);
+  await waitFor("head", `document.querySelector(".src-head .src-path")`);
+  assert.equal(text(".src-head .src-path"), "src/cache.ts");
+  // ▸ is a mouse helper: it is not a tab stop, and Enter after a click on it leaves the snippet alone (Enter belongs to the decision)
+  assert.equal(ev<boolean>(`[...document.querySelectorAll(".fr-toggle")].every((b) => b.tabIndex === -1)`), true);
+  // the chevron is drawn (an svg), not a glyph of the font: no text in the button, and it turns down while the snippet is open
+  assert.equal(ev<boolean>(`[...document.querySelectorAll(".fr-toggle")].every((b) => b.textContent === "" && !!b.querySelector("svg.fr-chev"))`), true);
+  ev(`document.querySelectorAll(".fr-toggle")[0].click(), "ok"`);
+  await waitFor("closed again", `document.querySelectorAll(".src-snip").length === 0`);
+  ab("click", "#background .fr-toggle");
+  await waitFor("opened by a real click", `document.querySelectorAll(".src-snip .src-row.hit").length >= 1`);
+  ab("press", "Enter");
+  // Enter went to the decision (it answers the card under the cursor); the button did not take it as a click that closes the snippet
+  const end = Date.now() + 8000;
+  let status = "pending";
+  while (status === "pending" && Date.now() < end) { await sleep(150); status = ((await api(`/api/decisions/${refsId}`)) as { status: string }).status; }
+  assert.notEqual(status, "pending", "Enter answered the card under the cursor");
 });
 
 gui("Mermaid renders any type: flowchart, sequenceDiagram, pie, and the other listed types do not throw", async () => {
