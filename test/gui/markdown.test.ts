@@ -155,13 +155,13 @@ function gui(name: string, fn: (t: TestContext) => Promise<void>) {
   });
 }
 
-async function seedDoc(markdown: string, question: string, file = "ex.md", labels = ["A (Recommended)", "B"]): Promise<{ id: string }> {
+async function seedDoc(markdown: string, question: string, file = "ex.md", labels = ["A (Recommended)", "B"], cwd = ROOT): Promise<{ id: string }> {
   const docPath = join(scratch, "ukagai", file);
   writeFileSync(docPath, markdown);
   const d = await api("/api/decisions", {
     tool_use_id: `toolu_md_${process.pid}_${Date.now()}`,
     kind: "answer_question",
-    session: { session_id: "00000000-0000-0000-0009-000000000001", cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl"), scratchpad_dir: scratch },
+    session: { session_id: "00000000-0000-0000-0009-000000000001", cwd, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl"), scratchpad_dir: scratch },
     request: { questions: [{ question, header: "Store", multiSelect: false, options: labels.map((label) => ({ label, description: label })) }] },
     explanation: { path: docPath, markdown, has: { mermaid: true, table: true, diff: true }, match: "question", attached_via: "first_call" },
   });
@@ -273,8 +273,12 @@ gui("file refs are short chips (full path in the DOM, title and copy); ▸ opens
   mkdirSync(join(proj, "src", "deep", "nested", "dir"), { recursive: true });
   writeFileSync(join(proj, "src", "deep", "nested", "dir", "articles.py"), Array.from({ length: 30 }, (_, i) => `row ${i + 1} = ${i + 1}`).join("\n") + "\n");
   writeFileSync(join(proj, ".env"), "TOKEN=invented\n");
+  // a file that really exists next to the project: only the containment check can make it "not found"
+  const outside = `ukagai-outside-${process.pid}.txt`;
+  writeFileSync(join(proj, "..", outside), "OUTSIDE=invented\n");
+  projects.push(join(proj, "..", outside));
   const REF = "src/deep/nested/dir/articles.py";
-  const plan = `# Refs plan\n\n## Context\n\nLook at \`${REF}:12\` first.\n\nThen \`${REF}:12-14\`, \`.env:1\`, \`../../etc/hosts:1\`, and run \`npm test\`.\n`;
+  const plan = `# Refs plan\n\n## Context\n\nLook at \`${REF}:12\` first.\n\nThen \`${REF}:12-14\`, \`.env:1\`, \`../${outside}:1\`, and run \`npm test\`.\n`;
   const d = await api("/api/decisions", {
     tool_use_id: `toolu_refs_${process.pid}_${Date.now()}`,
     kind: "approve_plan",
@@ -315,8 +319,8 @@ gui("file refs are short chips (full path in the DOM, title and copy); ▸ opens
   // a hidden file and a path out of the project are "not found" (no difference between the two)
   ev(`document.querySelectorAll("${BG} .fr-toggle")[2].click(), document.querySelectorAll("${BG} .fr-toggle")[3].click(), "ok"`);
   await waitFor("both missing", `document.querySelectorAll("${BG} .src-snip.missing").length === 2`);
-  assert.equal(text(`${BG} .src-snip.missing`), "Not found. The file is outside the project, hidden, or the line is past its end.");
-  assert.equal(ev<boolean>(`document.querySelector("${BG}").textContent.includes("TOKEN=invented")`), false);
+  assert.equal(text(`${BG} .src-snip.missing`), "Not found. The file is outside the project, hidden, secret, binary, too large, or the line is past its end.");
+  assert.equal(ev<boolean>(`document.querySelector("${BG}").textContent.includes("TOKEN=invented") || document.querySelector("${BG}").textContent.includes("OUTSIDE=invented")`), false);
   ab("set", "media", "light");
   ev(`document.querySelectorAll("${BG} .fr-toggle")[0].click(), document.querySelector("${BG} .fr-toggle").scrollIntoView({ block: "center" }), "ok"`);
   await waitFor("snippet again", `document.querySelectorAll("${BG} .src-snip .src-row.hit").length >= 1`);
@@ -333,6 +337,92 @@ gui("file refs are short chips (full path in the DOM, title and copy); ▸ opens
   assert.equal(ev<string>(`document.querySelector("${BG} code.short").innerText`), "dir/articles.py:12");
   assert.equal(count(`${BG} .fr-toggle`), 0);
   rmSync(join(home, ".claude", "plans", name), { force: true });
+});
+
+/** The shared table of what is a file reference (the TUI test reads the same file) */
+const REF_CASES = JSON.parse(readFileSync(new URL("./fixtures/fileref-cases.json", import.meta.url), "utf8")) as { chip: string[]; plain: string[] };
+
+gui("what is a file reference: the table shared with the TUI decides, in an explanation and in a plan", async () => {
+  const list = [...REF_CASES.chip, ...REF_CASES.plain.filter((x) => !x.includes("`"))].map((c) => `- \`${c}\``).join("\n");
+  await seedDoc(`---\nukagai: 1\nquestion: ${QUESTION}\n---\n\n## Why this decision is needed now\n\nThe table:\n\n${list}\n`, QUESTION);
+  ab("open", base + "/");
+  await waitFor("references", `document.querySelectorAll("${BG} li code").length === ${REF_CASES.chip.length + REF_CASES.plain.filter((x) => !x.includes("`")).length}`, 15000);
+  assert.deepEqual(texts(`${BG} li code.fileref`), REF_CASES.chip);
+  assert.deepEqual(texts(`${BG} li code:not(.fileref)`), REF_CASES.plain.filter((x) => !x.includes("`")));
+  await cancelAll();
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_refcases_${process.pid}_${Date.now()}`,
+    kind: "approve_plan",
+    session: { session_id: "00000000-0000-0000-0009-000000000003", cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan: `# Cases\n\n## One\n\n${list}\n`, planFilePath: "/p/cases.md" },
+  });
+  void api(`/api/decisions/${d.id}/wait?timeout_ms=60000`).catch(() => {});
+  ab("open", base + "/");
+  await waitFor("plan references", `document.querySelectorAll("${BG} li code").length === ${REF_CASES.chip.length + REF_CASES.plain.filter((x) => !x.includes("`")).length}`, 15000);
+  assert.deepEqual(texts(`${BG} li code.cbadge`), REF_CASES.chip);
+});
+
+gui("▸ works wherever a reference is shown: What only you know, Assumptions, the Why text; an option card keeps no stray ▸", async () => {
+  const proj = mkdtempSync(join(tmpdir(), "ukagai-refs2-"));
+  projects.push(proj);
+  mkdirSync(join(proj, "src"), { recursive: true });
+  writeFileSync(join(proj, "src", "cache.ts"), Array.from({ length: 30 }, (_, i) => `const row${i + 1} = ${i + 1};`).join("\n") + "\n");
+  const md = `---
+ukagai: 1
+question: ${QUESTION}
+title: Refs everywhere
+recommended: Sqlite
+reversibility: costly
+scope: repo
+---
+
+## Why this decision is needed now
+
+The reader is at \`src/cache.ts:5\` and it needs a schema before the release.
+
+## What only you know
+
+- Whether \`src/cache.ts:12\` is still used by the nightly job
+- If the figure in \`src/cache.ts:20-22\` includes the archive
+
+## Assumptions
+
+- The loop at \`src/cache.ts:8\` stays as it is
+- One process writes at a time
+
+## Options
+
+| Option | What happens if chosen | Risks and how to undo |
+|---|---|---|
+| Sqlite (Recommended) | Replaces \`src/cache.ts:3\` with a table | Revert \`src/cache.ts:3\` |
+| Flat files | Keeps \`src/cache.ts:3\` | Restore from git |
+
+## Recommendation
+
+I recommend **Sqlite** because it is simpler. Another option is right if the nightly job needs files.
+`;
+  await seedDoc(md, QUESTION, "refs2.md", ["Sqlite (Recommended)", "Flat files"], proj);
+  ab("open", base + "/");
+  await waitFor("rendered", `document.querySelectorAll(".fr-toggle").length >= 3`, 15000);
+  // No card (right column) holds a ▸ button or a stray ▸ character
+  assert.equal(count("#decision .fr-toggle"), 0);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("#decision .opt")].every((o) => !o.textContent.includes("▸"))`), true);
+  // Every ▸ on the page opens its own snippet with the referenced lines marked, and closes it again
+  const n = count(".fr-toggle");
+  assert.ok(n >= 3, `${n} buttons`);
+  for (let i = 0; i < n; i++) {
+    ev(`document.querySelectorAll(".fr-toggle")[${i}].click(), "ok"`);
+    await waitFor(`snippet ${i}`, `document.querySelectorAll(".src-snip .src-row.hit").length >= 1 && document.querySelectorAll(".fr-toggle")[${i}].getAttribute("aria-expanded") === "true"`);
+    ev(`document.querySelectorAll(".fr-toggle")[${i}].click(), "ok"`);
+    await waitFor(`closed ${i}`, `document.querySelectorAll(".src-snip").length === 0 && document.querySelectorAll(".fr-toggle")[${i}].getAttribute("aria-expanded") === "false"`);
+  }
+  // The buttons of the unknowns and the assumptions are among them
+  const where = ev<string[]>(`JSON.stringify([...document.querySelectorAll(".fr-toggle")].map((b) => b.closest("li")?.textContent.slice(0, 12) ?? b.closest("p")?.textContent.slice(0, 12) ?? "?"))`);
+  assert.ok(where.some((w) => w.startsWith("Whether")) && where.some((w) => w.startsWith("The loop")), JSON.stringify(where));
+  // The head of a snippet reads as one path
+  ev(`document.querySelectorAll(".fr-toggle")[0].click(), "ok"`);
+  await waitFor("head", `document.querySelector(".src-head .src-path")`);
+  assert.equal(text(".src-head .src-path"), "src/cache.ts");
 });
 
 gui("Mermaid renders any type: flowchart, sequenceDiagram, pie, and the other listed types do not throw", async () => {

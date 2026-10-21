@@ -576,9 +576,10 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .md .fr-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .md .src-snip { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); overflow: hidden; font-size: 12px; }
 .md .src-snip.missing { padding: 6px 10px; }
-.md .src-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; padding: 4px 10px; border-bottom: 1px solid var(--line); font: 12px/20px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.md .src-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 12px; padding: 4px 10px; border-bottom: 1px solid var(--line); font: 12px/20px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.md .src-path { overflow-wrap: anywhere; }
 .md .src-head b { font-weight: 700; }
-.md .src-range { margin-left: auto; color: var(--accent); font-weight: 600; }
+.md .src-range { margin-left: auto; white-space: nowrap; color: var(--accent); font-weight: 600; }
 .md .src-lines { overflow-x: auto; padding: 4px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .md .src-row { display: flex; min-width: max-content; }
 .md .src-row.hit { background: var(--yellow-bg); }

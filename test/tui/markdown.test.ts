@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderMarkdown, renderMarkdownRich } from "../../src/tui/markdown.js";
+import { readFileSync } from "node:fs";
+import { fileRef, renderMarkdown, renderMarkdownRich } from "../../src/tui/markdown.js";
 import { sliceCols, stripAnsi, width, wrap } from "../../src/tui/width.js";
 
 const plain = (md: string, w = 60) => renderMarkdown(md, w).map(stripAnsi);
@@ -31,7 +32,7 @@ test("`dir/name.ext:12`: only the file name and the line are cyan, the folders k
     assert.equal(stripAnsi(line!), `see ${ref} here`);
   }
   // not a file reference: the whole span stays cyan
-  for (const code of ["npm test", "and/or", "a/b c.ts"]) assert.ok(renderMarkdown(`\`${code}\``, 40)[0]!.includes(`\x1b[36m${code}`), code);
+  for (const code of ["npm test", "a/b c.ts"]) assert.ok(renderMarkdown(`\`${code}\``, 40)[0]!.includes(`\x1b[36m${code}`), code);
 });
 
 test("bullets use •", () => {
@@ -160,4 +161,24 @@ test("an HTML embed is one line pointing at the GUI, in both languages; a png is
   assert.deepEqual(ja, ["[HTML] 比較 — compare.htm (GUI で表示)"]);
   const png = renderMarkdownRich("![shot](a.png)\n", 80).lines.map(strip).filter((l) => l.trim());
   assert.ok(png[0]!.startsWith("[image] shot — a.png"));
+});
+
+// The grammar of a file reference is pinned for the GUI (test/gui/markdown.test.ts) and the TUI by one table
+const CASES = JSON.parse(readFileSync(new URL("../gui/fixtures/fileref-cases.json", import.meta.url), "utf8")) as { chip: string[]; plain: string[] };
+
+test("fileRef: the shared table says which code spans are file references", () => {
+  for (const t of CASES.chip) assert.ok(fileRef(t), `chip: ${t}`);
+  for (const t of CASES.plain) assert.equal(fileRef(t), null, `plain: ${t}`);
+  assert.deepEqual(fileRef("src/deep/a.ts:12"), { dir: "src/deep/", rest: "a.ts:12" });
+  assert.deepEqual(fileRef("a.ts"), { dir: "", rest: "a.ts" });
+});
+
+test("a code span is split by the table in the rendered line: folders plain, the rest cyan; non-references all cyan", () => {
+  for (const t of CASES.chip) {
+    const line = renderMarkdown(`\`${t}\``, 80)[0]!;
+    const m = fileRef(t)!;
+    assert.ok(line.includes(`${m.dir}\x1b[36m${m.rest}`), t);
+    assert.equal(stripAnsi(line), t);
+  }
+  for (const t of CASES.plain.filter((x) => !x.includes("`"))) assert.ok(renderMarkdown(`\`${t}\``, 80)[0]!.includes(`\x1b[36m${t}`), t);
 });

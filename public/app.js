@@ -406,12 +406,17 @@ function extractColumns(md, out) {
 // The dialect on parsed DOM (safe to call once per fresh container)
 const BADGES = "done todo doing blocked risk skip";
 const BADGE_RE = new RegExp(`^(\\s*)\\[(${BADGES.replaceAll(" ", "|")})\\][ \\t]?`);
-const FILEREF_RE = /^[\w.@/-]+\.(ts|tsx|js|jsx|mjs|cjs|json|md|css|html|vue|py|rs|go|toml|yaml|yml|sh|sql|java|kt|rb|php|swift|c|h|cpp|txt)(:\d+(-\d+)?|#L\d+(-L\d+)?)?$/;
-// A reference split for display: `up` and `near` are the folders (`near`: the closest one), `base` the file name, `tail` the line part as written (`:12`, `:12-20`, `#L12-L20`); `line` / `end` are numbers or null
+// A file reference is `path`, `path:12`, `path:12-30`, `path:12:3` (the column is ignored), `path#L12` or `path#L12-L20`, where the path has a `/` or ends in one of these extensions.
+// src/tui/markdown.ts fileRef is the same grammar: test/gui/fixtures/fileref-cases.json pins both
+const REF_EXT = new Set("ts tsx js jsx mjs cjs json md mdx css scss html vue svelte py rs go toml yaml yml sh sql java kt kts rb php swift c h cpp cs scala txt env ini cfg conf xml lock gradle tf proto graphql".split(" "));
+const PATH_SHAPE = /^(?:~\/|\.{1,2}\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+$/;
 const FILEREF_TAIL = /(?::(\d+)(?:-(\d+)|:\d+)?|#L(\d+)(?:-L(\d+))?)$/;
+// A reference split for display, or null: `up` and `near` are the folders (`near`: the closest one), `base` the file name, `tail` the line part as written; `line` / `end` are numbers or null
 function fileRefParts(text) {
-  const m = FILEREF_TAIL.exec(text);
-  const path = m ? text.slice(0, m.index) : text;
+  const s = text.trim();
+  const m = FILEREF_TAIL.exec(s);
+  const path = m ? s.slice(0, m.index) : s;
+  if (!PATH_SHAPE.test(path) || !(path.includes("/") || REF_EXT.has(path.slice(path.lastIndexOf(".") + 1).toLowerCase()))) return null;
   const cut = path.lastIndexOf("/") + 1;
   const dir = path.slice(0, cut);
   const split = dir.slice(0, -1).lastIndexOf("/") + 1;
@@ -490,20 +495,19 @@ function codeDecor(container, doc) {
     wrap.append(pre);
   }
   for (const c of container.querySelectorAll("code")) {
-    if (c.closest("pre") || c.classList.contains("cbadge") || !FILEREF_RE.test(c.textContent ?? "")) continue;
+    const r = c.closest("pre") || c.classList.contains("cbadge") ? null : fileRefParts(c.textContent ?? "");
+    if (!r) continue;
     c.classList.add("cbadge", "fileref");
     c.tabIndex = 0;
-    shortRef(c, doc);
+    shortRef(c, r, doc);
   }
 }
 
 // A file reference as a short chip: the file name and the line stand out, the closest folder is muted, the folders above it are hidden by CSS
 // (the text stays in the DOM: the copy, the title and the preserve tests read the full path). With a line, a button next to it opens the code
-function shortRef(code, doc) {
+function shortRef(code, r, doc) {
   const text = code.textContent ?? "";
-  if (text !== text.trim()) return;
-  const r = fileRefParts(text);
-  if (!r.base) return;
+  if (text !== text.trim() || !r.base) return;
   code.classList.add("short");
   code.title = text;
   code.replaceChildren(...[
@@ -512,37 +516,44 @@ function shortRef(code, doc) {
     el("span", { class: "fr-base", text: r.base }),
     r.tail && el("span", { class: "fr-line", text: r.tail }),
   ].filter(Boolean));
-  // Only a document of a real decision has a working directory to read from (not the plan drawer); a heading or summary is a click target of its own
+  // Only a document of a real decision has a working directory to read from (not the plan drawer); a heading or summary is a click target of its own.
+  // The button carries what it needs (cloneNode copies it into the unknowns row and the assumptions box); one handler on the document serves them all
   if (r.line && doc?.id && !isPlanId(doc.id) && doc.session?.cwd && !code.closest("h1, h2, h3, h4, h5, h6, summary, a, button")) {
     const label = t("src_show", { path: text });
-    const btn = el("button", { type: "button", class: "fr-toggle", "aria-expanded": "false", "aria-label": label, title: label, text: "▸" });
-    btn.addEventListener("click", () => toggleSource(btn, code, r, doc.id));
-    code.after(btn);
+    code.after(el("button", { type: "button", class: "fr-toggle", "aria-expanded": "false", "aria-label": label, title: label, text: "▸", "data-decision": doc.id, "data-path": r.path, "data-line": String(r.line), "data-end": r.end ? String(r.end) : null, "data-ref": text }));
   }
 }
 
-// Open or close the lines around the reference, under the paragraph / list item / table cell that holds it
-async function toggleSource(btn, code, r, id) {
-  if (btn.snip) {
-    btn.snip.remove();
-    btn.snip = null;
+document.addEventListener("click", (e) => {
+  const btn = e.target instanceof Element ? e.target.closest(".fr-toggle") : null;
+  if (btn) toggleSource(btn);
+});
+
+const openSnips = new WeakMap(); // button -> the snippet it opened
+
+// Open or close the lines around the reference, under the paragraph / list item / table cell that holds the button
+async function toggleSource(btn) {
+  const open = openSnips.get(btn);
+  if (open) {
+    open.remove();
+    openSnips.delete(btn);
     btn.setAttribute("aria-expanded", "false");
     btn.textContent = "▸";
     return;
   }
-  const snip = el("div", { class: "src-snip", role: "group", "aria-label": code.textContent ?? "", text: t("src_loading") });
-  const host = code.closest("p, li, td, th, dd");
-  if (!host) code.parentElement.after(snip); else if (host.tagName === "P") host.after(snip); else host.append(snip);
-  btn.snip = snip;
+  const snip = el("div", { class: "src-snip", role: "group", "aria-label": btn.dataset.ref ?? "", text: t("src_loading") });
+  const host = btn.closest("p, li, td, th, dd");
+  if (!host) btn.parentElement.after(snip); else if (host.tagName === "P") host.after(snip); else host.append(snip);
+  openSnips.set(btn, snip);
   btn.setAttribute("aria-expanded", "true");
   btn.textContent = "▾";
   try {
-    const q = new URLSearchParams({ decision: id, path: r.path, line: String(r.line) });
-    if (r.end) q.set("end", String(r.end));
+    const q = new URLSearchParams({ decision: btn.dataset.decision ?? "", path: btn.dataset.path ?? "", line: btn.dataset.line ?? "" });
+    if (btn.dataset.end) q.set("end", btn.dataset.end);
     const res = await api(`/api/source?${q}`);
-    if (btn.snip === snip) snip.replaceChildren(...snippetView(res));
+    if (openSnips.get(btn) === snip) snip.replaceChildren(...snippetView(res));
   } catch {
-    if (btn.snip === snip) { snip.classList.add("missing"); snip.textContent = t("src_missing"); }
+    if (openSnips.get(btn) === snip) { snip.classList.add("missing"); snip.textContent = t("src_missing"); }
   }
 }
 
@@ -550,7 +561,7 @@ async function toggleSource(btn, code, r, id) {
 function snippetView(res) {
   const cut = res.path.lastIndexOf("/") + 1;
   const [a, b] = res.hit;
-  const head = el("div", { class: "src-head" }, el("span", { class: "fr-dir", text: res.path.slice(0, cut) }), el("b", { text: res.path.slice(cut) }), el("span", { class: "src-range", text: a === b ? `L${a}` : `L${a}–${b}` }));
+  const head = el("div", { class: "src-head" }, el("span", { class: "src-path" }, res.path.slice(0, cut), el("b", { text: res.path.slice(cut) })), el("span", { class: "src-range", text: a === b ? `L${a}` : `L${a}–${b}` }));
   const rows = res.lines.map((text, i) => {
     const n = res.start + i;
     return el("div", { class: n >= a && n <= b ? "src-row hit" : "src-row" }, el("span", { class: "src-n", text: String(n) }), el("span", { class: "src-t", text }));
@@ -2563,7 +2574,8 @@ function inlineClone(node) {
         e.append(inlineClone(c));
         if (tag === "code") hyphenText(e);
         out.append(e);
-      } else if (tag === "sup" && c.classList.contains("fn")) out.append(c.cloneNode(true));
+      } else if (tag === "button" && c.classList.contains("fr-toggle")) continue; // the ▸ of a reference works in the document, not in a card
+      else if (tag === "sup" && c.classList.contains("fn")) out.append(c.cloneNode(true));
       else if (tag === "br") out.append(" ");
       else out.append(inlineClone(c));
     }
@@ -2917,8 +2929,8 @@ function findSection(secs, names, exact = false) {
 const PLAN_SHORT_H2 = 2;
 const PLAN_SHORT_LINES = 40;
 const PATH_LINE_SUFFIX = /:\d+(?:[-:]\d+)?$/;
-const PATH_SHAPE = /^(?:~\/|\.{1,2}\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+$/;
-// A backticked token that names a file: it has a `/`, or ends in a short extension (`.ts`); `:12` line suffixes are ignored
+// A backticked token that names a file: it has a `/`, or ends in a short extension (`.ts`); `:12` line suffixes are ignored. Only the file counts of a plan use it
+// (test/gui/plan.test.ts pins them); what becomes a chip is fileRefParts
 function pathOf(code) {
   const s = code.trim().replace(PATH_LINE_SUFFIX, "");
   if (!PATH_SHAPE.test(s)) return null;
@@ -3149,10 +3161,11 @@ function foldPlanSections(container, o, d) {
 // Backticked paths in the plan copy on click (the same `.cbadge` as the evidence lines)
 function pathBadges(container, doc) {
   for (const c of container.querySelectorAll("code")) {
-    if (c.closest("pre") || c.classList.contains("cbadge") || !pathOf(c.textContent ?? "")) continue;
+    const r = c.closest("pre") || c.classList.contains("cbadge") ? null : fileRefParts(c.textContent ?? "");
+    if (!r) continue;
     c.classList.add("cbadge");
     c.tabIndex = 0;
-    shortRef(c, doc);
+    shortRef(c, r, doc);
   }
 }
 
