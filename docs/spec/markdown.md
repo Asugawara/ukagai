@@ -115,8 +115,8 @@ GUI: a vertical timeline (numbered dots, connecting line, badge beside the title
 
 ### 2.10 File references
 
-Inline code that looks like a repository path with an optional line (`` `src/x.ts:12` ``, `` `public/app.js#L40-L60` ``).
-GUI: rendered as a chip; clicking copies the path (the same copy affordance as the badge). TUI: inline code as today. Use for "where": one path per sentence, as the writing rules already say.
+Inline code that looks like a repository path with an optional line or line range (`` `src/x.ts:12` ``, `` `src/x.ts:12-20` ``, `` `public/app.js#L40-L60` ``).
+GUI: rendered as a short chip: the file name in bold, the line in the accent colour, the closest folder in regular weight; the folders above it are hidden by CSS (they stay in the text, so the DOM, the `title` tooltip and the copy hold the full path as written). Clicking the chip copies the path (the same copy affordance as the badge). A reference with a line in a backticked path of a decision's document also gets a **▸** button next to the chip (not in a heading, and not in the plan drawer or a session without a working directory): it opens the lines around the reference from the session's working directory (`GET /api/source`, `docs/spec/api.md`), numbered, with the referenced lines marked, under the paragraph, list item or table cell; a second click closes it. A file that cannot be shown (outside the project, a secret or hidden file, binary, too big, line past the end) shows one "not found" line. TUI: inline code as today, but the folders keep the text's own attributes and the file name and line are cyan (no snippet). Use for "where": one path per sentence, as the writing rules already say.
 
 ### 2.11 Tables
 
@@ -155,7 +155,7 @@ Use: UI decisions (before / after screenshots taken with agent-browser into `<sc
 | `==mark==` | highlight | inverse |
 | `::: columns` | side by side | stacked with rules |
 | `## Steps` | timeline | ordered list |
-| File refs | copy chip | inline code |
+| File refs | short copy chip, `▸` opens the code | inline code, file name and line in cyan |
 | Images | inline, lightbox | `[image] alt — path` |
 
 ## 4. What the hook tells the agent
