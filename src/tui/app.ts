@@ -184,11 +184,17 @@ export class App {
   }
 
   /** The settings changed (GET /api/settings, `settings.updated`): the language (unless `--lang` pinned it) */
-  settingsUpdated(s: Settings): void {
+  settingsUpdated(s: Settings, now: number = Date.now()): void {
     if (!this.langLocked) this.lang = s.lang;
     this.presets = s.plans?.instruction_presets ?? [];
+    const wasAutoShow = this.autoShowPlans;
     this.autoShowPlans = s.plans?.auto_show ?? false;
     this.models.clear();
+    // Turned on while a ready plan already waits: bring it up now, not at the next plan event (as the GUI does)
+    if (!wasAutoShow && this.autoShowPlans) {
+      this.autoShow(now);
+      this.onPlans();
+    }
   }
 
   sessionUpdated(s: SessionSummary): void {

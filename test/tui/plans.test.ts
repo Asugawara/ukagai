@@ -384,6 +384,12 @@ test("long plan file without a session: → has nowhere to go and the zone stays
 
 test("plans.auto_show off (the default): a ready plan is not shown or counted but is in the list (b); an approval still shows; turning it on brings the plan up", async () => {
   assert.equal(DEFAULT_SETTINGS.plans.auto_show, false);
+  // Before any settings arrive (api.settings() failed at start): the initial state is off too
+  const bare = new App();
+  bare.planUpdated(summary(FILES["c.md"]!), clock);
+  await tick();
+  assert.equal(bare.shownPlan, null, "nothing pops up before the settings arrive");
+  assert.equal(bare.count(clock), 0, "not counted before the settings arrive");
   const { app } = setup();
   app.settingsUpdated(DEFAULT_SETTINGS);
   app.planUpdated(summary(FILES["c.md"]!), clock); // ready, session known
@@ -398,8 +404,8 @@ test("plans.auto_show off (the default): a ready plan is not shown or counted bu
   assert.equal(app.shownPlan, null, "the approval, not the plan file, is on screen");
   assert.notEqual(app.view(clock).model, null);
   app.drop("d1", clock);
-  app.settingsUpdated({ ...DEFAULT_SETTINGS, plans: { ...DEFAULT_SETTINGS.plans, auto_show: true } });
-  app.planUpdated(summary(FILES["c.md"]!), clock);
+  // The plan is already here; flipping the setting alone brings it up (no plan event after the flip)
+  app.settingsUpdated({ ...DEFAULT_SETTINGS, plans: { auto_show: true, instruction_presets: [] } }, clock);
   await tick();
   assert.equal(app.shownPlan, "c.md", "on: the plan comes up");
   assert.equal(app.count(clock), 1);
