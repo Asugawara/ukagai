@@ -1,9 +1,10 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, renameSync, unlinkSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isDenied, readSource, SOURCE_LINE_MAX } from "../../src/serve/source.js";
+import { isDenied, readLines, readSource, SOURCE_LINE_MAX } from "../../src/serve/source.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const roots: string[] = [];
@@ -26,10 +27,11 @@ const put = (path: string, body: Buffer | string): string => {
 const numbered = (n: number): string => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
 
 /** A server with one decision whose session runs in `<repo>/app` (the repository root is `<repo>`) */
-async function env() {
+async function env(dataIn?: (repo: string) => string) {
   const home = tmp();
-  const dataDir = tmp();
   const repo = tmp();
+  const dataDir = dataIn ? dataIn(repo) : tmp();
+  mkdirSync(dataDir, { recursive: true });
   const cwd = join(repo, "app");
   mkdirSync(join(repo, ".git"), { recursive: true });
   mkdirSync(cwd, { recursive: true });
@@ -53,7 +55,7 @@ async function env() {
   const id = await seed(cwd, "a");
   const get = (q: string, auth = true) => fetch(`${url}/api/source?${q}`, { headers: auth ? { authorization: `Bearer ${h.token}` } : {} });
   const src = (path: string, line: string | number = 1, extra = "", who = id, auth = true) => get(`decision=${who}&path=${encodeURIComponent(path)}&line=${line}${extra}`, auth);
-  return { home, dataDir, repo, cwd, id, seed, get, src };
+  return { home, dataDir, repo, cwd, id, seed, get, src, url };
 }
 
 const NOT_FOUND = { error: "not found" };
@@ -213,6 +215,15 @@ const NAMES: Array<[string, boolean]> = [
   [".github/workflows/ci.yml", false], [".gitlab/ci.md", false], [".circleci/config.yml", false], [".vscode/settings.json", false], [".devcontainer/devcontainer.json", false],
   [".husky/pre-commit", false], [".changeset/config.json", false], [".storybook/main.ts", false], [".claude/settings.md", false],
   [".gitignore", false], [".gitattributes", false], [".editorconfig", false], [".nvmrc", false], [".node-version", false], [".tool-versions", false], [".eslintrc.json", false], [".prettierrc", false],
+  ["secrets/prod.yaml", true], ["credentials/gcp.json", true], ["config/secrets/database.yml", true], ["k8s/secret/db.yaml", true], ["internal/secrets/vault.go", false], ["docs/secrets.mdx", false],
+  ["scripts/rotate-credentials.sh", false], ["credentials.sh", false], ["credentials.mts", false], ["notes/credentials.txt", false],
+  [".github/workflows/secrets-check.yml", false], [".github/workflows/credentials/deploy.yml", false],
+  ["env.local", true], ["production.env.local", true], ["app.env.bak", true], ["config/env.yaml", true], ["src/env.ts", false], ["src/env.py", false], ["config.env.example", false], ["prod.env.template", false],
+  [".claude/settings.local.json", true], [".claude/settings.json", false], [".claude/skills/x/SKILL.md", false],
+  ["id_utils.ts", false], ["src/id_token.ts", false], ["id_rsa.bak", true], ["id_ed25519.pub", true], ["id_custom", true], ["id_custom.pub", true],
+  [".gitlab-ci.yml", false], [".pre-commit-config.yaml", false], [".dockerignore", false], [".npmignore", false], [".gitmodules", false], [".python-version", false], [".ruby-version", false],
+  [".release-please-manifest.json", false], [".gitleaks.toml", false], [".babelrc", false], [".babelrc.json", false], [".stylelintrc", false], [".markdownlint.json", false], [".golangci.yml", false], [".golangci.yaml", false], [".rubocop.yml", false],
+  [".agents/skills/x.md", false], [".claude-plugin/plugin.json", false], [".cursor/rules/a.mdc", false],
   ["src/environment.ts", false], ["src/identity.ts", false], ["README.md", false], ["src/deep/nested/dir/articles.py", false], ["Makefile", false],
 ];
 
@@ -232,7 +243,7 @@ test("the table holds over HTTP too: files that exist are refused, source files 
   const e = await env();
   const put1 = (p: string) => put(join(e.repo, p), numbered(3));
   for (const [name, refused] of NAMES) {
-    if (name === "." || name.endsWith("/") || name === ".git" || name.includes("ſ")) continue;
+    if (name === ".git" || name === "credentials" || name.includes("ſ")) continue; // `credentials` is also a folder of another row; the others are the unit table only
     put1(name);
     assert.equal((await e.src(name, 1)).status, refused ? 404 : 200, name);
   }
@@ -280,10 +291,10 @@ test("a session in the home directory, above it, or in / reads nothing", async (
 
 test("a session inside a refused folder of the home directory, or in the data directory, reads nothing", async () => {
   const e = await env();
-  for (const d of [".aws", ".ssh", ".gnupg", ".kube", ".docker", ".config", ".claude", ".codex", ".ukagai", "Library"]) {
+  for (const d of [".aws", ".ssh", ".gnupg", ".kube", ".docker", ".config", ".claude", ".codex", ".ukagai", "Library/Keychains", "Library/Cookies", "Library/Application Support", "Library/Containers", "Library/Group Containers", "Library/Mail", "Library/Messages", "Library/Safari"]) {
     put(join(e.home, d, "credentials"), numbered(3));
     put(join(e.home, d, "sub", "x.txt"), numbered(3));
-    const id = await e.seed(join(e.home, d), `h${d}`);
+    const id = await e.seed(join(e.home, d), `h${d.replace("/", "-")}`);
     assert.equal((await e.src("credentials", 1, "", id)).status, 404, d);
     assert.equal((await e.src("sub/x.txt", 1, "", id)).status, 404, d);
     assert.equal((await e.src(join(e.home, d, "sub", "x.txt"), 1, "", id)).status, 404, d);
@@ -329,4 +340,127 @@ test("headers on a 404, and a path of more than 1024 characters", async () => {
   assert.equal((await e.src("a/".repeat(600) + "a.txt", 1)).status, 404);
   assert.equal((await e.src("./".repeat(520) + "a.txt", 1)).status, 404, "over 1024 characters, though it resolves");
   assert.equal((await e.src("a.txt", 1)).status, 200);
+});
+
+test("a FIFO in the project is 404 at once and the server keeps answering", async () => {
+  if (process.platform === "win32") return;
+  const e = await env();
+  assert.equal(spawnSync("mkfifo", [join(e.cwd, "pipe.txt")]).status, 0);
+  put(join(e.cwd, "a.txt"), numbered(3));
+  const t0 = Date.now();
+  const r = await e.src("pipe.txt", 1);
+  assert.equal(r.status, 404);
+  assert.deepEqual(await r.json(), NOT_FOUND);
+  assert.ok(Date.now() - t0 < 3000, "answered without waiting for a writer");
+  assert.equal(readLines(join(e.cwd, "pipe.txt")), null);
+  const health = await fetch(`${e.url}/healthz`, { signal: AbortSignal.timeout(2000) });
+  assert.equal(health.status, 200);
+  assert.equal((await e.src("a.txt", 1)).status, 200);
+});
+
+test("a cwd that vanished is 404, not an error", async () => {
+  const e = await env();
+  const gone = join(e.repo, "gone");
+  mkdirSync(gone);
+  const id = await e.seed(gone, "gone");
+  rmSync(gone, { recursive: true });
+  assert.equal((await e.src("a.txt", 1, "", id)).status, 404);
+  assert.equal(readSource(gone, "a.txt", 1, undefined, { home: e.home }), null);
+});
+
+test("the data directory is refused wherever it sits, also without a dot in its name and inside the project", async () => {
+  const e = await env((repo) => join(repo, "ukagai-data"));
+  mkdirSync(join(e.repo, ".git"), { recursive: true });
+  assert.equal(existsSync(join(e.repo, "ukagai-data", "token")), true, "the server wrote its token there");
+  assert.equal((await e.src("ukagai-data/token", 1, "", e.id)).status, 404, "refused by the data-directory rule, not by a name rule");
+  assert.equal((await e.src(join(e.repo, "ukagai-data", "token"), 1)).status, 404);
+  put(join(e.repo, "ukagai-data", "notes.txt"), numbered(3));
+  assert.equal((await e.src("ukagai-data/notes.txt", 1)).status, 404);
+  put(join(e.repo, "ok.txt"), numbered(3));
+  assert.equal((await e.src("ok.txt", 1)).status, 200);
+});
+
+test("the Unicode fold: ſecrets.yaml is judged as secrets.yaml, by its spelling and by its real name", async () => {
+  assert.equal(isDenied("ſecrets.yaml"), true);
+  assert.equal(isDenied("a/ſecrets.yaml"), true);
+  assert.equal(isDenied("config/ſecrets/db.yml"), true);
+  const e = await env();
+  put(join(e.repo, "secrets.yaml"), numbered(3));
+  put(join(e.repo, "okay.yaml"), numbered(3));
+  assert.equal((await e.src("secrets.yaml", 1)).status, 404);
+  assert.equal((await e.src("ſecrets.yaml", 1)).status, 404);
+  assert.equal((await e.src("okay.yaml", 1)).status, 200);
+});
+
+test("the re-resolve after open: a candidate that no longer names the real file is refused (the swap window, forced by a candidate that points elsewhere)", () => {
+  const dir = tmp();
+  put(join(dir, "a.txt"), "a\n");
+  put(join(dir, "b.txt"), "b\n");
+  symlinkSync(join(dir, "b.txt"), join(dir, "link.txt"));
+  assert.deepEqual(readLines(join(dir, "a.txt"), join(dir, "a.txt")), ["a"]);
+  assert.equal(readLines(join(dir, "a.txt"), join(dir, "link.txt")), null, "the candidate resolves to b.txt now");
+  assert.equal(readLines(join(dir, "link.txt")), null, "a symlink is not opened (O_NOFOLLOW)");
+  assert.equal(readLines(join(dir, "missing.txt")), null);
+  assert.equal(readLines(dir), null, "a directory");
+  // a hard link inside the root is accepted (documented)
+  linkSync(join(dir, "a.txt"), join(dir, "hard.txt"));
+  assert.deepEqual(readLines(join(dir, "hard.txt")), ["a"]);
+});
+
+test("a .git planted in a shared (sticky) parent does not widen the root", async () => {
+  if (process.platform === "win32") return;
+  const e = await env();
+  const shared = tmp();
+  mkdirSync(join(shared, ".git"));
+  chmodSync(shared, 0o1777);
+  put(join(shared, "other.txt"), numbered(3));
+  const child = join(shared, "scratch");
+  mkdirSync(child);
+  put(join(child, "mine.txt"), numbered(3));
+  const id = await e.seed(child, "shared");
+  assert.equal((await e.src("mine.txt", 1, "", id)).status, 200);
+  assert.equal(((await (await e.src("mine.txt", 1, "", id)).json()) as { path: string }).path, "mine.txt", "the root is the session's directory");
+  assert.equal((await e.src("../other.txt", 1, "", id)).status, 404);
+  // the same layout without the sticky bit: a repository the user owns is the root
+  chmodSync(shared, 0o755);
+  assert.equal((await e.src("../other.txt", 1, "", id)).status, 200);
+});
+
+test("a path alias of the home directory is the home directory (identity, not strings)", async () => {
+  const alias = (p: string) => "/System/Volumes/Data" + p;
+  if (!existsSync(alias(tmp()))) return; // macOS only
+  const e = await env((repo) => join(repo, "ukagai-data"));
+  put(join(e.home, "notes.txt"), numbered(3));
+  put(join(e.home, ".config", "x.txt"), numbered(3));
+  const inHome = await e.seed(alias(e.home), "alias-home");
+  assert.equal((await e.src("notes.txt", 1, "", inHome)).status, 404);
+  const inConfig = await e.seed(alias(join(e.home, ".config")), "alias-config");
+  assert.equal((await e.src("x.txt", 1, "", inConfig)).status, 404);
+  const inData = await e.seed(alias(join(e.repo, "ukagai-data")), "alias-data");
+  assert.equal((await e.src("token", 1, "", inData)).status, 404);
+  assert.equal(readSource(alias(e.home), "notes.txt", 1, undefined, { home: e.home }), null);
+});
+
+test("a project in a synced folder of ~/Library is readable", async () => {
+  const e = await env();
+  const proj = join(e.home, "Library", "Mobile Documents", "com~apple~CloudDocs", "proj");
+  mkdirSync(join(proj, ".git"), { recursive: true });
+  put(join(proj, "src", "a.ts"), numbered(3));
+  const id = await e.seed(proj, "icloud");
+  assert.equal((await e.src("src/a.ts", 1, "", id)).status, 200);
+});
+
+test("a swap between the open and the checks is refused: the path must still give the same real path and the same file", () => {
+  const dir = tmp();
+  put(join(dir, "real", "a.txt"), "inside\n");
+  put(join(dir, "other", "a.txt"), "OUTSIDE\n");
+  symlinkSync(join(dir, "real"), join(dir, "link"));
+  const real = realpathSync(join(dir, "real", "a.txt"));
+  const candidate = join(dir, "link", "a.txt");
+  assert.deepEqual(readLines(real, candidate), ["inside"]);
+  // the folder the candidate goes through is repointed after the open: the candidate no longer names `real`
+  assert.equal(readLines(real, candidate, () => { unlinkSync(join(dir, "link")); symlinkSync(join(dir, "other"), join(dir, "link")); }), null);
+  // another file takes the place of the opened one: same path, another device / inode
+  put(join(dir, "swap.txt"), "swapped\n");
+  assert.equal(readLines(real, real, () => renameSync(join(dir, "swap.txt"), real)), null);
 });
