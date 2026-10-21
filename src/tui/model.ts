@@ -313,7 +313,7 @@ function previewOf(raw: unknown): string | undefined {
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b./g, "")
     .replace(/\r\n?/g, "\n")
     .replace(/\t/g, "    ")
-    .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "")
+    .replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "")
     .replace(/\s+$/, "");
   return text.trim() ? text : undefined;
 }

@@ -57,3 +57,29 @@ test("TUI fields: a preview is cut at 12 rows with …, ANSI and CR are removed,
   app.handle({ name: "char", ch: "j" }, NOW);
   assert.ok(!stripAnsi(renderFrame(app.view(NOW), { cols: 100, rows: 200 }).text).includes("42"));
 });
+
+test("TUI fields: a preview line cut at the column width ends in …, plain attributes (no DIM)", () => {
+  const app = new App();
+  app.upsert(decision({ request: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [
+    { label: "One", description: "d", preview: `SHORT\n${"LONGLINE".repeat(30)}` },
+  ] }] } }), NOW);
+  const raw = renderFrame(app.view(NOW), { cols: 100, rows: 200 }).text;
+  const rows = stripAnsi(raw).split("\n");
+  const cut = rows.find((l) => l.includes("LONGLINE"))!;
+  assert.ok(cut.trimEnd().endsWith("…"), "the cut line ends in …");
+  assert.ok(!rows.find((l) => l.includes("SHORT"))!.includes("…"), "a line that fits has no …");
+  const row = raw.split("\n").find((l) => l.includes("SHORT"))!;
+  assert.ok(!row.includes("\x1b[2m"), "no DIM on the preview text");
+});
+
+for (const [name, chars] of [["C1 controls", "\u0080\u0085\u009b\u009f"], ["bidi embeddings and overrides", "‪‫‬‭‮"], ["bidi isolates", "⁦⁧⁨⁩"]] as const) {
+  test(`TUI fields: ${name} are removed from a preview`, () => {
+    const app = new App();
+    app.upsert(decision({ request: { questions: [{ question: "Q?", header: "H", multiSelect: false, options: [
+      { label: "One", description: "d", preview: `AB${chars}CD` },
+    ] }] } }), NOW);
+    const text = renderFrame(app.view(NOW), { cols: 100, rows: 200 }).text;
+    assert.ok(text.includes("ABCD"), "the text around them is joined");
+    for (const c of chars) assert.ok(!text.includes(c), `U+${c.codePointAt(0)!.toString(16)} is gone`);
+  });
+}
