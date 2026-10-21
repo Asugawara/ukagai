@@ -34,6 +34,8 @@ English is the default for code, comments, tests, docs, the skill, CLI output an
 
 - Do not write hooks directly into `.claude/settings.json`. During development, use a separate file via `--settings <file>`.
 - Keep the `hook` subcommand fail-open (on failure, print nothing and exit 0).
+- Do not drop explanation content in a UI. Whatever the hook accepts must be on the screen of the GUI and the TUI (`docs/spec/explain.md` 3.9).
+- When the hook starts to accept a new place or form for content, add a `pass-*` fixture to `test/explain-fixtures/`. The preserve tests render it in the GUI (CI job `gui-preserve`) and in the TUI.
 - Do not add `hooks/hooks.json` to the plugin tree. Codex would read the Claude hooks from it; the plugin's hook files are `hooks/claude.json` and `hooks/codex.json`.
 
 ## Commits

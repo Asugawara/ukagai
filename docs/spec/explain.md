@@ -217,8 +217,18 @@ All take the whole Markdown (front matter included; it is skipped). Lines inside
 | `parseTerms` | `(markdown: string) => { term: string; definition: string }[]` | The items of the Terms section. Accepted: `- **term** — definition`, `- **term**: definition` (also `**term:** definition`), `- term — definition` (a `:` also works for the plain form; `—` `–` `―` `-` and `：` are separators). Items without a separator or with an empty side are skipped |
 | `parseFootnotes` | `(markdown: string) => { defs: { id: string; text: string }[]; refs: string[] }` | `defs`: lines `[^id]: text` anywhere in the body (indented continuation lines joined; the first definition of an id wins). `refs`: distinct `[^id]` references in order of appearance (definition lines, inline code and fences are not references) |
 | `Table.extraColumns` | `number[]` on each table from `findTables` | See 3.3 item 5 |
+| `Table.start` / `Table.end` | `number` on each table from `findTables` | The line range `[start, end)` of the table (header row, separator and body rows) in the scanned lines. The TUI hides exactly these lines when the table becomes cards |
+| `NO_DIAGRAM_NOTE` | `RegExp` | A line under Options that says why no diagram is drawn (3.2). The GUI keeps a copy (`test/gui/cannot-rules.test.ts` keeps the two equal) |
 
 **Footnotes (`footnote`).** For every id in `refs` there must be a definition in `defs`, anywhere in the body (recommended: in "What I checked"). A definition without a reference is fine. Not evaluated for a blocker.
+
+### 3.9 What the screens keep (invariant)
+
+Everything an explanation that passes the checks says reaches the screen of the GUI and of the TUI. A section's reader takes only what it uses (the Options table becomes cards, the bullets of Terms / What only you know / Assumptions / Affected become the overlay, the lead and the affected row); everything else the section holds (paragraphs, images, code, diagrams, the rest of a list) stays in the background column under that section's heading, in place. A heading goes only when nothing is left under it.
+
+The only content that may be missing from a screen is what `ALLOWED_DROPS` in `test/support/explain-atoms.ts` lists, each with its reason: today the front matter (shown as the title, chips and question) and the `No diagram: <reason>` lines under Options (the hook's proof that a diagram was considered, not content for the human).
+
+`test/gui/preserve.test.ts` (a real browser; the CI job `gui-preserve` runs it with `UKAGAI_REQUIRE_BROWSER=1`, which turns a missing agent-browser into a failure) and `test/tui/preserve.test.ts` render every `pass-*` fixture and look for its fenced blocks, images, diagrams and sentinel words (`KEEP…`). A new place or form the checks accept needs a `pass-*` fixture. Which AskUserQuestion fields are shown, and why the others are not, is listed in `test/support/question-fields.ts`; both surfaces are tested against that list.
 
 ## 4. Check result
 
