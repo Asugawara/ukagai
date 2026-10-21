@@ -890,7 +890,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   hints: true,
   checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true },
-  plans: { auto_show: true, instruction_presets: [] },
+  plans: { auto_show: false, instruction_presets: [] },
   notify: { sound: false, browser: false, title_badge: true },
   claude: DEFAULT_CLAUDE_SETTINGS,
 };

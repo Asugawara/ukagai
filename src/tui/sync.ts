@@ -65,7 +65,7 @@ export async function streamLoop(api: SyncApi, app: App, signal: AbortSignal, o:
         (ev) => {
           if (ev.event === "session.updated") app.sessionUpdated(ev.session);
           else if (ev.event === "plan.updated") app.planUpdated(ev.plan, now());
-          else if (ev.event === "settings.updated") app.settingsUpdated(ev.settings);
+          else if (ev.event === "settings.updated") app.settingsUpdated(ev.settings, now());
           else if (ev.event === "plan.removed") app.planRemoved(ev.name, now());
           else app.upsert(ev.decision, now());
           o.onChange();

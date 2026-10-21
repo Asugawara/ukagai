@@ -172,7 +172,7 @@ test("PUT persists to config.json (reload the server: same values), returns the 
     s.theme = "dark";
     s.hints = false;
     s.checkpoints = { enabled: false, codex_delay_s: 600, terminal_delivery: false };
-    s.plans.auto_show = false;
+    s.plans.auto_show = true; // off is the default now, so flip it away from the default
     s.notify = { sound: true, browser: true, title_badge: false };
   });
   const r = await put(env, next);
