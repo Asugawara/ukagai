@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.0](https://github.com/Asugawara/ukagai/compare/v0.6.0...v0.7.0) (2026-10-21)
+
+
+### Features
+
+* serve code snippets at GET /api/source ([142872d](https://github.com/Asugawara/ukagai/commit/142872d181f8a3570cdaaa32281a6c211c4a0b65))
+* show file references as short chips with a snippet toggle ([2ee2cec](https://github.com/Asugawara/ukagai/commit/2ee2cec618b49626bf0cff68628586c7ed98204c))
+
+
+### Bug Fixes
+
+* cap the project root and refuse more secrets in /api/source ([436daf3](https://github.com/Asugawara/ukagai/commit/436daf324460230a7bef5f6f15c39b35ec3ddda7))
+* chip generic extensions again and keep Enter on the answer after a snippet click ([c095003](https://github.com/Asugawara/ukagai/commit/c0950038c52f77e2b065368ba193f7a712886668))
+* close the FIFO hang and the remaining secret-name and root gaps in /api/source ([cf063b8](https://github.com/Asugawara/ukagai/commit/cf063b8e614d9214b7fc7750e6df6cc70e0e5ebd))
+* draw the toggle chevron and mark the hit line with a yellow tint and an edge bar ([2203a3c](https://github.com/Asugawara/ukagai/commit/2203a3cd1be7d0d80b95fceb878adc68668d7364))
+* make the snippet toggle a visible, larger button ([61ffd24](https://github.com/Asugawara/ukagai/commit/61ffd24837b2aacd4b5f47e964c0311f96bcbe4f))
+* make the snippet toggle work in cloned content and share one reference grammar ([c7e1e6f](https://github.com/Asugawara/ukagai/commit/c7e1e6f119db158969e915408fff47c9e951cf32))
+
 ## [0.6.0](https://github.com/Asugawara/ukagai/compare/v0.5.0...v0.6.0) (2026-10-21)
 
 
