@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/Asugawara/ukagai/compare/v0.7.0...v0.8.0) (2026-10-21)
+
+
+### Features
+
+* pop up plan files only when the Plans setting is on (default off), in the GUI and the TUI ([6618c83](https://github.com/Asugawara/ukagai/commit/6618c838640fd4f20e84aaadcfaa9ee03531aeac))
+
+
+### Bug Fixes
+
+* bring up a ready plan at once when the TUI's Plans setting is turned on ([653189f](https://github.com/Asugawara/ukagai/commit/653189fbfa0defbb61f2c8b13288438c96e91de2))
+
 ## [0.7.0](https://github.com/Asugawara/ukagai/compare/v0.6.0...v0.7.0) (2026-10-21)
 
 
