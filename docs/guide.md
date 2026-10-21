@@ -28,6 +28,8 @@ A long plan has no contents list: it starts in the **plan zone** with its first 
 
 The same box is on the plan file card while the agent is still writing the plan; a plan file pops up only when its session is known (until then it waits in the list under `b`).
 
+File references in a plan (`` `services/export/src/export/job.ts:42` ``, or a range such as `:18-30`) are short chips: the file name and line stand out, the folders above the closest one are hidden, and hovering shows the full path (a click on the chip copies it). A **▸** button next to a reference with a line opens the numbered code around it, with the referenced lines highlighted. The server reads it from the session's working directory when you click, so no tokens are used. Files outside the project, secrets, binaries and files over 2 MB show "not found". More under [Rich Markdown](#rich-markdown).
+
 When a plan was rewritten after an instruction, the plan screen (GUI and TUI) shows version tabs (`v1（指示前） v2（今回）★`, `<` / `>` to switch), a one-line summary of what changed (sections added / changed / removed and the instruction that led to it) and marks the new / changed sections and lines; the versions and the diff come from `GET /api/sessions/:id/plan-versions`.
 
 ## Progress checkpoints
