@@ -23,6 +23,7 @@ let token = "";
 let serve: ChildProcess | undefined;
 let base = "";
 let opened = false;
+const projects: string[] = []; // throwaway project directories of the tests
 const session = `ukagai-md-${process.pid}-${Date.now().toString(36)}`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -143,7 +144,7 @@ before(async () => {
 after(async () => {
   if (opened) { try { ab("close"); } catch {} }
   serve?.kill();
-  for (const d of [home, top]) if (d) rmSync(d, { recursive: true, force: true });
+  for (const d of [home, top, ...projects]) if (d) rmSync(d, { recursive: true, force: true });
 });
 
 function gui(name: string, fn: (t: TestContext) => Promise<void>) {
@@ -264,6 +265,74 @@ gui("every construct renders (callouts, tasks, details, code, badges, mark, colu
   ev(`document.querySelector("${BG} .fileref").click(), "ok"`);
   await waitFor("copied", `window.__clip.length === 1 && window.__clip[0] === "src/contract.ts:12"`);
   await waitFor("toast", `[...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("Copied"))`);
+});
+
+gui("file refs are short chips (full path in the DOM, title and copy); ▸ opens the numbered lines with the referenced ones marked; the plan drawer has no ▸", async () => {
+  const proj = mkdtempSync(join(tmpdir(), "ukagai-refs-"));
+  projects.push(proj);
+  mkdirSync(join(proj, "src", "deep", "nested", "dir"), { recursive: true });
+  writeFileSync(join(proj, "src", "deep", "nested", "dir", "articles.py"), Array.from({ length: 30 }, (_, i) => `row ${i + 1} = ${i + 1}`).join("\n") + "\n");
+  writeFileSync(join(proj, ".env"), "TOKEN=invented\n");
+  const REF = "src/deep/nested/dir/articles.py";
+  const plan = `# Refs plan\n\n## Context\n\nLook at \`${REF}:12\` first.\n\nThen \`${REF}:12-14\`, \`.env:1\`, \`../../etc/hosts:1\`, and run \`npm test\`.\n`;
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_refs_${process.pid}_${Date.now()}`,
+    kind: "approve_plan",
+    session: { session_id: "00000000-0000-0000-0009-000000000002", cwd: proj, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { plan, planFilePath: "/p/refs-plan.md" },
+  });
+  assert.ok(d.id, `cannot create decision: ${JSON.stringify(d)}`);
+  void api(`/api/decisions/${d.id}/wait?timeout_ms=60000`).catch(() => {});
+  ab("open", base + "/");
+  await waitFor("chips", `document.querySelectorAll("${BG} code.short").length === 4`, 15000);
+  // short: the closest folder, the name and the line are on screen; the folders above are hidden but stay in the text, the title and the copy
+  assert.equal(ev<string>(`document.querySelector("${BG} code.short").innerText`), "dir/articles.py:12");
+  assert.equal(text(`${BG} code.short`), `${REF}:12`);
+  assert.equal(ev<string>(`document.querySelector("${BG} code.short").title`), `${REF}:12`);
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("${BG} code.short .fr-up")).display`), "none");
+  assert.equal(ev<boolean>(`+getComputedStyle(document.querySelector("${BG} code.short .fr-base")).fontWeight >= 700`), true);
+  assert.equal(count(`${BG} code.short .fr-line`), 4);
+  assert.equal(ev<boolean>(`[...document.querySelectorAll("${BG} code")].filter((c) => c.textContent === "npm test").every((c) => !c.classList.contains("cbadge"))`), true);
+  ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; return "ok"; })()`);
+  ev(`document.querySelector("${BG} code.short").click(), "ok"`);
+  await waitFor("copied the full path", `window.__clip.length === 1 && window.__clip[0] === "${REF}:12"`);
+  // ▸: one button per reference with a line, collapsed; it opens the lines under the paragraph and a second click closes them
+  assert.equal(count(`${BG} .fr-toggle`), 4);
+  assert.equal(ev<boolean>(`document.querySelector("${BG} .fr-toggle").getAttribute("aria-expanded") === "false"`), true);
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[0].click(), "ok"`);
+  await waitFor("snippet", `document.querySelectorAll("${BG} .src-snip .src-row").length === 11`);
+  assert.deepEqual(texts(`${BG} .src-snip .src-row.hit .src-n`), ["12"]);
+  assert.equal(text(`${BG} .src-snip .src-row.hit .src-t`), "row 12 = 12");
+  assert.equal(text(`${BG} .src-snip .src-head`), `${REF.slice(0, REF.lastIndexOf("/") + 1)}articles.pyL12`);
+  assert.equal(ev<boolean>(`document.querySelector("${BG} .fr-toggle").getAttribute("aria-expanded") === "true"`), true);
+  assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("${BG} .src-row.hit")).backgroundColor !== getComputedStyle(document.querySelector("${BG} .src-row:not(.hit)")).backgroundColor`), true);
+  assert.equal(ev<boolean>(`document.querySelector("${BG} .fr-toggle").closest("p").nextElementSibling.classList.contains("src-snip")`), true);
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[1].click(), "ok"`);
+  await waitFor("range snippet", `document.querySelectorAll("${BG} .src-snip").length === 2 && document.querySelectorAll("${BG} .src-row.hit").length === 4`);
+  assert.equal(text(`${BG} .src-snip:last-of-type .src-head .src-range`) || "", "L12–14");
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[0].click(), "ok"`);
+  await waitFor("closed", `document.querySelectorAll("${BG} .src-snip").length === 1 && document.querySelector("${BG} .fr-toggle").getAttribute("aria-expanded") === "false"`);
+  // a hidden file and a path out of the project are "not found" (no difference between the two)
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[2].click(), document.querySelectorAll("${BG} .fr-toggle")[3].click(), "ok"`);
+  await waitFor("both missing", `document.querySelectorAll("${BG} .src-snip.missing").length === 2`);
+  assert.equal(text(`${BG} .src-snip.missing`), "Not found. The file is outside the project, hidden, or the line is past its end.");
+  assert.equal(ev<boolean>(`document.querySelector("${BG}").textContent.includes("TOKEN=invented")`), false);
+  ab("set", "media", "light");
+  ev(`document.querySelectorAll("${BG} .fr-toggle")[0].click(), document.querySelector("${BG} .fr-toggle").scrollIntoView({ block: "center" }), "ok"`);
+  await waitFor("snippet again", `document.querySelectorAll("${BG} .src-snip .src-row.hit").length >= 1`);
+  await sleep(300);
+  ab("screenshot", join(SHOTS, "file-ref-snippet.png"));
+  await cancelAll();
+
+  // The plan drawer has no session, so no working directory: the short chip only
+  const name = "refs-drawer.md";
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  await planSession("refs-drawer");
+  writeFileSync(join(home, ".claude", "plans", name), plan);
+  await waitFor("drawer chips", `document.querySelectorAll("${BG} code.short").length === 4`, 8000);
+  assert.equal(ev<string>(`document.querySelector("${BG} code.short").innerText`), "dir/articles.py:12");
+  assert.equal(count(`${BG} .fr-toggle`), 0);
+  rmSync(join(home, ".claude", "plans", name), { force: true });
 });
 
 gui("Mermaid renders any type: flowchart, sequenceDiagram, pie, and the other listed types do not throw", async () => {

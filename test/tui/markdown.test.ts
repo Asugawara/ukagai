@@ -18,6 +18,22 @@ test("**strong** is bold cyan, `code` is cyan", () => {
   assert.equal(stripAnsi(line!), "Key and code");
 });
 
+test("`dir/name.ext:12`: only the file name and the line are cyan, the folders keep the text's attributes, and no character is dropped", () => {
+  for (const [ref, folders, rest] of [
+    ["src/deep/nested/dir/articles.py:12", "src/deep/nested/dir/", "articles.py:12"],
+    ["src/a.ts:12-20", "src/", "a.ts:12-20"],
+    ["public/app.js#L40-L60", "public/", "app.js#L40-L60"],
+    ["./x/y.md", "./x/", "y.md"],
+  ] as const) {
+    const [line] = renderMarkdown(`see \`${ref}\` here`, 80);
+    assert.ok(line!.includes(`${folders}\x1b[36m${rest}`), ref);
+    assert.ok(!line!.includes("\x1b[2m"), "nothing is dimmed");
+    assert.equal(stripAnsi(line!), `see ${ref} here`);
+  }
+  // not a file reference: the whole span stays cyan
+  for (const code of ["npm test", "and/or", "a/b c.ts"]) assert.ok(renderMarkdown(`\`${code}\``, 40)[0]!.includes(`\x1b[36m${code}`), code);
+});
+
 test("bullets use •", () => {
   assert.deepEqual(plain("- first\n- second\n"), ["• first", "• second"]);
 });

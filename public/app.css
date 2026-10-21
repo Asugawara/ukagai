@@ -567,6 +567,23 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .md ol.steps > li > ul, .md ol.steps > li > ol { margin: 4px 0 0; padding-left: 20px; }
 .md ol.steps > li:has(> .badge.done)::before { background: var(--green); }
 .md .cbadge.fileref { background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+/* Short reference chip: the folders above the closest one are hidden (still in the DOM for copy / title); no faint text: the file name is bold, the folder regular, the line in the accent colour */
+.cbadge.short .fr-up { display: none; }
+.cbadge.short .fr-base { font-weight: 700; }
+.cbadge.short .fr-line { color: var(--accent); font-weight: 600; }
+.md .fr-toggle { font: inherit; font-size: 11px; line-height: 16px; color: var(--accent); background: none; border: 1px solid transparent; border-radius: 4px; padding: 0 4px; margin-left: 2px; cursor: pointer; }
+.md .fr-toggle:hover { border-color: var(--line); }
+.md .fr-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.md .src-snip { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); overflow: hidden; font-size: 12px; }
+.md .src-snip.missing { padding: 6px 10px; }
+.md .src-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; padding: 4px 10px; border-bottom: 1px solid var(--line); font: 12px/20px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.md .src-head b { font-weight: 700; }
+.md .src-range { margin-left: auto; color: var(--accent); font-weight: 600; }
+.md .src-lines { overflow-x: auto; padding: 4px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.md .src-row { display: flex; min-width: max-content; }
+.md .src-row.hit { background: var(--yellow-bg); }
+.md .src-n { flex: none; width: 4.5ch; padding: 0 8px 0 10px; box-sizing: content-box; text-align: right; user-select: none; }
+.md .src-t { white-space: pre; min-height: 1.5em; padding-right: 10px; }
 .md .codefile { margin: 6px 0; }
 .md .codefile-tab { display: inline-block; font: 11px/20px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); background: var(--code); border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; padding: 0 10px; max-width: 100%; overflow-wrap: anywhere; }
 .md .codefile > pre, .md .codefile > details > pre { margin-top: 0; border-top-left-radius: 0; }

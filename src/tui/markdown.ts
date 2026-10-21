@@ -85,6 +85,13 @@ const IMAGE_RE = new RegExp(String.raw`!\[([^\]]*)\]\(${IMAGE_DEST}(?:\s+"[^"]*"
 // `==text==` but not runs of `=` (setext underlines, `a===b`); public/app.js inlineMarks must use the same pattern
 const MARK_RE = /(?<!=)==(?=[^\s=])([^=\n]*?[^\s=])==(?!=)/g;
 
+// `dir/name.ext:12`: the folders keep the text's own attributes, the file name and the line are cyan (nothing is dimmed or cut)
+const FILE_REF = /^((?:[\w@.+-]+\/)+)([\w@+-][\w@.+-]*\.[a-z][a-z0-9]{0,5}(?::\d+(?:[-:]\d+)?|#L\d+(?:-L\d+)?)?)$/i;
+const codeSpan = (c: string, close: string): string => {
+  const m = FILE_REF.exec(c);
+  return m ? `${m[1]}${CYAN}${m[2]}${close}` : `${CYAN}${c}${close}`;
+};
+
 /** Turn `**strong**` / `` `code` `` / `*em*` / links into ANSI, returning to base decoration afterwards */
 export function inline(text: string, opts: InlineOpts = {}): string {
   const strong = opts.strong ?? STRONG;
@@ -111,7 +118,7 @@ export function inline(text: string, opts: InlineOpts = {}): string {
   return marked
     .replace(/\x00([^\x01]*)\x01/g, (_, c: string) => `${opts.imageLabel ?? "[image]"} ${c}`)
     .replace(/\[\^([^\]\s]+)\](?!:)/g, (_, id: string) => `${CYAN}[${id}]${close}`)
-    .replace(/`([^`]+)`/g, (_, c: string) => `${CYAN}${c}${close}`)
+    .replace(/`([^`]+)`/g, (_, c: string) => codeSpan(c, close))
     .replace(/\*\*([^*]+)\*\*/g, (_, c: string) => `${strong}${c}${close}`)
     .replace(/(?<![*\w])\*([^*\s][^*]*)\*(?![*\w])/g, (_, c: string) => `\x1b[3m${c}${close}`)
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t: string, u: string) => `${t} (${u})`)
