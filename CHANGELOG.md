@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/Asugawara/ukagai/compare/v0.5.0...v0.6.0) (2026-10-21)
+
+
+### Features
+
+* show an AskUserQuestion option's preview on its card ([060982f](https://github.com/Asugawara/ukagai/commit/060982ff4e5658bf3d920bb94e78027875523835))
+
+
+### Bug Fixes
+
+* keep explanation content that a section reader does not use ([4c40d0a](https://github.com/Asugawara/ukagai/commit/4c40d0a26a91e79524cf1ea6b7fc3916a5f2feb8))
+* mark a cut TUI preview line and strip C1 / bidi controls ([5724367](https://github.com/Asugawara/ukagai/commit/5724367fb63258c5942d45e185f429ea51a8ba25))
+
 ## [0.5.0](https://github.com/Asugawara/ukagai/compare/v0.4.0...v0.5.0) (2026-10-20)
 
 
