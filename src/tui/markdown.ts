@@ -86,8 +86,9 @@ const IMAGE_RE = new RegExp(String.raw`!\[([^\]]*)\]\(${IMAGE_DEST}(?:\s+"[^"]*"
 const MARK_RE = /(?<!=)==(?=[^\s=])([^=\n]*?[^\s=])==(?!=)/g;
 
 // A file reference, the same grammar as fileRefParts in public/app.js (test/gui/fixtures/fileref-cases.json pins both): `path`, `path:12`, `path:12-30`,
-// `path:12:3`, `path#L12`, `path#L12-L20`, where the path has a `/` or ends in one of these extensions
-const REF_EXT = new Set("ts tsx js jsx mjs cjs json md mdx css scss html vue svelte py rs go toml yaml yml sh sql java kt kts rb php swift c h cpp cs scala txt env ini cfg conf xml lock gradle tf proto graphql".split(" "));
+// `path:12:3`, `path#L12`, `path#L12-L20`. The path ends in an extension, or has no extension but a `/` and a line part, or starts with `./` `../` `/` `~/`
+const REF_EXT = /\.[a-z][a-z0-9]{0,5}$/i;
+const REF_ANCHOR = /^(?:~\/|\.{1,2}\/|\/)/;
 const REF_PATH = /^(?:~\/|\.{1,2}\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+$/;
 const REF_TAIL = /(?::\d+(?:-\d+|:\d+)?|#L\d+(?:-L\d+)?)$/;
 
@@ -95,7 +96,7 @@ const REF_TAIL = /(?::\d+(?:-\d+|:\d+)?|#L\d+(?:-L\d+)?)$/;
 export function fileRef(text: string): { dir: string; rest: string } | null {
   const s = text.trim();
   const path = s.replace(REF_TAIL, "");
-  if (!REF_PATH.test(path) || !(path.includes("/") || REF_EXT.has(path.slice(path.lastIndexOf(".") + 1).toLowerCase()))) return null;
+  if (!REF_PATH.test(path) || !(REF_EXT.test(path) || REF_ANCHOR.test(path) || (path !== s && path.includes("/")))) return null;
   const cut = text.lastIndexOf("/") + 1;
   return { dir: text.slice(0, cut), rest: text.slice(cut) };
 }

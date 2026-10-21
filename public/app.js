@@ -406,9 +406,11 @@ function extractColumns(md, out) {
 // The dialect on parsed DOM (safe to call once per fresh container)
 const BADGES = "done todo doing blocked risk skip";
 const BADGE_RE = new RegExp(`^(\\s*)\\[(${BADGES.replaceAll(" ", "|")})\\][ \\t]?`);
-// A file reference is `path`, `path:12`, `path:12-30`, `path:12:3` (the column is ignored), `path#L12` or `path#L12-L20`, where the path has a `/` or ends in one of these extensions.
+// A file reference is `path`, `path:12`, `path:12-30`, `path:12:3` (the column is ignored), `path#L12` or `path#L12-L20`. The path ends in an extension (`.ts`: a dot, a letter, up to 5 more
+// letters or digits), or has no extension but a `/` and a line part (`src/Makefile:3`) or starts with `./` `../` `/` `~/`; so `and/or`, `origin/main`, `16/9` and `v1.2:3` are plain code.
 // src/tui/markdown.ts fileRef is the same grammar: test/gui/fixtures/fileref-cases.json pins both
-const REF_EXT = new Set("ts tsx js jsx mjs cjs json md mdx css scss html vue svelte py rs go toml yaml yml sh sql java kt kts rb php swift c h cpp cs scala txt env ini cfg conf xml lock gradle tf proto graphql".split(" "));
+const REF_EXT = /\.[a-z][a-z0-9]{0,5}$/i;
+const REF_ANCHOR = /^(?:~\/|\.{1,2}\/|\/)/;
 const PATH_SHAPE = /^(?:~\/|\.{1,2}\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+$/;
 const FILEREF_TAIL = /(?::(\d+)(?:-(\d+)|:\d+)?|#L(\d+)(?:-L(\d+))?)$/;
 // A reference split for display, or null: `up` and `near` are the folders (`near`: the closest one), `base` the file name, `tail` the line part as written; `line` / `end` are numbers or null
@@ -416,7 +418,7 @@ function fileRefParts(text) {
   const s = text.trim();
   const m = FILEREF_TAIL.exec(s);
   const path = m ? s.slice(0, m.index) : s;
-  if (!PATH_SHAPE.test(path) || !(path.includes("/") || REF_EXT.has(path.slice(path.lastIndexOf(".") + 1).toLowerCase()))) return null;
+  if (!PATH_SHAPE.test(path) || !(REF_EXT.test(path) || REF_ANCHOR.test(path) || (m && path.includes("/")))) return null;
   const cut = path.lastIndexOf("/") + 1;
   const dir = path.slice(0, cut);
   const split = dir.slice(0, -1).lastIndexOf("/") + 1;
@@ -520,7 +522,7 @@ function shortRef(code, r, doc) {
   // The button carries what it needs (cloneNode copies it into the unknowns row and the assumptions box); one handler on the document serves them all
   if (r.line && doc?.id && !isPlanId(doc.id) && doc.session?.cwd && !code.closest("h1, h2, h3, h4, h5, h6, summary, a, button")) {
     const label = t("src_show", { path: text });
-    code.after(el("button", { type: "button", class: "fr-toggle", "aria-expanded": "false", "aria-label": label, title: label, text: "▸", "data-decision": doc.id, "data-path": r.path, "data-line": String(r.line), "data-end": r.end ? String(r.end) : null, "data-ref": text }));
+    code.after(el("button", { type: "button", class: "fr-toggle", tabindex: "-1", "aria-expanded": "false", "aria-label": label, title: label, text: "▸", "data-decision": doc.id, "data-path": r.path, "data-line": String(r.line), "data-end": r.end ? String(r.end) : null, "data-ref": text }));
   }
 }
 

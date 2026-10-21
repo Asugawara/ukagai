@@ -17,10 +17,24 @@
     "app.js#L40-L60",
     "public/app.js#L40-L60",
     "src/deep/nested/dir/articles.py:12",
-    "and/or",
     "Cargo.toml:3",
     "src/App.TSX:9",
-    "services/export/src/export/job.ts:42"
+    "services/export/src/export/job.ts:42",
+    "vite.config.mts",
+    "x.cts:4",
+    "init.lua:3",
+    "schema.prisma:12",
+    "app.log:120",
+    "Page.astro:5",
+    "index.d.mts",
+    "rules.mdc",
+    "logo.svg",
+    "./run",
+    "../bin/run",
+    "~/bin/run",
+    "/usr/local/bin/tool",
+    "src/Makefile:4",
+    "lib/Rakefile#L9"
   ],
   "plain": [
     "npm test",
@@ -39,6 +53,17 @@
     "src/x.ts:12-",
     "src/x.ts#L",
     "a//b.ts",
-    "`src/x.ts`"
+    "`src/x.ts`",
+    "and/or",
+    "origin/main",
+    "CI/CD",
+    "I/O",
+    "16/9",
+    "application/json",
+    "@hono/node-server",
+    "feat/short-file-refs",
+    "Makefile:3",
+    "a/b",
+    "src/main"
   ]
 }

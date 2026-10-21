@@ -401,7 +401,7 @@ The reader is at \`src/cache.ts:5\` and it needs a schema before the release.
 
 I recommend **Sqlite** because it is simpler. Another option is right if the nightly job needs files.
 `;
-  await seedDoc(md, QUESTION, "refs2.md", ["Sqlite (Recommended)", "Flat files"], proj);
+  const { id: refsId } = await seedDoc(md, QUESTION, "refs2.md", ["Sqlite (Recommended)", "Flat files"], proj);
   ab("open", base + "/");
   await waitFor("rendered", `document.querySelectorAll(".fr-toggle").length >= 3`, 15000);
   // No card (right column) holds a ▸ button or a stray ▸ character
@@ -423,6 +423,18 @@ I recommend **Sqlite** because it is simpler. Another option is right if the nig
   ev(`document.querySelectorAll(".fr-toggle")[0].click(), "ok"`);
   await waitFor("head", `document.querySelector(".src-head .src-path")`);
   assert.equal(text(".src-head .src-path"), "src/cache.ts");
+  // ▸ is a mouse helper: it is not a tab stop, and Enter after a click on it leaves the snippet alone (Enter belongs to the decision)
+  assert.equal(ev<boolean>(`[...document.querySelectorAll(".fr-toggle")].every((b) => b.tabIndex === -1)`), true);
+  ev(`document.querySelectorAll(".fr-toggle")[0].click(), "ok"`);
+  await waitFor("closed again", `document.querySelectorAll(".src-snip").length === 0`);
+  ab("click", "#background .fr-toggle");
+  await waitFor("opened by a real click", `document.querySelectorAll(".src-snip .src-row.hit").length >= 1`);
+  ab("press", "Enter");
+  // Enter went to the decision (it answers the card under the cursor); the button did not take it as a click that closes the snippet
+  const end = Date.now() + 8000;
+  let status = "pending";
+  while (status === "pending" && Date.now() < end) { await sleep(150); status = ((await api(`/api/decisions/${refsId}`)) as { status: string }).status; }
+  assert.notEqual(status, "pending", "Enter answered the card under the cursor");
 });
 
 gui("Mermaid renders any type: flowchart, sequenceDiagram, pie, and the other listed types do not throw", async () => {
