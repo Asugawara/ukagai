@@ -35,6 +35,7 @@ jobs:
   # UKAGAI_REQUIRE_BROWSER=1 makes a missing agent-browser fail the run instead of skipping it.
   gui-preserve:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -44,7 +45,10 @@ jobs:
       - run: npm ci
       - run: npm install -g agent-browser@0.34.0
       - run: agent-browser install --with-deps
+      # ubuntu-24.04 restricts unprivileged user namespaces, which Chrome's sandbox needs
       - run: UKAGAI_TERMINAL=none UKAGAI_REQUIRE_BROWSER=1 node --import tsx --test test/gui/preserve.test.ts
+        env:
+          AGENT_BROWSER_ARGS: --no-sandbox
 
   lint-sh:
     runs-on: ubuntu-latest
