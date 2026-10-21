@@ -70,6 +70,8 @@ Request (`CreateDecisionRequest`. The server collects `context`, so the hook doe
 }
 ```
 
+An option may carry `preview` (a string, AskUserQuestion's optional monospace text): it is stored with the request and shown as **plain text** (never parsed as Markdown or HTML) under the card the cursor is on. The GUI shows it whole (it scrolls); the TUI shows at most 12 rows of it and cuts a line at the column width, both marked with `…`. It is not part of the answer: the answer is the option's `label`.
+
 `kind` is `answer_question` (AskUserQuestion) or `approve_plan` (ExitPlanMode). `request` holds the hook's `tool_input` as is. `explanation` is optional (its shape is `Decision.explanation` in section 3 of the plan). `explanation.type` (`decision` / `blocker` / `quiz`, omitted = decision) is the `type` in the explanation file's front matter; the server only stores and returns it. `explanation.none_reason` is `plan_mode` / `loop_guard` (set by the hook) or `not_required` (reserved. No path sets it. It stays in the contract because the GUI / TUI hold the display text).
 
 Response: **201 for a new decision, 200 if the same `tool_use_id` already exists** (the body is the whole `Decision` in both cases). `status` is `pending`. A decision registered for message delivery carries `delivery: "message"` and no `lease_until`: the hook does not wait for it.

@@ -1,0 +1,10 @@
+{
+  "valid": true,
+  "missing": [],
+  "has": {
+    "mermaid": true,
+    "diff": false,
+    "table": true
+  },
+  "question": "Which cache layer should the report page read from?"
+}
