@@ -4,7 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { App } from "../../src/tui/app.js";
 import { buildModel } from "../../src/tui/model.js";
-import { renderMermaid } from "../../src/tui/mermaid.js";
+import { diagramType, isAsciiType, renderMermaid } from "../../src/tui/mermaid.js";
+import { t } from "../../src/tui/i18n.js";
 import { renderFrame } from "../../src/tui/render.js";
 import { stripAnsi } from "../../src/tui/width.js";
 import { passCases, type PassCase } from "../support/explain-atoms.js";
@@ -23,6 +24,12 @@ function decisionOf(c: PassCase) {
 /** The screen as plain text: no ANSI, no whitespace, no box edges (a box wraps the text it holds) */
 const flat = (s: string): string => stripAnsi(s).replace(/[\s│▏]/gu, "");
 
+test("the fixture list is not empty and holds the fixtures that matter", () => {
+  const files = passCases().map((c) => c.file);
+  assert.ok(files.length > 0);
+  for (const f of ["pass-media-in-sections.md", "pass-diagram-under-options.md"]) assert.ok(files.includes(f), `${f} is missing`);
+});
+
 for (const c of passCases()) {
   test(`TUI keeps every atom of ${c.file}`, () => {
     const d = decisionOf(c);
@@ -40,10 +47,14 @@ for (const c of passCases()) {
     for (const w of c.atoms.sentinels) if (!text.includes(w)) missing.push(`sentinel ${w}`);
     for (const alt of c.atoms.images) if (!text.includes(flat(`[image] ${alt}`))) missing.push(`image ${alt}`);
     for (const k of c.atoms.codeKeys) if (!text.includes(flat(k))) missing.push(`code ${k}`);
-    // A Mermaid block is drawn as boxes: every line of its drawing is on the screen, in order
+    // A Mermaid block is drawn as boxes: every line of its drawing is on the screen, in order. A type the TUI does not draw, or a drawing that fails, shows its source
     for (const src of c.atoms.mermaid) {
-      const r = renderMermaid(src);
-      if (!r.ok) continue;
+      const r = isAsciiType(diagramType(src)) ? renderMermaid(src) : { ok: false as const };
+      if (!r.ok) {
+        if (isAsciiType(diagramType(src)) && !text.includes(flat(t("en", "figure_failed")))) missing.push("the note that a diagram could not be drawn");
+        for (const l of src.split("\n").filter((x) => x.trim())) if (!text.includes(flat(l))) missing.push(`diagram source ${l}`);
+        continue;
+      }
       let at = 0;
       for (const l of r.lines.map((x) => x.trim()).filter(Boolean)) {
         const i = screen.findIndex((s, n) => n >= at && s.includes(l));

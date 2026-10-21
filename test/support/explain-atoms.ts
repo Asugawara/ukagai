@@ -9,14 +9,14 @@ import { NO_DIAGRAM_NOTE, SECTION, findSection, findTables, normalizeLabel, pars
 export const FIXTURE_DIR = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 
 /**
- * The only content an explanation may lose on screen. A line that matches `test` is not scanned for atoms.
+ * The only content an explanation may lose on screen. A line that matches `test` is not scanned for atoms (`inOptions`: the line is in the Options section).
  * Everything else the hook accepts must reach the GUI and the TUI.
  */
-export const ALLOWED_DROPS: { what: string; why: string; test: (line: string) => boolean }[] = [
+export const ALLOWED_DROPS: { what: string; why: string; test: (line: string, inOptions: boolean) => boolean }[] = [
   {
-    what: "`No diagram: <reason>` lines",
-    why: "the hook reads them as proof that a diagram was considered; they are not content for the human",
-    test: (line) => NO_DIAGRAM_NOTE.test(line),
+    what: "`No diagram: <reason>` lines under Options",
+    why: "the hook reads them there as proof that a diagram was considered; they are not content for the human (both screens drop them under Options only)",
+    test: (line, inOptions) => inOptions && NO_DIAGRAM_NOTE.test(line),
   },
 ];
 // The front matter is not scanned either: its fields are shown as the title, the chips and the question, not as written.
@@ -37,6 +37,7 @@ export function atomsOf(markdown: string): Atoms {
   const lines = toLines(markdown);
   const body = lines.slice(parseFrontMatter(lines).bodyStart);
   const { inFence, blocks } = scanFences(body);
+  const options = findSection(scanHeadings(body, inFence), body.length, SECTION.options);
   const atoms: Atoms = { fences: {}, codeKeys: [], mermaid: [], images: [], sentinels: [] };
   for (const b of blocks) {
     const lang = b.lang || "text";
@@ -51,7 +52,8 @@ export function atomsOf(markdown: string): Atoms {
     if (key) atoms.codeKeys.push(key);
   }
   body.forEach((line, i) => {
-    if (inFence[i] || ALLOWED_DROPS.some((a) => a.test(line))) return;
+    const inOptions = !!options && i > options.start && i < options.end;
+    if (inFence[i] || ALLOWED_DROPS.some((a) => a.test(line, inOptions))) return;
     for (const m of line.matchAll(/!\[([^\]]*)\]\([^)]*\)/g)) atoms.images.push(m[1]!);
     for (const m of line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").matchAll(/KEEP[A-Z]+/g)) atoms.sentinels.push(m[0]);
   });
@@ -72,10 +74,13 @@ export interface PassCase {
 /** Quizzes have no Options table: their options are free text */
 const QUIZ_LABELS = ["Some(true), the extension is not .json", "Some(false), fixtures are out of scope", "None, the extension decides nothing"];
 
+/** Fixtures the preserve tests must never lose (a broken glob would otherwise leave them passing on zero cases) */
+const REQUIRED = ["pass-media-in-sections.md", "pass-diagram-under-options.md"];
+
 export function passCases(): PassCase[] {
-  return readdirSync(FIXTURE_DIR)
-    .filter((f) => /^pass-.+\.md$/.test(f))
-    .sort()
+  const files = readdirSync(FIXTURE_DIR).filter((f) => /^pass-.+\.md$/.test(f)).sort();
+  for (const f of REQUIRED) if (!files.includes(f)) throw new Error(`the pass-* fixtures lack ${f} (${files.length} found)`);
+  return files
     .map((file) => {
       const markdown = readFileSync(join(FIXTURE_DIR, file), "utf8");
       const lines = toLines(markdown);

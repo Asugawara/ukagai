@@ -146,12 +146,15 @@ function missingOnPage(c: PassCase): string[] {
   const a = c.atoms;
   return ev<string[]>(`JSON.stringify((() => {
     const A = ${JSON.stringify({ sentinels: a.sentinels, images: a.images, codeKeys: a.codeKeys, mermaid: a.mermaid.length })};
+    // textContent, not what is painted: code folded behind "Show code" and a closed <details> are still on the page, one click from the human
     const flat = (s) => s.replace(/\\s/g, "");
     const roots = ["#head", "#background", "#decision"].map((s) => document.querySelector(s)).filter(Boolean);
     const text = flat(roots.map((e) => e.textContent ?? "").join("\\n") + [...document.querySelectorAll("[data-def]")].map((e) => e.dataset.def).join("\\n"));
     const out = [];
     for (const w of A.sentinels) if (!text.includes(w)) out.push("sentinel " + w);
-    for (const alt of A.images) if (![...document.images].some((i) => i.alt === alt) && !text.includes(flat(alt))) out.push("image " + alt);
+    // Images count only inside the three screen regions (not anywhere in the document)
+    const shownImages = roots.flatMap((e) => [...e.querySelectorAll("img")]);
+    for (const alt of A.images) if (!shownImages.some((i) => i.alt === alt) && !text.includes(flat(alt))) out.push("image " + alt);
     for (const k of A.codeKeys) if (!text.includes(flat(k))) out.push("code " + k);
     const drawn = roots.reduce((n, e) => n + e.querySelectorAll(".mermaid-ok").length, 0);
     if (drawn < A.mermaid) out.push("diagrams " + drawn + "/" + A.mermaid);
@@ -167,6 +170,12 @@ if (REQUIRE_BROWSER) {
     assert.ok(HAS_BROWSER, "agent-browser is not on PATH; the GUI preserve test would be skipped and guard nothing");
   });
 }
+
+test("the fixture list is not empty and holds the fixtures that matter", () => {
+  const files = passCases().map((c) => c.file);
+  assert.ok(files.length > 0);
+  for (const f of ["pass-media-in-sections.md", "pass-diagram-under-options.md"]) assert.ok(files.includes(f), `${f} is missing`);
+});
 
 for (const c of passCases()) {
   gui(`keeps every atom of ${c.file}`, async () => {
@@ -252,10 +261,27 @@ gui("preview: visible on the cursor card only, moves with the arrow key, and cli
   // The preview is plain text: its tab and line break are kept, nothing in it is parsed
   ab("press", "ArrowUp");
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#decision .opt.cursor .opt-preview")).whiteSpace`), "pre");
-  // A real click on a one-click card sends it; a click on its preview must not
+  // A click on a one-click card sends it; a click on its preview must not. Poll for ~1.5 s: fail as soon as the decision leaves `pending`
   ab("click", "#decision .opt.cursor .opt-preview");
-  await sleep(800);
-  const d = await api(`/api/decisions/${id}`);
-  assert.equal(d.status, "pending", "the decision is still open");
-  assert.equal(d.response, undefined, "no answer was sent");
+  for (const end = Date.now() + 1500; Date.now() < end; await sleep(100)) {
+    const d = await api(`/api/decisions/${id}`);
+    assert.equal(d.status, "pending", "a click on the preview closed the decision");
+  }
+  assert.equal((await api(`/api/decisions/${id}`)).response, undefined, "no answer was sent");
+});
+
+gui("preview: positive control: a click on the card itself (not on its preview) does send the answer", async () => {
+  const id = await seedFields(true);
+  await reopen();
+  ab("click", "#decision .opt.cursor .lab");
+  const end = Date.now() + 5000;
+  for (;;) {
+    const d = await api(`/api/decisions/${id}`);
+    if (d.status === "answer_submitted") {
+      assert.equal(Object.values(d.response.answers)[0], fieldOptions()[0]!.label, "the first card's label was sent");
+      break;
+    }
+    assert.ok(Date.now() < end, `the click on the card never sent the answer (${d.status})`);
+    await sleep(100);
+  }
 });
