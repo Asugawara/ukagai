@@ -287,6 +287,10 @@ export interface Table {
   rows: string[][];
   /** Indexes of the columns other than the label (0), "what happens" and "risk" (empty for a 3-column table) */
   extraColumns: number[];
+  /** First line of the table (the header row) in the scanned lines */
+  start: number;
+  /** One past the last line of the table (the separator row and every body row included) */
+  end: number;
 }
 
 /** Columns after the label that are neither "what happens" nor "risk" */
@@ -320,7 +324,7 @@ export function findTables(lines: string[], inFence: boolean[], from: number, to
       j++;
     }
     const header = splitRow(head);
-    tables.push({ header, rows, extraColumns: extraColumnsOf(header) });
+    tables.push({ header, rows, extraColumns: extraColumnsOf(header), start: i, end: j });
     i = j - 1;
   }
   return tables;
@@ -473,7 +477,7 @@ function hasContent(lines: string[], s: Section): boolean {
 }
 
 /** A line under Options that says why no diagram is drawn ("No diagram: <reason>", "図なし: <理由>") */
-const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
+export const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
 
 function hasNoDiagramNote(lines: string[], inFence: boolean[], s: Section): boolean {
   for (let i = s.start + 1; i < s.end; i++) {

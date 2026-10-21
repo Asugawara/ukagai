@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  COINED_ALLOW, COINED_PHASE_EN, COINED_PHASE_JA, COINED_SKIP, COINED_TOKEN, UNDO_BAD_WORDS, UNDO_WORDS, extractCoined,
+  COINED_ALLOW, COINED_PHASE_EN, COINED_PHASE_JA, COINED_SKIP, COINED_TOKEN, NO_DIAGRAM_NOTE, UNDO_BAD_WORDS, UNDO_WORDS, extractCoined,
 } from "../../src/hook/explain.js";
 
 const APP = readFileSync(new URL("../../public/app.js", import.meta.url), "utf8");
@@ -53,4 +53,11 @@ test("app.js undo word lists == src/hook/explain.ts: regex sources and flags", (
   assert.equal(read("UNDO_BAD_WORDS").flags, UNDO_BAD_WORDS.flags);
   assert.equal(read("UNDO_WORDS").source, UNDO_WORDS.source);
   assert.equal(read("UNDO_WORDS").flags, UNDO_WORDS.flags);
+});
+
+test("app.js NO_DIAGRAM_NOTE == src/hook/explain.ts: regex source and flags", () => {
+  const m = /^const NO_DIAGRAM_NOTE = \/(.*)\/([a-z]*);$/m.exec(APP);
+  assert.ok(m, "NO_DIAGRAM_NOTE literal in app.js");
+  assert.equal(m![1], NO_DIAGRAM_NOTE.source);
+  assert.equal(m![2], NO_DIAGRAM_NOTE.flags);
 });

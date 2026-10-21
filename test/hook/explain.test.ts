@@ -35,8 +35,8 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 41 fixtures", () => {
-  assert.equal(mdFiles.length, 41);
+test("there are 42 fixtures", () => {
+  assert.equal(mdFiles.length, 42);
 });
 
 for (const f of mdFiles) {

@@ -10,6 +10,7 @@ import {
   findCoinedTerms,
   findSection,
   findTables,
+  NO_DIAGRAM_NOTE,
   normalizeLabel,
   parseBullets,
   parseFootnotes,
@@ -478,14 +479,35 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     };
   }
 
-  const drop: [number, number][] = [[optSec!.start, optSec!.end]];
-  const secBody = (names: readonly string[], dropIt: boolean): string => {
+  // Only what a reader of the section consumed leaves the background: the Options table, the bullets of the optional lists, and the sections shown in a box of their own
+  const hide = new Set<number>();
+  const drop = (from: number, to: number): void => {
+    for (let i = from; i < to; i++) hide.add(i);
+  };
+  // Sections whose heading goes too when nothing but blank lines is left under it
+  const trimmed: { start: number; end: number }[] = [];
+  drop(table!.start, table!.end);
+  trimmed.push(optSec!);
+  for (let i = optSec!.start + 1; i < optSec!.end; i++) if (!inFence[i] && NO_DIAGRAM_NOTE.test(body[i]!)) hide.add(i); // the hook's proof of a considered diagram, not content for the human
+  // The top-level bullets of a section (with their continuation lines), the same lines parseBullets reads
+  const dropBullets = (sec: { start: number; end: number }): void => {
+    let open = false;
+    for (let i = sec.start + 1; i < sec.end; i++) {
+      if (inFence[i]) { open = false; continue; }
+      if (/^ {0,3}(?:[-*+]|\d+[.)])\s+(.*\S)\s*$/.test(body[i]!)) { hide.add(i); open = true; }
+      else if (open && /^\s{2,}\S/.test(body[i]!)) hide.add(i);
+      else open = false;
+    }
+    trimmed.push(sec);
+  };
+  const secBody = (names: readonly string[], dropIt: "bullets" | "all" | false): string => {
     const sec = findSection(headings, body.length, names);
     if (!sec || sec.start === optSec!.start || (recSec && sec.start === recSec.start)) return "";
-    if (dropIt) drop.push([sec.start, sec.end]);
+    if (dropIt === "bullets") dropBullets(sec);
+    else if (dropIt === "all") drop(sec.start, sec.end);
     return body.slice(sec.start + 1, sec.end).join("\n").trim();
   };
-  // The hook parsers read the whole Markdown; secBody is still called so the sections are dropped from the background.
+  // The hook parsers read the whole Markdown; secBody is still called so the bullets are dropped from the background.
   const full = body.join("\n");
   // Why leads the background column; a Why with footnotes stays in the background (renderMarkdown has no footnote definitions)
   let why: ScreenModel["why"] = null;
@@ -494,13 +516,13 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     const text = body.slice(whySec.start + 1, whySec.end).join("\n").trim();
     if (text && !/\[\^/.test(text)) {
       why = { heading: body[whySec.start]!.replace(/^\s*#+\s*/, "").trim(), text };
-      drop.push([whySec.start, whySec.end]);
+      drop(whySec.start, whySec.end);
     }
   }
-  const unknowns = secBody(SECTION.unknowns, true) ? parseBullets(full, SECTION.unknowns) : [];
-  const assumptions = secBody(SECTION.assumptions, true) ? parseBullets(full, SECTION.assumptions) : [];
-  const against = secBody(SECTION.against, true).replace(/\s*\n\s*/g, " ") || null;
-  const affects = secBody(SECTION.affects, true) ? parseBullets(full, SECTION.affects) : [];
+  const unknowns = secBody(SECTION.unknowns, "bullets") ? parseBullets(full, SECTION.unknowns) : [];
+  const assumptions = secBody(SECTION.assumptions, "bullets") ? parseBullets(full, SECTION.assumptions) : [];
+  const against = secBody(SECTION.against, "all").replace(/\s*\n\s*/g, " ") || null; // shown whole in a box of its own
+  const affects = secBody(SECTION.affects, "bullets") ? parseBullets(full, SECTION.affects) : [];
   const terms = secBody(SECTION.terms, false) ? parseTerms(full) : [];
   let todo: string | null = null;
   if (base.blocker) {
@@ -509,7 +531,7 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
       const text = body.slice(todoSec.start + 1, todoSec.end).join("\n").trim();
       if (text) {
         todo = text;
-        drop.push([todoSec.start, todoSec.end]);
+        drop(todoSec.start, todoSec.end);
       }
     }
   }
@@ -518,10 +540,13 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     const text = body.slice(recSec.start + 1, recSec.end).join("\n").trim();
     if (text) {
       recommendation = text;
-      drop.push([recSec.start, recSec.end]);
+      drop(recSec.start, recSec.end);
     }
   }
-  const kept = body.filter((_, i) => !drop.some(([s, e]) => i >= s && i < e));
+  for (const sec of trimmed) {
+    if (!body.some((l, i) => i > sec.start && i < sec.end && !hide.has(i) && l.trim() !== "")) drop(sec.start, sec.end);
+  }
+  const kept = body.filter((_, i) => !hide.has(i));
   const cards = [...parsed.cards, ...parsed.extras].map((c) => (plainQuestion.approval && DENY_RE.test(c.label) ? { ...c, heavy: false } : c));
   const split = recommendation ? splitHeadline(recommendation) : null;
   const fns = parseFootnotes(body.join("\n"));
