@@ -43,7 +43,7 @@ export async function streamLoop(api, app, signal, o) {
                 else if (ev.event === "plan.updated")
                     app.planUpdated(ev.plan, now());
                 else if (ev.event === "settings.updated")
-                    app.settingsUpdated(ev.settings);
+                    app.settingsUpdated(ev.settings, now());
                 else if (ev.event === "plan.removed")
                     app.planRemoved(ev.name, now());
                 else
