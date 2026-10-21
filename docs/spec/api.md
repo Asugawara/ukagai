@@ -333,7 +333,7 @@ The settings page (`/settings`) edits `<data-dir>/config.json` through these two
   "plans": {
     // one-click chips on plan cards: at most 10 lines of 1-300 characters (trimmed, blank lines dropped)
     "instruction_presets": [],
-    "auto_show": true,   // false: new plan files do not pop up and do not count in Pending (the drawer list and an arriving approval still show them). Whatever it says, a plan file without `session_id` never pops up or counts (it has no actions): it is listed in the drawer until `plan.updated` brings the session
+    "auto_show": false,  // default false. false: new plan files do not pop up and do not count in Pending (the drawer list and an arriving approval still show them). Whatever it says, a plan file without `session_id` never pops up or counts (it has no actions): it is listed in the drawer until `plan.updated` brings the session
   },
   "notify": {
     "sound": false,                  // a short beep on a new decision while the GUI tab is not focused
@@ -352,7 +352,7 @@ A failed write (for example a read-only data directory) is a 500 `{ "error": "in
 
 `config.json` is read tolerantly (`readConfig`): a missing or malformed file, or any unknown / invalid field, falls back to that field's default and never throws (a key an older version wrote is ignored); `writeConfig` writes the whole object. Not settings: ports, the data directory, hook budgets, the Codex home.
 
-Live application, without a restart: the recap watcher, the Codex bridge (`codex_delay_s` at arm time) and the terminal delivery read the current value at the moment they act; `lang` changes what `GET /api/config`, the injected `<html lang data-lang>` and the next GUI / TUI load use (the hook reads `config.json` per call already). `theme`, `hints`, `plans.auto_show`, and `notify.*` are applied by the GUI itself; the TUI takes `lang` (unless `--lang` pinned it) from `GET /api/settings` at start, on every reconnect refetch and on `settings.updated`.
+Live application, without a restart: the recap watcher, the Codex bridge (`codex_delay_s` at arm time) and the terminal delivery read the current value at the moment they act; `lang` changes what `GET /api/config`, the injected `<html lang data-lang>` and the next GUI / TUI load use (the hook reads `config.json` per call already). `theme`, `hints`, `plans.auto_show`, and `notify.*` are applied by the GUI itself; the TUI takes `lang` (unless `--lang` pinned it) and `plans.auto_show` (off until the settings say otherwise: a plan file is then neither queued nor counted in the TUI, the list `b` still has it) from `GET /api/settings` at start, on every reconnect refetch and on `settings.updated`.
 
 ### POST /api/plans/:name/instruct
 

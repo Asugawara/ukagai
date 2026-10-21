@@ -1,4 +1,5 @@
-import type { Decision } from "../../src/contract.js";
+import { DEFAULT_SETTINGS, type Decision } from "../../src/contract.js";
+import { App } from "../../src/tui/app.js";
 
 /** The question text of the default decision. */
 export const Q = "Should notifications use SSE or WebSocket?";
@@ -201,4 +202,11 @@ export function blockerDecision(over: Partial<Decision> & Record<string, unknown
     ...withExplanation(md, { type: "blocker" }),
     ...over,
   } as never);
+}
+
+/** An App with `plans.auto_show` on (the shipped default is off): for tests whose plan files must come up by themselves */
+export function autoShowApp(): App {
+  const app = new App();
+  app.settingsUpdated({ ...DEFAULT_SETTINGS, plans: { ...DEFAULT_SETTINGS.plans, auto_show: true } });
+  return app;
 }

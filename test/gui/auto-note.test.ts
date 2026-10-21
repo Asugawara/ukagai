@@ -9,6 +9,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HAS_BROWSER = spawnSync("agent-browser", ["--version"], { stdio: "ignore" }).status === 0;
@@ -103,6 +104,7 @@ before(async () => {
   if (!HAS_BROWSER) return;
   home = mkdtempSync(join(tmpdir(), "ukagai-auto-note-"));
   dataDir = join(home, "data");
+  optInPlanAutoShow(dataDir);
   mkdirSync(join(home, ".claude", "projects", "p"), { recursive: true });
   mkdirSync(join(home, ".claude", "plans"), { recursive: true });
   const port = await freePort();

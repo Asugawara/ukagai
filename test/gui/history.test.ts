@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SEED_MD = readFileSync(new URL("./fixtures/seed.md", import.meta.url), "utf8");
@@ -134,6 +135,7 @@ before(async () => {
   if (!HAS_BROWSER) return;
   home = mkdtempSync(join(tmpdir(), "ukagai-hist-"));
   dataDir = join(home, "data");
+  optInPlanAutoShow(dataDir);
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
   serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home } });

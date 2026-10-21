@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, type PlanContent, type PlanSummary } from "../../src/
 import type { Key } from "../../src/tui/keys.js";
 import { renderFrame } from "../../src/tui/render.js";
 import { stripAnsi } from "../../src/tui/width.js";
-import { decision } from "./helpers.js";
+import { decision, autoShowApp } from "./helpers.js";
 
 const ch = (c: string): Key => ({ name: "char", ch: c });
 const enter: Key = { name: "enter" };
@@ -25,7 +25,7 @@ const draw = (app: App) => {
 };
 
 function approval(presets: string[] = []): App {
-  const app = new App();
+  const app = autoShowApp();
   app.settingsUpdated({ ...DEFAULT_SETTINGS, plans: { auto_show: true, instruction_presets: presets } });
   app.replacePending([decision({ kind: "approve_plan", request: { plan: "# P\n\n## Scope and reversibility\n\nx", planFilePath: "/p" } } as never)], clock);
   return app;
@@ -76,7 +76,7 @@ test("plan file: a session shows the box and sends through the plan endpoint; no
   const file = (session_id?: string): PlanContent => ({ name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, format_ok: true, ready: false, ...(session_id ? { session_id } : {}) });
   const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false, format_ok: true, ready: false };
   for (const withSession of [true, false]) {
-    const app = new App();
+    const app = autoShowApp();
     app.fetchPlan = async () => file(withSession ? "s-live" : undefined);
     app.replacePlans([withSession ? { ...summary, session_id: "s-live", ready: true } : summary], clock);
     await new Promise((r) => setTimeout(r, 5));
@@ -101,7 +101,7 @@ test("plan file: a session shows the box and sends through the plan endpoint; no
 test("plan file: the draft survives a failed send, a second Enter while sending does nothing, success clears it", async () => {
   const file: PlanContent = { name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, format_ok: true, ready: true, session_id: "s-live" };
   const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file.mtime, bytes: 20, sections: 1, lines: 5, read: false, format_ok: true, ready: true, session_id: "s-live" };
-  const app = new App();
+  const app = autoShowApp();
   app.fetchPlan = async () => file;
   app.replacePlans([summary], clock);
   await new Promise((r) => setTimeout(r, 5));
@@ -242,7 +242,7 @@ test("approval: in the box digits and letters are text once there is text; Enter
 test("plan file with a session: the card is always there, no i needed; without a session it says why and there is no card", async () => {
   const file = (session_id?: string): PlanContent => ({ name: "swift.md", title: "Swift", mtime: new Date(clock - 60_000).toISOString(), markdown: "# Swift\n\n## A\n\nx\n", read: false, format_ok: true, ready: false, ...(session_id ? { session_id } : {}) });
   const summary: PlanSummary = { name: "swift.md", title: "Swift", mtime: file().mtime, bytes: 20, sections: 1, lines: 5, read: false, format_ok: true, ready: false };
-  const app = new App();
+  const app = autoShowApp();
   app.fetchPlan = async () => file("s-live");
   app.replacePlans([{ ...summary, session_id: "s-live", ready: true }], clock);
   await new Promise((r) => setTimeout(r, 5));
@@ -251,7 +251,7 @@ test("plan file with a session: the card is always there, no i needed; without a
   assert.match(draw(app).text, /\[i\] Instruct/, "the plan file's one card keeps the i key");
   press(app, ch("i"), ...[...("hi")].map(ch));
   assert.deepEqual(press(app, enter), [{ type: "instruct_plan", name: "swift.md", text: "hi" }]);
-  const lone = new App();
+  const lone = autoShowApp();
   lone.fetchPlan = async () => file();
   lone.replacePlans([summary], clock);
   press(lone, ch("b"), enter);

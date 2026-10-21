@@ -136,7 +136,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---- Settings (GET /api/settings, SSE settings.updated; edited on /settings) ----
 // Same shape as the Settings schema in src/contract.ts. `loaded` below does not depend on it: the defaults apply until the first fetch lands
-const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: true, instruction_presets: [] }, notify: { sound: false, browser: false, title_badge: true } };
+const DEFAULT_SETTINGS = { lang: "en", theme: "system", hints: true, checkpoints: { enabled: true, codex_delay_s: 180, terminal_delivery: true }, plans: { auto_show: false, instruction_presets: [] }, notify: { sound: false, browser: false, title_badge: true } };
 let settings = DEFAULT_SETTINGS;
 function applySettings(s) {
   const prev = settings;

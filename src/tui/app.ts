@@ -187,6 +187,7 @@ export class App {
   settingsUpdated(s: Settings): void {
     if (!this.langLocked) this.lang = s.lang;
     this.presets = s.plans?.instruction_presets ?? [];
+    this.autoShowPlans = s.plans?.auto_show ?? false;
     this.models.clear();
   }
 
@@ -269,6 +270,9 @@ export class App {
     return out;
   }
 
+  /** Settings `plans.auto_show`: off keeps the plan files out of the queue and the Pending count (the list `b` still has them). Off until the settings say otherwise, like the default */
+  private autoShowPlans = false;
+
   /** The plans to list: newest first, minus the ones that are an approval decision */
   private visiblePlans(): PlanSummary[] {
     const hidden = this.hiddenPlans();
@@ -281,7 +285,7 @@ export class App {
 
   /** The new plans that flow in by themselves: only a `ready` one (the server: complete, session known, not working, no decision pending); one still being written sits in the list (`b`) as "Writing" until it is */
   private queuedPlans(now: number): PlanSummary[] {
-    return this.newPlans(now).filter((p) => p.ready);
+    return this.autoShowPlans ? this.newPlans(now).filter((p) => p.ready) : [];
   }
 
   /** The Instruct card of a plan file needs a session that is known and not working */

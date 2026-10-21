@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SETTINGS } from "../../src/contract.js";
+import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const LONG = readFileSync(new URL("./fixtures/long-plan.md", import.meta.url), "utf8");
@@ -73,7 +74,7 @@ async function api(path: string, body?: unknown, method?: string) {
   return res.json() as Promise<any>;
 }
 
-const setTheme = (theme: "light" | "dark") => api("/api/settings", structuredClone({ ...DEFAULT_SETTINGS, theme }), "PUT");
+const setTheme = (theme: "light" | "dark") => api("/api/settings", structuredClone({ ...DEFAULT_SETTINGS, theme, plans: { ...DEFAULT_SETTINGS.plans, auto_show: true } }), "PUT");
 
 async function cancelAll() {
   const list = (await api("/api/decisions?status=pending")) as { id: string }[];
@@ -160,6 +161,7 @@ before(async () => {
   if (!HAS_BROWSER) return;
   home = mkdtempSync(join(tmpdir(), "ukagai-contrast-"));
   dataDir = join(home, "data");
+  optInPlanAutoShow(dataDir);
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
   serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home } });

@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 - **TUI**: 同じ画面をターミナルで。`ukagai tui`。[ガイド](docs/guide.md#the-tui)
 - **回答をメッセージで届ける**: 対話の Claude Code ターミナルでは、エージェントは待たずにターンを終え、手が空いたところで回答がメッセージとして届きます（既定でオン、オフにする方法は 3 つ）。[ガイド](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **Codex CLI**: hooks とプラン承認用のブリッジ。[ガイド](docs/guide.md#codex-cli)
-- **設定ページ**: 言語、テーマ、通知、プランの自動表示、エージェントが従うスキルの本文。[ガイド](docs/guide.md#settings)
+- **設定ページ**: 言語、テーマ、通知、プランファイルの自動表示（既定はオフ）、エージェントが従うスキルの本文。[ガイド](docs/guide.md#settings)
 - **コード参照**: プランや説明にある長い `path:line` は短いチップになり（フルパスはホバーとコピーで分かります）、`▸` で行番号付きの前後のコードを開けます。クリックしたときにプロジェクトから読むので、トークンは使いません。[ガイド](docs/guide.md#plan-approval)
 - **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
 

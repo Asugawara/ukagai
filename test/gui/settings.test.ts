@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SETTINGS, type Settings } from "../../src/contract.js";
+import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HAS_BROWSER = spawnSync("agent-browser", ["--version"], { stdio: "ignore" }).status === 0;
@@ -72,7 +73,8 @@ async function api(path: string, body?: unknown, method?: string) {
 const getSettings = (): Promise<Settings> => api("/api/settings");
 const putSettings = (f: (s: Settings) => void = () => {}) => {
   // The light theme unless a test says otherwise: the browser's own scheme would move every colour under the assertions
-  const s = structuredClone({ ...DEFAULT_SETTINGS, theme: "light" as const });
+  // plans.auto_show on unless a test says otherwise: the shipped default is off
+  const s = structuredClone({ ...DEFAULT_SETTINGS, theme: "light" as const, plans: { ...DEFAULT_SETTINGS.plans, auto_show: true } });
   f(s);
   return api("/api/settings", s, "PUT");
 };
@@ -144,6 +146,7 @@ before(async () => {
   if (!HAS_BROWSER) return;
   home = mkdtempSync(join(tmpdir(), "ukagai-settings-"));
   dataDir = join(home, "data");
+  optInPlanAutoShow(dataDir);
   mkdirSync(PLANS(), { recursive: true });
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
@@ -599,6 +602,20 @@ gui("plans.auto_show=false keeps a new plan out of Pending (still in the drawer 
   assert.equal(ev<boolean>(`document.getElementById("empty").hidden`), false);
   await putSettings();
   await waitFor("the plan takes the screen once auto-show is on", `document.querySelector("#head .hd-ctx")?.textContent.includes("updated") && document.querySelector("#background .md")`);
+});
+
+gui("the shipped default (plans.auto_show off): a ready plan neither takes the screen nor counts, and is in the drawer list", async () => {
+  await putSettings((s) => (s.plans = structuredClone(DEFAULT_SETTINGS.plans)));
+  assert.equal((await getSettings()).plans.auto_show, false);
+  await openMain(IDLE);
+  await planSession("default-plan");
+  writePlan("default-plan.md", "# Default plan\n\n## One\n\nText.\n");
+  await sleep(2500);
+  assert.equal(ev<boolean>(`document.getElementById("empty").hidden`), false, "the plan did not take the screen");
+  assert.equal(ev<string>("document.title"), "ukagai", "and it is not counted");
+  key("b");
+  await waitFor("drawer lists the plan", `document.querySelector("#pending-list .plan-row")`);
+  key("Escape");
 });
 
 gui("title_badge=false keeps the (N) count out of the tab title", async () => {

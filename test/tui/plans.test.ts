@@ -4,13 +4,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { App } from "../../src/tui/app.js";
-import type { PlanContent, PlanSummary } from "../../src/contract.js";
+import { DEFAULT_SETTINGS, type PlanContent, type PlanSummary } from "../../src/contract.js";
 import type { Key } from "../../src/tui/keys.js";
 import { MESSAGES } from "../../src/tui/i18n.js";
 import { renderFrame } from "../../src/tui/render.js";
 import { planOutline } from "../../src/tui/plan.js";
 import { stripAnsi } from "../../src/tui/width.js";
-import { decision } from "./helpers.js";
+import { decision, autoShowApp } from "./helpers.js";
 
 const LONG = readFileSync(new URL("../gui/fixtures/long-plan.md", import.meta.url), "utf8");
 const SHORT_C = "# Short plan C\n\n## One\n\nText.\n\n## Two\n\nMore.\n";
@@ -43,7 +43,7 @@ function setup(): { app: App } {
     "old.md": file("old.md", "Old plan", SHORT_C, 30 * 3600_000),
   };
   fetched = [];
-  const app = new App();
+  const app = autoShowApp();
   app.fetchPlan = async (name) => {
     fetched.push(name);
     return FILES[name]!;
@@ -380,6 +380,29 @@ test("long plan file without a session: → has nowhere to go and the zone stays
   const { text } = draw(app);
   assert.match(text, /The agent's session was not found/);
   assert.match(text, /j\/k Section · Enter Open · o All/);
+});
+
+test("plans.auto_show off (the default): a ready plan is not shown or counted but is in the list (b); an approval still shows; turning it on brings the plan up", async () => {
+  assert.equal(DEFAULT_SETTINGS.plans.auto_show, false);
+  const { app } = setup();
+  app.settingsUpdated(DEFAULT_SETTINGS);
+  app.planUpdated(summary(FILES["c.md"]!), clock); // ready, session known
+  await tick();
+  assert.equal(app.shownPlan, null, "nothing pops up");
+  assert.equal(app.count(clock), 0, "not counted in Pending");
+  press(app, ch("b"));
+  assert.equal(app.view(clock).list!.items.length, 1, "listed in b");
+  press(app, esc);
+  app.replacePending([decision({ kind: "approve_plan", request: { plan: "# P\n\n## Scope and reversibility\n\nx", planFilePath: "/p" } } as never)], clock);
+  assert.equal(app.count(clock), 1, "the approval counts");
+  assert.equal(app.shownPlan, null, "the approval, not the plan file, is on screen");
+  assert.notEqual(app.view(clock).model, null);
+  app.drop("d1", clock);
+  app.settingsUpdated({ ...DEFAULT_SETTINGS, plans: { ...DEFAULT_SETTINGS.plans, auto_show: true } });
+  app.planUpdated(summary(FILES["c.md"]!), clock);
+  await tick();
+  assert.equal(app.shownPlan, "c.md", "on: the plan comes up");
+  assert.equal(app.count(clock), 1);
 });
 
 test("a plan that is not ready (still being written) is not queued, counted or shown; the list (b) labels it Writing / 作成中; plan.updated with ready true brings it up", async () => {

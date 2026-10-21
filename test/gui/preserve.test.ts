@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { passCases, type PassCase } from "../support/explain-atoms.js";
 import { EXPLAINED_MD, FIELD_RULES, V, options as fieldOptions } from "../support/question-fields.js";
+import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const PIXEL = fileURLToPath(new URL("./fixtures/pixel.png", import.meta.url));
@@ -109,6 +110,7 @@ before(async () => {
   // Point HOME at a temp directory so ~/.ukagai and real sessions are untouched
   home = mkdtempSync(join(tmpdir(), "ukagai-gui-preserve-"));
   dataDir = join(home, "data");
+  optInPlanAutoShow(dataDir);
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
   await startServe();

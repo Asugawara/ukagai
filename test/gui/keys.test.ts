@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SEED_MD = readFileSync(new URL("./fixtures/seed.md", import.meta.url), "utf8");
@@ -196,6 +197,7 @@ before(async () => {
   // Point HOME at a temp directory so ~/.ukagai and real sessions are untouched (the allowed range of transcript_path is based here too)
   home = mkdtempSync(join(tmpdir(), "ukagai-gui-"));
   dataDir = join(home, "data");
+  optInPlanAutoShow(dataDir);
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
   // A stale dist/ would skew server behavior, so always run src through tsx

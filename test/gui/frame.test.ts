@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { FRAME_POLICY } from "../../src/serve/files.js";
+import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HAS_BROWSER = spawnSync("agent-browser", ["--version"], { stdio: "ignore" }).status === 0;
@@ -138,6 +139,7 @@ before(async () => {
   writeFileSync(join(home, ".claude", "plans", "a.png"), png(120, 80, [22, 163, 74]));
   writeFileSync(join(home, ".claude", "plans", "plan-compare.html"), PAGE);
   const dataDir = join(home, "data");
+  optInPlanAutoShow(dataDir);
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
   serve = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", "serve", "--port", String(port), "--data-dir", dataDir], { cwd: ROOT, stdio: "ignore", env: { ...process.env, HOME: home, UKAGAI_DISABLE: "1" } });

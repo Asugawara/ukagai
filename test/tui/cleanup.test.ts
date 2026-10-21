@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { parseSse } from "../../src/tui/api.js";
 import { App } from "../../src/tui/app.js";
+import { autoShowApp } from "./helpers.js";
 import { refetch, type SyncApi } from "../../src/tui/sync.js";
 import { renderFrame, richStats } from "../../src/tui/render.js";
 import type { PlanContent } from "../../src/contract.js";
@@ -45,7 +46,7 @@ test("refetch: plans are fetched on connect, and the safety poll skips them whil
     plans: async () => (plans++, []),
     stream: async () => {},
   };
-  const app = new App();
+  const app = autoShowApp();
   await refetch(api, app, () => NOW);
   assert.equal(plans, 1);
   await refetch(api, app, () => NOW, app.down); // SSE up
@@ -56,7 +57,7 @@ test("refetch: plans are fetched on connect, and the safety poll skips them whil
 });
 
 test("a repaint of an open long plan renders nothing again; a new width or language does", async () => {
-  const app = new App();
+  const app = autoShowApp();
   const file: PlanContent = { name: "b.md", title: "Export retry", mtime: new Date(NOW - 3600_000).toISOString(), markdown: LONG, read: false, format_ok: true, ready: true, session_id: "s-plan" } as PlanContent;
   app.fetchPlan = async () => file;
   app.planUpdated({ name: "b.md", title: file.title, mtime: file.mtime, bytes: LONG.length, sections: 9, lines: 200, read: false, format_ok: true, ready: true, session_id: "s-plan" }, NOW);
