@@ -365,7 +365,7 @@ export function createApp(deps: AppDeps): Hono {
     const end = endQ === undefined ? undefined : num(endQ);
     if (line === null || line < 1 || end === null || (end !== undefined && end < line)) return c.json({ error: "invalid line" }, 400);
     const d = store.get(c.req.query("decision") ?? "");
-    const snippet = d ? readSource(d.session.cwd, c.req.query("path") ?? "", line, end) : null;
+    const snippet = d ? readSource(d.session.cwd, c.req.query("path") ?? "", line, end, { home: deps.home, dataDir: deps.dataDir }) : null;
     return snippet ? c.json(snippet) : c.json({ error: "not found" }, 404);
   });
 

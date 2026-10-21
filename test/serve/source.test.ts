@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isDenied, SOURCE_LINE_MAX } from "../../src/serve/source.js";
+import { isDenied, readSource, SOURCE_LINE_MAX } from "../../src/serve/source.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 
 const roots: string[] = [];
@@ -53,7 +53,7 @@ async function env() {
   const id = await seed(cwd, "a");
   const get = (q: string, auth = true) => fetch(`${url}/api/source?${q}`, { headers: auth ? { authorization: `Bearer ${h.token}` } : {} });
   const src = (path: string, line: string | number = 1, extra = "", who = id, auth = true) => get(`decision=${who}&path=${encodeURIComponent(path)}&line=${line}${extra}`, auth);
-  return { repo, cwd, id, seed, get, src };
+  return { home, dataDir, repo, cwd, id, seed, get, src };
 }
 
 const NOT_FOUND = { error: "not found" };
@@ -88,6 +88,10 @@ test("a range shows exactly that range, at most 40 lines; lines past the end are
   put(join(e.cwd, "crlf.txt"), "a\r\nb\r\nc\r\n");
   const crlf = (await (await e.src("crlf.txt", 2)).json()) as { total: number; lines: string[] };
   assert.deepEqual([crlf.total, crlf.lines], [3, ["a", "b", "c"]]);
+  // a lone CR is not a line break (git and the agent's Read tool count the same way); only one trailing CR per line is dropped
+  put(join(e.cwd, "cr.txt"), "x = '\r'\r\ny\r\n");
+  const cr = (await (await e.src("cr.txt", 1)).json()) as { total: number; lines: string[] };
+  assert.deepEqual([cr.total, cr.lines], [2, ["x = '\r'", "y"]]);
   put(join(e.cwd, "wide.txt"), "x".repeat(SOURCE_LINE_MAX + 50) + "\n");
   const wide = (await (await e.src("wide.txt", 1)).json()) as { lines: string[] };
   assert.equal(wide.lines[0], "x".repeat(SOURCE_LINE_MAX) + "…");
@@ -111,8 +115,12 @@ test("escapes are 404: ../, an absolute path outside the root, a symlink out of 
   put(join(outside, "secret.txt"), numbered(5));
   put(join(e.repo, "..", `ukagai-sibling-${process.pid}.txt`), numbered(5));
   roots.push(join(e.repo, "..", `ukagai-sibling-${process.pid}.txt`));
+  // `../../secret.txt` from <repo>/app is <tmp>/secret.txt: it must exist, or the 404 below would prove nothing
+  put(join(e.repo, "..", "secret.txt"), numbered(5));
+  roots.push(join(e.repo, "..", "secret.txt"));
   symlinkSync(join(outside, "secret.txt"), join(e.cwd, "link.txt"));
   symlinkSync(outside, join(e.cwd, "linkdir"));
+  assert.equal(realpathSync(join(e.cwd, "..", "..", "secret.txt")).length > 0, true);
   for (const p of ["../../secret.txt", `../../ukagai-sibling-${process.pid}.txt`, "../../../../../../../../etc/hosts", join(outside, "secret.txt"), "/etc/hosts", "link.txt", "linkdir/secret.txt"]) {
     const r = await e.src(p, 1);
     assert.equal(r.status, 404, p);
@@ -189,4 +197,136 @@ test("authorization: no credential is 401, before the 400", async () => {
   assert.equal(r.status, 401);
   assert.deepEqual(await r.json(), { error: "unauthorized" });
   assert.equal((await e.src("../x", 0, "", e.id, false)).status, 401, "401 comes before the 400");
+});
+
+/** (name, refused): the name rules and the dot-segment rule, on a path relative to the project root */
+const NAMES: Array<[string, boolean]> = [
+  [".env", true], [".env.local", true], [".env-prod", true], [".env_local", true], [".envrc", true], ["db.env", true], ["prod.env", true], [".dev.vars", true],
+  [".env.example", false], [".env.sample", false], [".env.local.example", false], [".env.prod.sample", false],
+  ["credentials.json", true], ["service-account.json", true], ["service-account-prod.json", true], ["secrets.yaml", true], ["secrets.json", true], ["my-credentials.yml", true], ["credentials", true],
+  ["credentials.ts", false], ["secrets.py", false], ["secret_santa.md", false], ["credential-store.go", false],
+  ["app.keystore", true], ["release.jks", true], ["vault.kdbx", true], ["a.pem", true], ["a.KEY", true], ["a.p12", true], ["a.pfx", true],
+  ["terraform.tfstate", true], ["terraform.tfstate.backup", true], ["prod.tfvars", true], ["kubeconfig", true], [".htpasswd", true], [".vault-token", true], ["local.properties", true],
+  ["id_rsa", true], ["id_rsa.pub", true], ["id_ed25519", true], ["id_ecdsa", true], ["id_dsa", true], ["ID_RSA", true], ["id_rſa", true],
+  [".npmrc", true], [".netrc", true], [".pypirc", true], [".pgpass", true], [".git-credentials", true], [".yarnrc.yml", true], [".zsh_history", true], [".bash_history", true],
+  [".git", true], [".git/config", true], [".GIT/HEAD", true], [".ssh/config", true], [".awſ/credentials", true], [".aws/credentials", true], [".gnupg/gpg.conf", true], [".hidden/notes.txt", true],
+  [".github/workflows/ci.yml", false], [".gitlab/ci.md", false], [".circleci/config.yml", false], [".vscode/settings.json", false], [".devcontainer/devcontainer.json", false],
+  [".husky/pre-commit", false], [".changeset/config.json", false], [".storybook/main.ts", false], [".claude/settings.md", false],
+  [".gitignore", false], [".gitattributes", false], [".editorconfig", false], [".nvmrc", false], [".node-version", false], [".tool-versions", false], [".eslintrc.json", false], [".prettierrc", false],
+  ["src/environment.ts", false], ["src/identity.ts", false], ["README.md", false], ["src/deep/nested/dir/articles.py", false], ["Makefile", false],
+];
+
+test("the name rules: every name of the table is refused or allowed as listed (also behind a folder)", () => {
+  for (const [name, refused] of NAMES) {
+    assert.equal(isDenied(name), refused, name);
+    assert.equal(isDenied(`pkg/sub/${name}`), refused, `pkg/sub/${name}`);
+  }
+  // an absolute path is judged without the dot-segment rule: the repository may live under ~/.herdr/worktrees
+  assert.equal(isDenied("/Users/x/.herdr/worktrees/p/src/a.ts", false), false);
+  assert.equal(isDenied("/Users/x/.herdr/worktrees/p/src/a.ts", true), true);
+  assert.equal(isDenied("/Users/x/.herdr/worktrees/p/.env", false), true);
+  assert.equal(isDenied("/Users/x/.herdr/worktrees/p/.git/config", false), true);
+});
+
+test("the table holds over HTTP too: files that exist are refused, source files named like secrets are served", async () => {
+  const e = await env();
+  const put1 = (p: string) => put(join(e.repo, p), numbered(3));
+  for (const [name, refused] of NAMES) {
+    if (name === "." || name.endsWith("/") || name === ".git" || name.includes("ſ")) continue;
+    put1(name);
+    assert.equal((await e.src(name, 1)).status, refused ? 404 : 200, name);
+  }
+});
+
+test("the Unicode fold: a spelling that macOS folds onto a denied name is refused (the real path is judged, in NFKC)", async () => {
+  const e = await env();
+  put(join(e.repo, ".aws", "credentials"), numbered(3));
+  put(join(e.repo, "k", "id_rsa"), numbered(3));
+  for (const p of [".awſ/credentials", "k/id_rſa", ".AWS/credentials", "k/ID_RSA", "K/id_rsa"]) assert.equal((await e.src(p, 1)).status, 404, p);
+  assert.equal(isDenied(".awſ/credentials"), true);
+  assert.equal(isDenied("k/id_rſa"), true);
+});
+
+test("a repository at the home directory does not widen the root: the session's directory is the root, and ukagai's own files stay out", async () => {
+  const e = await env();
+  mkdirSync(join(e.home, ".git"), { recursive: true });
+  mkdirSync(join(e.home, "proj"), { recursive: true });
+  put(join(e.home, "proj", "a.txt"), numbered(3));
+  put(join(e.home, "notes.txt"), numbered(3));
+  put(join(e.home, ".ukagai", "token"), "secret-token\n");
+  put(join(e.home, ".config", "gh", "hosts.yml"), "oauth_token: x\n");
+  put(join(e.home, ".zsh_history"), numbered(3));
+  const id = await e.seed(join(e.home, "proj"), "dot");
+  assert.equal((await e.src("a.txt", 1, "", id)).status, 200);
+  assert.equal(((await (await e.src("a.txt", 1, "", id)).json()) as { path: string }).path, "a.txt", "the root is proj, not home");
+  for (const p of ["../notes.txt", "../.ukagai/token", "../.config/gh/hosts.yml", "../.zsh_history", join(e.home, "notes.txt"), join(e.home, ".ukagai", "token")]) assert.equal((await e.src(p, 1, "", id)).status, 404, p);
+});
+
+test("a session in the home directory, above it, or in / reads nothing", async () => {
+  const e = await env();
+  put(join(e.home, "notes.txt"), numbered(3));
+  put(join(e.home, "..", `ukagai-above-${process.pid}.txt`), numbered(3));
+  roots.push(join(e.home, "..", `ukagai-above-${process.pid}.txt`));
+  const inHome = await e.seed(e.home, "home");
+  const above = await e.seed(join(e.home, ".."), "above");
+  const slash = await e.seed("/", "slash");
+  assert.equal((await e.src("notes.txt", 1, "", inHome)).status, 404);
+  assert.equal((await e.src(join(e.home, "notes.txt"), 1, "", inHome)).status, 404);
+  assert.equal((await e.src(`ukagai-above-${process.pid}.txt`, 1, "", above)).status, 404);
+  assert.equal((await e.src("etc/hosts", 1, "", slash)).status, 404);
+  assert.equal((await e.src("/etc/hosts", 1, "", slash)).status, 404);
+  assert.equal(readSource("/", "/etc/hosts", 1, undefined, { home: e.home }), null);
+});
+
+test("a session inside a refused folder of the home directory, or in the data directory, reads nothing", async () => {
+  const e = await env();
+  for (const d of [".aws", ".ssh", ".gnupg", ".kube", ".docker", ".config", ".claude", ".codex", ".ukagai", "Library"]) {
+    put(join(e.home, d, "credentials"), numbered(3));
+    put(join(e.home, d, "sub", "x.txt"), numbered(3));
+    const id = await e.seed(join(e.home, d), `h${d}`);
+    assert.equal((await e.src("credentials", 1, "", id)).status, 404, d);
+    assert.equal((await e.src("sub/x.txt", 1, "", id)).status, 404, d);
+    assert.equal((await e.src(join(e.home, d, "sub", "x.txt"), 1, "", id)).status, 404, d);
+  }
+  // a project below the home directory that refers into a refused folder with an absolute path
+  const proj = join(e.home, "proj");
+  mkdirSync(join(proj, ".git"), { recursive: true });
+  const inProj = await e.seed(proj, "proj");
+  assert.equal((await e.src(join(e.home, ".aws", "credentials"), 1, "", inProj)).status, 404);
+  assert.equal((await e.src("../.aws/credentials", 1, "", inProj)).status, 404);
+  put(join(e.dataDir, "token"), "tok\n");
+  const inData = await e.seed(e.dataDir, "data");
+  assert.equal((await e.src("token", 1, "", inData)).status, 404);
+  assert.equal((await e.src(join(e.dataDir, "token"), 1)).status, 404);
+  // a symlink from the project into the data directory
+  symlinkSync(join(e.dataDir, "token"), join(e.cwd, "tok.txt"));
+  assert.equal((await e.src("tok.txt", 1)).status, 404);
+});
+
+test("a line past the end of the cwd's file goes on to the repository root's file; a denied name still stops", async () => {
+  const e = await env();
+  put(join(e.cwd, "README.md"), numbered(2));
+  put(join(e.repo, "README.md"), numbered(50));
+  const r = await e.src("README.md", 40);
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { path: string; total: number };
+  assert.deepEqual([body.path, body.total], ["README.md", 50]);
+  assert.equal((await e.src("README.md", 60)).status, 404, "past the end of both");
+  assert.equal((await e.src("README.md", 1)).status, 200);
+  assert.equal(((await (await e.src("README.md", 1)).json()) as { path: string }).path, "app/README.md", "the cwd's file wins when the line is there");
+  put(join(e.cwd, ".env"), numbered(2));
+  put(join(e.repo, ".env"), numbered(50));
+  assert.equal((await e.src(".env", 40)).status, 404);
+});
+
+test("headers on a 404, and a path of more than 1024 characters", async () => {
+  const e = await env();
+  const r = await e.src("nope.txt", 1);
+  assert.equal(r.status, 404);
+  assert.equal(r.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(r.headers.get("cache-control"), "private, no-cache");
+  put(join(e.cwd, "a.txt"), numbered(3));
+  assert.equal((await e.src("a/".repeat(600) + "a.txt", 1)).status, 404);
+  assert.equal((await e.src("./".repeat(520) + "a.txt", 1)).status, 404, "over 1024 characters, though it resolves");
+  assert.equal((await e.src("a.txt", 1)).status, 200);
 });
