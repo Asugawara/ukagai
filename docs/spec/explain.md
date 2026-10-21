@@ -228,7 +228,7 @@ Everything an explanation that passes the checks says reaches the screen of the 
 
 The only content that may be missing from a screen is what `ALLOWED_DROPS` in `test/support/explain-atoms.ts` lists, each with its reason: today the front matter (shown as the title, chips and question) and the `No diagram: <reason>` lines under Options (the hook's proof that a diagram was considered, not content for the human).
 
-`test/gui/preserve.test.ts` (a real browser; the CI job `gui-preserve` runs it with `UKAGAI_REQUIRE_BROWSER=1`, which turns a missing agent-browser into a failure) and `test/tui/preserve.test.ts` render every `pass-*` fixture and look for its fenced blocks, images, diagrams and sentinel words (`KEEP…`). A new place or form the checks accept needs a `pass-*` fixture. Which AskUserQuestion fields are shown, and why the others are not, is listed in `test/support/question-fields.ts`; both surfaces are tested against that list.
+`test/gui/preserve.test.ts` (a real browser; the CI job `gui-preserve` runs it with `UKAGAI_REQUIRE_BROWSER=1`, which turns a missing agent-browser into a failure) and `test/tui/preserve.test.ts` render every `pass-*` fixture and look for its fenced blocks, images, diagrams and sentinel words (`KEEP…`). A new place or form the checks accept needs a `pass-*` fixture. The TUI cuts an option's `preview` to 12 rows and to the column width (marked with `…`): that is a display limit on a field that is not explanation content, not a drop. Which AskUserQuestion fields are shown, and why the others are not, is listed in `test/support/question-fields.ts`; both surfaces are tested against that list.
 
 ## 4. Check result
 
