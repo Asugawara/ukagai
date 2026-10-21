@@ -120,7 +120,7 @@ GUI: rendered as a chip; clicking copies the path (the same copy affordance as t
 
 ### 2.11 Tables
 
-GFM tables with alignment markers. The explanation-file **Options** table keeps its contract (first column = option label; see `explain.md` §3.3) and the GUI turns it into cards. Other tables render as tables; a cell may hold a badge (§2.6), inline code, a short callout-free sentence. No nested lists in cells.
+GFM tables with alignment markers. The explanation-file **Options** table keeps its contract (first column = option label; see `explain.md` §3.3) and the GUI turns it into cards. What else sits under the Options heading (text, images, code blocks, diagrams, before or after the table) stays in the left column at its place; only the table leaves it, and a `No diagram: <reason>` line is not shown. Other tables render as tables; a cell may hold a badge (§2.6), inline code, a short callout-free sentence. No nested lists in cells.
 
 ### 2.13 HTML pages
 

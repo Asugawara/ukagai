@@ -231,7 +231,7 @@ export function findTables(lines, inFence, from, to) {
             j++;
         }
         const header = splitRow(head);
-        tables.push({ header, rows, extraColumns: extraColumnsOf(header) });
+        tables.push({ header, rows, extraColumns: extraColumnsOf(header), start: i, end: j });
         i = j - 1;
     }
     return tables;
@@ -369,7 +369,7 @@ function hasContent(lines, s) {
     return lines.slice(s.start + 1, s.end).some((l) => l.trim() !== "");
 }
 /** A line under Options that says why no diagram is drawn ("No diagram: <reason>", "図なし: <理由>") */
-const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
+export const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
 function hasNoDiagramNote(lines, inFence, s) {
     for (let i = s.start + 1; i < s.end; i++) {
         const m = inFence[i] ? null : NO_DIAGRAM_NOTE.exec(lines[i]);

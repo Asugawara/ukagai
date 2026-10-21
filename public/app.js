@@ -1373,8 +1373,10 @@ async function send(d, body) {
 
 // A raw option that has no row in the explanation table: strip the (Recommended) suffix and show a recommended badge. The answer value stays the original label
 // A quiz option is shown exactly as given: no recommended badge, no preferred start position, the label untouched
-const quizItem = (o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: false });
-const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label) });
+// `preview` (AskUserQuestion's optional monospace text) is shown as plain text, and only when it is a string
+const previewOf = (o) => (typeof o?.preview === "string" && o.preview.trim() ? o.preview : null);
+const quizItem = (o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: false, preview: previewOf(o) });
+const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label), preview: previewOf(o) });
 
 const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
 
@@ -1793,7 +1795,7 @@ function renderRightBody(d) {
       if (v2) {
         if (v2.todoBox) top.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
         items = [
-          ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk })),
+          ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk, preview: previewOf(c.option) })),
           ...v2.extras.map(rawItem),
         ];
         // A blocker without a recommended row starts on the fixed "Done. Continue" option
@@ -1838,7 +1840,9 @@ function renderRightBody(d) {
         const card = el("label", { class: "opt" + (it.badge ? " recommended" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null },
           oneClick && idx < 4 ? el("span", { class: "cardkey", text: String(idx + 1) }) : null, input,
           el("span", { class: "grow" }, lab, ...descs,
-            oneClick ? el("div", { class: "confirm-inline", "data-key": `card:${idx}`, hidden: dr.confirmKey !== `card:${idx}`, text: t("confirm_again") }) : null));
+            oneClick ? el("div", { class: "confirm-inline", "data-key": `card:${idx}`, hidden: dr.confirmKey !== `card:${idx}`, text: t("confirm_again") }) : null,
+            // Selecting or scrolling the preview must not count as the second click that confirms the answer
+            it.preview ? el("pre", { class: "opt-preview", text: it.preview, onclick: (ev) => { ev.stopPropagation(); ev.preventDefault(); } }) : null));
         if (single) {
           cards.push({ input, card, risk: it.risk ?? "", value: it.value });
           card.addEventListener("click", (ev) => {
@@ -2664,13 +2668,50 @@ function parseTerms(sec) {
     }
     term = term.replace(/[:：]\s*$/, "").trim();
     def = def.replace(/^\s*[:：—–-]+\s*/, "").trim();
-    if (term && def) out.push({ term, def });
+    if (term && def) out.push({ term, def, li });
   }
   return out;
 }
 
 // Top-level bullets of a section (elements holding the inline content)
 const bulletsOf = (sec) => sec.nodes.flatMap((n) => [...(n.querySelectorAll?.(":scope > li") ?? [])]);
+
+// A line under Options that says why no diagram is drawn. Copy of NO_DIAGRAM_NOTE in src/hook/explain.ts (test/gui/cannot-rules.test.ts keeps the two equal)
+const NO_DIAGRAM_NOTE = /^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*|_)?(?:no diagram|diagram:\s*none|図(?:は)?(?:なし|不要|省略))(?:\*\*|_)?\s*[:：—–,-]?\s*(\S.{7,})$/iu;
+
+// A section's reader takes some of its nodes (`read`: the options table, the bullets of a list) out of the left column; everything else the section holds stays
+// under its heading, in place. Parents the removal leaves empty (a list, a column, a <details> with only its summary) go too, up to the section's top level.
+// `notes`: also drop the `No diagram: <why>` paragraphs and items, which are the hook's proof of a considered diagram and not content for the human.
+// The heading goes with the section only when nothing is left under it
+function keepRest(sec, read, { notes = false } = {}) {
+  const root = sec.head.parentElement;
+  const hasContent = (e) => {
+    if (e.querySelector("img, svg, pre, figure, table, iframe")) return true;
+    const box = e.tagName === "DETAILS" ? [...e.children].filter((c) => c.tagName !== "SUMMARY") : [e];
+    return box.some((c) => (c.textContent ?? "").trim() !== "");
+  };
+  const cut = (n) => {
+    let up = n.parentElement;
+    n.remove();
+    while (up && up !== root && root.contains(up) && !hasContent(up)) {
+      const next = up.parentElement;
+      up.remove();
+      up = next;
+    }
+  };
+  for (const n of read) cut(n);
+  if (notes) {
+    for (const n of sec.nodes.slice(1)) {
+      for (const p of [n, ...n.querySelectorAll?.("p, li") ?? []]) {
+        if (!["P", "LI"].includes(p.tagName) || p.closest("pre") || p.querySelector("ul, ol, p")) continue;
+        if (NO_DIAGRAM_NOTE.test((p.textContent ?? "").trim())) cut(p);
+      }
+    }
+  }
+  const rest = sec.nodes.slice(1).filter((n) => root.contains(n) && hasContent(n));
+  if (!rest.length) for (const n of sec.nodes) n.remove();
+  return rest.length > 0;
+}
 
 // Move the first sentence of the first paragraph out of the box into a new element (the headline), so the box does not repeat it.
 // null when there is none (the box is left whole)
@@ -3087,8 +3128,8 @@ function buildModel(d) {
     const table = optSec?.nodes.find((n) => n.tagName === "TABLE") ?? optSec?.nodes.map((n) => n.querySelector?.("table")).find(Boolean);
     const v2 = table ? parseOptionsTable(table, qs[0].options, fm) : null;
     if (v2) {
-      if (v2.cards.length) for (const n of optSec.nodes) n.remove(); // if no row matched, leave the table in the left column
-      // Optional sections (Terms / What only you know / Assumptions / Counterargument / Affected) leave the left column
+      if (v2.cards.length) keepRest(optSec, [table], { notes: true }); // if no row matched, leave the table in the left column
+      // Optional sections (Terms / What only you know / Assumptions / Counterargument / Affected) give their lists to the screen; what else they hold stays
       const takeSec = (names) => {
         const sec = findSection(secs, names, true);
         if (!sec || sec === optSec || sec === recSec) return null;
@@ -3102,16 +3143,17 @@ function buildModel(d) {
       v2.terms = termsSec ? parseTerms(termsSec) : [];
       v2.unknowns = unknownsSec ? bulletsOf(unknownsSec) : [];
       v2.assumptions = assumptionsSec ? bulletsOf(assumptionsSec) : [];
-      v2.affects = affectsSec ? bulletsOf(affectsSec).map((li) => (li.textContent ?? "").trim()).filter(Boolean) : [];
+      const affectsLis = affectsSec ? bulletsOf(affectsSec) : [];
+      v2.affects = affectsLis.map((li) => (li.textContent ?? "").trim()).filter(Boolean);
       if (againstSec) {
         const box = el("div", { class: "md" });
         for (const n of againstSec.nodes.slice(1)) box.append(n);
         if (box.children.length) v2.against = box;
       }
-      for (const sec of [termsSec, unknownsSec, assumptionsSec, againstSec, affectsSec]) {
-        if (!sec) continue;
-        for (const n of sec.nodes) if (n.parentElement === left) n.remove();
+      for (const [sec, read] of [[termsSec, v2.terms.map((x) => x.li)], [unknownsSec, v2.unknowns], [assumptionsSec, v2.assumptions], [affectsSec, affectsLis]]) {
+        if (sec) keepRest(sec, read);
       }
+      if (againstSec) for (const n of againstSec.nodes) if (n.parentElement === left) n.remove(); // its body moved into the box above
       // What the scan covers: the title and the body outside code fences; exempt: the question, the recommended label and the option labels
       let fence = false;
       const scanned = [];
