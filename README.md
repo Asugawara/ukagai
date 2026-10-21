@@ -41,6 +41,10 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 
 ![A plan approval](docs/images/plan.png)
 
+![A plan step whose file references are short chips, with the code around one of them opened](docs/images/fileref.png)
+
+*Long `path:line` references in a plan become short chips; `▸` opens the code around the line.*
+
 ## What you get
 
 - **Decision screen**: options with the agent's recommendation, keys for everything, a list of pending decisions (`b`). [Guide](docs/guide.md#the-decision-screen)
@@ -50,6 +54,7 @@ Right after installing, `ukagai doctor` reports the server and the token as "not
 - **Answers as messages**: in an interactive Claude Code terminal the agent ends its turn instead of waiting, and your answer arrives as a message once it is idle (on by default, three ways to turn it off). [Guide](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **Codex CLI**: hooks plus a bridge for plan approval. [Guide](docs/guide.md#codex-cli)
 - **Settings page**: language, theme, notifications, plan auto-show, and the skill text the agent follows. [Guide](docs/guide.md#settings)
+- **Code references**: a long `path:line` in a plan or explanation becomes a short chip (the full path on hover and in the copy), and `▸` opens the numbered code around the line, read from your project when you click, so no tokens are used. [Guide](docs/guide.md#plan-approval)
 - **Rich Markdown**: callouts, Mermaid, diffs, task lists and more in explanations and plans. [Guide](docs/guide.md#rich-markdown)
 
 ![The same decision in the terminal UI](docs/images/tui.png)

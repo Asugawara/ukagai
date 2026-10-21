@@ -59,6 +59,26 @@ const IMAGE_DEST = String.raw `((?:[^()\s]|\([^()\s]*\))+)`;
 const IMAGE_RE = new RegExp(String.raw `!\[([^\]]*)\]\(${IMAGE_DEST}(?:\s+"[^"]*")?\)`, "g");
 // `==text==` but not runs of `=` (setext underlines, `a===b`); public/app.js inlineMarks must use the same pattern
 const MARK_RE = /(?<!=)==(?=[^\s=])([^=\n]*?[^\s=])==(?!=)/g;
+// A file reference, the same grammar as fileRefParts in public/app.js (test/gui/fixtures/fileref-cases.json pins both): `path`, `path:12`, `path:12-30`,
+// `path:12:3`, `path#L12`, `path#L12-L20`. The path ends in an extension, or has no extension but a `/` and a line part, or starts with `./` `../` `/` `~/`
+const REF_EXT = /\.[a-z][a-z0-9]{0,5}$/i;
+const REF_ANCHOR = /^(?:~\/|\.{1,2}\/|\/)/;
+const REF_PATH = /^(?:~\/|\.{1,2}\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+$/;
+const REF_TAIL = /(?::\d+(?:-\d+|:\d+)?|#L\d+(?:-L\d+)?)$/;
+/** `dir` is the folders with their trailing `/` ("" when there are none), `rest` the file name and the line part as written. Null when `text` is no file reference */
+export function fileRef(text) {
+    const s = text.trim();
+    const path = s.replace(REF_TAIL, "");
+    if (!REF_PATH.test(path) || !(REF_EXT.test(path) || REF_ANCHOR.test(path) || (path !== s && path.includes("/"))))
+        return null;
+    const cut = text.lastIndexOf("/") + 1;
+    return { dir: text.slice(0, cut), rest: text.slice(cut) };
+}
+// A file reference's folders keep the text's own attributes, the file name and the line are cyan (nothing is dimmed or cut)
+const codeSpan = (c, close) => {
+    const m = c === c.trim() ? fileRef(c) : null;
+    return m ? `${m.dir}${CYAN}${m.rest}${close}` : `${CYAN}${c}${close}`;
+};
 /** Turn `**strong**` / `` `code` `` / `*em*` / links into ANSI, returning to base decoration afterwards */
 export function inline(text, opts = {}) {
     const strong = opts.strong ?? STRONG;
@@ -86,7 +106,7 @@ export function inline(text, opts = {}) {
     return marked
         .replace(/\x00([^\x01]*)\x01/g, (_, c) => `${opts.imageLabel ?? "[image]"} ${c}`)
         .replace(/\[\^([^\]\s]+)\](?!:)/g, (_, id) => `${CYAN}[${id}]${close}`)
-        .replace(/`([^`]+)`/g, (_, c) => `${CYAN}${c}${close}`)
+        .replace(/`([^`]+)`/g, (_, c) => codeSpan(c, close))
         .replace(/\*\*([^*]+)\*\*/g, (_, c) => `${strong}${c}${close}`)
         .replace(/(?<![*\w])\*([^*\s][^*]*)\*(?![*\w])/g, (_, c) => `\x1b[3m${c}${close}`)
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t, u) => `${t} (${u})`)

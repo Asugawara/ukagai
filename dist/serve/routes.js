@@ -10,6 +10,7 @@ import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
 import { FILE_TYPES, FRAME_CSP, FRAME_POLICY, TAB_CSP, validFileTag, documentDir, isHtmlFile, resolveDocumentFile, rewriteHtml } from "./files.js";
 import { injectFrameHelper } from "./frame-helper.js";
+import { readSource } from "./source.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import { PlanSessions } from "./plan-session.js";
 import { PlanReady } from "./plan-ready.js";
@@ -297,6 +298,20 @@ export function createApp(deps) {
         catch {
             return notFound();
         }
+    });
+    // The lines around a `path:line` reference of a decision's document, read from the session's working directory (docs/spec/api.md). Unresolvable and refused are both 404
+    app.get("/api/source", filesAuth, (c) => {
+        c.header("Cache-Control", "private, no-cache");
+        c.header("X-Content-Type-Options", "nosniff");
+        const num = (v) => (v !== undefined && /^[0-9]{1,7}$/.test(v) ? Number(v) : null);
+        const line = num(c.req.query("line"));
+        const endQ = c.req.query("end");
+        const end = endQ === undefined ? undefined : num(endQ);
+        if (line === null || line < 1 || end === null || (end !== undefined && end < line))
+            return c.json({ error: "invalid line" }, 400);
+        const d = store.get(c.req.query("decision") ?? "");
+        const snippet = d ? readSource(d.session.cwd, c.req.query("path") ?? "", line, end, { home: deps.home, dataDir: deps.dataDir }) : null;
+        return snippet ? c.json(snippet) : c.json({ error: "not found" }, 404);
     });
     app.get("/api/decisions", auth("any"), (c) => {
         const q = c.req.query("status");
