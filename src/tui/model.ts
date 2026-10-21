@@ -56,6 +56,8 @@ export interface Card {
   heavy?: boolean;
   /** One of the blocker's three fixed options: shown in the display language, the value stays as received */
   fixed?: FixedLabel;
+  /** The option's `preview` (plain monospace text), shown under the card the cursor is on */
+  preview?: string;
 }
 
 export type FixedLabel = "done" | "skip" | "stop";
@@ -259,7 +261,7 @@ const isDash = (s: string): boolean => /^[-—ー]*$/u.test(s.trim());
 /** Match a table (first column = label) to the options. Null if no row matches */
 function cardsFromTable(
   t: Table,
-  options: { label: string; description?: string | undefined }[],
+  options: { label: string; description?: string | undefined; preview?: unknown }[],
   recommended: string | undefined,
 ): { cards: Card[]; extras: Card[] } | null {
   const hi = t.header.findIndex((h) => COLUMN_HAPPENS.test(h.normalize("NFKC")));
@@ -282,6 +284,7 @@ function cardsFromTable(
       lines = row.slice(1).map((c, j) => ({ text: c ? `${t.header[j + 1] ?? ""}: ${c}` : "", md: true }));
     }
     lines = lines.filter((l) => l.text && !isDash(l.text));
+    const preview = previewOf(o.preview);
     cards.push({
       value: o.label,
       label: stripSuffix(row[0] ?? ""),
@@ -290,6 +293,7 @@ function cardsFromTable(
       heavy: ri >= 0 && hasMatch(IRREVERSIBLE_RE, row[ri] ?? ""),
       suffix: SUFFIX_RE.test(row[0] ?? ""),
       key,
+      ...(preview ? { preview } : {}),
     });
   }
   if (!cards.length) return null;
@@ -302,17 +306,31 @@ function cardsFromTable(
   return { cards: cards.map(({ suffix: _s, key: _k, ...c }) => withFixed(c)), extras };
 }
 
+/** A preview as the terminal may print it: a string only, tabs expanded, CR and every escape sequence / control character removed */
+function previewOf(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const text = raw
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b./g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\t/g, "    ")
+    .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "")
+    .replace(/\s+$/, "");
+  return text.trim() ? text : undefined;
+}
+
 const withFixed = (c: Card): Card => {
   const f = fixedLabel(c.value);
   return f ? { ...c, fixed: f } : c;
 };
 
-function rawCard(o: { label: string; description?: string | undefined }, recommended: boolean): Card {
+function rawCard(o: { label: string; description?: string | undefined; preview?: unknown }, recommended: boolean): Card {
+  const preview = previewOf(o.preview);
   return withFixed({
     value: o.label,
     label: stripSuffix(o.label),
     lines: o.description ? [{ text: o.description, md: false }] : [],
     recommended,
+    ...(preview ? { preview } : {}),
   });
 }
 

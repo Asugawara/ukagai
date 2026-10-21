@@ -1373,8 +1373,10 @@ async function send(d, body) {
 
 // A raw option that has no row in the explanation table: strip the (Recommended) suffix and show a recommended badge. The answer value stays the original label
 // A quiz option is shown exactly as given: no recommended badge, no preferred start position, the label untouched
-const quizItem = (o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: false });
-const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label) });
+// `preview` (AskUserQuestion's optional monospace text) is shown as plain text, and only when it is a string
+const previewOf = (o) => (typeof o?.preview === "string" && o.preview.trim() ? o.preview : null);
+const quizItem = (o) => ({ label: o.label, value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: false, pref: false, preview: previewOf(o) });
+const rawItem = (o) => ({ label: stripSuffix(o.label), value: o.label, lines: o.description ? [{ text: o.description }] : [], badge: SUFFIX_RE.test(o.label), pref: SUFFIX_RE.test(o.label), preview: previewOf(o) });
 
 const clamp = (i, n) => Math.max(0, Math.min(n - 1, i));
 
@@ -1793,7 +1795,7 @@ function renderRightBody(d) {
       if (v2) {
         if (v2.todoBox) top.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
         items = [
-          ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk })),
+          ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk, preview: previewOf(c.option) })),
           ...v2.extras.map(rawItem),
         ];
         // A blocker without a recommended row starts on the fixed "Done. Continue" option
@@ -1838,7 +1840,9 @@ function renderRightBody(d) {
         const card = el("label", { class: "opt" + (it.badge ? " recommended" : "") + (it.color ? " colored" : ""), style: it.color ? `--oc:${it.color}` : null },
           oneClick && idx < 4 ? el("span", { class: "cardkey", text: String(idx + 1) }) : null, input,
           el("span", { class: "grow" }, lab, ...descs,
-            oneClick ? el("div", { class: "confirm-inline", "data-key": `card:${idx}`, hidden: dr.confirmKey !== `card:${idx}`, text: t("confirm_again") }) : null));
+            oneClick ? el("div", { class: "confirm-inline", "data-key": `card:${idx}`, hidden: dr.confirmKey !== `card:${idx}`, text: t("confirm_again") }) : null,
+            // Selecting or scrolling the preview must not count as the second click that confirms the answer
+            it.preview ? el("pre", { class: "opt-preview", text: it.preview, onclick: (ev) => { ev.stopPropagation(); ev.preventDefault(); } }) : null));
         if (single) {
           cards.push({ input, card, risk: it.risk ?? "", value: it.value });
           card.addEventListener("click", (ev) => {

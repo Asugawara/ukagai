@@ -13,7 +13,7 @@ import { decision, withExplanation } from "./helpers.js";
 const NOW = Date.parse("2026-10-02T00:00:30.000Z");
 
 function decisionOf(c: PassCase) {
-  const options = c.labels.map((label, i) => ({ label: i === 0 && c.kind === "decision" ? `${label} (Recommended)` : label, description: `About ${label}` }));
+  const options = c.labels.map((label, i) => ({ label: i === 0 && c.kind === "decision" ? `${label} (Recommended)` : label, description: `About ${label}`, preview: `KEEPPREVIEW${i}` }));
   return decision({
     request: { questions: [{ question: c.question, header: "Check", multiSelect: false, options }] },
     ...withExplanation(c.markdown, c.kind === "decision" ? {} : { type: c.kind }),
@@ -34,6 +34,9 @@ for (const c of passCases()) {
     const screen = frame.text.split("\n").map(stripAnsi);
     const text = flat(frame.text);
     const missing: string[] = [];
+    // The option's preview: under the card the cursor starts on (the first one of every fixture), not under the others
+    if (!text.includes("KEEPPREVIEW0")) missing.push("preview of the cursor card");
+    if (text.includes("KEEPPREVIEW1")) missing.push("preview of a card without the cursor must stay hidden");
     for (const w of c.atoms.sentinels) if (!text.includes(w)) missing.push(`sentinel ${w}`);
     for (const alt of c.atoms.images) if (!text.includes(flat(`[image] ${alt}`))) missing.push(`image ${alt}`);
     for (const k of c.atoms.codeKeys) if (!text.includes(flat(k))) missing.push(`code ${k}`);

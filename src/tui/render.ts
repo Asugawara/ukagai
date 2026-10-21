@@ -240,8 +240,17 @@ function cardLines(card: Card, w: number, lang: Lang, o: { cursor: boolean; sele
           : l.text;
     for (const x of wrap(body, Math.max(8, w - width(lead)))) out.push(pad + x);
   }
+  // The preview is plain text kept as written (no wrapping): one row per line, cut at the column edge, at most PREVIEW_ROWS rows
+  if (o.cursor && card.preview) {
+    const rows = card.preview.split("\n");
+    for (const l of rows.slice(0, PREVIEW_ROWS)) out.push(`${pad}${DIM}${truncate(l, Math.max(8, w - width(lead)))}${RESET}`);
+    if (rows.length > PREVIEW_ROWS) out.push(`${pad}${DIM}…${RESET}`);
+  }
   return out;
 }
+
+/** Most rows of an option's preview the cursor card shows */
+const PREVIEW_ROWS = 12;
 
 /** How many body rows to keep when the recommendation box exceeds half the column height */
 const REC_CUT_ROWS = 8;

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { passCases, type PassCase } from "../support/explain-atoms.js";
+import { EXPLAINED_MD, FIELD_RULES, V, options as fieldOptions } from "../support/question-fields.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const PIXEL = fileURLToPath(new URL("./fixtures/pixel.png", import.meta.url));
@@ -72,7 +73,7 @@ async function api(path: string, body?: unknown) {
 async function seed(c: PassCase): Promise<string> {
   const n = ++seq;
   const markdown = c.markdown.replace(/\]\([^)\s]+\.png\)/g, "](pixel.png)");
-  const options = c.labels.map((label, i) => ({ label: i === 0 && c.kind === "decision" ? `${label} (Recommended)` : label, description: `About ${label}` }));
+  const options = c.labels.map((label, i) => ({ label: i === 0 && c.kind === "decision" ? `${label} (Recommended)` : label, description: `About ${label}`, preview: `KEEPPREVIEW${i}` }));
   const d = await api("/api/decisions", {
     tool_use_id: `toolu_gui_preserve_${process.pid}_${n}`,
     kind: "answer_question",
@@ -158,6 +159,9 @@ function missingOnPage(c: PassCase): string[] {
   })())`);
 }
 
+/** The text of every preview that is on screen (display is not none) */
+const visiblePreviews = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("#decision .opt .opt-preview")].filter((p) => getComputedStyle(p).display !== "none").map((p) => p.textContent))`);
+
 if (REQUIRE_BROWSER) {
   test("UKAGAI_REQUIRE_BROWSER=1: agent-browser is on PATH", () => {
     assert.ok(HAS_BROWSER, "agent-browser is not on PATH; the GUI preserve test would be skipped and guard nothing");
@@ -175,6 +179,8 @@ for (const c of passCases()) {
       missing = missingOnPage(c);
     }
     assert.deepEqual(missing, [], `${c.file}: not on the page`);
+    // The option's preview shows under the cursor card only (the first card of every fixture)
+    assert.deepEqual(visiblePreviews(), ["KEEPPREVIEW0"], "previews on screen");
     // Terms leave the left column for the list behind `?`: every term is there
     const terms = c.kind === "decision" && /^## (?:Terms|用語)\s*$/m.test(c.markdown) ? (/^## (?:Terms|用語)\s*$([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(c.markdown)?.[1]?.match(/^[-*] /gm)?.length ?? 0) : 0;
     if (terms) {
@@ -197,4 +203,59 @@ gui("an image placed above the Options table loads", async () => {
     assert.ok(Date.now() < end, "the image above the Options table did not load");
     await sleep(200);
   }
+});
+
+/** Seed a decision with the field values of test/support/question-fields.ts */
+async function seedFields(explained: boolean, multiSelect = false): Promise<string> {
+  const n = ++seq;
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_gui_fields_${process.pid}_${n}`,
+    kind: "answer_question",
+    session: { session_id: `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`, cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl") },
+    request: { questions: [{ question: V.question, header: V.header, options: fieldOptions(), multiSelect }] },
+    ...(explained ? { explanation: { path: join(dataDir, "explain", "fields.md"), title: "Pick the cache layer", question: V.question, reversibility: "reversible", scope: "file", markdown: EXPLAINED_MD, has: { mermaid: false, table: true, diff: false }, match: "question", attached_via: "first_call" } } : {}),
+  });
+  assert.ok(d.id, `cannot create decision: ${JSON.stringify(d)}`);
+  return d.id;
+}
+
+const pageHas = (word: string) => ev<boolean>(`(() => { const t = ["#head", "#background", "#decision"].map((s) => document.querySelector(s)?.textContent ?? "").join(" "); return t.includes(${JSON.stringify(word)}); })()`);
+
+for (const mode of ["plain", "explained"] as const) {
+  gui(`fields (${mode}): shown ones are on the page, hidden ones are not`, async () => {
+    await seedFields(mode === "explained");
+    await reopen();
+    for (const r of FIELD_RULES) {
+      const rule = r.gui?.[mode] ?? r[mode];
+      if (rule === true) assert.ok(pageHas(r.word), `${r.field}: ${r.word} is not shown`);
+      else assert.ok(!pageHas(r.word), `${r.field}: hidden (${rule}) but ${r.word} is on the page`);
+    }
+  });
+}
+
+gui("fields: multiSelect decides between radio buttons and checkboxes", async () => {
+  await seedFields(false, true);
+  await reopen();
+  assert.equal(ev<number>(`document.querySelectorAll("#decision .opt input[type=checkbox]").length`), 4); // three options and the free text
+  await cancelAll();
+  await seedFields(false, false);
+  await reopen();
+  assert.equal(ev<number>(`document.querySelectorAll("#decision .opt input[type=checkbox]").length`), 0);
+});
+
+gui("preview: visible on the cursor card only, moves with the arrow key, and clicking it does not send the answer", async () => {
+  const id = await seedFields(true);
+  await reopen();
+  assert.deepEqual(visiblePreviews(), [`${V.alpha.preview}`]);
+  ab("press", "ArrowDown");
+  assert.deepEqual(visiblePreviews(), [V.beta.preview]);
+  // The preview is plain text: its tab and line break are kept, nothing in it is parsed
+  ab("press", "ArrowUp");
+  assert.equal(ev<string>(`getComputedStyle(document.querySelector("#decision .opt.cursor .opt-preview")).whiteSpace`), "pre");
+  // A real click on a one-click card sends it; a click on its preview must not
+  ab("click", "#decision .opt.cursor .opt-preview");
+  await sleep(800);
+  const d = await api(`/api/decisions/${id}`);
+  assert.equal(d.status, "pending", "the decision is still open");
+  assert.equal(d.response, undefined, "no answer was sent");
 });

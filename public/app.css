@@ -164,6 +164,9 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
 .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 button.btn.cursor { outline: 2px solid var(--accent); outline-offset: 2px; }
 .opt .grow { flex: 1; min-width: 0; }
+/* The option's `preview`: plain monospace text, shown under the cursor card (all of them when expanded, and with several questions, which have no cursor) */
+.opt .opt-preview { display: none; margin: 6px 0 2px; max-height: 14em; overflow: auto; white-space: pre; cursor: text; user-select: text; }
+.opt.cursor .opt-preview, .expanded .opt .opt-preview, .q:not(.split) .opt .opt-preview { display: block; }
 .actions { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0 12px; margin-top: auto; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
 .actions .row2 { display: flex; gap: 8px; }
 .actions .row2 > button { flex: 1; }
