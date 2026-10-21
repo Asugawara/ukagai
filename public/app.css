@@ -571,9 +571,11 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .cbadge.short .fr-up { display: none; }
 .cbadge.short .fr-base { font-weight: 700; }
 .cbadge.short .fr-line { color: var(--accent); font-weight: 600; }
-.md .fr-toggle { font: inherit; font-size: 11px; line-height: 16px; color: var(--accent); background: none; border: 1px solid transparent; border-radius: 4px; padding: 0 4px; margin-left: 2px; cursor: pointer; }
-.md .fr-toggle:hover { border-color: var(--line); }
+/* The ▸ next to a reference: a real button (22x20 hit area), the glyph in the accent colour; the negative margins keep the line height of the paragraph or list item */
+.md .fr-toggle { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 22px; height: 20px; padding: 0 5px; margin: -2px 0 -2px 4px; vertical-align: middle; font: inherit; font-size: 17px; line-height: 1; color: var(--accent); background: var(--code); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.md .fr-toggle:hover, .md .fr-toggle:focus-visible { border-color: var(--accent); background: var(--accent-bg); }
 .md .fr-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.md .fr-toggle[aria-expanded="true"] { border-color: var(--accent); background: var(--accent-bg); }
 .md .src-snip { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--code); overflow: hidden; font-size: 12px; }
 .md .src-snip.missing { padding: 6px 10px; }
 .md .src-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 12px; padding: 4px 10px; border-bottom: 1px solid var(--line); font: 12px/20px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
