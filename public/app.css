@@ -3,6 +3,7 @@
   --repo-l: 28%; --repo: #a855f7; --branch: #16a34a; --worktree: #ea580c; --blocker: #f97316;
   --accent: #2563eb; --accent-bg: #2563eb14; --red: #dc2626; --yellow: #ca8a04; --yellow-bg: #fde68a; --green: #16a34a;
   --add: #dcfce7; --del: #fee2e2; --hunk: #e0e7ff; --file: #e5e7eb; --code: #f1f1f4;
+  --hit-bg: #fde68a; --hit-edge: #a16207; /* the referenced lines of a code snippet: a tint over the code background and a solid left bar */
   --opt-0: #d97706; --opt-1: #0d9488; --opt-2: #db2777; --opt-3: #7c3aed; --purple: #7c3aed;
   color-scheme: light dark;
 }
@@ -12,7 +13,7 @@
     --bg: #17171a; --fg: #e8e8ec; --muted: #b0b0b8; --line: #34343a; --panel: #1f1f24;
     --repo-l: 74%; --repo: #c084fc; --branch: #4ade80; --worktree: #fb923c; --blocker: #fb923c;
     --accent: #6ea0ff; --accent-bg: #6ea0ff1f; --red: #f87171; --yellow: #facc15; --yellow-bg: #5f3510; --green: #4ade80;
-    --add: #14352180; --del: #45151580; --hunk: #25306080; --file: #3a3a4280; --code: #26262c;
+    --add: #14352180; --del: #45151580; --hunk: #25306080; --file: #3a3a4280; --code: #26262c; --hit-bg: rgb(250 204 21 / 0.22); --hit-edge: #facc15;
     --opt-0: #fbbf24; --opt-1: #2dd4bf; --opt-2: #f472b6; --opt-3: #a78bfa; --purple: #a78bfa;
   }
 }
@@ -20,7 +21,7 @@
   --bg: #17171a; --fg: #e8e8ec; --muted: #b0b0b8; --line: #34343a; --panel: #1f1f24;
   --repo-l: 74%; --repo: #c084fc; --branch: #4ade80; --worktree: #fb923c; --blocker: #fb923c;
   --accent: #6ea0ff; --accent-bg: #6ea0ff1f; --red: #f87171; --yellow: #facc15; --yellow-bg: #5f3510; --green: #4ade80;
-  --add: #14352180; --del: #45151580; --hunk: #25306080; --file: #3a3a4280; --code: #26262c;
+  --add: #14352180; --del: #45151580; --hunk: #25306080; --file: #3a3a4280; --code: #26262c; --hit-bg: rgb(250 204 21 / 0.22); --hit-edge: #facc15;
   --opt-0: #fbbf24; --opt-1: #2dd4bf; --opt-2: #f472b6; --opt-3: #a78bfa;
 }
 :root[data-theme="light"] { color-scheme: light; }
@@ -571,8 +572,12 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .cbadge.short .fr-up { display: none; }
 .cbadge.short .fr-base { font-weight: 700; }
 .cbadge.short .fr-line { color: var(--accent); font-weight: 600; }
-/* The ▸ next to a reference: a real button (22x20 hit area), the glyph in the accent colour; the negative margins keep the line height of the paragraph or list item */
-.md .fr-toggle { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 22px; height: 20px; padding: 0 5px; margin: -2px 0 -2px 4px; vertical-align: middle; font: inherit; font-size: 17px; line-height: 1; color: var(--accent); background: var(--code); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+/* The button next to a reference: a real button (24x22 hit area) with a drawn chevron (not a font glyph) in the accent colour, turned down when the snippet is open;
+   the negative margins keep the line height of the paragraph or list item */
+.md .fr-toggle { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 24px; height: 22px; padding: 0 5px; margin: -3px 0 -3px 4px; vertical-align: middle; color: var(--accent); background: var(--code); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.md .fr-toggle .fr-chev { display: block; width: 13px; height: 13px; }
+@media (prefers-reduced-motion: no-preference) { .md .fr-toggle .fr-chev { transition: transform .12s; } }
+.md .fr-toggle[aria-expanded="true"] .fr-chev { transform: rotate(90deg); }
 .md .fr-toggle:hover, .md .fr-toggle:focus-visible { border-color: var(--accent); background: var(--accent-bg); }
 .md .fr-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .md .fr-toggle[aria-expanded="true"] { border-color: var(--accent); background: var(--accent-bg); }
@@ -584,7 +589,9 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .md .src-range { margin-left: auto; white-space: nowrap; color: var(--accent); font-weight: 600; }
 .md .src-lines { overflow-x: auto; padding: 4px 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .md .src-row { display: flex; min-width: max-content; }
-.md .src-row.hit { background: var(--yellow-bg); }
+.md .src-row.hit { background: var(--hit-bg); }
+.md .src-row.hit .src-n { font-weight: 700; box-shadow: inset 3px 0 0 var(--hit-edge); }
+@media (forced-colors: active) { .md .src-row.hit .src-n { box-shadow: none; border-left: 3px solid Highlight; padding-left: 7px; } }
 .md .src-n { flex: none; width: 4.5ch; padding: 0 8px 0 10px; box-sizing: content-box; text-align: right; user-select: none; }
 .md .src-t { white-space: pre; min-height: 1.5em; padding-right: 10px; }
 .md .codefile { margin: 6px 0; }

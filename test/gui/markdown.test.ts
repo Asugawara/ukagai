@@ -425,6 +425,8 @@ I recommend **Sqlite** because it is simpler. Another option is right if the nig
   assert.equal(text(".src-head .src-path"), "src/cache.ts");
   // ▸ is a mouse helper: it is not a tab stop, and Enter after a click on it leaves the snippet alone (Enter belongs to the decision)
   assert.equal(ev<boolean>(`[...document.querySelectorAll(".fr-toggle")].every((b) => b.tabIndex === -1)`), true);
+  // the chevron is drawn (an svg), not a glyph of the font: no text in the button, and it turns down while the snippet is open
+  assert.equal(ev<boolean>(`[...document.querySelectorAll(".fr-toggle")].every((b) => b.textContent === "" && !!b.querySelector("svg.fr-chev"))`), true);
   ev(`document.querySelectorAll(".fr-toggle")[0].click(), "ok"`);
   await waitFor("closed again", `document.querySelectorAll(".src-snip").length === 0`);
   ab("click", "#background .fr-toggle");

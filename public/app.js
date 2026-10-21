@@ -522,7 +522,7 @@ function shortRef(code, r, doc) {
   // The button carries what it needs (cloneNode copies it into the unknowns row and the assumptions box); one handler on the document serves them all
   if (r.line && doc?.id && !isPlanId(doc.id) && doc.session?.cwd && !code.closest("h1, h2, h3, h4, h5, h6, summary, a, button")) {
     const label = t("src_show", { path: text });
-    code.after(el("button", { type: "button", class: "fr-toggle", tabindex: "-1", "aria-expanded": "false", "aria-label": label, title: label, text: "▸", "data-decision": doc.id, "data-path": r.path, "data-line": String(r.line), "data-end": r.end ? String(r.end) : null, "data-ref": text }));
+    code.after(el("button", { type: "button", class: "fr-toggle", tabindex: "-1", "aria-expanded": "false", "aria-label": label, title: label, "data-decision": doc.id, "data-path": r.path, "data-line": String(r.line), "data-end": r.end ? String(r.end) : null, "data-ref": text }, chevron()));
   }
 }
 
@@ -530,6 +530,17 @@ document.addEventListener("click", (e) => {
   const btn = e.target instanceof Element ? e.target.closest(".fr-toggle") : null;
   if (btn) toggleSource(btn);
 });
+
+// The chevron of the ▸ button, drawn (not a font glyph, which comes out tiny); CSS turns it down when the snippet is open
+function chevron() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({ viewBox: "0 0 12 12", width: "13", height: "13", class: "fr-chev", "aria-hidden": "true", focusable: "false" })) svg.setAttribute(k, v);
+  const path = document.createElementNS(ns, "path");
+  for (const [k, v] of Object.entries({ d: "M4 1.5 8.5 6 4 10.5", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" })) path.setAttribute(k, v);
+  svg.append(path);
+  return svg;
+}
 
 const openSnips = new WeakMap(); // button -> the snippet it opened
 
@@ -540,7 +551,6 @@ async function toggleSource(btn) {
     open.remove();
     openSnips.delete(btn);
     btn.setAttribute("aria-expanded", "false");
-    btn.textContent = "▸";
     return;
   }
   const snip = el("div", { class: "src-snip", role: "group", "aria-label": btn.dataset.ref ?? "", text: t("src_loading") });
@@ -548,7 +558,6 @@ async function toggleSource(btn) {
   if (!host) btn.parentElement.after(snip); else if (host.tagName === "P") host.after(snip); else host.append(snip);
   openSnips.set(btn, snip);
   btn.setAttribute("aria-expanded", "true");
-  btn.textContent = "▾";
   try {
     const q = new URLSearchParams({ decision: btn.dataset.decision ?? "", path: btn.dataset.path ?? "", line: btn.dataset.line ?? "" });
     if (btn.dataset.end) q.set("end", btn.dataset.end);
