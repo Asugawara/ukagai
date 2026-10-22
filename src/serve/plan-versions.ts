@@ -60,8 +60,9 @@ export class PlanVersionStore {
 function approvalInstruction(d: Decision): PlanInstruction | undefined {
   const r = d.response;
   if (!r) return undefined;
-  if (r.instruct && r.text) return { text: r.text, kind: "instruct", at: r.decided_at };
-  if (r.approve === false) return { text: r.reason?.trim() ? r.reason : "", kind: "reject", at: r.decided_at };
+  const comments = r.comments ? { comments: r.comments } : {};
+  if (r.instruct && r.text) return { text: r.text, kind: "instruct", ...comments, at: r.decided_at };
+  if (r.approve === false) return { text: r.reason?.trim() ? r.reason : "", kind: "reject", ...comments, at: r.decided_at };
   return undefined;
 }
 

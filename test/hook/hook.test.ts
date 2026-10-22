@@ -1246,3 +1246,13 @@ test("Stop never carries wakeup, even when its message mentions <task-notificati
     assert.equal(f.calls.find((c) => c.path === "/api/events")?.body.wakeup, undefined);
   });
 });
+
+test("an answer containing an inline-comment block passes through the hook unchanged", async () => {
+  const sp = tmpDir();
+  writeFile(join(sp, "ukagai", "e.md"), explanationFor(Q));
+  const answer = 'B\n\nThe human left 1 comment:\n1. explanation /s/e.md, "Why": "because"\n   → more\n     detail';
+  await withServer(answerHandler({ [Q]: answer }), async (f, d) => {
+    const r = await runHook(args(f, d), JSON.stringify(t1(sp)));
+    assert.deepEqual(JSON.parse(r.stdout).hookSpecificOutput.updatedInput.answers, { [Q]: answer });
+  });
+});

@@ -43,6 +43,8 @@ import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./
 import type { PlanSummary } from "../contract.js";
 import { PlanSessions } from "./plan-session.js";
 import { PlanReady } from "./plan-ready.js";
+import { TooLongError, composeWithComments, type CommentContext } from "./comments.js";
+import { MARK_BODY_LIMIT, MARK_MAX_BYTES, decodePng, markPathIn, marksDir, saveMark } from "./marks.js";
 import { PlanVersionStore, buildPlanVersions } from "./plan-versions.js";
 import type { PlanReadStore } from "./plan-read.js";
 import type { SettingsStore } from "./settings.js";
@@ -50,6 +52,7 @@ import { diffLines, MAX_DIFF_CELLS } from "./plan-diff.js";
 import { customSkillPath, readSkill, resetSkill, writeSkill } from "../settings/skill.js";
 import { SKILL_SOURCE } from "../settings/target.js";
 import { toLines } from "../hook/explain.js";
+import { bodyLimit } from "hono/body-limit";
 import { HttpError, SESSION_PANEL_OPEN_EVENT, type AnswerPatch, type Store } from "./store.js";
 
 export const COOKIE_NAME = "ukagai_session";
@@ -108,6 +111,10 @@ function safeEqual(a: string, b: string): boolean {
   return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
+const MarkRequest = z
+  .strictObject({ decision: z.string().optional(), plan: z.string().optional(), png: z.string().min(1) })
+  .refine((b) => (b.decision === undefined) !== (b.plan === undefined), { message: "exactly one of decision / plan", path: ["decision"] });
+
 export function createApp(deps: AppDeps): Hono {
   const { store, hub } = deps;
   const app = new Hono();
@@ -142,6 +149,7 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   app.onError((err, c) => {
+    if (err instanceof TooLongError) return c.json({ error: "too_long", length: err.length, max: err.max }, 400);
     if (err instanceof HttpError) {
       return c.json(err.issues ? { error: err.message, issues: err.issues } : { error: err.message }, err.status);
     }
@@ -409,20 +417,67 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  /** Where the marks of a session live: its explanation folder's marks/, then <dataDir>/marks */
+  const sessionOf = (sessionId: string): { session_id: string; scratchpad_dir?: string } | undefined => {
+    const d = store.list().find((x) => x.session.session_id === sessionId);
+    if (d) return { session_id: sessionId, ...(d.session.scratchpad_dir ? { scratchpad_dir: d.session.scratchpad_dir } : {}) };
+    return store.listSessions().some((x) => x.session_id === sessionId) ? { session_id: sessionId } : undefined;
+  };
+  const markDirs = (sessionId?: string): string[] => {
+    if (deps.dataDir === undefined) return [];
+    const sess = sessionId ? sessionOf(sessionId) : undefined;
+    return [...(sess ? [marksDir(deps.dataDir, sess)] : []), marksDir(deps.dataDir)];
+  };
+  const commentCtx = (sessionId: string | undefined, c: Pick<CommentContext, "planFile" | "explanationFile">): CommentContext => {
+    const dirs = markDirs(sessionId);
+    return { ...c, markPath: (id) => markPathIn(dirs, id) };
+  };
+
+  // A marked copy of an image region (PNG), kept where the agent can open it
+  app.post(
+    "/api/marks",
+    auth("any"),
+    jsonOnly,
+    bodyLimit({ maxSize: MARK_BODY_LIMIT, onError: (c) => c.json({ error: "payload too large" }, 413) }),
+    async (c) => {
+      if (deps.dataDir === undefined) return c.json({ error: "marks unavailable" }, 503);
+      const body = await parse(c, MarkRequest);
+      let sessionId: string | undefined;
+      if (body.decision !== undefined) {
+        const d = store.get(body.decision);
+        if (!d) return c.json({ error: "decision not found" }, 404);
+        sessionId = d.session.session_id;
+      } else if (body.plan !== undefined) {
+        if (!isPlanFile(body.plan)) return c.json({ error: "invalid plan name" }, 400);
+        sessionId = await planSessions.find(body.plan);
+      }
+      const b64 = body.png;
+      if (Math.floor((b64.length * 3) / 4) > MARK_MAX_BYTES + 3) return c.json({ error: "png too large" }, 413);
+      const png = decodePng(b64);
+      if (!png) return c.json({ error: "png is not a PNG" }, 400);
+      if (png.length > MARK_MAX_BYTES) return c.json({ error: "png too large" }, 413);
+      const sess = sessionId ? sessionOf(sessionId) : undefined;
+      return c.json({ id: saveMark(marksDir(deps.dataDir, sess), png) });
+    },
+  );
+
   // Tell the agent that is writing this plan something, while no hook waits (same queue and terminal typing as a checkpoint reply)
   app.post("/api/plans/:name/instruct", auth("any"), jsonOnly, async (c) => {
     const name = c.req.param("name") ?? "";
     const body = await parse(c, PlanInstructRequest);
     const sessionId = isPlanFile(name) ? await planSessions.find(name) : undefined;
     if (!sessionId) return c.json({ error: "no session found for this plan" }, 404);
+    // The plan file is the server's own record (the name in the URL), never the client's `source.file`
+    const planFile = join(plansDir(deps.home), name);
+    const text = body.comments ? composeWithComments(body.text, body.comments, commentCtx(sessionId, { planFile })) : (body.text ?? "");
     // Snapshot the plan as the human saw it: the agent rewrites the file after this (plan versions)
     if (planVersions) {
       try {
         const plan = await readPlan(deps.home, name);
-        planVersions.add(sessionId, plan.markdown, { text: body.text, kind: "instruct", at: new Date().toISOString() });
+        planVersions.add(sessionId, plan.markdown, { text, kind: "instruct", ...(body.comments ? { comments: body.comments } : {}), at: new Date().toISOString() });
       } catch {}
     }
-    const delivered_via = await store.queuePlanInstruction(sessionId, body.text);
+    const delivered_via = await store.queuePlanInstruction(sessionId, text);
     deps.log?.("plan_instructed", { plan: name, session: sessionId, via: delivered_via });
     return c.json({ delivered_via });
   });
@@ -520,16 +575,25 @@ export function createApp(deps: AppDeps): Hono {
     const id = c.req.param("id");
     if (!store.get(id)) return c.json({ error: "decision not found" }, 404);
     const body = await parse(c, AnswerRequest);
+    const d = store.get(id)!;
     let patch: AnswerPatch;
     if ("kind" in body) patch = { kind: "checkpoint", answer: body.kind, ...(body.text !== undefined ? { text: body.text } : {}) };
-    else if ("answers" in body) patch = { kind: "answers", answers: body.answers };
+    else if ("answers" in body) patch = { kind: "answers", answers: body.answers, ...(body.comments ? { comments: body.comments } : {}) };
     else if ("fallback" in body) patch = { kind: "fallback" };
     else if ("instruct" in body) {
-      if (store.get(id)!.kind !== "approve_plan") return c.json({ error: "instruct is only for approve_plan" }, 400);
-      patch = { kind: "instruct_plan", text: body.text };
+      if (d.kind !== "approve_plan") return c.json({ error: "instruct is only for approve_plan" }, 400);
+      patch = { kind: "instruct_plan", ...(body.text !== undefined ? { text: body.text } : {}), ...(body.comments ? { comments: body.comments } : {}) };
     } else if (body.approve) patch = { kind: "approve", ...(body.set_mode_auto ? { set_mode_auto: true } : {}) };
-    else patch = { kind: "reject", ...(body.reason?.trim() ? { reason: body.reason } : {}) };
-    return c.json(store.submitAnswer(id, patch));
+    else patch = { kind: "reject", ...(body.reason?.trim() ? { reason: body.reason } : {}), ...(body.comments ? { comments: body.comments } : {}) };
+    // The files named in the comment text are the server's own records of this decision
+    const planFilePath = (d.request as { planFilePath?: unknown }).planFilePath;
+    const explPath = d.explanation?.path;
+    const explanationFile = explPath && explPath !== "" ? (explPath.endsWith(PLAN_BLOCK_SUFFIX) ? explPath.slice(0, -PLAN_BLOCK_SUFFIX.length) : explPath) : undefined;
+    const ctx = commentCtx(d.session.session_id, {
+      ...(d.kind === "approve_plan" && typeof planFilePath === "string" && planFilePath !== "" ? { planFile: planFilePath } : {}),
+      ...(explanationFile && !(d.kind === "approve_plan") ? { explanationFile } : {}),
+    });
+    return c.json(store.submitAnswer(id, patch, ctx));
   });
 
   // ---- events / sessions ----

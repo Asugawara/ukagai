@@ -83,3 +83,10 @@ test("plan instructed: the hook's instruction text after the ref; every plan tex
     assert.equal(t.match(/\[ukagai\]/g)?.length, 1);
   }
 });
+
+test("an answer carrying a comment block stays one quoted line: the newlines are escaped", () => {
+  const answer = 'B\n\nThe human left 1 comment:\n1. plan /p.md, "S": "q"\n   → n';
+  const text = deliveryText(decision({ "Which?": answer }));
+  assert.equal(text, `[ukagai] (ref a1b2c3d4) The human answered your question in the ukagai GUI:\n- "Which?": ${JSON.stringify(answer)}`);
+  assert.equal(text.split("\n").length, 2);
+});

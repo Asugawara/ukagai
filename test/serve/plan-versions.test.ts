@@ -267,3 +267,33 @@ test("two fetches of an unchanged plan file are byte-identical (the current vers
   assert.equal(await get(), a);
   assert.equal((JSON.parse(a) as PlanVersionsResponse).versions.length, 2);
 });
+
+// ---- inline comments ----
+
+const COMMENT = { id: "c1", kind: "text", source: { kind: "plan" }, section: ["Goal"], quote: "old goal", note: "say why" };
+
+test("a plan card instruct with comments: the snapshot's instruction keeps the comments and the composed text", async () => {
+  const env = await boot();
+  writePlan(env, "swift-otter.md", V1);
+  await liveSession(env, "s1", "swift-otter");
+  const r = await api(env, "/api/plans/swift-otter.md/instruct", { text: "tighten", comments: [COMMENT] });
+  assert.equal(r.status, 200);
+  writePlan(env, "swift-otter.md", V2);
+  const { body } = await versions(env, "s1", "?current=plan:swift-otter.md");
+  const ins = body.versions[0]!.instruction!;
+  assert.equal(ins.kind, "instruct");
+  assert.deepEqual(ins.comments, [COMMENT]);
+  assert.ok(ins.text.startsWith("tighten\n\nThe human left 1 comment:"));
+});
+
+test("a rejection with comments: the next version's instruction carries them", async () => {
+  const env = await boot();
+  const d1 = await planDecision(env, "s1", "t1", V1);
+  const r = await api(env, `/api/decisions/${d1.id}/answer`, { approve: false, comments: [COMMENT] });
+  assert.equal(r.status, 200);
+  await planDecision(env, "s1", "t2", V2);
+  const { body } = await versions(env, "s1");
+  assert.equal(body.versions[0]!.instruction?.kind, "reject");
+  assert.deepEqual(body.versions[0]!.instruction?.comments, [COMMENT]);
+  assert.ok(body.versions[0]!.instruction?.text.startsWith("The human left 1 comment:"));
+});
