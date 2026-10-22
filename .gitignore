@@ -16,3 +16,4 @@ out/
 .env.*
 *.bak*
 /verification/
+/demo/out/
