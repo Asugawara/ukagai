@@ -81,3 +81,11 @@ With a popover open on a plan, Esc closed it; the plan screen stayed.
 - Clicking the highlighted text did not open its popover once; clicking the number badge did.
 - Picking showed the hint "Click an element (Esc to cancel)" but no outline on hover in the screenshots.
 - A person using the same GUI answered the first question while the run was unattended (answer without comments) and switched the display language back to Japanese once; those runs were repeated.
+
+## Follow-up (after this run)
+
+- Check 6 was repeated on a fresh server (agent-browser, real full screen entered by a click, 100%, 125% and 195%): the pick reached the parent and the popover opened every time, so the failure above was not reproduced. One cause of "picking sometimes shows nothing" was found and fixed: when the frame's document loaded again while the button showed picking, the new helper was not told, so a click did nothing. The parent now sends `pick` again on every load (`frameLoaded`). A test in `test/gui/frame.test.ts` reloads the full-screen frame while picking and clicks.
+- The hover outline did not show when picking was turned on with the pointer already on an element (no `mouseover` fires); the helper also listens to `mousemove` now.
+- Fixed: the "Changed" / "New" badge no longer enters the section path; the popover buttons no longer wrap in Japanese.
+- Check 5: switching to the v1 tab is outside the feature (comments belong to the current version; old versions are not commented on). The orphan state after a plan update is covered by `test/gui/comments.test.ts` (a plan file update that removes the quote marks the comment "Not found in the current text").
+- Not changed: a click on highlighted text does not open its popover (the number badge and the list row do).
