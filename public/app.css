@@ -610,18 +610,20 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .doc-frame-name { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 12ch; }
 .doc-frame-alt { font-weight: 700; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-frame-bar .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; white-space: nowrap; flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open { white-space: nowrap; flex: none; }
+.doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open, .doc-frame-bar .doc-frame-pick { white-space: nowrap; flex: none; }
 .doc-frame-bar svg { display: none; width: 14px; height: 14px; vertical-align: -2px; }
 /* The frame, not the window, decides: a column shows icon-only buttons (the text is the title / aria-label), a wide frame the text buttons */
 .md figure.doc-frame { container-type: inline-size; }
 @container (max-width: 440px) {
   .doc-frame-bar .btn-text { display: none; }
   .doc-frame-bar svg { display: inline-block; }
-  .doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open { padding: 2px 7px; line-height: 1; display: inline-flex; align-items: center; }
+  .doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open, .doc-frame-bar .doc-frame-pick { padding: 2px 7px; line-height: 1; display: inline-flex; align-items: center; }
 }
-.doc-frame-full, .doc-frame-open, .frame-btn { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+.doc-frame-full, .doc-frame-open, .doc-frame-pick, .frame-btn { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
 .doc-frame-open, .frame-btn { text-decoration: none; }
-.doc-frame-full:hover, .doc-frame-open:hover, .frame-btn:hover { border-color: var(--accent); }
+.doc-frame-full:hover, .doc-frame-open:hover, .doc-frame-pick:hover, .frame-btn:hover { border-color: var(--accent); }
+.doc-frame-pick.on, .frame-pick.on { border-color: var(--accent); background: var(--accent-bg); }
+.frame-pick svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 .doc-frame-view { display: block; width: 100%; height: 480px; border: 0; background: #fff; }
 /* Full screen page: the overlay fills the viewport (also when requestFullscreen is refused); only the iframe scrolls */
 .overlay.frame { padding: 0; align-items: stretch; background: #000; }
@@ -726,3 +728,13 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .cmt-strip { border: 1px solid var(--accent); background: var(--accent-bg); border-radius: 8px; padding: 6px 8px; margin: 6px 0; }
 .cmt-strip > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .cmt-strip .cmt-list { margin: 6px 0 0; }
+/* Comments on a region of an image: the rectangle while dragging, the outline that stays, the lightbox's own layer */
+.rg-draw { position: fixed; z-index: 85; box-sizing: border-box; border: 2px dashed #dc2626; background: rgb(220 38 38 / 0.12); pointer-events: none; }
+.rg-box { position: absolute; box-sizing: border-box; border: 2px dashed #dc2626; pointer-events: none; }
+.rg-layer { position: absolute; inset: 0; pointer-events: none; }
+.lightbox-wrap { position: relative; display: inline-block; line-height: 0; }
+.rg-layer .cmt-n { position: absolute; left: -2px; top: -20px; }
+.doc-img-open img, .lightbox-img { user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
+.lightbox-img { touch-action: none; }
+.cmt-pop-err { color: var(--red); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.cmt-pop-err[hidden] { display: none; }

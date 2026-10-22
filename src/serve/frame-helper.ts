@@ -113,11 +113,129 @@ export const FRAME_HELPER = String.raw`(function () {
     e.preventDefault();
     parent.postMessage({ ukagai: "key", key: e.key }, "*");
   });
+  // Comments (parent <-> helper): the parent turns element picking on ({ukagai:"pick", on}) and sends the elements of existing comments ({ukagai:"marks", items:[{n, sel}]}); the helper reports
+  // {ukagai:"picked", sel, tag, text, rect}, {ukagai:"pick-cancel"} and, after a mouseup that left a text selection, {ukagai:"selected", quote, prefix, suffix, sel, rect}. rect is in the frame's viewport
+  // pixels (what the parent adds the frame's own position to). The page's text and markup are untrusted: everything sent is clipped here, and the parent checks it again. The page's own scripts do not
+  // run, but a form control named "style" or "parentElement" still clobbers the property of its form, so the DOM is read through the prototypes' getters and a failure sends nothing
+  var PICK = "2px solid #db2777", MARK = "2px dashed #db2777";
+  var ID_RE = /^[A-Za-z][\w-]{0,40}$/, CLASS_RE = /^[A-Za-z][\w-]{0,30}$/, DIGITS = /\d{4,}/, TAG_RE = /^[a-z][a-z0-9-]{0,39}$/;
+  var picking = false, hover = null, marked = [];
+  var getter = function (proto, name) { var d = Object.getOwnPropertyDescriptor(proto, name); return d && d.get; };
+  var tagOf = getter(Element.prototype, "tagName"), parentOf = getter(Node.prototype, "parentElement"), childrenOf = getter(Element.prototype, "children");
+  var attr = function (n, name) { return Element.prototype.getAttribute.call(n, name); };
+  var qsa = function (sel) { return Document.prototype.querySelectorAll.call(document, sel); };
+  var clip = function (s, n) { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) : s; };
+  var unique = function (sel) { try { return qsa(sel).length === 1; } catch (err) { return false; } };
+  function selectorOf(el) {
+    var id = attr(el, "id");
+    if (id && ID_RE.test(id) && unique("#" + id)) return "#" + id;
+    var path = "", n = el;
+    for (var depth = 0; n && n !== de && depth < 5; depth++, n = parentOf.call(n)) {
+      var nid = attr(n, "id");
+      if (depth > 0 && nid && ID_RE.test(nid) && unique("#" + nid)) { path = "#" + nid + (path ? " > " + path : ""); break; }
+      var tag = String(tagOf.call(n)).toLowerCase(), part = TAG_RE.test(tag) ? tag : "*", cls = (attr(n, "class") || "").split(/\s+/), used = 0;
+      for (var i = 0; i < cls.length && used < 2; i++) if (CLASS_RE.test(cls[i]) && !DIGITS.test(cls[i])) { part += "." + cls[i]; used++; }
+      var cand = part + (path ? " > " + path : "");
+      if (unique(cand)) return cand.length > 200 ? "" : cand;
+      var par = parentOf.call(n), nth = 0, same = 0;
+      if (par) {
+        var kids = childrenOf.call(par);
+        for (var k = 0; k < kids.length; k++) if (String(tagOf.call(kids[k])).toLowerCase() === tag) { same++; if (kids[k] === n) nth = same; }
+      }
+      if (same > 1) part += ":nth-of-type(" + nth + ")";
+      path = part + (path ? " > " + path : "");
+      if (unique(path)) break;
+    }
+    return path.length > 200 ? "" : path;
+  }
+  function textOf(el) {
+    var t = clip(el.innerText, 80);
+    if (t) return t;
+    var names = ["aria-label", "alt", "title"];
+    for (var i = 0; i < names.length; i++) { t = clip(attr(el, names[i]), 80); if (t) return t; }
+    return "";
+  }
+  function rectOf(r) { return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; }
+  function outline(el, value) {
+    var s = el.style, keep = { o: s.getPropertyValue("outline"), p: s.getPropertyPriority("outline"), f: s.getPropertyValue("outline-offset") };
+    s.setProperty("outline", value, "important");
+    s.setProperty("outline-offset", "2px", "important");
+    return keep;
+  }
+  function restore(el, keep) {
+    var s = el.style;
+    s.removeProperty("outline");
+    s.removeProperty("outline-offset");
+    if (keep.o) s.setProperty("outline", keep.o, keep.p);
+    if (keep.f) s.setProperty("outline-offset", keep.f);
+  }
+  function unhover() { if (hover) { try { restore(hover.el, hover.keep); } catch (err) {} hover = null; } }
+  function setPick(on) { picking = on; if (!on) unhover(); }
+  function setMarks(items) {
+    for (var i = 0; i < marked.length; i++) try { restore(marked[i].el, marked[i].keep); } catch (err) {}
+    marked = [];
+    unhover();
+    for (var j = 0; j < items.length && j < 60; j++) {
+      var it = items[j];
+      if (!it || typeof it !== "object" || typeof it.sel !== "string" || it.sel.length > 200) continue;
+      try {
+        var el = qsa(it.sel)[0];
+        if (el) marked.push({ el: el, keep: outline(el, MARK) });
+      } catch (err) {}
+    }
+  }
+  window.addEventListener("mouseover", function (e) {
+    if (!picking || !(e.target instanceof Element)) return;
+    var el = e.target;
+    if (hover && hover.el === el) return;
+    try {
+      unhover();
+      hover = { el: el, keep: outline(el, PICK) };
+    } catch (err) {}
+  }, true);
+  window.addEventListener("click", function (e) {
+    if (!picking || !(e.target instanceof Element)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var el = e.target, msg = null;
+    try { msg = { ukagai: "picked", sel: selectorOf(el), tag: String(tagOf.call(el)).toLowerCase().slice(0, 40), text: textOf(el), rect: rectOf(el.getBoundingClientRect()) }; } catch (err) {}
+    setPick(false);
+    if (msg) parent.postMessage(msg, "*");
+  }, true);
+  window.addEventListener("keydown", function (e) {
+    if (!picking || e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    setPick(false);
+    parent.postMessage({ ukagai: "pick-cancel" }, "*");
+  }, true);
+  window.addEventListener("mouseup", function () {
+    setTimeout(function () {
+      try {
+        var sel = getSelection();
+        if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+        var range = sel.getRangeAt(0), quote = clip(range.toString(), 500);
+        if (!quote) return;
+        var anc = range.commonAncestorContainer;
+        if (anc.nodeType !== 1) anc = anc.parentNode;
+        if (!anc || anc.nodeType !== 1) return;
+        var root = document.body || de, before = document.createRange(), after = document.createRange();
+        before.setStart(root, 0);
+        before.setEnd(range.startContainer, range.startOffset);
+        after.setStart(range.endContainer, range.endOffset);
+        after.setEnd(root, root.childNodes.length);
+        var pre = before.toString().replace(/\s+/g, " "), post = after.toString().replace(/\s+/g, " ");
+        parent.postMessage({ ukagai: "selected", quote: quote, prefix: pre.slice(-64), suffix: post.slice(0, 64), sel: selectorOf(anc), rect: rectOf(range.getBoundingClientRect()) }, "*");
+      } catch (err) {}
+    }, 0);
+  }, true);
   window.addEventListener("message", function (e) {
     if (e.source !== parent || !e.data || typeof e.data !== "object") return;
     if (e.data.ukagai === "mode") overlay = e.data.overlay === true;
     else if (e.data.ukagai === "zoom" && typeof e.data.value === "number" && isFinite(e.data.value)) setZoom(e.data.value);
     else if (e.data.ukagai === "fit") fit();
+    else if (e.data.ukagai === "pick") setPick(e.data.on === true);
+    else if (e.data.ukagai === "marks" && Array.isArray(e.data.items)) setMarks(e.data.items);
   });
   window.addEventListener("load", schedule);
   window.addEventListener("resize", schedule);

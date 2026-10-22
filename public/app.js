@@ -311,10 +311,12 @@ function documentImages(container, doc) {
         el("div", { class: "doc-frame-bar" },
           el("span", { class: "doc-frame-name" },
             el("span", { class: "doc-frame-alt", title: alt || name, text: alt || name }), el("span", { class: "chip", title: name, text: name })),
-          // In a narrow frame (container query in app.css) the two buttons show only their icon; the text stays as title / aria-label
+          // In a narrow frame (container query in app.css) the buttons show only their icon; the text stays as title / aria-label
+          framePickButton("doc-frame-pick"),
           el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", title: t("frame_newtab"), "aria-label": t("frame_newtab") }, icon("external-link"), el("span", { class: "btn-text", text: t("frame_newtab") })),
           el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, title: t("frame_full"), "aria-label": t("frame_full") }, icon("maximize"), el("span", { class: "btn-text", text: t("frame_full") }))),
         el("iframe", { class: "doc-frame-view", ...frameAttrs, src, loading: "lazy", title: alt || name }));
+      frame.querySelector("iframe").addEventListener("load", (ev) => syncFrameMarks(ev.target, true));
       img.replaceWith(frame);
       const fp = frame.parentElement;
       if (fp?.tagName === "P" && fp.childNodes.length === 1) fp.replaceWith(frame);
@@ -322,6 +324,7 @@ function documentImages(container, doc) {
     }
     img.setAttribute("src", src);
     img.setAttribute("loading", "lazy");
+    img.setAttribute("draggable", "false"); // a pointer drag draws a region (comments), not the browser's drag ghost
     const fig = el("figure", { class: "doc-img" });
     const open = el("button", { class: "doc-img-open", type: "button", "aria-label": t("image_open", { alt: alt || t("image") }) });
     img.replaceWith(fig);
@@ -1658,6 +1661,8 @@ function closeOverlay() {
   overlay.el.remove();
   overlay = null;
   if (!drawerOpen()) setBackgroundInert(false);
+  reanchorSoon(); // comments made in the overlay get their badges (the text ranges are found again too: reanchor cleared them while the overlay was open)
+  syncFrameMarks();
   if (back?.isConnected && back !== document.body && !back.matches("input, textarea")) back.focus({ preventScroll: true });
 }
 function openOverlay(kind, title, body, extra = {}) {
@@ -1679,8 +1684,11 @@ function openLightbox(button) {
   if (!thumb) return;
   const alt = thumb.getAttribute("alt") ?? "";
   button.focus({ preventScroll: true });
-  const full = el("img", { class: "lightbox-img", src: thumb.getAttribute("src"), alt, onclick: closeOverlay });
-  openOverlay("lightbox", alt || t("image"), full);
+  const full = el("img", { class: "lightbox-img", src: thumb.getAttribute("src"), alt, draggable: "false", onclick: closeOverlay });
+  const layer = el("div", { class: "rg-layer" });
+  openOverlay("lightbox", alt || t("image"), el("div", { class: "lightbox-wrap" }, full, layer), { img: full, layer });
+  full.addEventListener("load", paintLightbox);
+  paintLightbox();
 }
 // An embedded HTML page at full size: the shared overlay, asked to be the browser's real full screen (the overlay itself fills the viewport when that is refused).
 // A top bar carries the zoom controls; the frame's helper script (src/serve/frame-helper.ts) does the zooming and reports its size / zoom back
@@ -1696,10 +1704,11 @@ function openFrame(button) {
     btn(t("frame_fit"), () => frameZoom("fit")), btn("100%", () => frameZoom(1)),
     btn(t("frame_zoom_out"), () => frameZoom(overlay.zoom / 1.25)), btn(t("frame_zoom_in"), () => frameZoom(overlay.zoom * 1.25))] : [];
   const head = el("div", { class: "frame-bar" },
-    el("span", { class: "frame-title", text: title }), ...zoomControls,
+    el("span", { class: "frame-title", text: title }), framePickButton("frame-btn frame-pick"), ...zoomControls,
     el("a", { class: "frame-btn", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
     btn(t("frame_close"), closeOverlay));
   openOverlay("frame", title, frame, { head, frame, zoom: 1, zoomLabel });
+  frame.addEventListener("load", () => syncFrameMarks(frame, true));
   overlay.el.requestFullscreen?.()?.catch?.(() => {});
 }
 function frameZoom(v) {
@@ -1708,7 +1717,8 @@ function frameZoom(v) {
   w.postMessage(v === "fit" ? { ukagai: "fit" } : { ukagai: "zoom", value: clampZoom(v) }, "*");
 }
 function frameKey(key) {
-  if (key === "Escape") closeOverlay();
+  if (key === "Escape" && picking()) setPick(picking(), false);
+  else if (key === "Escape") closeOverlay();
   else if (key === "+" || key === "=") frameZoom(overlay.zoom * 1.25);
   else if (key === "-") frameZoom(overlay.zoom / 1.25);
   else if (key === "0") frameZoom(1);
@@ -1721,6 +1731,9 @@ window.addEventListener("message", (e) => {
   const d = e.data;
   if (!d || typeof d !== "object" || !e.source) return;
   const num = (v, lo, hi) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+  const from = overlay?.kind === "frame" && overlay.frame.isConnected && e.source === overlay.frame.contentWindow ? overlay.frame
+    : [...document.querySelectorAll("iframe.doc-frame-view")].find((f) => f.contentWindow && f.contentWindow === e.source);
+  if (from && frameComment(from, d)) return;
   if (overlay?.kind === "frame" && overlay.frame.isConnected && e.source === overlay.frame.contentWindow) {
     if (d.ukagai === "frame" && num(d.zoom, 0.05, 5)) {
       if (!overlay.modeSent) { overlay.modeSent = true; e.source.postMessage({ ukagai: "mode", overlay: true }, "*"); } // zoom, pinch and zoom keys are the helper's only in full screen
@@ -1741,7 +1754,9 @@ document.addEventListener("click", (e) => {
   const b = tgt?.closest("button.doc-img-open");
   if (b) return openLightbox(b);
   const f = tgt?.closest("button.doc-frame-full");
-  if (f) openFrame(f);
+  if (f) return openFrame(f);
+  const pk = tgt?.closest("button.doc-frame-pick, button.frame-pick");
+  if (pk) framePick(pk);
 });
 
 function openTerms(v2) {
@@ -2407,8 +2422,9 @@ pruneComments();
 
 // The shown item when it can take comments: a pending question with an explanation, a plan decision (not an earlier version),
 // a plan file card that has a session to send to. null otherwise
-function commentTarget() {
-  if (overlay || drawerOpen()) return null;
+// `inOverlay`: the full-screen page and the lightbox take comments too (their own code asks with true)
+function commentTarget(inOverlay = false) {
+  if ((overlay && !(inOverlay && (overlay.kind === "frame" || overlay.kind === "lightbox"))) || drawerOpen()) return null;
   const d = shownPlanPd() ?? decisions.get(shownId);
   if (!d || d.status !== "pending") return null;
   if (d.kind === "answer_question") return hasExplanation(d) ? { d, source: "explanation" } : null;
@@ -2591,8 +2607,14 @@ function reanchor() {
   cmtRanges.clear();
   if (!tgt) { paintComments(); return; }
   const dr = draftOf(tgt.d);
-  const texts = dr.comments.filter((c) => c.kind === "text");
+  const texts = dr.comments.filter((c) => c.kind === "text" && c.source.kind !== "page");
   let flipped = false;
+  // a comment on a page or an image has no text to find: it is anchored while the frame / image of that file is still on the page
+  for (const c of dr.comments) {
+    if (c.source.kind !== "page" && c.source.kind !== "image") continue;
+    const here = !c.source.file || !!anchorOf(c);
+    if (here && c.orphan) { delete c.orphan; flipped = true; } else if (!here && !c.orphan) { c.orphan = true; flipped = true; }
+  }
   if (texts.length) {
     const root = $("background");
     const idx = textIndex(root);
@@ -2619,6 +2641,7 @@ function rectOfRange(range) {
 }
 
 function paintComments() {
+  paintLightbox();
   const root = $("background");
   const tgt = commentTarget();
   const list = tgt ? draftOf(tgt.d).comments : [];
@@ -2627,12 +2650,14 @@ function paintComments() {
     if (ranges.length) CSS.highlights.set("ukagai-comment", new Highlight(...ranges)); else CSS.highlights.delete("ukagai-comment");
   }
   cmtLayer = root.querySelector(":scope > .cmt-layer");
-  if (!list.length) { cmtLayer?.remove(); return; }
+  if (!list.length) { cmtLayer?.remove(); syncFrameMarks(); return; }
   if (!cmtLayer) cmtLayer = el("div", { class: "cmt-layer", "aria-hidden": "false" });
   if (cmtLayer.parentElement !== root || root.lastElementChild !== cmtLayer) root.append(cmtLayer);
   const box = root.getBoundingClientRect();
   const badges = [];
+  const perFrame = new Map(); // a frame's badges sit side by side along its top edge
   list.forEach((c, i) => {
+    if (c.source.kind === "page" || c.source.kind === "image") { paintOther(badges, box, root, c, i, perFrame); return; }
     const range = cmtRanges.get(c.id);
     const hit = range && rectOfRange(range);
     if (!hit) return;
@@ -2643,6 +2668,70 @@ function paintComments() {
     }));
   });
   cmtLayer.replaceChildren(...badges);
+  syncFrameMarks();
+}
+
+// The frame (page comments) or the image (region comments) of a comment's file in the left column, or null
+const fileOfUrl = (url) => {
+  try {
+    const u = new URL(url, location.href);
+    if (u.pathname !== "/api/files") return "";
+    const written = u.searchParams.get("path") ?? "";
+    if (written.startsWith("/")) return written;
+    const decision = u.searchParams.get("decision");
+    const d = decision ? decisions.get(decision) : null;
+    const doc = (d?.explanation?.path ?? d?.request?.planFilePath ?? "").replace(/#ukagai-explain$/, "");
+    if (!doc.startsWith("/")) return written; // a plan file card: the plans folder is not known here, the written path stays relative
+    const parts = doc.split("/").slice(0, -1);
+    for (const seg of written.split("/")) { if (seg === "..") parts.pop(); else if (seg && seg !== ".") parts.push(seg); }
+    return parts.join("/") || "/";
+  } catch { return ""; }
+};
+const frameFile = (frame) => fileOfUrl(frame.getAttribute("src") ?? "");
+function anchorOf(c) {
+  const root = $("background");
+  const sel = c.source.kind === "image" ? "figure.doc-img img" : "iframe.doc-frame-view";
+  return [...root.querySelectorAll(sel)].find((x) => (c.source.kind === "image" ? fileOfUrl(x.getAttribute("src") ?? "") : frameFile(x)) === (c.source.file ?? "")) ?? null;
+}
+// Badges (and, for a region, its outline) of a comment on a page or an image, drawn in the same layer
+function paintOther(badges, box, root, c, i, perFrame) {
+  const x = anchorOf(c);
+  if (!x) return;
+  const r = x.getBoundingClientRect();
+  if (!r.width && !r.height) return;
+  const at = (left, top, cls) => el("button", {
+    class: `cmt-badge${cls}`, type: "button", tabindex: "-1", "data-id": c.id, "aria-label": `${t("cmt_aria")} ${i + 1}`, text: String(i + 1),
+    style: `left:${Math.round(left - box.left + root.scrollLeft)}px;top:${Math.round(top - box.top + root.scrollTop)}px`,
+    onclick: () => focusComment(c.id),
+  });
+  if (c.kind === "region" && c.rect && x.naturalWidth) {
+    const k = r.width / x.naturalWidth;
+    const rl = r.left + c.rect.x * k;
+    const rt = r.top + c.rect.y * k;
+    badges.push(el("div", { class: "rg-box", style: `left:${Math.round(rl - box.left + root.scrollLeft)}px;top:${Math.round(rt - box.top + root.scrollTop)}px;width:${Math.max(2, Math.round(c.rect.w * k))}px;height:${Math.max(2, Math.round(c.rect.h * k))}px` }));
+    badges.push(at(rl - 8, rt - 9, ""));
+    return;
+  }
+  const n = perFrame.get(x) ?? 0;
+  perFrame.set(x, n + 1);
+  badges.push(at(r.left + 6 + n * 21, r.top - 9, ""));
+}
+
+// Tell a frame which elements carry comments (it outlines them). Only a changed list is sent; `force` after the frame (re)loaded
+function syncFrameMarks(only, force = false) {
+  const tgt = commentTarget(true);
+  const list = tgt ? draftOf(tgt.d).comments : [];
+  const frames = only ? [only] : [...document.querySelectorAll("iframe.doc-frame-view, iframe.frame-full")];
+  for (const f of frames) {
+    if (!f.isConnected || !f.contentWindow) continue;
+    const file = frameFile(f);
+    const items = [];
+    list.forEach((c, i) => { if (c.source.kind === "page" && c.selector && (c.source.file ?? "") === file) items.push({ n: i + 1, sel: c.selector }); });
+    const key = JSON.stringify(items);
+    if (!force && f._marks === key) continue;
+    f._marks = key;
+    f.contentWindow.postMessage({ ukagai: "marks", items }, "*");
+  }
 }
 
 // ---- Making a comment from the selection ----
@@ -2741,6 +2830,196 @@ $("background").addEventListener("mouseup", (ev) => {
   setTimeout(commentFromSelection, 0);
 });
 
+// ---- Comments on a page in a frame and on a region of an image ----
+
+// A frame element is picked with the frame helper (src/serve/frame-helper.ts): the parent turns picking on, the helper outlines what the pointer is over and reports the click.
+// Text selected inside the page is reported by the helper on mouseup. Without the helper (FRAME_SCRIPTS false) the button comments on the whole page.
+let pickFrame = null; // the iframe that is picking now
+const picking = () => (pickFrame?.isConnected ? pickFrame : null);
+const frameOfButton = (b) => b.closest(".doc-frame")?.querySelector("iframe.doc-frame-view") ?? (overlay?.kind === "frame" ? overlay.frame : null);
+
+function framePickButton(cls) {
+  const label = t(FRAME_SCRIPTS ? "cmt_pick" : "cmt_page");
+  return el("button", { class: cls, type: "button", "aria-pressed": "false", title: label, "aria-label": label }, icon("message-square"), el("span", { class: "btn-text", text: label }));
+}
+function setPick(frame, on, notify = true) {
+  const prev = picking();
+  if (notify && prev && (prev !== frame || !on)) prev.contentWindow?.postMessage({ ukagai: "pick", on: false }, "*");
+  pickFrame = on ? frame : null;
+  if (notify && on) { frame.contentWindow?.postMessage({ ukagai: "pick", on: true }, "*"); toast(t("cmt_pick_on")); }
+  for (const b of document.querySelectorAll("button.doc-frame-pick, button.frame-pick")) {
+    const hot = !!pickFrame && frameOfButton(b) === pickFrame;
+    b.setAttribute("aria-pressed", String(hot));
+    b.classList.toggle("on", hot);
+  }
+}
+function framePick(btn) {
+  const frame = frameOfButton(btn);
+  const tgt = commentTarget(true);
+  if (!frame || !tgt) return;
+  if (!FRAME_SCRIPTS) { pageComment(tgt, frame); return; }
+  setPick(frame, picking() !== frame);
+}
+// Esc ends picking before anything else sees it (the helper does the same when the focus is inside the frame)
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape" || !picking() || pop) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  setPick(picking(), false);
+}, true);
+
+const draftFile = (file) => (file && file.length <= 300 ? { file } : {});
+// A comment on the whole page (no frame helper to pick an element with)
+function pageComment(tgt, frame) {
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) { toast(t("cmt_max", { max: COMMENTS_MAX }), { kind: "lost" }); return; }
+  const title = clip(frame.getAttribute("title") ?? "", 120);
+  const draft = { id: cmtId(), kind: "element", source: { kind: "page", ...draftFile(frameFile(frame)) }, ...(title ? { text: title } : {}), note: "" };
+  openCommentPopover(frame.getBoundingClientRect(), draft, { n: dr.comments.length + 1, onSave: (note) => addComment(tgt, { ...draft, note }) });
+}
+
+// A report from the helper of `frame` (`d` is untrusted: every field is checked and clipped here). true when it was one of the comment messages
+function frameComment(frame, d) {
+  if (d.ukagai === "pick-cancel") { if (picking() === frame) setPick(frame, false, false); return true; }
+  const picked = d.ukagai === "picked";
+  if (!picked && d.ukagai !== "selected") return false;
+  if (picked) { if (picking() !== frame) return true; setPick(frame, false, false); } // the helper turns picking off after one pick
+  const cap = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
+  const r = d.rect;
+  if (!r || typeof r !== "object" || !["x", "y", "w", "h"].every((k) => typeof r[k] === "number" && Number.isFinite(r[k]) && Math.abs(r[k]) <= 1e6)) return true;
+  const tgt = commentTarget(true);
+  if (!tgt || (pop && pop.ta.value.trim())) return true;
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) { toast(t("cmt_max", { max: COMMENTS_MAX }), { kind: "lost" }); return true; }
+  const draft = { id: cmtId(), kind: picked ? "element" : "text", source: { kind: "page", ...draftFile(frameFile(frame)) }, note: "" };
+  const sel = cap(d.sel, 200);
+  if (sel && !/[\u0000-\u001f]/.test(sel)) draft.selector = sel;
+  if (picked) {
+    const tag = cap(d.tag, 40);
+    const text = cap(d.text, 120).trim();
+    if (/^[a-z][a-z0-9-]*$/.test(tag)) draft.tag = tag;
+    if (text) draft.text = text;
+  } else {
+    const quote = cap(d.quote, 500).trim();
+    if (!quote) return true;
+    draft.quote = quote;
+    const prefix = cap(d.prefix, 64);
+    const suffix = cap(d.suffix, 64);
+    if (prefix) draft.prefix = prefix;
+    if (suffix) draft.suffix = suffix;
+  }
+  // the helper's rect is in the frame's viewport pixels (getBoundingClientRect already includes the helper's zoom), so the frame's own position is all that is added
+  const fr = frame.getBoundingClientRect();
+  const within = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  const left = within(fr.left + r.x, fr.left, fr.right);
+  const top = within(fr.top + r.y, fr.top, fr.bottom);
+  const anchor = { left, top, right: within(fr.left + r.x + r.w, left, fr.right), bottom: within(fr.top + r.y + r.h, top, fr.bottom) };
+  openCommentPopover(anchor, draft, { n: dr.comments.length + 1, onSave: (note) => addComment(tgt, { ...draft, note }) });
+  return true;
+}
+
+// Regions: a pointer drag of more than 4 px on a document image (inline or in the lightbox) draws a dashed rectangle; a plain click still opens the lightbox
+const DRAG_MIN = 4;
+let drag = null; // { img, x, y, on, box }
+const dragRect = (g, x, y) => {
+  const ir = g.img.getBoundingClientRect();
+  const within = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  const x0 = within(Math.min(g.x, x), ir.left, ir.right);
+  const x1 = within(Math.max(g.x, x), ir.left, ir.right);
+  const y0 = within(Math.min(g.y, y), ir.top, ir.bottom);
+  const y1 = within(Math.max(g.y, y), ir.top, ir.bottom);
+  return { left: x0, top: y0, right: x1, bottom: y1, ir };
+};
+document.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0 || !ev.isPrimary || !(ev.target instanceof Element)) return;
+  const img = ev.target.closest(".doc-img-open img, img.lightbox-img");
+  if (!img || !commentTarget(true)) return;
+  drag = { img, x: ev.clientX, y: ev.clientY, on: false, box: null };
+});
+document.addEventListener("pointermove", (ev) => {
+  if (!drag) return;
+  if (!drag.on && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) <= DRAG_MIN) return;
+  drag.on = true;
+  drag.box ??= document.body.appendChild(el("div", { class: "rg-draw" }));
+  const r = dragRect(drag, ev.clientX, ev.clientY);
+  drag.box.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.right - r.left}px;height:${r.bottom - r.top}px`;
+});
+document.addEventListener("pointerup", (ev) => {
+  const g = drag;
+  drag = null;
+  g?.box?.remove();
+  if (!g?.on) return;
+  // the click that follows a drag must not open (or close) the lightbox
+  const swallow = (e) => { e.preventDefault(); e.stopPropagation(); };
+  document.addEventListener("click", swallow, { capture: true, once: true });
+  setTimeout(() => document.removeEventListener("click", swallow, true), 0);
+  regionComment(g.img, dragRect(g, ev.clientX, ev.clientY));
+});
+document.addEventListener("pointercancel", () => { drag?.box?.remove(); drag = null; });
+
+// `r`: the dragged rectangle in viewport pixels (+ the image's rect); the comment's rect is in the image's natural pixels
+function regionComment(img, r) {
+  const tgt = commentTarget(true);
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!tgt || !nw || !nh || !r.ir.width || !r.ir.height) return;
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) { toast(t("cmt_max", { max: COMMENTS_MAX }), { kind: "lost" }); return; }
+  const kx = nw / r.ir.width;
+  const ky = nh / r.ir.height;
+  const x = Math.min(nw - 1, Math.max(0, Math.round((r.left - r.ir.left) * kx)));
+  const y = Math.min(nh - 1, Math.max(0, Math.round((r.top - r.ir.top) * ky)));
+  const rect = { x, y, w: Math.max(1, Math.min(nw - x, Math.round((r.right - r.left) * kx))), h: Math.max(1, Math.min(nh - y, Math.round((r.bottom - r.top) * ky))) };
+  const draft = { id: cmtId(), kind: "region", source: { kind: "image", ...draftFile(fileOfUrl(img.getAttribute("src") ?? "")) }, rect, note: "" };
+  openCommentPopover(r, draft, {
+    n: dr.comments.length + 1, async: true,
+    onSave: async (note) => addComment(tgt, { ...draft, mark: await uploadMark(tgt.d, img, rect), note }),
+  });
+}
+
+// The region plus padding (max(64 px, half the region) per axis, kept inside the image), the region outlined in red, long edge at most 2048: saved by the server, which returns its id
+async function uploadMark(d, img, rect) {
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  const padX = Math.max(64, Math.round(rect.w / 2));
+  const padY = Math.max(64, Math.round(rect.h / 2));
+  const cx = Math.max(0, rect.x - padX);
+  const cy = Math.max(0, rect.y - padY);
+  const cw = Math.min(nw, rect.x + rect.w + padX) - cx;
+  const ch = Math.min(nh, rect.y + rect.h + padY) - cy;
+  const scale = Math.min(1, 2048 / Math.max(cw, ch));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(cw * scale));
+  canvas.height = Math.max(1, Math.round(ch * scale));
+  const g = canvas.getContext("2d");
+  g.drawImage(img, cx, cy, cw, ch, 0, 0, canvas.width, canvas.height);
+  g.strokeStyle = "#dc2626";
+  g.lineWidth = 3;
+  g.strokeRect((rect.x - cx) * scale, (rect.y - cy) * scale, rect.w * scale, rect.h * scale);
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  if (!blob) throw new Error("no image");
+  const url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); });
+  const png = url.slice(url.indexOf(",") + 1);
+  const { id } = await post("/api/marks", isPlanId(d.id) ? { plan: planNameOf(d.id), png } : { decision: d.id, png });
+  return id;
+}
+
+// The regions of the comments on the lightbox's image (outlined with their numbers; percentages, so a resize needs no repaint)
+function paintLightbox() {
+  if (overlay?.kind !== "lightbox") return;
+  const { img, layer } = overlay;
+  const tgt = commentTarget(true);
+  const file = fileOfUrl(img.getAttribute("src") ?? "");
+  const boxes = [];
+  (tgt ? draftOf(tgt.d).comments : []).forEach((c, i) => {
+    if (c.kind !== "region" || !c.rect || c.source.kind !== "image" || (c.source.file ?? "") !== file || !img.naturalWidth) return;
+    const pc = (v, of) => `${(v / of) * 100}%`;
+    boxes.push(el("div", { class: "rg-box", style: `left:${pc(c.rect.x, img.naturalWidth)};top:${pc(c.rect.y, img.naturalHeight)};width:${pc(c.rect.w, img.naturalWidth)};height:${pc(c.rect.h, img.naturalHeight)}` },
+      el("span", { class: "cmt-n", text: String(i + 1) })));
+  });
+  layer.replaceChildren(...boxes);
+}
+
 // ---- The popover ----
 
 let pop = null; // { el, ta, close }
@@ -2752,10 +3031,11 @@ function closeCommentPopover() {
 // (Save + Delete when editing). `draft` is a Comment (its note may be empty); `n` is its number in the list.
 // Esc and ⌘/Ctrl+Enter never reach the global key handler. Clicking outside closes it when the note is empty and leaves it open otherwise.
 // onSave(note) gets the trimmed note; onDelete (editing only) shows a Delete button
-function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1 } = {}) {
+// `async: true`: onSave returns a promise; the popover waits (buttons and Esc are off), closes when it resolves and shows the error and stays open when it rejects
+function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1, async = false } = {}) {
   closeCommentPopover();
   const label = draft.kind === "text" ? `“${clip(draft.quote ?? "", 80)}”`
-    : draft.kind === "element" ? `${draft.tag ?? t("cmt_element")}${draft.text ? ` “${clip(draft.text, 60)}”` : draft.selector ? ` ${clip(draft.selector, 60)}` : ""}`
+    : draft.kind === "element" ? `${draft.selector ? (draft.tag ?? t("cmt_element")) : t("cmt_page_whole")}${draft.text ? ` “${clip(draft.text, 60)}”` : draft.selector ? ` ${clip(draft.selector, 60)}` : ""}`
     : t("cmt_region", { w: draft.rect?.w ?? 0, h: draft.rect?.h ?? 0, x: draft.rect?.x ?? 0, y: draft.rect?.y ?? 0 });
   const editing = !!draft.note || !!onDelete;
   draft = { ...draft, note: draft.note ?? "" };
@@ -2765,24 +3045,41 @@ function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1 } = {})
     oninput: () => { add.disabled = !ta.value.trim(); },
   });
   ta.value = draft.note ?? "";
+  let busy = false;
+  const err = el("div", { class: "cmt-pop-err", role: "alert", hidden: true });
   const root = el("div", { class: "cmt-pop", role: "dialog", "aria-label": t("cmt_aria") },
     el("div", { class: "cmt-pop-head" }, el("span", { class: "cmt-n", text: String(n) }), el("span", { class: "cmt-pop-q", title: label, text: label })),
-    ta,
+    ta, err,
     el("div", { class: "cmt-pop-actions" },
-      onDelete ? el("button", { class: "btn danger", type: "button", onclick: () => { close(); onDelete(); } }, t("cmt_delete")) : null,
+      onDelete ? el("button", { class: "btn danger", type: "button", onclick: () => { if (busy) return; close(); onDelete(); } }, t("cmt_delete")) : null,
       el("span", { class: "grow" }),
-      el("button", { class: "btn", type: "button", onclick: () => close() }, el("span", { text: t("cmt_cancel") }), el("kbd", { text: "Esc" })),
+      el("button", { class: "btn", type: "button", onclick: () => { if (!busy) close(); } }, el("span", { text: t("cmt_cancel") }), el("kbd", { text: "Esc" })),
       add));
-  const save = () => {
+  const save = async () => {
     const note = ta.value.trim();
-    if (!note) return;
-    close();
-    onSave?.(note);
+    if (!note || busy) return;
+    if (!async) { close(); onSave?.(note); return; }
+    busy = true;
+    err.hidden = true;
+    add.disabled = true;
+    ta.disabled = true;
+    try {
+      await onSave(note);
+      busy = false;
+      close();
+    } catch (e) {
+      busy = false;
+      ta.disabled = false;
+      add.disabled = false;
+      err.textContent = t("cmt_upload_failed", { error: e?.message ?? String(e) });
+      err.hidden = false;
+      ta.focus();
+    }
   };
   // In the capture phase on the document: nothing typed while the popover is open reaches the global key handler (Esc on a plan card would move on)
   const onKey = (ev) => {
     ev.stopPropagation();
-    if (ev.key === "Escape") { ev.preventDefault(); close(); }
+    if (ev.key === "Escape") { ev.preventDefault(); if (!busy) close(); }
     else if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && !ev.isComposing) { ev.preventDefault(); save(); }
     else if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "c" && ev.target === ta && !ta.value && draft.quote) {
       ev.preventDefault();
@@ -2790,7 +3087,7 @@ function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1 } = {})
     }
   };
   const onDown = (ev) => {
-    if (root.contains(ev.target) || ta.value.trim()) return;
+    if (busy || root.contains(ev.target) || ta.value.trim()) return;
     if (ev.target instanceof Element && ev.target.closest(".cmt-badge")) return; // the badge reopens its own popover after this one closes
     close();
   };
@@ -2812,7 +3109,7 @@ function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1 } = {})
     root.style.left = `${left}px`;
     root.style.top = `${Math.max(8, Math.min(innerHeight - h - 8, top))}px`;
   };
-  document.body.append(root);
+  (document.fullscreenElement ?? document.body).append(root); // in the browser's full screen only that element and its children are shown
   pop = { el: root, ta, close };
   place();
   document.addEventListener("keydown", onKey, true);
@@ -2827,7 +3124,7 @@ function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1 } = {})
 // "where" of a comment in the list: section › "quote" / the element / the region
 function commentWhere(c) {
   if (c.kind === "text") return [...(c.section ?? []), `“${clip(c.quote ?? "", 60)}”`].join(" › ");
-  if (c.kind === "element") return `${c.tag ?? t("cmt_element")}${c.text ? ` “${clip(c.text, 40)}”` : c.selector ? ` ${clip(c.selector, 40)}` : ""}`;
+  if (c.kind === "element") return `${c.selector ? (c.tag ?? t("cmt_element")) : t("cmt_page_whole")}${c.text ? ` “${clip(c.text, 40)}”` : c.selector ? ` ${clip(c.selector, 40)}` : ""}`;
   return t("cmt_region", { w: c.rect?.w ?? 0, h: c.rect?.h ?? 0, x: c.rect?.x ?? 0, y: c.rect?.y ?? 0 });
 }
 

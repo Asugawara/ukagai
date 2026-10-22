@@ -5,10 +5,11 @@
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { optInPlanAutoShow } from "../support/plans-auto.js";
 
@@ -20,6 +21,8 @@ mkdirSync(SHOTS, { recursive: true });
 const PLAN = "# Export retry\n\n## Context\n\nThe export job fails on a flaky upload.\n\n## Scope and reversibility\n\nReversibility: reversible\nScope: file\n\n## Steps\n\n- [ ] add retry\n";
 
 let home = "";
+let top = "";
+let scratch = "";
 let dataDir = "";
 let port = 0;
 let token = "";
@@ -77,6 +80,20 @@ async function api(path: string, body?: unknown, method?: string) {
   const text = await res.text();
   return (text ? JSON.parse(text) : null) as any;
 }
+/** A solid-colour PNG (no dependency): signature, IHDR, one IDAT, IEND */
+function png(w: number, h: number, [r, g, b]: [number, number, number]): Buffer {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (buf: Buffer) => { let c = 0xffffffff; for (const x of buf) c = crcTable[(c ^ x) & 0xff]! ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const sum = Buffer.alloc(4); sum.writeUInt32BE(crc(body));
+    return Buffer.concat([len, body, sum]);
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w }, () => [r, g, b]).flat())]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: h }, () => row)))), chunk("IEND", Buffer.alloc(0))]);
+}
 async function seedPlan(sid?: string, transcriptPath?: string): Promise<{ id: string }> {
   const n = ++seq;
   const d = await api("/api/decisions", {
@@ -99,6 +116,10 @@ async function reopen(ready: string) {
 before(async () => {
   if (!HAS_BROWSER) return;
   home = mkdtempSync(join(tmpdir(), "ukagai-plin-"));
+  top = mkdtempSync(join(tmpdir(), "claude-ukagai-cmt-"));
+  scratch = join(top, "-proj", "sess-cmt", "scratchpad");
+  mkdirSync(join(scratch, "ukagai"), { recursive: true });
+  writeFileSync(join(scratch, "ukagai", "shot.png"), png(400, 300, [147, 197, 253]));
   dataDir = join(home, "data");
   optInPlanAutoShow(dataDir);
   mkdirSync(join(home, ".claude", "plans"), { recursive: true });
@@ -119,7 +140,7 @@ before(async () => {
 after(async () => {
   if (opened) { try { ab("close"); } catch {} }
   serve?.kill();
-  if (home) rmSync(home, { recursive: true, force: true });
+  for (const d of [home, top]) if (d) rmSync(d, { recursive: true, force: true });
 });
 
 function gui(name: string, fn: (t: TestContext) => Promise<void>) {
@@ -154,6 +175,7 @@ async function answered(id: string) {
   }
 }
 
+const count0 = (sel: string) => ev<number>(`document.querySelectorAll(${JSON.stringify(sel)}).length`);
 const active = () => ev<string>(`document.activeElement?.id ?? ""`);
 
 gui("select text -> popover -> Ctrl+Enter gives one highlight and one badge; the right list shows it; Send stores response.comments and the composed text", async () => {
@@ -277,6 +299,76 @@ gui("plan file card: Esc in the popover only closes it; a plan update that keeps
   assert.match(ins.instruction.text, /The human left 1 comment:/);
   assert.match(ins.instruction.text, /use the idempotency key/);
   rmSync(file, { force: true });
+});
+
+gui("a drag on an image draws a region and makes a region comment with a marked copy; a plain click still opens the lightbox, which shows the region; Send carries it", async () => {
+  const docPath = join(scratch, "ukagai", "ex.md");
+  const markdown = "---\nukagai: 1\n---\n## Why this decision is needed now\n\nThe colour:\n\n![shot](shot.png)\n";
+  writeFileSync(docPath, markdown);
+  const d = await api("/api/decisions", {
+    tool_use_id: `toolu_cmt_img_${process.pid}_${++seq}`,
+    kind: "answer_question",
+    session: { session_id: "00000000-0000-0000-0009-000000000003", cwd: ROOT, transcript_path: join(home, ".claude", "projects", "p", "none.jsonl"), scratchpad_dir: scratch },
+    request: { questions: [{ question: "Which colour?", header: "Colour", multiSelect: false, options: [{ label: "A", description: "A" }, { label: "B", description: "B" }] }] },
+    explanation: { path: docPath, markdown, has: { mermaid: false, table: false, diff: false }, match: "question", attached_via: "first_call" },
+  });
+  assert.ok(d.id, JSON.stringify(d));
+  void api(`/api/decisions/${d.id}/wait?timeout_ms=60000`).catch(() => {});
+  await reopen("document.querySelector('#background figure.doc-img img')?.naturalWidth === 400");
+  const imgBox = () => ev<{ x: number; y: number; w: number; h: number }>(`JSON.stringify((() => { const r = document.querySelector("#background figure.doc-img img").getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })())`);
+  const b = imgBox();
+  const at = (dx: number, dy: number) => [String(Math.round(b.x + dx)), String(Math.round(b.y + dy))];
+  ab("mouse", "move", ...at(50, 40));
+  ab("mouse", "down");
+  ab("mouse", "move", ...at(100, 60));
+  ab("mouse", "move", ...at(150, 90));
+  ab("mouse", "up");
+  await waitFor("region popover", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.equal(count0(".overlay"), 0, "the click after a drag did not open the lightbox");
+  assert.match(ev<string>(`document.querySelector(".cmt-pop .cmt-pop-q").textContent`), /^Region \d+×\d+ at \d+,\d+$/);
+  ev(`(() => { const t = document.querySelector(".cmt-pop-ta"); t.value = "a paler purple"; t.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()`);
+  // the first upload fails: the error shows inside the popover, which stays open with the note
+  ev(`(() => { window.__fetch = window.fetch; window.fetch = (u, i) => (String(u).includes("/api/marks") && !window.__failed ? (window.__failed = 1, Promise.resolve(new Response('{"error":"disk full"}', { status: 500 }))) : window.__fetch(u, i)); return "ok"; })()`);
+  key("Enter", ".cmt-pop-ta", ", ctrlKey: true");
+  await waitFor("error in the popover", `document.querySelector(".cmt-pop .cmt-pop-err") && !document.querySelector(".cmt-pop .cmt-pop-err").hidden`);
+  assert.match(ev<string>(`document.querySelector(".cmt-pop .cmt-pop-err").textContent`), /disk full/);
+  assert.equal(ev(`document.querySelector(".cmt-pop-ta").value`), "a paler purple");
+  assert.equal(count0("#decision .cmt-row"), 0, "nothing was added");
+  key("Enter", ".cmt-pop-ta", ", ctrlKey: true");
+  await waitFor("popover closed after the upload", `!document.querySelector(".cmt-pop")`, 15000);
+  await waitFor("region outline and badge", `document.querySelectorAll("#background .rg-box").length === 1 && document.querySelectorAll("#background .cmt-badge").length === 1 && document.querySelectorAll("#decision .cmt-row").length === 1`);
+  const stored = ev<any>(`JSON.stringify(JSON.parse(localStorage.getItem("ukagai.comments.${d.id}")).comments[0])`);
+  assert.equal(stored.kind, "region");
+  assert.deepEqual(stored.source, { kind: "image", file: join(scratch, "ukagai", "shot.png") });
+  assert.match(stored.mark, /^[0-9a-f]{16}$/);
+  // the displayed pixels are scaled to the natural ones (the image is 400 wide on screen or less)
+  const k = 400 / b.w;
+  assert.ok(Math.abs(stored.rect.x - 50 * k) <= 2 && Math.abs(stored.rect.y - 40 * k) <= 2 && Math.abs(stored.rect.w - 100 * k) <= 3 && Math.abs(stored.rect.h - 50 * k) <= 3, JSON.stringify({ rect: stored.rect, k }));
+  // a plain click opens the lightbox; the region is drawn there too; Esc closes it
+  ab("mouse", "move", ...at(200, 150));
+  ab("mouse", "down");
+  ab("mouse", "up");
+  await waitFor("lightbox", `document.querySelector(".overlay.lightbox .lightbox-img")`);
+  await waitFor("region in the lightbox", `document.querySelectorAll(".overlay.lightbox .rg-box").length === 1`);
+  assert.equal(String(ev(`document.querySelector(".overlay.lightbox .rg-box .cmt-n").textContent`)), "1");
+  key("Escape");
+  await waitFor("lightbox closed", `!document.querySelector(".overlay")`);
+  await waitFor("outline is back inline", `document.querySelectorAll("#background .rg-box").length === 1`);
+  ab("screenshot", join(SHOTS, "CMT-region.png"));
+  // answer with an option: the comment goes with the answer, and the composed text points at the marked copy
+  ev(`document.querySelector("#decision .opt").click(), "ok"`);
+  const done = await answered(d.id);
+  assert.equal(done.response.comments.length, 1);
+  assert.equal(done.response.comments[0].kind, "region");
+  assert.equal(done.response.comments[0].mark, stored.mark);
+  const answer = JSON.stringify(done.response);
+  const m = /marked copy: (\/[^\s"\\)]+\.png)/.exec(answer);
+  assert.ok(m, `the text names the marked copy: ${answer}`);
+  assert.equal(m![1], join(scratch, "ukagai", "marks", `${stored.mark}.png`));
+  assert.ok(existsSync(m![1]), "the marked copy exists");
+  assert.equal(readFileSync(m![1]).subarray(1, 4).toString(), "PNG");
+  assert.match(answer, /region x=\d+ y=\d+ w=\d+ h=\d+/);
+  assert.match(answer, /a paler purple/);
 });
 
 if (REQUIRE_BROWSER) {
