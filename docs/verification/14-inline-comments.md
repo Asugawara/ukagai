@@ -47,9 +47,9 @@ Two text comments (a step, a risk sentence) plus the overall message. The model 
 [ukagai] The human has not approved the plan yet and asks you to do this first: 先にコメントを反映して、計画を直してください
 
 The human left 2 comments:
-1. plan /Users/a14628/.claude/plans/you-are-in-plan-tidy-thompson.md, "Make the export job retry with a capped backoff > Steps > Cap the backoff at 30 seconds": "Cap the backoff at 30 seconds"
+1. plan ~/.claude/plans/you-are-in-plan-tidy-thompson.md, "Make the export job retry with a capped backoff > Steps > Cap the backoff at 30 seconds": "Cap the backoff at 30 seconds"
    → 60 秒にしたい。上流の SLA が 45 秒なので
-2. plan /Users/a14628/.claude/plans/you-are-in-plan-tidy-thompson.md, "Make the export job retry with a capped backoff > Risks": "A failed export may be retried; the job must stay safe to run twice"
+2. plan ~/.claude/plans/you-are-in-plan-tidy-thompson.md, "Make the export job retry with a capped backoff > Risks": "A failed export may be retried; the job must stay safe to run twice"
    → 二重実行の対策も書いて
 You are still in plan mode: do it (research, subagents and reviews are fine; do not edit project files), update the plan file, then call ExitPlanMode again.
 ```
@@ -61,7 +61,7 @@ With one comment waiting, the first press on "Approve" showed "1 comment will be
 [ukagai] The human rejected the plan and wrote: 却下: 上限の根拠が弱い
 
 The human left 1 comment:
-1. plan /Users/a14628/.claude/plans/you-are-in-plan-tidy-thompson.md, "Make the export job retry with a capped backoff > Steps Changed > Cap the backoff at 60 seconds": "Cap the backoff at 60 seconds"
+1. plan ~/.claude/plans/you-are-in-plan-tidy-thompson.md, "Make the export job retry with a capped backoff > Steps Changed > Cap the backoff at 60 seconds": "Cap the backoff at 60 seconds"
    → やっぱり 90 秒で
 ```
 
