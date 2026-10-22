@@ -372,10 +372,12 @@ test("a queued 600-character instruction joined with a near-limit comment block 
   plan(env, "swift-otter.md");
   await event(env, "s-live", transcript(env, "s-live", "swift-otter"), "UserPromptSubmit");
   assert.equal((await api(env, "/api/plans/swift-otter.md/instruct", { text: "q".repeat(600) })).status, 200);
-  const notes = ["a".repeat(1000), "b".repeat(1000), "c".repeat(1000), "short last note"];
-  const comments = notes.map((note, i) => ({ ...COMMENT, id: `c${i + 1}`, note }));
-  const block = formatComments(comments, { planFile: join(env.home, ".claude", "plans", "swift-otter.md") });
-  assert.ok(block.length >= 3500 && block.length <= 4000, `block length ${block.length}`);
+  const planFile = join(env.home, ".claude", "plans", "swift-otter.md");
+  const withLast = (last: string) => ["a".repeat(1000), "b".repeat(1000), "c".repeat(1000), last].map((note, i) => ({ ...COMMENT, id: `c${i + 1}`, note }));
+  // the where-lines carry the plan file's absolute path, whose length depends on the OS's tmp dir: size the last note so the block is 3700 characters everywhere
+  const comments = withLast("d".repeat(1 + 3700 - formatComments(withLast("d"), { planFile }).length));
+  const block = formatComments(comments, { planFile });
+  assert.equal(block.length, 3700);
   const r = await api(env, "/api/plans/swift-otter.md/instruct", { comments });
   assert.equal(r.status, 200);
   const ins = ((await (await api(env, "/api/sessions/s-live/instruction")).json()) as { instruction: { text: string } }).instruction;
