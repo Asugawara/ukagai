@@ -258,6 +258,24 @@ gui("a reload restores the draft comments; deleting one removes it from the high
   assert.equal(ev(`localStorage.getItem("ukagai.comments.${id}")`), null);
 });
 
+gui("a reload drops a stored draft that does not fit the contract (no note) and the send still succeeds", async () => {
+  const { id } = await seedPlan();
+  await reopen("document.querySelector('#decision .btn')");
+  await comment("flaky upload", "valid note");
+  await waitFor("one comment", `document.querySelectorAll("#decision .cmt-row").length === 1`);
+  // a hand-edited or older entry: no note, so the server would refuse the whole send with 400
+  const bad = { id: "nonote", kind: "text", source: { kind: "plan" }, quote: "export job" };
+  ev(`(() => { const k = "ukagai.comments.${id}"; const v = JSON.parse(localStorage.getItem(k)); v.comments.push(${JSON.stringify(bad)}); localStorage.setItem(k, JSON.stringify(v)); return "ok"; })()`);
+  await reopen("document.querySelectorAll('#decision .cmt-row').length === 1 && document.querySelectorAll('#background .cmt-badge').length === 1");
+  assert.equal(ev(`document.querySelectorAll("#decision .cmt-row").length`), 1, "only the valid comment is listed");
+  assert.match(ev<string>(`document.querySelector("#decision .cmt-row").textContent`), /valid note/);
+  ev(`document.querySelector("#instruct-send").click(), "ok"`);
+  const d = await answered(id);
+  assert.equal(d.response.instruct, true);
+  assert.equal(d.response.comments.length, 1);
+  assert.equal(d.response.comments[0].note, "valid note");
+});
+
 gui("plan file card: Esc in the popover only closes it; a plan update that keeps the quote re-anchors, one that removes it marks the comment orphan", async () => {
   const file = join(home, ".claude", "plans", "quick-fox.md");
   writeFileSync(file, PLAN);

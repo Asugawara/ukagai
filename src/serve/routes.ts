@@ -573,9 +573,9 @@ export function createApp(deps: AppDeps): Hono {
 
   app.post("/api/decisions/:id/answer", auth("any"), jsonOnly, async (c) => {
     const id = c.req.param("id");
-    if (!store.get(id)) return c.json({ error: "decision not found" }, 404);
+    const d = store.get(id);
+    if (!d) return c.json({ error: "decision not found" }, 404);
     const body = await parse(c, AnswerRequest);
-    const d = store.get(id)!;
     let patch: AnswerPatch;
     if ("kind" in body) patch = { kind: "checkpoint", answer: body.kind, ...(body.text !== undefined ? { text: body.text } : {}) };
     else if ("answers" in body) patch = { kind: "answers", answers: body.answers, ...(body.comments ? { comments: body.comments } : {}) };

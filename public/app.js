@@ -2387,10 +2387,21 @@ function cmtId() {
 
 // ---- Storage ----
 
+// The shape the server accepts (src/contract.ts); a stored entry that does not fit is dropped, or its send would be refused
+function validComment(c) {
+  if (!c || typeof c !== "object") return false;
+  if (typeof c.id !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(c.id)) return false;
+  if (!["text", "element", "region"].includes(c.kind)) return false;
+  if (!c.source || typeof c.source !== "object" || !["plan", "explanation", "page", "image"].includes(c.source.kind)) return false;
+  if (typeof c.note !== "string" || c.note.trim() === "") return false;
+  if (c.kind === "text" && typeof c.quote !== "string") return false;
+  if (c.kind === "region" && !(c.rect && ["x", "y", "w", "h"].every((k) => Number.isFinite(c.rect[k])))) return false;
+  return true;
+}
 function loadComments(id) {
   try {
     const v = JSON.parse(localStorage.getItem(CMT_PREFIX + id) ?? "null");
-    if (v && Date.now() - v.at < CMT_TTL_MS && Array.isArray(v.comments)) return v.comments.slice(0, COMMENTS_MAX);
+    if (v && Date.now() - v.at < CMT_TTL_MS && Array.isArray(v.comments)) return v.comments.filter(validComment).slice(0, COMMENTS_MAX);
   } catch {}
   return [];
 }
@@ -2676,7 +2687,7 @@ const fileOfUrl = (url) => {
   try {
     const u = new URL(url, location.href);
     if (u.pathname !== "/api/files") return "";
-    const written = u.searchParams.get("path") ?? "";
+    const written = (u.searchParams.get("path") ?? "").replace(/[\u0000-\u001f\u007f]/g, "");
     if (written.startsWith("/")) return written;
     const decision = u.searchParams.get("decision");
     const d = decision ? decisions.get(decision) : null;
@@ -2684,7 +2695,7 @@ const fileOfUrl = (url) => {
     if (!doc.startsWith("/")) return written; // a plan file card: the plans folder is not known here, the written path stays relative
     const parts = doc.split("/").slice(0, -1);
     for (const seg of written.split("/")) { if (seg === "..") parts.pop(); else if (seg && seg !== ".") parts.push(seg); }
-    return parts.join("/") || "/";
+    return (parts.join("/") || "/").replace(/[\u0000-\u001f\u007f]/g, "");
   } catch { return ""; }
 };
 const frameFile = (frame) => fileOfUrl(frame.getAttribute("src") ?? "");
@@ -3146,7 +3157,7 @@ function commentList(d, dr) {
       el("span", { class: "cmt-n", text: String(i + 1) }),
       el("div", { class: "cmt-body" },
         el("div", { class: "cmt-where", title: commentWhere(c), text: commentWhere(c) }),
-        c.orphan ? el("div", { class: "cmt-orphan", text: t("cmt_orphan") }) : null,
+        c.orphan ? el("div", { class: "cmt-orphan", text: t(c.kind === "text" && (c.source.kind === "plan" || c.source.kind === "explanation") ? "cmt_orphan" : "cmt_orphan_shown") }) : null,
         el("div", { class: "cmt-note", text: c.note })),
       el("button", { class: "cmt-del", type: "button", tabindex: "-1", "aria-label": t("cmt_remove"), title: t("cmt_remove"), text: "✕", onclick: () => removeComment(c.id) }));
     list.append(row);

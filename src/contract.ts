@@ -320,7 +320,7 @@ const CommentRect = z.strictObject({
 export const CommentSource = z.strictObject({
   kind: z.enum(["plan", "explanation", "page", "image"]),
   /** page / image: the absolute path the GUI shows (from the /api/files URL). plan / explanation: ignored, the server uses its own record */
-  file: z.string().max(300).optional(),
+  file: z.string().max(300).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
 });
 export type CommentSource = z.infer<typeof CommentSource>;
 export const Comment = z
@@ -336,8 +336,8 @@ export const Comment = z
     prefix: z.string().max(64).optional(),
     suffix: z.string().max(64).optional(),
     /** element (or text inside a page): CSS selector in the page */
-    selector: z.string().max(200).optional(),
-    tag: z.string().max(40).optional(),
+    selector: z.string().max(200).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
+    tag: z.string().max(40).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
     /** element: its visible text / aria-label / alt */
     text: z.string().max(120).optional(),
     /** region: natural pixels of the image (required for kind region) */

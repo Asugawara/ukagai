@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { slugOfHead } from "../../src/serve/plan-session.js";
+import { formatComments } from "../../src/serve/comments.js";
 import { PLAN_INSTRUCT_PREFIX, DEFAULT_SETTINGS, type Decision, type Settings } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 import type { Terminal, TerminalFound, TerminalRef, TerminalStatus } from "../../src/serve/terminal.js";
@@ -364,4 +365,22 @@ test("plan card instruct: text then the block; over 4000 is 400 too_long and not
   await api(env, "/api/plans/swift-otter.md/instruct", { text: "add rollback", comments: [COMMENT] });
   const ins = ((await (await api(env, "/api/sessions/s-live/instruction")).json()) as { instruction: { text: string } }).instruction;
   assert.ok(ins.text.startsWith("add rollback\n\nThe human left 1 comment:"));
+});
+
+test("a queued 600-character instruction joined with a near-limit comment block keeps the block whole", async () => {
+  const env = await boot();
+  plan(env, "swift-otter.md");
+  await event(env, "s-live", transcript(env, "s-live", "swift-otter"), "UserPromptSubmit");
+  assert.equal((await api(env, "/api/plans/swift-otter.md/instruct", { text: "q".repeat(600) })).status, 200);
+  const notes = ["a".repeat(1000), "b".repeat(1000), "c".repeat(1000), "short last note"];
+  const comments = notes.map((note, i) => ({ ...COMMENT, id: `c${i + 1}`, note }));
+  const block = formatComments(comments, { planFile: join(env.home, ".claude", "plans", "swift-otter.md") });
+  assert.ok(block.length >= 3500 && block.length <= 4000, `block length ${block.length}`);
+  const r = await api(env, "/api/plans/swift-otter.md/instruct", { comments });
+  assert.equal(r.status, 200);
+  const ins = ((await (await api(env, "/api/sessions/s-live/instruction")).json()) as { instruction: { text: string } }).instruction;
+  assert.ok(ins.text.length <= 4000, `length ${ins.text.length}`);
+  assert.ok(ins.text.endsWith(block), "the full comment block is at the end");
+  assert.ok(ins.text.startsWith("q"));
+  assert.ok(!ins.text.includes("\n\n\n"), "no empty joiner before the block");
 });

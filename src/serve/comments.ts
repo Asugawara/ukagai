@@ -56,7 +56,10 @@ function whereLine(c: Comment, ctx: CommentContext): string {
     const section = c.section && c.section.length > 0 ? `, ${JSON.stringify(c.section.join(" > "))}` : "";
     line = `${head}${section}: ${quoted(c.quote ?? "")}`;
   }
-  return c.orphan ? `${line} (no longer in the current text)` : line;
+  // A text anchor in the plan or the explanation is searched in that text; a page or image comment is gone from the screen
+  const inText = c.kind === "text" && (c.source.kind === "plan" || c.source.kind === "explanation");
+  if (!c.orphan) return line;
+  return inText ? `${line} (no longer in the current text)` : `${line} (no longer shown)`;
 }
 
 /** The text of the comments as the agent reads it (see the contract: "Text the agent sees") */

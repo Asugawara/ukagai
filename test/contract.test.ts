@@ -243,6 +243,13 @@ test("Comment: kind text needs a quote, kind region needs a rect", () => {
   assert.equal(Comment.safeParse({ ...region, rect: { x: 0, y: 0, w: 1, h: 1 }, mark: "XYZ" }).success, false);
 });
 
+test("Comment: a newline in file, selector or tag is rejected", () => {
+  assert.equal(Comment.safeParse({ ...okComment, source: { kind: "page", file: "a\nb.html" } }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, kind: "element", quote: undefined, selector: "button\n.save" }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, kind: "element", quote: undefined, tag: "b\u0000" }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, source: { kind: "page", file: "/s/ok.html" }, selector: "p" }).success, true);
+});
+
 test("AnswerRequest: comments ride on answers, reject and instruct; approve + comments is rejected", () => {
   assert.equal(AnswerRequest.safeParse({ answers: { Q: "A" }, comments: [okComment] }).success, true);
   assert.equal(AnswerRequest.safeParse({ approve: false, comments: [okComment] }).success, true);

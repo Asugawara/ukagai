@@ -56,6 +56,17 @@ test("an orphan gets the suffix at the end of the where-line", () => {
   assert.equal(out.split("\n")[1], '1. plan /h/.claude/plans/retry.md: "gone" (no longer in the current text)');
 });
 
+test("a page or image orphan, and an element or region orphan, get the no-longer-shown suffix", () => {
+  const page = formatComments([c({ kind: "text", source: { kind: "page", file: "/s/header-b.html" }, selector: "p", quote: "gone", orphan: true })], ctx);
+  assert.equal(page.split("\n")[1], '1. page /s/header-b.html, element p: "gone" (no longer shown)');
+  const el = formatComments([c({ kind: "element", source: { kind: "page", file: "/s/header-b.html" }, selector: "button.save", text: "Save", orphan: true })], ctx);
+  assert.equal(el.split("\n")[1], '1. page /s/header-b.html, element button.save "Save" (no longer shown)');
+  const region = formatComments([c({ kind: "region", source: { kind: "image", file: "/s/color.png" }, rect: { x: 1, y: 2, w: 3, h: 4 }, orphan: true })], ctx);
+  assert.equal(region.split("\n")[1], "1. image /s/color.png, region x=1 y=2 w=3 h=4 (no longer shown)");
+  const planText = formatComments([c({ kind: "text", source: { kind: "explanation" }, quote: "gone", orphan: true })], ctx);
+  assert.ok(planText.split("\n")[1].endsWith(" (no longer in the current text)"));
+});
+
 test("a multi-line note is indented by 5 spaces after the first line", () => {
   const out = formatComments([c({ kind: "text", source: { kind: "plan" }, quote: "q", note: "right align,\nswap with share\n\nthanks" })], ctx);
   assert.deepEqual(out.split("\n").slice(2), ["   → right align,", "     swap with share", "     ", "     thanks"]);

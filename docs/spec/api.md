@@ -466,7 +466,7 @@ The formatting rules, which the agent sees as English text:
 - The where-line depends on the kind: text in a plan: `plan <file>, "<section joined with ' > '>": <quote>`; text in an explanation: `explanation <file>, …`; text in a page: `page <file>, element <selector>: <quote>`; element: `page <file>, element <selector> "<text>"`; element without a selector: `page <file> (whole page)`; region: `image <file>, region x= y= w= h=`, plus ` (marked copy: <absolute path>)` only when the mark exists.
 - `, "<section>"` is left out when there is no section, and `<file>` when it is unknown.
 - Quotes and texts are JSON-quoted and clipped to 160 characters with `…`.
-- An orphan gets ` (no longer in the current text)` at the end of its where-line.
+- An orphan gets ` (no longer in the current text)` at the end of its where-line when it is a `text` comment in a `plan` or `explanation`; every other orphan (a `page` or `image` comment, or an element or region) gets ` (no longer shown)`.
 - The block is appended after the existing text with a blank line between; it is the whole text when there is none. For a question it goes after the first question's answer value.
 
 ## Progress checkpoints

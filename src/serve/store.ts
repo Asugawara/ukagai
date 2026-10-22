@@ -47,6 +47,12 @@ import { deliveryText, instructionParts } from "./delivery-text.js";
 import { transcriptHasDelivery } from "./history.js";
 import type { SseEventName } from "./sse.js";
 
+/** Joins an older text in front of a newer one within INSTRUCTION_MAX_CHARS: the older text is cut, the newer one stays whole */
+function joinKeepingNewest(older: string, newest: string): string {
+  const head = older.slice(0, Math.max(0, INSTRUCTION_MAX_CHARS - newest.length - 1));
+  return head === "" ? newest : `${head}\n${newest}`;
+}
+
 export class HttpError extends Error {
   constructor(
     public status: 400 | 401 | 403 | 404 | 409,
@@ -558,7 +564,7 @@ export class Store {
     const ins: Instruction = queued
       ? queued.text.trim() === ""
         ? { ...queued, text: text.slice(0, INSTRUCTION_MAX_CHARS), about: "plan" }
-        : { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
+        : { ...queued, text: joinKeepingNewest(queued.text, text) }
       : { decision_id: "", kind: "instruct", text, created_at, about: "plan" };
     this.instructions.set(sessionId, ins);
     if (this.sessions.get(sessionId)?.state === "idle" && !this.hasOpenAsync(sessionId) && this.offerToMod(sessionId)) return "message";
@@ -1500,7 +1506,8 @@ export class Store {
     }
     // One slot, one prefix: the texts are joined (the prefix of the first one stays); the checkpoints all stay with it
     const ids = [...m.decision_ids, ...(queued?.decision_id ? [queued.decision_id, ...(this.joinedIds.get(queued.decision_id) ?? [])] : [])];
-    const text = [...m.parts.map((x) => x.text), ...(queued ? [queued.text] : [])].join("\n").slice(0, INSTRUCTION_MAX_CHARS);
+    const texts = [...m.parts.map((x) => x.text), ...(queued ? [queued.text] : [])];
+    const text = joinKeepingNewest(texts.slice(0, -1).join("\n"), texts[texts.length - 1] ?? "");
     const about = m.parts[0]?.about;
     this.instructions.set(sid, { decision_id: ids[0] ?? "", kind: "instruct", text, created_at: m.source.created_at, ...(about ? { about } : {}) });
     if (ids[0]) this.joinedIds.set(ids[0], ids.slice(1));
