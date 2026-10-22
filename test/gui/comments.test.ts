@@ -395,3 +395,14 @@ if (REQUIRE_BROWSER) {
     assert.ok(HAS_BROWSER, "agent-browser is not on PATH");
   });
 }
+
+gui("the New / Changed badge of a revised plan section is not part of the section path of a comment", async () => {
+  const { id } = await seedPlan();
+  await reopen("document.querySelector('#decision .btn')");
+  // what markVersion does to the heading of a changed section: the badge goes into the heading itself
+  ev(`(() => { const h = [...document.querySelectorAll("#background h1, #background h2, #background h3, #background details.plan-sec > summary")].find((x) => /^\\W*Context/.test(x.textContent.trim())); const t = h.querySelector(":scope > .ps-title") ?? h; const b = document.createElement("span"); b.className = "ver-badge"; b.textContent = "Changed"; t.append(" ", b); return "ok"; })()`);
+  await comment("flaky upload", "retry");
+  await waitFor("stored", `localStorage.getItem("ukagai.comments.${id}")`);
+  const c = ev<any[]>(`JSON.stringify(JSON.parse(localStorage.getItem("ukagai.comments.${id}")).comments)`)[0];
+  assert.deepEqual(c.section, ["Export retry", "Context"]);
+});

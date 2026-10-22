@@ -711,7 +711,7 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .cmt-pop-ta { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; resize: vertical; }
 .cmt-pop-actions { display: flex; align-items: center; gap: 6px; }
 .cmt-pop-actions .grow { flex: 1; }
-.cmt-pop-actions .btn { width: auto; min-height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; }
+.cmt-pop-actions .btn { width: auto; min-height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .cmt-pop-actions kbd { font-size: 10px; opacity: 0.75; }
 .cmt-list { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .cmt-row { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; font-size: 12px; }

@@ -316,7 +316,7 @@ function documentImages(container, doc) {
           el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", title: t("frame_newtab"), "aria-label": t("frame_newtab") }, icon("external-link"), el("span", { class: "btn-text", text: t("frame_newtab") })),
           el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, title: t("frame_full"), "aria-label": t("frame_full") }, icon("maximize"), el("span", { class: "btn-text", text: t("frame_full") }))),
         el("iframe", { class: "doc-frame-view", ...frameAttrs, src, loading: "lazy", title: alt || name }));
-      frame.querySelector("iframe").addEventListener("load", (ev) => syncFrameMarks(ev.target, true));
+      frame.querySelector("iframe").addEventListener("load", (ev) => frameLoaded(ev.target));
       img.replaceWith(frame);
       const fp = frame.parentElement;
       if (fp?.tagName === "P" && fp.childNodes.length === 1) fp.replaceWith(frame);
@@ -1708,7 +1708,7 @@ function openFrame(button) {
     el("a", { class: "frame-btn", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
     btn(t("frame_close"), closeOverlay));
   openOverlay("frame", title, frame, { head, frame, zoom: 1, zoomLabel });
-  frame.addEventListener("load", () => syncFrameMarks(frame, true));
+  frame.addEventListener("load", () => frameLoaded(frame));
   overlay.el.requestFullscreen?.()?.catch?.(() => {});
 }
 function frameZoom(v) {
@@ -2537,7 +2537,11 @@ function rangeOfSpan(idx, s, e) {
 // ---- Section (heading path) ----
 
 const headLevel = (h) => /^H(\d)$/.exec(h.tagName)?.[1] * 1 || (h.parentElement.classList.contains("plan-sub") ? 3 : 2);
-const headText = (h) => clip(((h.querySelector(":scope > .ps-title") ?? h).textContent ?? "").replaceAll("⁠", "").replace(/\s+/g, " ").trim(), 120);
+const headText = (h) => {
+  const copy = (h.querySelector(":scope > .ps-title") ?? h).cloneNode(true);
+  for (const b of copy.querySelectorAll(".ver-badge")) b.remove(); // the New / Changed badge of a revised plan is not part of the heading
+  return clip((copy.textContent ?? "").replaceAll("⁠", "").replace(/\s+/g, " ").trim(), 120);
+};
 // The headings above `node` (outermost first, at most 6). For a plan the bold step title that starts the node's list item / paragraph comes last
 function sectionPath(heads, node, plan) {
   const stack = [];
@@ -2730,6 +2734,12 @@ function paintOther(badges, box, root, c, i, perFrame) {
   const n = perFrame.get(x) ?? 0;
   perFrame.set(x, n + 1);
   badges.push(at(r.left + 6 + n * 21, r.top - 9, ""));
+}
+
+// A frame's document (re)loaded: its helper starts with nothing, so the marks and a pick still on (the button shows it) are sent again
+function frameLoaded(frame) {
+  syncFrameMarks(frame, true);
+  if (picking() === frame) frame.contentWindow?.postMessage({ ukagai: "pick", on: true }, "*");
 }
 
 // Tell a frame which elements carry comments (it outlines them). Only a changed list is sent; `force` after the frame (re)loaded

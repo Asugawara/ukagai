@@ -184,7 +184,8 @@ export const FRAME_HELPER = String.raw`(function () {
       } catch (err) {}
     }
   }
-  window.addEventListener("mouseover", function (e) {
+  // mousemove as well as mouseover: picking turned on while the pointer already rests on an element fires no mouseover for it
+  function hoverOn(e) {
     if (!picking || !(e.target instanceof Element)) return;
     var el = e.target;
     if (hover && hover.el === el) return;
@@ -192,7 +193,9 @@ export const FRAME_HELPER = String.raw`(function () {
       unhover();
       hover = { el: el, keep: outline(el, PICK) };
     } catch (err) {}
-  }, true);
+  }
+  window.addEventListener("mouseover", hoverOn, true);
+  window.addEventListener("mousemove", hoverOn, true);
   window.addEventListener("click", function (e) {
     if (!picking || !(e.target instanceof Element)) return;
     e.preventDefault();

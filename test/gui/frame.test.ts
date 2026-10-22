@@ -682,3 +682,47 @@ gui("the toggle in the frame bar picks an element: the helper's report opens the
   // the frame leaves the page (another explanation): its comments are orphans, not lost
   ab("screenshot", join(SHOTS, "FRAME-comments.png"));
 });
+
+gui("full screen: picking an element opens the popover and the comment gets its badge and list row; a pick survives the frame loading again", async () => {
+  writeFileSync(join(scratch, "ukagai", "pick.html"), PICK_PAGE);
+  ab("open", base + "/");
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  const { id } = await seedDoc(EXPL.replace("compare.html", "pick.html"));
+  await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+  if (!supportsCsp()) return;
+  await waitFor("frame loaded", `document.querySelector("${BG} iframe.doc-frame-view")._marks !== undefined`);
+  ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
+  await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
+  const full = ".overlay.frame iframe.frame-full";
+  const pressed = () => ev<boolean>(`document.querySelector(".overlay.frame .frame-pick").getAttribute("aria-pressed") === "true"`);
+  // the toggle of the full-screen bar picks in the full-screen frame; the report of that frame opens the popover inside the overlay
+  ev(`document.querySelector(".overlay.frame .frame-pick").click(), "ok"`);
+  assert.equal(pressed(), true);
+  fromFrame({ ukagai: "picked", sel: "#save", tag: "button", text: "Save", rect: { x: 40, y: 60, w: 120, h: 40 } }, full);
+  await waitFor("popover", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.equal(pressed(), false, "picking is off after one pick");
+  const box = ev<{ l: number; t: number; inside: boolean }>(`JSON.stringify((() => { const r = document.querySelector("${full}").getBoundingClientRect(), p = document.querySelector(".cmt-pop").getBoundingClientRect(); return { l: Math.round(p.left - r.left), t: Math.round(p.top - r.top), inside: p.right <= innerWidth && p.bottom <= innerHeight && p.top >= 0 }; })())`);
+  assert.ok(box.inside && box.t >= 100 - 2, `the popover is on screen below the element: ${JSON.stringify(box)}`);
+  writeNote("full screen note");
+  await waitFor("stored", `localStorage.getItem("ukagai.comments.${id}")`);
+  assert.equal(stored(id)[0].selector, "#save");
+  key("Escape"); // closes the overlay: the badge and the list row are of the left column
+  await waitFor("overlay closed", `!document.querySelector(".overlay.frame")`);
+  await waitFor("badge and list row", `document.querySelectorAll("${BG} .cmt-badge").length === 1 && document.querySelectorAll("#decision .cmt-row").length === 1`);
+  // the frame loads again while the button shows picking: the helper is told again (its pick state starts empty)
+  ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
+  await waitFor("overlay again", `document.querySelector(".overlay.frame iframe.frame-full")`);
+  ev(`window.__loads = 0, document.querySelector("${full}").addEventListener("load", () => window.__loads++), "ok"`);
+  ev(`document.querySelector(".overlay.frame .frame-pick").click(), "ok"`);
+  ev(`(() => { const f = document.querySelector("${full}"); f.src = f.src; return "ok"; })()`);
+  await waitFor("reloaded", `window.__loads === 1`);
+  assert.equal(pressed(), true);
+  await sleep(500);
+  ab("mouse", "move", "600", "500");
+  ab("mouse", "move", "100", String(40 + 80));
+  ab("mouse", "down");
+  ab("mouse", "up");
+  await waitFor("popover after reload", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.equal(pressed(), false);
+  key("Escape");
+});
