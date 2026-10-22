@@ -74,6 +74,8 @@ GUI の言語は最初はロケールで決まり（`LC_ALL`、`LC_MESSAGES`、`
 
 *エージェントが提案した 2 つのランディングページ案を GUI で比べ、そのまま答えます。*
 
+**直してほしい場所を指して伝える。** 説明やプランの文、埋め込みの HTML ページの要素、画像の範囲を選んで、その場でコメントを書けます。コメントはどこを指しているかと一緒に、答え・指示・却下に添えてエージェントへ届きます。[ガイド](docs/guide.md#inline-comments)
+
 **止まっているエージェントの様子を見る。** Claude Code がセッション要約を書いたとき（Codex は 3 分間ターンがないとき）、それが進捗チェックになり、指示または停止で返答できます。[ガイド](docs/guide.md#progress-checkpoints)
 
 **ターミナルで済ませたいとき。** `ukagai tui` は、同じ判断画面を vim 風のキーで出します。[ガイド](docs/guide.md#the-tui)
@@ -109,6 +111,7 @@ GUI はビルド不要の静的な HTML と JS です。Mermaid の図は mermai
 
 - [判断画面](docs/guide.md#the-decision-screen): エージェントの推奨付きの選択肢、すべてキーで操作可能、保留一覧。
 - [プラン承認](docs/guide.md#plan-approval): 承認、指示、却下。コード参照。
+- [その場コメント](docs/guide.md#inline-comments): 選んだ文、HTML ページの要素、画像の範囲へのコメント。
 - [進捗チェックポイント](docs/guide.md#progress-checkpoints)
 - [TUI](docs/guide.md#the-tui)
 - [回答をメッセージで届ける](docs/guide.md#answers-as-messages-the-ukagai-mod)

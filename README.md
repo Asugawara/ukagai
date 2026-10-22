@@ -74,6 +74,8 @@ The GUI language starts from your locale (`ja` if `LC_ALL`, `LC_MESSAGES` or `LA
 
 *Two landing-page variants proposed by the agent, compared in the GUI and answered there.*
 
+**Point at what to change.** Select a sentence in an explanation or a plan, an element of an embedded HTML page, or a region of an image, and write a comment right there. The comments go to the agent with your answer, instruction or rejection, each saying where it points. [Guide](docs/guide.md#inline-comments)
+
 **Check in on idle agents.** When Claude Code writes a session recap (or a Codex session has been quiet for 3 minutes), it becomes a progress check you can answer with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
 
 **Stay in the terminal if you like.** `ukagai tui` shows the same decision screen with vim-style keys. [Guide](docs/guide.md#the-tui)
@@ -109,6 +111,7 @@ The GUI is static HTML and JS with no build step. Mermaid diagrams are drawn by 
 
 - [Decision screen](docs/guide.md#the-decision-screen): options with the agent's recommendation, keys for everything, the pending list.
 - [Plan approval](docs/guide.md#plan-approval): approve, instruct or reject; code references.
+- [Inline comments](docs/guide.md#inline-comments): comments on selected text, an element of an HTML page or a region of an image.
 - [Progress checkpoints](docs/guide.md#progress-checkpoints)
 - [TUI](docs/guide.md#the-tui)
 - [Answers as messages](docs/guide.md#answers-as-messages-the-ukagai-mod)

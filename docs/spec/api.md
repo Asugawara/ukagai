@@ -170,6 +170,10 @@ A progress checkpoint (`kind: "checkpoint"`) takes a sixth shape, `{ "kind": "co
 - `set_mode_auto` is allowed only with `approve: true`.
 - `{ "instruct": true, "text": "…" }` is for `approve_plan` only (400 for any other kind): "do this before I approve". `text` is trimmed, 1 to 4000 characters. It is stored like a reject (`answer_submitted`, same events, same history) with the response `{ "via": "gui", "instruct": true, "text": "…", "decided_at": … }` (`approve` and `reason` are absent). The hook answers ExitPlanMode with a deny whose reason is `[ukagai] The human has not approved the plan yet and asks you to do this first: <text>` followed by `You are still in plan mode: do it (research, subagents and reviews are fine; do not edit project files), update the plan file, then call ExitPlanMode again.`; the agent's next ExitPlanMode is a new decision. The Codex bridge starts a Plan-mode turn with the same text (like a reject with feedback).
 - `{fallback:true}` transitions `pending` → `fallback` (the GUI does not send it; the button was removed). Anything else transitions `pending` → `answer_submitted`.
+- `comments` (optional) is accepted with `answers`, `{approve:false}` and `{instruct:true}`. It is a non-empty list of up to `COMMENTS_MAX` (30) comments, each in the shape of "Comment text" below; an empty list is 400. `{approve:true}` with `comments` is 400 (the strict shape).
+- `instruct` needs `text` or `comments` (or both). `text` is as above; `comments` alone is valid.
+- Comments need an answer to attach to: when the request has no answer key to take the block (for example `answers` is empty), it is 400 `{"error": "comments need an answer to attach to"}`.
+- The server appends the formatted block (see "Comment text") to the text the human sent: the first question's answer value, `text` (instruct) or `reason` (reject; the block alone when there is no reason). Nothing is stored before the composed text is checked: when it is over 4000 characters the answer is refused with `400 {"error": "too_long", "length": N, "max": 4000}` and the decision stays pending. The structured list is kept as `response.comments`.
 
 Response 200: the updated `Decision`.
 
@@ -356,7 +360,7 @@ Live application, without a restart: the recap watcher, the Codex bridge (`codex
 
 ### POST /api/plans/:name/instruct
 
-Cookie or Bearer, JSON. Body `{ "text": "…" }` (trimmed, 1 to 4000 characters, else 400). Tells the agent that is still writing the plan something while no hook waits. 404 when no session maps to the plan (see `session_id` above). Otherwise the text is delivered exactly like a checkpoint "instruct" reply: queued for `GET /api/sessions/:id/instruction` (the agent's next tool call; the hook words it `[ukagai] About the plan you are writing: <text>`), and typed into the agent's terminal when the agent is idle and its terminal is found (same line, same rules as a checkpoint reply). The session has one queue slot: if a checkpoint `stop` is queued the call is 409 `{ "error": "a stop is queued for this session" }` (the stop must still reach the agent); if a checkpoint reply or an earlier plan instruction is queued, the texts are joined with a newline (capped at 4000 characters) and the earlier one keeps its identity, so its checkpoint is marked delivered when the joined text is consumed or typed. A plan instruction that is queued while the agent works is typed into its terminal when the agent goes idle (`Stop`), and is dropped (log line `plan_instruction_dropped`) when an `approve_plan` decision is created for the session (the human instructs on the approval card then). Plan instructions are not persisted: a server restart loses an undelivered one (checkpoint replies still survive). No decision record is created. The plan's content at that moment is stored as a plan version (see `GET /api/sessions/:id/plan-versions`; at most 20 per session). 200 `{ "delivered_via": "hook" | "terminal" | "message" | "noop" }` (`hook`: waiting for the next tool call; `terminal`: typed; `message`: the agent is idle and a live ukagai mod polls the session, so the text waits in the mod's inbox as `[ukagai] (ref …) About the plan you are writing: <text>`; `noop` is unused here), and one `plan_instructed` line goes to `serve.log`.
+Cookie or Bearer, JSON. Body `{ "text"?: "…", "comments"?: [Comment] }`: `text` is trimmed and 1 to 4000 characters (else 400), `comments` follows "Comment text" below, and one of the two must be present (else 400). The comments are appended to `text` (or form the whole text) in the same format, and a composed text over 4000 characters is 400 `too_long`. Tells the agent that is still writing the plan something while no hook waits. 404 when no session maps to the plan (see `session_id` above). Otherwise the text is delivered exactly like a checkpoint "instruct" reply: queued for `GET /api/sessions/:id/instruction` (the agent's next tool call; the hook words it `[ukagai] About the plan you are writing: <text>`), and typed into the agent's terminal when the agent is idle and its terminal is found (same line, same rules as a checkpoint reply). The session has one queue slot: if a checkpoint `stop` is queued the call is 409 `{ "error": "a stop is queued for this session" }` (the stop must still reach the agent); if a checkpoint reply or an earlier plan instruction is queued, the texts are joined with a newline (capped at 4000 characters) and the earlier one keeps its identity, so its checkpoint is marked delivered when the joined text is consumed or typed. A plan instruction that is queued while the agent works is typed into its terminal when the agent goes idle (`Stop`), and is dropped (log line `plan_instruction_dropped`) when an `approve_plan` decision is created for the session (the human instructs on the approval card then). Plan instructions are not persisted: a server restart loses an undelivered one (checkpoint replies still survive). No decision record is created. The plan's content at that moment is stored as a plan version (see `GET /api/sessions/:id/plan-versions`; at most 20 per session). 200 `{ "delivered_via": "hook" | "terminal" | "message" | "noop" }` (`hook`: waiting for the next tool call; `terminal`: typed; `message`: the agent is idle and a live ukagai mod polls the session, so the text waits in the mod's inbox as `[ukagai] (ref …) About the plan you are writing: <text>`; `noop` is unused here), and one `plan_instructed` line goes to `serve.log`.
 
 ### GET /api/sessions/:id/plan-versions
 
@@ -423,6 +427,47 @@ AskUserQuestion is not available inside subagents, so no decision arises there (
 ### GET / and GET /settings
 
 `GET /` serves `public/index.html`; `GET /settings` (and `/settings/`) serves `public/settings.html`, the settings page. Both issue the session cookie the same way. The server injects the `?v=` version into the asset URLs (`app.js` / `settings.js`, `app.css`), and injects `<html lang="…" data-lang="…">` (plus `data-theme="light|dark"` when the theme is pinned) with the values of the live settings.
+
+### POST /api/marks
+
+Cookie or Bearer, `Content-Type: application/json` (else 415). Body `{ "decision"?: string, "plan"?: string, "png": string }`: exactly one of `decision` (a decision id) or `plan` (a plan file name); `png` is the base64 of a PNG without a `data:` prefix. The body is limited to 6 MB and the decoded PNG to 4 MB.
+
+- 200 `{ "id": "<16 hex>" }`: the mark's id, which a region comment stores as `mark`.
+- 400: not a PNG (or not base64), an invalid `plan` name, or a body that is not one of the shapes above.
+- 401: no valid Cookie or Bearer.
+- 404: `decision` is not a known decision. A `plan` with no known session is not an error: the mark goes to `<data-dir>/marks`.
+- 413: body over 6 MB, or a decoded PNG over 4 MB.
+- 415: `Content-Type` is not `application/json`.
+- 503: no data directory.
+
+The PNG is saved as `<id>.png` (mode 0600) in the marks folder of the session: `<scratchpad_dir>/ukagai/marks/` when the session has a scratchpad, `<data-dir>/explain/<session_id>/marks/` without one, and `<data-dir>/marks/` when the session is not known. After each save the folder is pruned: files older than 7 days are removed, and all but the newest 100 of the folder. The server also prunes these folders at start. The comment text gives the path of the copy only when the id resolves to an existing file.
+
+### Comment text
+
+A comment (`Comment` in `src/contract.ts`) is one of three kinds, sent with an answer, instruction or rejection:
+
+| Field | Meaning |
+|---|---|
+| `id` | 1 to 32 of `A-Za-z0-9_-` |
+| `kind` | `text` (a selected range), `element` (a page element, or text in a page) or `region` (a rectangle of an image) |
+| `source` | `{ kind: "plan" \| "explanation" \| "page" \| "image", file? }`. For plan and explanation the server uses its own record of the file, so `file` is only read for page and image (up to 300 characters) |
+| `section?` | the heading path, outermost first (up to 6 entries of up to 120 characters) |
+| `quote?`, `prefix?`, `suffix?` | `text`: the selected text (required, up to 500 characters) and up to 64 characters before and after it |
+| `selector?`, `tag?`, `text?` | `element`: CSS selector (up to 200 characters), tag (up to 40) and visible text, `aria-label` or `alt` (up to 120) |
+| `rect?` | `region`: `{x, y, w, h}` in natural pixels of the image (required for `region`; `w` and `h` at least 1). For an element, `rect` is what the frame reports (see `docs/spec/markdown.md` 2.13) and is not sent to the agent |
+| `mark?` | `region`: the id returned by `POST /api/marks` |
+| `orphan?` | the anchor is no longer in the current text |
+| `note` | what the human wrote: trimmed, 1 to 1000 characters |
+
+The formatting rules, which the agent sees as English text:
+
+- The block starts with `The human left N comment` (`s` unless N is 1), followed by a colon.
+- Each comment is numbered from 1 and has a where-line, then a line `   → ` followed by the first line of the note; following lines of the note are indented by 5 spaces.
+- The where-line depends on the kind: text in a plan: `plan <file>, "<section joined with ' > '>": <quote>`; text in an explanation: `explanation <file>, …`; text in a page: `page <file>, element <selector>: <quote>`; element: `page <file>, element <selector> "<text>"`; element without a selector: `page <file> (whole page)`; region: `image <file>, region x= y= w= h=`, plus ` (marked copy: <absolute path>)` only when the mark exists.
+- `, "<section>"` is left out when there is no section, and `<file>` when it is unknown.
+- Quotes and texts are JSON-quoted and clipped to 160 characters with `…`.
+- An orphan gets ` (no longer in the current text)` at the end of its where-line.
+- The block is appended after the existing text with a blank line between; it is the whole text when there is none. For a question it goes after the first question's answer value.
 
 ## Progress checkpoints
 

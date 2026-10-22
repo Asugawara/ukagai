@@ -12,7 +12,7 @@ You can also run the server yourself with `ukagai serve` (http://127.0.0.1:4818)
 
 `[` `]` and `Tab` switch pending decisions (`←` `→` do so only where there is no plan zone: questions, checkpoints, short plans). `b` opens the list of pending decisions.
 
-The language is stored in `<data-dir>/config.json` (default data dir: `~/.ukagai`) and changed on the Settings page (below). When `ukagai install` finds no `config.json` it creates one whose language comes from your locale (`ja` if the first non-empty of `LC_ALL`, `LC_MESSAGES`, `LANG` starts with `ja`, otherwise `en`); an existing config is never touched. A plugin-only user never runs `install`, so they start in `en` and switch on the Settings page. The agent writes its explanations in the same language. `ukagai install` backs up your settings before writing.
+The language is stored in `<data-dir>/config.json` (default data dir: `~/.ukagai`) and changed on the Settings page (below). When `ukagai install` finds no `config.json` it creates one whose language comes from your locale (`ja` if the first non-empty of `LC_ALL`, `LC_MESSAGES`, `LANG` starts with `ja`, otherwise `en`); an existing config is never touched. A plugin-only user never runs `install`, so they start in `en` and switch on the Settings page. The agent writes its explanations in the same language. `ukagai install` backs up your settings before writing. To comment on the text, page elements or image regions of a question, see [Inline comments](#inline-comments).
 
 ## Plan approval
 
@@ -31,6 +31,34 @@ The same box is on the plan file card while the agent is still writing the plan;
 File references in a plan (`` `services/export/src/export/job.ts:42` ``, or a range such as `:18-30`) are short chips: the file name and line stand out, the folders above the closest one are hidden, and hovering shows the full path (a click on the chip copies it). A **▸** button next to a reference with a line opens the numbered code around it, with the referenced lines highlighted. The server reads it from the session's working directory when you click, so no tokens are used. Files outside the project, secrets, binaries and files over 2 MB show "not found". More under [Rich Markdown](#rich-markdown).
 
 When a plan was rewritten after an instruction, the plan screen (GUI and TUI) shows version tabs (`v1（指示前） v2（今回）★`, `<` / `>` to switch), a one-line summary of what changed (sections added / changed / removed and the instruction that led to it) and marks the new / changed sections and lines; the versions and the diff come from `GET /api/sessions/:id/plan-versions`.
+
+To comment on a part of the plan, select it and see [Inline comments](#inline-comments).
+
+## Inline comments
+
+Comment on a part of what the agent showed you. The comment is sent with your answer, instruction or rejection, so the agent sees it next to the text it refers to.
+
+- **Text.** Select text in a question's explanation or in a plan. A popover opens under the selection: type the comment, then `⌘` / `Ctrl` + `Enter` adds it and `Esc` cancels. The key `m` comments on the selection, or moves to the comment list when nothing is selected. The text stays highlighted with the comment's number.
+- **An element of an embedded HTML page.** The comment button in the page's bar (also in full screen) turns on picking: hovering outlines an element, a click picks it. Selecting text inside the page works too. Picking works in Chromium-based browsers; elsewhere the button comments on the whole page.
+- **A region of an image.** Drag over an image, inline or enlarged, to mark a region. A plain click still enlarges the image. The comment keeps a copy of the image with the region outlined in red, saved in the session's scratchpad under `ukagai/marks/`, so the agent can open it.
+
+What happens to the comments when you send:
+
+- **Plans.** The Instruct card becomes "Send N comments" with an optional overall message. Reject sends the comments as well. Approve with comments waiting needs a second press and then drops them.
+- **Questions.** The comments go with whichever answer you send, including "None of these" and "Cannot answer".
+- **Drafts** survive a reload. When the plan changes, comments are found again in the new text. A comment whose text is gone is marked "no longer in the current text" and is still sent.
+
+Limits: 30 comments, 1000 characters per comment, and 4000 characters for the whole text. When the text would be longer, the server refuses it and the screen shows the length and the maximum.
+
+The agent receives the comments as English text after your answer, instruction or rejection. A shortened example:
+
+```text
+The human left 2 comments:
+1. plan /Users/x/.claude/plans/retry-exports.md, "Steps > Cap the backoff": "cap it at 30 seconds"
+   → make it 60 seconds; the upstream SLA is 45 seconds
+2. image /Users/x/scratchpad/ukagai/color.png, region x=200 y=35 w=96 h=18 (marked copy: /Users/x/scratchpad/ukagai/marks/3f2a0c1d9e8b7a65.png)
+   → a lighter purple
+```
 
 ## Progress checkpoints
 
