@@ -2393,9 +2393,13 @@ function validComment(c) {
   if (typeof c.id !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(c.id)) return false;
   if (!["text", "element", "region"].includes(c.kind)) return false;
   if (!c.source || typeof c.source !== "object" || !["plan", "explanation", "page", "image"].includes(c.source.kind)) return false;
-  if (typeof c.note !== "string" || c.note.trim() === "") return false;
+  if (typeof c.note !== "string" || c.note.trim() === "" || c.note.trim().length > 1000) return false;
   if (c.kind === "text" && typeof c.quote !== "string") return false;
-  if (c.kind === "region" && !(c.rect && ["x", "y", "w", "h"].every((k) => Number.isFinite(c.rect[k])))) return false;
+  if (c.kind === "region") {
+    const r = c.rect;
+    if (!(r && [r.x, r.y, r.w, r.h].every(Number.isInteger) && r.x >= 0 && r.y >= 0 && r.w >= 1 && r.h >= 1)) return false;
+  }
+  if (c.mark !== undefined && !(typeof c.mark === "string" && /^[0-9a-f]{16}$/.test(c.mark))) return false;
   return true;
 }
 function loadComments(id) {
@@ -3052,7 +3056,7 @@ function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1, async 
   draft = { ...draft, note: draft.note ?? "" };
   const add = el("button", { class: "btn primary", type: "button", disabled: !draft.note.trim(), onclick: () => save() }, el("span", { text: t(editing ? "cmt_save" : "cmt_add") }), el("kbd", { text: "⌘↵" }));
   const ta = el("textarea", {
-    class: "cmt-pop-ta", rows: "3", "aria-label": t("cmt_aria"), placeholder: t("cmt_placeholder"),
+    class: "cmt-pop-ta", rows: "3", maxlength: "1000", "aria-label": t("cmt_aria"), placeholder: t("cmt_placeholder"),
     oninput: () => { add.disabled = !ta.value.trim(); },
   });
   ta.value = draft.note ?? "";
@@ -3067,7 +3071,7 @@ function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1, async 
       el("button", { class: "btn", type: "button", onclick: () => { if (!busy) close(); } }, el("span", { text: t("cmt_cancel") }), el("kbd", { text: "Esc" })),
       add));
   const save = async () => {
-    const note = ta.value.trim();
+    const note = ta.value.trim().slice(0, 1000);
     if (!note || busy) return;
     if (!async) { close(); onSave?.(note); return; }
     busy = true;
@@ -3182,7 +3186,9 @@ function commentsTextLength(list) {
   let n = `The human left ${list.length} comments:`.length;
   list.forEach((c, i) => {
     const what = c.quote ?? c.text ?? c.selector ?? "";
-    const where = `${i + 1}. ${c.source.kind} ${c.source.file ?? ""}, "${(c.section ?? []).join(" > ")}": ${JSON.stringify(what.length > 160 ? what.slice(0, 160) + "…" : what)}${c.orphan ? " (no longer in the current text)" : ""}`;
+    const inText = c.kind === "text" && (c.source.kind === "plan" || c.source.kind === "explanation");
+    const orphanNote = inText ? " (no longer in the current text)" : " (no longer shown)";
+    const where = `${i + 1}. ${c.source.kind} ${c.source.file ?? ""}, "${(c.section ?? []).join(" > ")}": ${JSON.stringify(what.length > 160 ? what.slice(0, 160) + "…" : what)}${c.orphan ? orphanNote : ""}`;
     n += 1 + where.length + 6 + c.note.length + 5 * (c.note.split("\n").length - 1);
   });
   return n;

@@ -161,6 +161,7 @@ const badges = () => ev<number>(`document.querySelectorAll("#background .cmt-bad
 async function comment(needle: string, note: string) {
   assert.equal(selectText(needle), "ok", `${needle} is in the left column`);
   await waitFor("popover opens", `document.querySelector(".cmt-pop .cmt-pop-ta") && document.activeElement?.classList.contains("cmt-pop-ta")`);
+  assert.equal(ev<number>(`document.querySelector(".cmt-pop-ta").maxLength`), 1000, "the note box holds 1000 characters");
   ev(`(() => { const t = document.querySelector(".cmt-pop-ta"); t.value = ${JSON.stringify(note)}; t.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()`);
   key("Enter", ".cmt-pop-ta", ", ctrlKey: true");
   await waitFor("popover closed", `!document.querySelector(".cmt-pop")`);

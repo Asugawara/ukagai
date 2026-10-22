@@ -46,9 +46,9 @@ What happens to the comments when you send:
 
 - **Plans.** The Instruct card becomes "Send N comments" with an optional overall message. Reject sends the comments as well. Approve with comments waiting needs a second press and then drops them.
 - **Questions.** The comments go with whichever answer you send, including "None of these" and "Cannot answer".
-- **Drafts** survive a reload. When the plan changes, comments are found again in the new text. A comment whose text is gone is marked "no longer in the current text" and is still sent.
+- **Drafts** survive a reload and are kept for 7 days. When the plan changes, comments are found again in the new text. A comment whose place is gone is still sent: a text comment is shown as "Not found in the current text", a page or image element or region as "No longer shown".
 
-Limits: 30 comments, 1000 characters per comment, and 4000 characters for the whole text. When the text would be longer, the server refuses it and the screen shows the length and the maximum.
+Limits: 30 comments, 1000 characters per comment (the comment box stops there), and 4000 characters for the whole text. When the text would be longer, the server refuses it and the screen shows the length and the maximum.
 
 The agent receives the comments as English text after your answer, instruction or rejection. A shortened example:
 
