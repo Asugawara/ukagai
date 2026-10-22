@@ -202,6 +202,8 @@ claude --settings /tmp/ukagai-settings.json
 - publish ジョブがそれらをアップロードし、リリースを公開します。
 - plugin ジョブがステージしたツリーを `plugin` ブランチに push します。両方のマーケットプレイスがこのブランチを読みます。
 
+冒頭のデモは `npm run demo` で実際の GUI から描画し（Chrome、img2webp、ffmpeg が必要）、`npm run demo:publish` で PR に添付したものです。`demo/README.md` を参照。
+
 ## ライセンス
 
 MIT。[LICENSE](LICENSE) を参照してください。サードパーティのライセンスは `public/vendor/LICENSES.md` にあります。

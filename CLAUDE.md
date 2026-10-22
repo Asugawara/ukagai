@@ -17,6 +17,7 @@ TypeScript (ESM, NodeNext), Node >= 22, npm, Hono + `@hono/node-server`, zod, `n
 - `npm test` — run `test/**/*.test.ts`
 - `npm run dev:serve` — `tsx src/cli.ts serve`
 - `npm run release:stage` — `sh scripts/build-release.sh <version> out` (stage the release tree, tarball, SHA256SUMS). `bin/ukagai` and `install.sh` must stay POSIX sh (check with `shellcheck -s sh`)
+- `npm run demo` — render the README demo into `demo/out/<lang>/` (needs Chrome, img2webp, ffmpeg); `npm run demo:publish -- <pr>` attaches it to the PR and points both READMEs at the uploaded WebP; see `demo/README.md`
 
 ## Docs
 
@@ -37,6 +38,7 @@ English is the default for code, comments, tests, docs, the skill, CLI output an
 - Do not drop explanation content in a UI. Whatever the hook accepts must be on the screen of the GUI and the TUI (`docs/spec/explain.md` 3.9).
 - When the hook starts to accept a new place or form for content, add a `pass-*` fixture to `test/explain-fixtures/`. The preserve tests render it in the GUI (CI job `gui-preserve`) and in the TUI.
 - Do not add `hooks/hooks.json` to the plugin tree. Codex would read the Claude hooks from it; the plugin's hook files are `hooks/claude.json` and `hooks/codex.json`.
+- Do not commit rendered demo files (`demo/out/`). They live as PR attachments; `demo/published.json` records which render the READMEs show.
 
 ## Commits
 

@@ -202,6 +202,8 @@ Releases: `npm run release:stage` (`sh scripts/build-release.sh <version> out`) 
 - The publish job uploads them and publishes the release.
 - The plugin job pushes the stage tree to the `plugin` branch, which both marketplaces read.
 
+The demo at the top is rendered from the real GUI with `npm run demo` (needs Chrome, img2webp and ffmpeg) and attached to the pull request with `npm run demo:publish`; see `demo/README.md`.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party licences: `public/vendor/LICENSES.md`.
