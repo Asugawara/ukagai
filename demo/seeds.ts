@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { story } from "./timeline.js";
 
 export type Lang = "en" | "ja";
 export const LANGS: readonly Lang[] = ["en", "ja"];
@@ -29,19 +30,8 @@ export const TOOL_USE_IDS = {
   planV2: "toolu_demo_plan_v2",
 } as const;
 
-// Stored in the demo's own story; timeline.js does not exist yet (Step 9).
-export const STORY: Record<Lang, Record<SessionKey, { prompt: string; question?: string; instruction?: string }>> = {
-  en: {
-    cc: { prompt: "Failed exports should retry with backoff. Plan it first.", question: "Where should the retry for failed exports live?" },
-    codex: { prompt: "Make the onboarding page convert better. Show me options.", question: "Which onboarding page variant should we ship?" },
-    cc2: { prompt: "Add a currency column to the orders table.", instruction: "Backfill in batches: one UPDATE would lock orders for minutes." },
-  },
-  ja: {
-    cc: { prompt: "失敗したエクスポートをバックオフ付きでリトライさせたい。まずプランを立てて", question: "失敗したエクスポートのリトライはどこに置くべきですか？" },
-    codex: { prompt: "オンボーディングページの登録率を上げたい。案を見せて", question: "公開するオンボーディングページはどの案にしますか？" },
-    cc2: { prompt: "orders テーブルに currency 列を追加して", instruction: "バッチで埋め戻して。1 回の UPDATE だと orders が数分ロックされる" },
-  },
-};
+// One source of truth: the stage prints the same text in the terminals.
+export const STORY = story;
 
 export interface Option {
   label: string;

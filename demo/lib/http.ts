@@ -40,7 +40,7 @@ export interface StaticServer {
   close(): Promise<void>;
 }
 
-// routes maps a URL prefix to a directory. Paths that resolve outside their directory get 404.
+// routes maps a URL prefix to a directory, or an exact URL to one file. Paths that resolve outside their directory get 404.
 export async function serveStatic(routes: Record<string, string>): Promise<StaticServer> {
   const port = await freePort();
   const server: Server = createServer((req, res) => {
@@ -54,6 +54,15 @@ export async function serveStatic(routes: Record<string, string>): Promise<Stati
       .sort((a, b) => b.length - a.length)[0];
     if (prefix === undefined) {
       res.writeHead(404).end();
+      return;
+    }
+    if (isFile(routes[prefix]!)) {
+      if (url.pathname !== prefix) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(200, { "content-type": MIME[extname(prefix)] ?? "application/octet-stream", "cache-control": "no-store" });
+      createReadStream(routes[prefix]!).pipe(res);
       return;
     }
     let rel: string;
