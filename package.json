@@ -29,6 +29,7 @@
   "scripts": {
     "build": "tsc",
     "demo": "node --import tsx demo/render.ts",
+    "demo:publish": "node --import tsx demo/publish.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.mod.json && tsc --noEmit -p tsconfig.demo.json",
     "test": "UKAGAI_TERMINAL=none node --import tsx --test \"test/**/*.test.ts\"",
     "dev:serve": "tsx src/cli.ts serve",
