@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/Asugawara/ukagai/compare/v0.8.0...v0.9.0) (2026-10-23)
+
+
+### Features
+
+* accept inline comments with answers, instructions and rejections, and store marked image crops ([238af7e](https://github.com/Asugawara/ukagai/commit/238af7e2af03f83f1d7b3f3862c2fbff6353d2b4))
+* comment on an element of an embedded HTML page or a region of an image ([659f247](https://github.com/Asugawara/ukagai/commit/659f247d25b456058d3facf903872dd4b5a533d2))
+* comment on selected text in the GUI and send the comments with the answer ([77a6764](https://github.com/Asugawara/ukagai/commit/77a6764e2854ab8f59f66d1107f83ed7b50cddf5))
+
+
+### Bug Fixes
+
+* hold the 1000-character note limit in the comment box and check restored drafts like the server ([ac4f164](https://github.com/Asugawara/ukagai/commit/ac4f164043ad85e78345246b816fdec2fa42f5cf))
+* keep picking on when a page frame loads again, and keep badges out of the section path ([0b37781](https://github.com/Asugawara/ukagai/commit/0b377815f4ba2b2169de096a0a0e7b719ee6fa8d))
+* keep the comment block whole when instructions are joined, validate restored drafts, and refuse control characters in comment paths ([bc33cc7](https://github.com/Asugawara/ukagai/commit/bc33cc73665fc04f09fd05e7d43172f8cb7f736b))
+
 ## [0.8.0](https://github.com/Asugawara/ukagai/compare/v0.7.0...v0.8.0) (2026-10-21)
 
 
