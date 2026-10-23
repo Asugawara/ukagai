@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
 import { appendLogLine } from "../log.js";
 import { LEASE_GRACE_MS, plansDir } from "../contract.js";
+import { marksDir, pruneMarks } from "./marks.js";
 import { startCodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
 import { startCheckpointDelivery } from "./deliver.js";
@@ -66,6 +67,10 @@ export async function start(opts = {}) {
         },
     });
     store.load();
+    // Old marked copies of images: the data-dir folder and the folder of every session a stored decision knows
+    pruneMarks(marksDir(dataDir));
+    for (const sess of new Map(store.list().map((d) => [d.session.session_id, d.session])).values())
+        pruneMarks(marksDir(dataDir, sess));
     // A plan whose session is found after the plan was announced (the transcript gets its slug lazily): tell the UIs
     const planSessions = new PlanSessions(() => store.listSessions(), home, Date.now, (name, session_id) => {
         void planSummary(dir, name, planRead.isRead).then((summary) => {

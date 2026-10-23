@@ -57,10 +57,11 @@ function approvalInstruction(d) {
     const r = d.response;
     if (!r)
         return undefined;
+    const comments = r.comments ? { comments: r.comments } : {};
     if (r.instruct && r.text)
-        return { text: r.text, kind: "instruct", at: r.decided_at };
+        return { text: r.text, kind: "instruct", ...comments, at: r.decided_at };
     if (r.approve === false)
-        return { text: r.reason?.trim() ? r.reason : "", kind: "reject", at: r.decided_at };
+        return { text: r.reason?.trim() ? r.reason : "", kind: "reject", ...comments, at: r.decided_at };
     return undefined;
 }
 /** The versions of a session (approve_plan decisions + stored file snapshots, by `at`), `current` appended when it differs from the last, and the diffs */

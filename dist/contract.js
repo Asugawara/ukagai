@@ -257,6 +257,48 @@ export const Explanation = z.object({
     // not_required is reserved (no path sets it; the GUI / TUI only carry display text for it)
     none_reason: z.enum(["plan_mode", "loop_guard", "not_required"]).optional(),
 });
+// ---- inline comments ----
+export const COMMENTS_MAX = 30;
+const CommentRect = z.strictObject({
+    x: z.number().int().min(0),
+    y: z.number().int().min(0),
+    w: z.number().int().min(1),
+    h: z.number().int().min(1),
+});
+export const CommentSource = z.strictObject({
+    kind: z.enum(["plan", "explanation", "page", "image"]),
+    /** page / image: the absolute path the GUI shows (from the /api/files URL). plan / explanation: ignored, the server uses its own record */
+    file: z.string().max(300).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
+});
+export const Comment = z
+    .strictObject({
+    id: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/),
+    kind: z.enum(["text", "element", "region"]),
+    source: CommentSource,
+    /** heading path, outermost first */
+    section: z.array(z.string().max(120)).max(6).optional(),
+    /** text: the selected text (required for kind text) */
+    quote: z.string().max(500).optional(),
+    /** text: up to 64 chars before / after, for re-anchoring */
+    prefix: z.string().max(64).optional(),
+    suffix: z.string().max(64).optional(),
+    /** element (or text inside a page): CSS selector in the page */
+    selector: z.string().max(200).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
+    tag: z.string().max(40).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
+    /** element: its visible text / aria-label / alt */
+    text: z.string().max(120).optional(),
+    /** region: natural pixels of the image (required for kind region) */
+    rect: CommentRect.optional(),
+    /** region: id returned by POST /api/marks */
+    mark: z.string().regex(/^[0-9a-f]{16}$/).optional(),
+    /** the anchor is no longer found in the current text */
+    orphan: z.boolean().optional(),
+    /** what the human wrote */
+    note: z.string().trim().min(1).max(1000),
+})
+    .refine((c) => c.kind !== "text" || c.quote !== undefined, { message: "quote is required for kind text", path: ["quote"] })
+    .refine((c) => c.kind !== "region" || c.rect !== undefined, { message: "rect is required for kind region", path: ["rect"] });
+export const Comments = z.array(Comment).min(1).max(COMMENTS_MAX);
 /**
  * How an answered decision or checkpoint reached the agent: the PreToolUse hook, typed into its terminal, the Codex bridge, nothing to do
  * (stop of an idle agent), a message the ukagai mod submitted, or (a plan approved for message delivery) the re-called ExitPlanMode used its grant
@@ -274,6 +316,8 @@ export const DecisionResponse = z.object({
     kind: z.enum(["continue", "instruct", "stop"]).optional(),
     /** the instruction of a checkpoint `instruct` or of an approve_plan `instruct` */
     text: z.string().optional(),
+    /** the inline comments the human sent with the answer (their text is already appended to the fields above) */
+    comments: Comments.optional(),
     decided_at: z.string(),
     /** For a checkpoint: when its instruction was handed to the agent */
     delivered_at: z.string().optional(),
@@ -380,8 +424,11 @@ export const CreateDecisionRequest = z.object({
 export const INSTRUCTION_MAX_CHARS = 4000;
 /** Leads the text of an instruction sent from a plan file card (the hook's context and the terminal line) */
 export const PLAN_INSTRUCT_PREFIX = "[ukagai] About the plan you are writing:";
-/** POST /api/plans/:name/instruct */
-export const PlanInstructRequest = z.strictObject({ text: z.string().trim().min(1).max(INSTRUCTION_MAX_CHARS) });
+const InstructText = z.string().trim().min(1).max(INSTRUCTION_MAX_CHARS);
+/** POST /api/plans/:name/instruct: `text`, `comments`, or both */
+export const PlanInstructRequest = z
+    .strictObject({ text: InstructText.optional(), comments: Comments.optional() })
+    .refine((b) => b.text !== undefined || b.comments !== undefined, { message: "text or comments is required", path: ["text"] });
 /** POST /api/decisions/:id/answer. Strict so that the key sets are mutually exclusive */
 export const AnswerRequest = z.union([
     // checkpoint: `text` is required for instruct; `via` / `decided_at` of the CheckpointResponse shape are accepted and ignored (the server sets them)
@@ -393,11 +440,13 @@ export const AnswerRequest = z.union([
         decided_at: z.string().optional(),
     })
         .refine((b) => b.kind !== "instruct" || (b.text ?? "").trim() !== "", { message: "text is required for instruct", path: ["text"] }),
-    z.strictObject({ answers: z.record(z.string(), z.string()) }),
+    z.strictObject({ answers: z.record(z.string(), z.string()), comments: Comments.optional() }),
     z.strictObject({ approve: z.literal(true), set_mode_auto: z.boolean().optional() }),
-    z.strictObject({ approve: z.literal(false), reason: z.string().optional() }),
-    // approve_plan only (the route rejects it for other kinds): do `text` first, the plan stays unapproved
-    z.strictObject({ instruct: z.literal(true), text: z.string().trim().min(1).max(INSTRUCTION_MAX_CHARS) }),
+    z.strictObject({ approve: z.literal(false), reason: z.string().optional(), comments: Comments.optional() }),
+    // approve_plan only (the route rejects it for other kinds): do `text` / the comments first, the plan stays unapproved
+    z
+        .strictObject({ instruct: z.literal(true), text: InstructText.optional(), comments: Comments.optional() })
+        .refine((b) => b.text !== undefined || b.comments !== undefined, { message: "text or comments is required", path: ["text"] }),
     z.strictObject({ fallback: z.literal(true) }),
 ]);
 /** Body of a 200 from GET /api/decisions/:id/wait (204 has no body) */
@@ -492,9 +541,11 @@ export const CANNOT_PREFIX = "Cannot answer — ";
 export const CANNOT_REASONS = ["Undefined terms", "Unclear", "Too much at once"];
 /** Parses an answer value. null when it is not a Cannot answer (an unknown reason is not one either) */
 export function parseCannotAnswer(answer) {
-    if (!answer.startsWith(CANNOT_PREFIX))
+    // only the first line counts: an inline-comment block may follow after a newline
+    const first = answer.split("\n", 1)[0] ?? "";
+    if (!first.startsWith(CANNOT_PREFIX))
         return null;
-    const rest = answer.slice(CANNOT_PREFIX.length);
+    const rest = first.slice(CANNOT_PREFIX.length);
     const reason = CANNOT_REASONS.find((r) => rest === r || rest.startsWith(r + ":"));
     if (!reason)
         return null;
@@ -751,6 +802,7 @@ export const SkillPut = z.object({
 export const PlanInstruction = z.object({
     text: z.string(),
     kind: z.enum(["instruct", "reject"]),
+    comments: Comments.optional(),
     at: z.string(),
 });
 /** One version of a session's plan; `instruction` is what the human sent after this version (what led to the next one) */

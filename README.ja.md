@@ -1,71 +1,125 @@
 <p align="center"><img src="docs/images/logo.png" width="140" alt="ukagai のロゴ"></p>
 
+![デモ: 2 つの Claude Code と 1 つの Codex のセッションが、質問とプランを ukagai の 1 つの受信箱に送る。エージェントの説明はシーケンス図と推奨つき。人がキーボードで答えると、答えはメッセージとしてエージェントに届く。HTML の 2 案を並べて比べ、直したプランの変更点・diff・ファイル参照の先のコードを見て承認する。どのエージェントも先へ進む](https://github.com/user-attachments/assets/fd4c9db9-b717-41ab-a528-3cd79d8222a3)
+
 <h1 align="center">ukagai</h1>
 
-<p align="center"><b>Agents ask. Humans decide.</b><br>Claude Code と Codex CLI の質問・プラン承認を 1 か所に集め、答えるための文脈も一緒に届けます。</p>
+<p align="center"><b>A decision inbox for Claude Code and Codex.</b><br>Agents ask. Humans decide.</p>
 
 [English](README.md) | 日本語
 
-![エージェントの説明つきの質問: シーケンス図、推奨、選択肢](docs/images/ja/hero.png)
+ukagai は、Claude Code と Codex CLI の複数セッションが待っている質問とプラン承認を、1 つの受信箱（localhost の GUI、またはターミナル UI）に集めます。どの判断にも、エージェント自身が書いた説明が付きます。なぜ聞くのか、推奨、選択肢、図、diff です。
 
-## ukagai とは
+エージェントを並行して何本も動かす開発者向けです。止まっているセッションを探してターミナルを巡回し、スクロールして経緯を思い出す代わりに、1 か所で、選択肢のすぐ隣にある文脈を見て答えられます。
 
-ukagai は、コーディングエージェントが人間に求める判断（Claude Code の `AskUserQuestion` とプラン承認）を hooks で横取りし、localhost の GUI（またはターミナル UI）に集めます。各判断には、エージェント自身が書いた説明（なぜ今なのか、推奨、選択肢の表、Mermaid 図、関連する diff）が付きます。MCP は使いません。hooks + スキル + GUI だけで動きます。
+## どんな画面か
 
-## 何が違うのか
+![エージェントからの質問: なぜ聞くのか、シーケンス図、推奨、3 つの選択肢](docs/images/ja/hero.png)
 
-- **エージェントがリッチな Markdown で説明し、描画された状態で見られます。** 図（Mermaid）、diff、画像、そして UI やランディングページの案のような HTML ページ丸ごとがページ自身のスクリプトを実行しないサンドボックス化されたフレーム（全画面でのズーム表示や、スクリプトなしの新しいタブでの表示にも対応）で、選択肢のすぐ隣に表示されます。比べて決めるのが 1 か所で済みます。
-- **セッションもエージェントも横断する 1 つの受信箱。** Claude Code と Codex CLI、質問とプラン承認を、保留一覧と履歴つきで扱えます。
-- **MCP なし、毎ターンの文脈に何も足しません。** hooks とスキルがエージェント自身の `AskUserQuestion` / プラン承認を横取りし、ツール定義が文脈に居座ることはありません。
-- **GUI が軽い。** Mermaid の図は mermaid.js（5.5 MB）ではなく [pele](https://github.com/obsidianmd/pele)（682 KB）で描きます。リリースは 22% 小さくなり、GUI のページは約 3 倍速く読み込まれます。
+*1 つの判断。エージェントは、失敗したエクスポートのリトライをどこに置くかを聞いています。左は、なぜ聞くのか・シーケンス図・推奨。右は選択肢で、どれも元に戻す方法つきです。*
 
-![エージェントが提案した 2 つのオンボーディングページ案を GUI で並べて表示](docs/images/ja/compare.png)
+![保留中の判断の一覧: 別々のプロジェクトの質問とプラン](docs/images/ja/drawer.png)
 
-*エージェントが提案した 2 つのランディングページ案を GUI で比べ、そのまま答えます。*
-
-## なぜ必要か
-
-コーディングエージェントは作業の途中で質問をしてきます。その質問は複数のターミナルやタブに散らばり、答える人に文脈が足りないことがよくあります。ukagai はすべての質問を 1 か所に集め、エージェントが質問する理由を書いた説明のすぐ隣に置きます。
+*待っているものを、セッションもプロジェクトも横断して 1 つの一覧に（`b`）。*
 
 ## クイックスタート
 
-必要なもの: Node.js 22 以上、macOS または Linux（Windows は非対応）、Claude Code（2.1.304 以上）と Codex CLI のどちらか（または両方）。
+**必要なもの**: Node.js 22 以上、macOS または Linux（Windows は非対応）、Claude Code 2.1.304 以上と Codex CLI のどちらか（または両方）。動作確認は Claude Code 2.1.304、Codex CLI 0.159.3 で行っています。
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
-```
+> [!IMPORTANT]
+> ukagai でプランを承認する前にお読みください。
+>
+> - **Claude Code: 「承認」は「auto モードで続行」です。** 「計画を確認した」だけでは済みません。GUI や TUI で承認すると、そのセッションが Claude Code の auto モードに切り替わります。承認だけのボタンはないので、保留したいときは **指示** か **却下** を使ってください。承認が効くのは、そのプラン 1 件を同じセッションで 1 回だけです。セッションの終了、新しいプランの提出、プランモードからの離脱で失効します。ukagai がモードを切り替えられなかったとき（たとえばプランが別の経路で通ったとき）は、通知で知らせます。Shift+Tab で自分で切り替えてください。
+> - **Codex CLI: 端末側でも操作が要ります。** ukagai で承認すると Codex で実装が始まりますが、Codex 自身の「Implement this plan?」ポップアップは端末に残ります。そちらでは **No, stay in Plan mode** を選んでください。もう一度「Yes」を選ぶと、プランが 2 回実行されます。
 
-そのあと `claude`（または `codex`）を起動してください。サーバーは自動で起動し、その日の最初のセッションで GUI が開きます。以降は `AskUserQuestion` とプラン承認がすべてそこに届きます。`install.sh` は見つかったエージェントすべて（Claude Code と Codex CLI、詳細は下記）に hooks を登録します。GUI の言語は最初はロケールで決まり（`LC_ALL`、`LC_MESSAGES`、`LANG` のうち最初の空でない値が `ja` で始まれば `ja`、それ以外は `en`）、設定ページ（GUI で `,` キー）で変えられます。
+1. **インストールします。**
 
-インストール直後の `ukagai doctor` は server と token を "not started yet" と表示し、最初の `claude` セッションのあとは `no problems` になります。
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
+   ```
 
-![プラン承認の画面](docs/images/ja/plan.png)
+   ukagai を `~/.local/share/ukagai` に置き（`~/.local/bin/ukagai` にリンク）、見つかったエージェントすべてに登録します。
+
+   - Claude Code: hooks を `~/.claude/settings.json` に、`ukagai-explain` スキルを `~/.claude/skills/ukagai-explain/` に、小さな mod を `~/.claude/skills/ukagai-mod/` に置きます。
+   - Codex CLI: hooks を `$CODEX_HOME/hooks.json`（既定は `~/.codex`）に、その信頼エントリを `config.toml` に書きます。
+   - 変更するファイルは、先にバックアップを取ります（`.bak-*`）。ukagai の設定・履歴・ログは `~/.ukagai` に置かれます。登録は `ukagai uninstall` で外せます。
+
+2. **エージェントを起動します。** `claude`（または `codex`）を起動してください。すでに開いているセッションは開き直します。サーバーは自動で起動し、その日の最初のセッションで GUI（`http://127.0.0.1:4818`）が開きます。手動で起動するなら `ukagai serve` です。
+
+3. **最初の質問に答えます。** エージェントに選択を求めてみてください。たとえば `AskUserQuestion で、新しいヘルパーの名前を A と B のどちらにするか聞いてください。` です（Codex ではプランモード `/plan` で）。質問が説明つきで GUI に届くので、選択肢を選んで `Enter` を押します（数字キーでも選べます）。
+   - 最初のうちは、エージェントが説明を書き終えるまで ukagai が質問を保留します。赤い `[ukagai, not a failure]` の行が出て少し待つのは正常です。
+   - 対話の Claude Code ターミナルでは、そのあとエージェントがターンを終え、回答は `[ukagai]` で始まるメッセージとして届きます。
+
+4. **セットアップを確認します。** `ukagai doctor` は、最初のセッションまでは server と token を "not started yet" と表示し、そのあとは `no problems` と表示します。
+
+GUI の言語は最初はロケールで決まり（`LC_ALL`、`LC_MESSAGES`、`LANG` のうち最初の空でない値が `ja` で始まれば `ja`、それ以外は `en`）、設定ページ（GUI で `,` キー）で変えられます。
+
+## こんなときに
+
+**複数セッションの判断を 1 か所に。** すべてのセッション、両方のエージェントの質問とプランが、1 つの保留一覧（`b`）に届きます。タブのアイコンとタイトルに件数が出て、設定でビープ音やブラウザ通知も足せます。どのカードにもプロジェクト名が付くので、どこが聞いているか分かります。[ガイド](docs/guide.md#the-decision-screen)
+
+**スクロールで探さず、文脈を見て決める。** 説明はエージェント自身が書きます。なぜ今なのか、推奨、選択肢ごとに元に戻す方法を書いた表、Mermaid 図、関連する diff、確認した根拠です。[ガイド](docs/guide.md#rich-markdown)
+
+**実行前にプランを確認する。** プランは、読んだ印のついた折りたたみのセクションで開きます。長い `path:line` の参照は短いチップになり、`▸` で行番号付きの前後のコードを開けます（クリックしたときにプロジェクトから読みます）。直したいときは指示（「先にこれをして」）を書きます。エージェントがプランを直して再提出し、新しい版には変更点の要約が付きます。Claude Code で承認すると auto モードになります（上記参照）。[ガイド](docs/guide.md#plan-approval)
+
+![プラン承認の画面: 折りたたまれたセクションと、承認（auto モードで続行）/ 指示 / 却下](docs/images/ja/plan.png)
 
 ![ファイル参照が短いチップになり、そのうち 1 つの前後のコードが開いているプランの手順](docs/images/ja/fileref.png)
 
 *プランの長い `path:line` 参照は短いチップになり、`▸` でその行の前後のコードを開けます。*
 
-## できること
+**UI 案を並べて比べる。** エージェントは、UI やランディングページの案のような HTML ページ丸ごとを提案できます。ukagai は、ページ自身のスクリプトを実行しないサンドボックス化されたフレームで、選択肢のすぐ隣に表示します（全画面でのズーム表示、新しいタブでの表示にも対応）。[ガイド](docs/guide.md#rich-markdown)
 
-- **判断画面**: エージェントの推奨付きの選択肢、すべてキーで操作可能、保留中の判断の一覧（`b`）。[ガイド](docs/guide.md#the-decision-screen)
-- **プラン承認**: 承認（auto モードで続行）、指示（「先にこれをして」）、却下。[ガイド](docs/guide.md#plan-approval)
-- **進捗チェックポイント**: エージェントのセッション要約に、指示または停止で返答できます。[ガイド](docs/guide.md#progress-checkpoints)
-- **TUI**: 同じ画面をターミナルで。`ukagai tui`。[ガイド](docs/guide.md#the-tui)
-- **回答をメッセージで届ける**: 対話の Claude Code ターミナルでは、エージェントは待たずにターンを終え、手が空いたところで回答がメッセージとして届きます（既定でオン、オフにする方法は 3 つ）。[ガイド](docs/guide.md#answers-as-messages-the-ukagai-mod)
-- **Codex CLI**: hooks とプラン承認用のブリッジ。[ガイド](docs/guide.md#codex-cli)
-- **設定ページ**: 言語、テーマ、通知、プランファイルの自動表示（既定はオフ）、エージェントが従うスキルの本文。[ガイド](docs/guide.md#settings)
-- **コード参照**: プランや説明にある長い `path:line` は短いチップになり（フルパスはホバーとコピーで分かります）、`▸` で行番号付きの前後のコードを開けます。クリックしたときにプロジェクトから読むので、トークンは使いません。[ガイド](docs/guide.md#plan-approval)
-- **Rich Markdown**: 説明やプランで、コールアウト、Mermaid、diff、タスクリストなどを使えます。[ガイド](docs/guide.md#rich-markdown)
+![エージェントが提案した 2 つのランディングページ案を GUI で並べて表示し、そこで回答する](docs/images/ja/compare.png)
+
+*エージェントが提案した 2 つのランディングページ案を GUI で比べ、そのまま答えます。*
+
+**直してほしい場所を指して伝える。** 説明やプランの文、埋め込みの HTML ページの要素、画像の範囲を選んで、その場でコメントを書けます。コメントはどこを指しているかと一緒に、答え・指示・却下に添えてエージェントへ届きます。[ガイド](docs/guide.md#inline-comments)
+
+**止まっているエージェントの様子を見る。** Claude Code がセッション要約を書いたとき（Codex は 3 分間ターンがないとき）、それが進捗チェックになり、指示または停止で返答できます。[ガイド](docs/guide.md#progress-checkpoints)
+
+**ターミナルで済ませたいとき。** `ukagai tui` は、同じ判断画面を vim 風のキーで出します。[ガイド](docs/guide.md#the-tui)
 
 ![ターミナルでの同じ判断](docs/images/ja/tui.png)
 
-*同じ判断をターミナルで。*
+## 対応状況と制約
 
-![保留中の判断の一覧](docs/images/ja/drawer.png)
+| | Claude Code | Codex CLI |
+|---|---|---|
+| 質問 | `AskUserQuestion` | プランモードの `request_user_input`、ターン終了時に文章で書かれた質問 |
+| プラン承認 | `ExitPlanMode`（hook 経由） | プランモードで完成したプラン（Codex のローカル app-server 経由） |
+| 承認したあと | セッションが auto モードに切り替わる | ukagai が Default モードで実装のターンを始める。端末の Codex のポップアップは「No, stay in Plan mode」で閉じる |
+| コマンドの承認 | 端末に残る | Allow / Deny のカード |
+| 進捗チェック | セッション要約から | 新しいターンが 3 分間ないとき（既定） |
+| 動作確認したバージョン | 2.1.304 | 0.159.3 |
 
-ガイドは英語です。
+- **エージェントが先に説明を書きます。** 質問やプランの最初の呼び出しは、エージェントが説明を書き終えるまで保留されます。そのぶんエージェントの時間とトークンがかかります。書き方はスキルと短い文脈の一文で教えます。
+- **回答をメッセージで届ける（Claude Code）。** 対話のターミナルでは、エージェントは待たずにターンを終え、手が空いたところで回答がメッセージとして届きます。`claude -p`、Agent SDK、Desktop、VS Code のチャット、サブエージェント、Codex では、hook が回答を待ちます。既定でオンで、オフにする方法は 3 つあります。[ガイド](docs/guide.md#answers-as-messages-the-ukagai-mod)
+- **サーバーに届かないとき**は、hook は何も出力せず、エージェントは通常の端末のプロンプトに戻ります。
+- **Codex のプラン承認**には、サーバーが Codex のローカル app-server につながっている必要があります。Codex の起動後、つながるまでに最大 30 秒ほどかかります。Codex の Default モードで質問を受けるには、Codex の `config.toml` に `features.default_mode_request_user_input = true` が必要です（ukagai は書き込みません）。[ガイド](docs/guide.md#codex-cli)
+- **ローカルのみ。** サーバーは `127.0.0.1:4818` で待ち受けます。ユーザーガイドは英語です。
 
-## インストールのオプション
+## 詳細
+
+### 仕組み
+
+エージェントが `AskUserQuestion` や `ExitPlanMode` を呼ぶと、`PreToolUse` hook がまず 1 回その呼び出しを拒否し、説明ファイルを書くようエージェントに求めます（書式は `ukagai-explain` スキルが教えます）。再試行では、hook が判断をローカルのサーバーに登録し、GUI または TUI での回答を待ち、ツールの結果としてエージェントに返します。MCP は使いません。hooks、スキル、GUI で動きます。
+
+GUI はビルド不要の静的な HTML と JS です。Mermaid の図は mermaid.js（5.5 MB）ではなく [pele](https://github.com/obsidianmd/pele)（682 KB）で描きます。
+
+### ガイドの項目
+
+- [判断画面](docs/guide.md#the-decision-screen): エージェントの推奨付きの選択肢、すべてキーで操作可能、保留一覧。
+- [プラン承認](docs/guide.md#plan-approval): 承認、指示、却下。コード参照。
+- [その場コメント](docs/guide.md#inline-comments): 選んだ文、HTML ページの要素、画像の範囲へのコメント。
+- [進捗チェックポイント](docs/guide.md#progress-checkpoints)
+- [TUI](docs/guide.md#the-tui)
+- [回答をメッセージで届ける](docs/guide.md#answers-as-messages-the-ukagai-mod)
+- [Codex CLI](docs/guide.md#codex-cli): hooks とプラン承認用のブリッジ。
+- [設定](docs/guide.md#settings): 言語、テーマ、通知、プランファイルの自動表示（既定はオフ）、エージェントが従うスキルの本文。
+- [Rich Markdown](docs/guide.md#rich-markdown): 説明やプランで使えるコールアウト、Mermaid、diff、タスクリストなど。
+
+### インストールのオプション
 
 `install.sh` はバイナリを入れたあと `ukagai install` を実行し、見つかったエージェントすべてに hooks とスキルを登録します（先に設定のバックアップを取ります）。Claude Code には、ukagai mod も専用の小さなプラグインとして `~/.claude/skills/ukagai-mod/` に置きます（ukagai プラグインが有効なときは、プラグインが mod を持ってくるので置きません）。`wget` でも実行できます。
 
@@ -97,11 +151,19 @@ curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | 
 
 プラグインだけを使っている場合、シェルで `ukagai` は打てません。Claude Code ではエージェントの Bash ツール経由で `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` を実行してください。`install.sh` も実行済みの場合は、`ukagai install` が自身の登録を外し、hooks が二重に動かないようにします。
 
-**更新**: インストールのコマンドをもう一度実行します。登録済みのエージェントだけを登録し直し、オプション（`--timeout`、`--observe`、`--no-autostart`、`--server`、`--data-dir`）はそのまま引き継がれます。オプションを既定に戻すには、`ukagai uninstall` のあとに `ukagai install` を実行してください。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。**アンインストール**: `ukagai uninstall`（先に `--dry-run`）で Claude Code と Codex CLI の両方から hooks、skill、ukagai mod を外します（片方だけなら `--claude` または `--codex`）。hooks が残らなくなればサーバーも止まります（片方が失敗しても、もう片方は外れます。終了コードは 1 で、サーバーは止まらずに残ります）。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
+### 更新
+
+インストールのコマンドをもう一度実行します。登録済みのエージェントだけを登録し直し、オプション（`--timeout`、`--observe`、`--no-autostart`、`--server`、`--data-dir`）はそのまま引き継がれます。オプションを既定に戻すには、`ukagai uninstall` のあとに `ukagai install` を実行してください。起動中のサーバーは次のセッション開始時に置き換わります（そのサーバーが保持していた判断はターミナルに戻ります）。
+
+### doctor
 
 うまく動かないときは `ukagai doctor` を実行してください（[トラブルシューティング](docs/guide.md#troubleshooting)）。
 
-## ドキュメント
+### アンインストール
+
+`ukagai uninstall`（先に `--dry-run`）で Claude Code と Codex CLI の両方から hooks、スキル、ukagai mod を外します（片方だけなら `--claude` または `--codex`）。hooks が残らなくなればサーバーも止まります（片方が失敗しても、もう片方は外れます。終了コードは 1 で、サーバーは止まらずに残ります）。そのあと `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai` を実行してください。`~/.ukagai`（設定・履歴・ログ）は残るので、消すなら `rm -rf ~/.ukagai` です。プラグインは `/plugin uninstall ukagai@ukagai` または `codex plugin remove ukagai` です。
+
+### ドキュメント
 
 | パス | 内容 |
 |---|---|
@@ -141,9 +203,11 @@ claude --settings /tmp/ukagai-settings.json
 
 - `main` への Conventional Commits を受けて、release-please がリリース PR を開きます。
 - その PR をマージすると、タグとドラフトのリリースが作られます。
-- package ジョブがtarballと `SHA256SUMS` をビルドします。
+- package ジョブが tarball と `SHA256SUMS` をビルドします。
 - publish ジョブがそれらをアップロードし、リリースを公開します。
 - plugin ジョブがステージしたツリーを `plugin` ブランチに push します。両方のマーケットプレイスがこのブランチを読みます。
+
+冒頭のデモは `npm run demo` で実際の GUI から描画し（Chrome、img2webp、ffmpeg が必要）、`npm run demo:publish` で PR に添付したものです。`demo/README.md` を参照。
 
 ## ライセンス
 

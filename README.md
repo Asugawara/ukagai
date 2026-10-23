@@ -1,69 +1,125 @@
 <p align="center"><img src="docs/images/logo.png" width="140" alt="ukagai logo"></p>
 
+![Demo: two Claude Code sessions and a Codex session send their questions and a plan to one ukagai inbox; the agent's explanation shows a sequence diagram and a recommendation; the human answers with the keyboard and the answer reaches the agent as a message; two HTML mockups are compared side by side; a revised plan shows what changed, a diff and the code behind a file reference, and is approved; every agent keeps going](https://github.com/user-attachments/assets/11175d3d-4026-41ff-985a-7129f49b621a)
+
 <h1 align="center">ukagai</h1>
 
-<p align="center"><b>Agents ask. Humans decide.</b><br>One inbox for every question and plan approval from Claude Code and Codex CLI, with the context to answer them.</p>
+<p align="center"><b>A decision inbox for Claude Code and Codex.</b><br>Agents ask. Humans decide.</p>
 
 English | [日本語](README.ja.md)
 
-![A question with the agent's explanation: a sequence diagram, a recommendation and the options](docs/images/hero.png)
+ukagai gathers the questions and plan approvals your Claude Code and Codex CLI sessions are waiting on into one inbox (a localhost GUI, or a terminal UI). Each one comes with the agent's own explanation: why it is asking, a recommendation, the options, a diagram and a diff.
 
-## What it is
+It is for developers who run several agent sessions at once. Instead of walking through terminals to find the session that stopped, then scrolling back to remember what it was doing, you answer from one place with the context next to the options.
 
-ukagai intercepts the decisions a coding agent asks a human for (Claude Code's `AskUserQuestion` and plan approval) with hooks, and collects them in one localhost GUI (or a terminal UI). Each decision comes with an explanation the agent wrote itself: why now, a recommendation, an options table, a Mermaid diagram and the related diff. No MCP is involved: it is hooks + a skill + a GUI.
+## What you see
 
-## What makes it different
+![A question from an agent: why it is asking, a sequence diagram, the recommendation and three options](docs/images/hero.png)
 
-- **The agent explains in rich Markdown and you see it rendered.** Diagrams (Mermaid), diffs, images and whole HTML pages, such as UI or landing-page variants in a sandboxed frame that runs no script of the page's own (full screen with zoom, or in a new tab without any script), appear next to the options, so you compare and decide in one place.
-- **One inbox across sessions and agents.** Claude Code and Codex CLI, questions and plan approvals, with a pending list and history.
-- **No MCP, nothing added to every turn.** Hooks and a skill intercept the agent's own `AskUserQuestion` / plan approval; no tool definitions sit in the context.
-- **A light GUI.** Mermaid diagrams are drawn by [pele](https://github.com/obsidianmd/pele) (682 KB) instead of mermaid.js (5.5 MB): the release is 22% smaller and the GUI page loads about three times faster.
+*One decision. The agent asks where the retry for failed exports should live. Left: why it is asking, a sequence diagram and its recommendation. Right: the options, each with how to undo it.*
 
-![Two onboarding-page variants proposed by the agent, side by side in the GUI](docs/images/compare.png)
+![The list of pending decisions: questions and a plan from different projects](docs/images/drawer.png)
 
-*Two landing-page variants proposed by the agent, compared in the GUI and answered there.*
-
-## Why
-
-Coding agents stop and ask a question mid-task, and those questions scatter across terminals and tabs, where the human often lacks the context to answer. ukagai puts every question in one place, next to the agent's own explanation of why it is asking.
+*Everything that is waiting, across sessions and projects, in one list (`b`).*
 
 ## Quick start
 
-Requirements: Node.js >= 22, macOS or Linux (Windows is not supported), Claude Code (2.1.304 or later) and / or Codex CLI.
+**Requirements**: Node.js 22 or later, macOS or Linux (Windows is not supported), and Claude Code 2.1.304 or later and / or Codex CLI. Verified on Claude Code 2.1.304 and Codex CLI 0.159.3.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
-```
+> [!IMPORTANT]
+> Read this before you approve a plan in ukagai.
+>
+> - **Claude Code: Approve means "continue in auto mode".** It is not just "I read the plan". Approving in the GUI or TUI switches that session to Claude Code's auto mode, and there is no plain-approve button; to hold a plan back, use **Instruct** or **Reject**. The approval covers that one plan, once, in the same session, and lapses when the session ends, a new plan arrives or the session leaves plan mode. If ukagai could not switch the mode (for example the plan went through some other way), a notice says so; switch it yourself with Shift+Tab.
+> - **Codex CLI: finish in the terminal too.** After you approve in ukagai, it starts the implementation in Codex, but Codex's own "Implement this plan?" popup stays open in the terminal. Choose **No, stay in Plan mode** there; a second "Yes" runs the plan twice.
 
-Then start `claude` (or `codex`). The server starts by itself and the GUI opens on your first session of the day; from then on every `AskUserQuestion` and plan approval lands there. `install.sh` registers the hooks for every agent it finds, Claude Code and Codex CLI (see below). The GUI language starts from your locale (`ja` if `LC_ALL`, `LC_MESSAGES` or `LANG` starts with `ja`, otherwise `en`); change it on the Settings page (`,` key in the GUI).
+1. **Install.**
 
-Right after installing, `ukagai doctor` reports the server and the token as "not started yet"; after your first `claude` session it prints `no problems`.
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Asugawara/ukagai/main/install.sh | sh
+   ```
 
-![A plan approval](docs/images/plan.png)
+   This puts ukagai in `~/.local/share/ukagai` (linked as `~/.local/bin/ukagai`) and registers it with every agent it finds:
+
+   - Claude Code: hooks in `~/.claude/settings.json`, the `ukagai-explain` skill in `~/.claude/skills/ukagai-explain/` and a small mod in `~/.claude/skills/ukagai-mod/`.
+   - Codex CLI: hooks in `$CODEX_HOME/hooks.json` (default `~/.codex`) and their trust entries in `config.toml`.
+   - Each file it changes is backed up first (`.bak-*`). Your ukagai settings, history and logs live in `~/.ukagai`. `ukagai uninstall` takes the registration out again.
+
+2. **Start an agent.** Run `claude` (or `codex`); restart a session that was already open. The server starts by itself and the GUI (`http://127.0.0.1:4818`) opens in your first session of the day. `ukagai serve` starts it by hand.
+
+3. **Answer your first question.** Ask the agent for a choice, for example `Ask me with AskUserQuestion whether to call a new helper A or B.` (in Codex, use Plan mode: `/plan`). The question appears in the GUI with its explanation; pick an option and press `Enter` (number keys work too).
+   - The first time, ukagai holds the question until the agent has written its explanation, so a red `[ukagai, not a failure]` line and a short wait are normal.
+   - In an interactive Claude Code terminal, the agent then ends its turn and your answer arrives as a message that starts with `[ukagai]`.
+
+4. **Check the setup.** `ukagai doctor` reports the server and the token as "not started yet" until your first session, and `no problems` after it.
+
+The GUI language starts from your locale (`ja` if `LC_ALL`, `LC_MESSAGES` or `LANG` starts with `ja`, otherwise `en`); change it on the Settings page (`,` key in the GUI).
+
+## What it is good for
+
+**Several sessions, one list.** Questions and plans from every session and both agents land in one pending list (`b`). The tab icon and title show the count, and Settings can add a beep or a browser notification. Each card is labelled with its project, so you know who is asking. [Guide](docs/guide.md#the-decision-screen)
+
+**Decide with context, not scroll-back.** The agent writes the explanation itself: why it is asking now, a recommendation, an options table that says how to undo each choice, a Mermaid diagram, related diffs and what it checked. [Guide](docs/guide.md#rich-markdown)
+
+**Review a plan before it runs.** A plan opens as folded sections with read marks. A long `path:line` reference becomes a short chip, and `▸` opens the numbered code around the line, read from your project when you click. To change a plan, type an instruction ("do this first"): the agent revises it and asks again, and the new version comes with a summary of what changed. Approve means auto mode in Claude Code (see above). [Guide](docs/guide.md#plan-approval)
+
+![A plan approval: folded sections, and Approve (continue in auto mode) / Instruct / Reject](docs/images/plan.png)
 
 ![A plan step whose file references are short chips, with the code around one of them opened](docs/images/fileref.png)
 
 *Long `path:line` references in a plan become short chips; `▸` opens the code around the line.*
 
-## What you get
+**Compare UI options side by side.** An agent can propose whole HTML pages, such as UI or landing-page variants. ukagai shows them next to the options in a sandboxed frame that runs none of the page's own scripts (full screen with zoom, or in a new tab). [Guide](docs/guide.md#rich-markdown)
 
-- **Decision screen**: options with the agent's recommendation, keys for everything, a list of pending decisions (`b`). [Guide](docs/guide.md#the-decision-screen)
-- **Plan approval**: approve (and continue in auto mode), instruct ("do this first") or reject. [Guide](docs/guide.md#plan-approval)
-- **Progress checkpoints**: answer the agent's session recap with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
-- **TUI**: the same screen in the terminal, `ukagai tui`. [Guide](docs/guide.md#the-tui)
-- **Answers as messages**: in an interactive Claude Code terminal the agent ends its turn instead of waiting, and your answer arrives as a message once it is idle (on by default, three ways to turn it off). [Guide](docs/guide.md#answers-as-messages-the-ukagai-mod)
-- **Codex CLI**: hooks plus a bridge for plan approval. [Guide](docs/guide.md#codex-cli)
-- **Settings page**: language, theme, notifications, plan-file pop-up (off by default), and the skill text the agent follows. [Guide](docs/guide.md#settings)
-- **Code references**: a long `path:line` in a plan or explanation becomes a short chip (the full path on hover and in the copy), and `▸` opens the numbered code around the line, read from your project when you click, so no tokens are used. [Guide](docs/guide.md#plan-approval)
-- **Rich Markdown**: callouts, Mermaid, diffs, task lists and more in explanations and plans. [Guide](docs/guide.md#rich-markdown)
+![Two landing-page variants proposed by the agent, side by side in the GUI, answered there](docs/images/compare.png)
+
+*Two landing-page variants proposed by the agent, compared in the GUI and answered there.*
+
+**Point at what to change.** Select a sentence in an explanation or a plan, an element of an embedded HTML page, or a region of an image, and write a comment right there. The comments go to the agent with your answer, instruction or rejection, each saying where it points. [Guide](docs/guide.md#inline-comments)
+
+**Check in on idle agents.** When Claude Code writes a session recap (or a Codex session has been quiet for 3 minutes), it becomes a progress check you can answer with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
+
+**Stay in the terminal if you like.** `ukagai tui` shows the same decision screen with vim-style keys. [Guide](docs/guide.md#the-tui)
 
 ![The same decision in the terminal UI](docs/images/tui.png)
 
-*The same decision in the terminal.*
+## Support and limits
 
-![The pending list](docs/images/drawer.png)
+| | Claude Code | Codex CLI |
+|---|---|---|
+| Questions | `AskUserQuestion` | `request_user_input` in Plan mode; a question written as prose when the turn stops |
+| Plan approval | `ExitPlanMode`, through the hook | A finished Plan-mode plan, through Codex's local app-server |
+| After you approve | The session switches to auto mode | ukagai starts the implementation turn in Default mode. In the terminal, answer Codex's popup with "No, stay in Plan mode" |
+| Command approvals | Stay in the terminal | An Allow / Deny card |
+| Progress check | From the session recap | After 3 minutes without a new turn (default) |
+| Verified on | 2.1.304 | 0.159.3 |
 
-## Install options
+- **The agent writes an explanation first.** The first call to a question or a plan is held until the agent has written it, which costs the agent a little time and tokens. The skill and a short context sentence teach it how.
+- **Answers as messages (Claude Code).** In an interactive terminal the agent ends its turn instead of waiting, and your answer arrives as a message once it is idle. In `claude -p`, the Agent SDK, Desktop, the VS Code chat, subagents and Codex, the hook waits for your answer instead. It is on by default and has three ways to turn it off. [Guide](docs/guide.md#answers-as-messages-the-ukagai-mod)
+- **If the server cannot be reached**, the hook prints nothing and the agent falls back to its normal terminal prompt.
+- **Codex plan approval** needs the server to attach to Codex's local app-server, which can take up to about 30 seconds after Codex starts. Questions in Codex's Default mode need `features.default_mode_request_user_input = true` in its `config.toml` (ukagai does not write it). [Guide](docs/guide.md#codex-cli)
+- **Local only.** The server listens on `127.0.0.1:4818`. The user guide is in English.
+
+## Details
+
+### How it works
+
+When the agent calls `AskUserQuestion` or `ExitPlanMode`, a `PreToolUse` hook first denies the call once and asks the agent to write an explanation file (the `ukagai-explain` skill teaches the format). On the retry, the hook registers the decision with the local server, waits for your answer in the GUI or TUI, and hands it back to the agent as the tool's result. No MCP is involved: it is hooks, a skill and a GUI.
+
+The GUI is static HTML and JS with no build step. Mermaid diagrams are drawn by [pele](https://github.com/obsidianmd/pele) (682 KB) instead of mermaid.js (5.5 MB).
+
+### Guide topics
+
+- [Decision screen](docs/guide.md#the-decision-screen): options with the agent's recommendation, keys for everything, the pending list.
+- [Plan approval](docs/guide.md#plan-approval): approve, instruct or reject; code references.
+- [Inline comments](docs/guide.md#inline-comments): comments on selected text, an element of an HTML page or a region of an image.
+- [Progress checkpoints](docs/guide.md#progress-checkpoints)
+- [TUI](docs/guide.md#the-tui)
+- [Answers as messages](docs/guide.md#answers-as-messages-the-ukagai-mod)
+- [Codex CLI](docs/guide.md#codex-cli): hooks plus a bridge for plan approval.
+- [Settings](docs/guide.md#settings): language, theme, notifications, plan-file pop-up (off by default) and the skill text the agent follows.
+- [Rich Markdown](docs/guide.md#rich-markdown): callouts, Mermaid, diffs, task lists and more in explanations and plans.
+
+### Install options
 
 `install.sh` installs the binary and then runs `ukagai install`, which registers the hooks and the skill for every agent it finds (and backs up your settings first). For Claude Code it also places the ukagai mod as a small plugin of its own at `~/.claude/skills/ukagai-mod/` (skipped when the ukagai plugin is enabled, which brings the mod itself). `wget` works too.
 
@@ -95,11 +151,19 @@ The old `--lang`, `--codex` and `--claude` are ignored with a warning, and `ukag
 
 A plugin-only user cannot type `ukagai` in the shell: run `"${CLAUDE_PLUGIN_ROOT}/bin/ukagai" doctor` through the agent's Bash tool in Claude Code. If you also ran `install.sh`, `ukagai install` removes its own registration so the hooks run once.
 
-**Update**: run the install command again. It re-registers only the agents that are already registered, and keeps their options (`--timeout`, `--observe`, `--no-autostart`, `--server`, `--data-dir`); to put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. A running server is replaced at the next session start (decisions it still held fall back to the terminal). **Uninstall**: `ukagai uninstall` (`--dry-run` first) removes the hooks, the skill and the ukagai mod from both Claude Code and Codex CLI (`--claude` or `--codex` picks one) and stops the server once no hooks remain (if one agent fails, the other is still removed, the command exits 1 and the server is left running), then `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`; `~/.ukagai` (settings, history, logs) is kept, `rm -rf ~/.ukagai` removes it too; for plugins `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
+### Update
+
+Run the install command again. It re-registers only the agents that are already registered, and keeps their options (`--timeout`, `--observe`, `--no-autostart`, `--server`, `--data-dir`); to put the options back to the defaults, run `ukagai uninstall` and then `ukagai install`. A running server is replaced at the next session start (decisions it still held fall back to the terminal).
+
+### Doctor
 
 Something wrong? Run `ukagai doctor` ([troubleshooting](docs/guide.md#troubleshooting)).
 
-## Documentation
+### Uninstall
+
+`ukagai uninstall` (`--dry-run` first) removes the hooks, the skill and the ukagai mod from both Claude Code and Codex CLI (`--claude` or `--codex` picks one) and stops the server once no hooks remain (if one agent fails, the other is still removed, the command exits 1 and the server is left running). Then run `rm -rf ~/.local/share/ukagai ~/.local/bin/ukagai`. `~/.ukagai` (settings, history, logs) is kept; `rm -rf ~/.ukagai` removes it too. For plugins: `/plugin uninstall ukagai@ukagai` or `codex plugin remove ukagai`.
+
+### Documentation
 
 | Path | Content |
 |---|---|
@@ -142,6 +206,8 @@ Releases: `npm run release:stage` (`sh scripts/build-release.sh <version> out`) 
 - The package job builds the tarball and `SHA256SUMS`.
 - The publish job uploads them and publishes the release.
 - The plugin job pushes the stage tree to the `plugin` branch, which both marketplaces read.
+
+The demo at the top is rendered from the real GUI with `npm run demo` (needs Chrome, img2webp and ffmpeg) and attached to the pull request with `npm run demo:publish`; see `demo/README.md`.
 
 ## License
 
