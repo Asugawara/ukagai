@@ -1,0 +1,44 @@
+{
+  "en": {
+    "pr": 47,
+    "comment": "https://github.com/Asugawara/ukagai/pull/47#issuecomment-6354452190",
+    "published_at": "2026-10-23T00:31:44.273Z",
+    "uploader": "Asugawara",
+    "head": "be1bcc8",
+    "inputs": "a6bc187294c672ddc3a3c7edbdd110cf446fd7fa2838c2a8b5f40bfa073fc8c5",
+    "chrome": "Google Chrome 139.0.7258.139",
+    "webp": {
+      "url": "https://github.com/user-attachments/assets/11175d3d-4026-41ff-985a-7129f49b621a",
+      "bytes": 5989448,
+      "sha256": "8f4b8304b3783db9bdaa2cb57042480978b3870da9f69f9d04f92a1cd77af8bb",
+      "verified": true
+    },
+    "mp4": {
+      "url": "https://github.com/user-attachments/assets/27be29b8-a0c4-47ac-9122-b19c5aa7c53c",
+      "bytes": 4470266,
+      "sha256": "186c0c57729cfacdefd5e3a35c21b5517b19085b02ee8c8334fdf054a9afa3fe",
+      "verified": true
+    }
+  },
+  "ja": {
+    "pr": 47,
+    "comment": "https://github.com/Asugawara/ukagai/pull/47#issuecomment-6354454876",
+    "published_at": "2026-10-23T00:31:56.999Z",
+    "uploader": "Asugawara",
+    "head": "be1bcc8",
+    "inputs": "a6bc187294c672ddc3a3c7edbdd110cf446fd7fa2838c2a8b5f40bfa073fc8c5",
+    "chrome": "Google Chrome 139.0.7258.139",
+    "webp": {
+      "url": "https://github.com/user-attachments/assets/fd4c9db9-b717-41ab-a528-3cd79d8222a3",
+      "bytes": 6083210,
+      "sha256": "306eac8675d0d508e53ff4036587c301f2f52b8e7d17d776d1e046984a3b9cd8",
+      "verified": true
+    },
+    "mp4": {
+      "url": "https://github.com/user-attachments/assets/bec3f229-10d0-4ded-9ac8-39bf81ac6b2b",
+      "bytes": 4610432,
+      "sha256": "b1e03aee6ce513b0f67807027d97cbe310d11e037b5f9612235f0ed8edf5ca2a",
+      "verified": true
+    }
+  }
+}

@@ -1,0 +1,62 @@
+import { db } from "../db.js";
+import { parseUnit, type Currency } from "./money.js";
+import { taxFor } from "./tax.js";
+
+export interface Order {
+  id: string;
+  total_cents: number;
+  price_unit: string;
+  currency: Currency | null;
+}
+
+export interface Line {
+  cents: number;
+}
+
+export interface Receipt {
+  orderId: string;
+  currency: Currency;
+  subtotal: number;
+  tax: number;
+  total: number;
+}
+
+// Totals are computed in cents; rounding happens once, at the end.
+export function cents(amount: number): number {
+  return Math.round(amount * 100);
+}
+
+export function formatTotal(receipt: Receipt): string {
+  return `${(receipt.total / 100).toFixed(2)} ${receipt.currency}`;
+}
+
+export function isFree(receipt: Receipt): boolean {
+  return receipt.total === 0;
+}
+
+export function sumLines(lines: Line[]): number {
+  return lines.reduce((sum, l) => sum + l.cents, 0);
+}
+
+export function withTax(subtotal: number, rate: number): number {
+  return Math.round(subtotal * rate);
+}
+
+export function describeOrder(order: Order): string {
+  return `${order.id}: ${order.price_unit}`;
+}
+
+// Orders are looked up by id; the lookup is in one place so tests can stub it.
+export const lookupOrder = (id: string): Promise<Order | null> => db.orders.get(id);
+export async function checkout(orderId: string): Promise<Receipt> {
+  const order = await db.orders.get(orderId);
+  if (!order) throw new Error(`no order ${orderId}`);
+  const lines = await db.lines.list(orderId);
+  const subtotal = lines.reduce((sum, l) => sum + l.cents, 0);
+  // the unit is free text today: "$", "USD", "usd ", ...
+  const unit = order.price_unit.trim();
+  const currency = parseUnit(unit);
+  if (!currency) throw new Error(`unknown unit ${unit}`);
+  const tax = taxFor(currency, subtotal);
+  return { orderId, currency, subtotal, tax, total: subtotal + tax };
+}

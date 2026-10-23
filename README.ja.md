@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/images/logo.png" width="140" alt="ukagai のロゴ"></p>
 
+![デモ: 2 つの Claude Code と 1 つの Codex のセッションが、質問とプランを ukagai の 1 つの受信箱に送る。エージェントの説明はシーケンス図と推奨つき。人がキーボードで答えると、答えはメッセージとしてエージェントに届く。HTML の 2 案を並べて比べ、直したプランの変更点・diff・ファイル参照の先のコードを見て承認する。どのエージェントも先へ進む](https://github.com/user-attachments/assets/fd4c9db9-b717-41ab-a528-3cd79d8222a3)
+
 <h1 align="center">ukagai</h1>
 
 <p align="center"><b>A decision inbox for Claude Code and Codex.</b><br>Agents ask. Humans decide.</p>
@@ -201,6 +203,8 @@ claude --settings /tmp/ukagai-settings.json
 - package ジョブが tarball と `SHA256SUMS` をビルドします。
 - publish ジョブがそれらをアップロードし、リリースを公開します。
 - plugin ジョブがステージしたツリーを `plugin` ブランチに push します。両方のマーケットプレイスがこのブランチを読みます。
+
+冒頭のデモは `npm run demo` で実際の GUI から描画し（Chrome、img2webp、ffmpeg が必要）、`npm run demo:publish` で PR に添付したものです。`demo/README.md` を参照。
 
 ## ライセンス
 
