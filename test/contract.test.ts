@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   AnswerRequest,
+  COMMENTS_MAX,
+  Comment,
+  Comments,
+  PlanInstructRequest,
+  parseCannotAnswer,
   AskUserQuestionInput,
   CreateDecisionRequest,
   DecisionStatus,
@@ -206,4 +211,65 @@ test("AnswerRequest: checkpoint shape needs text for instruct and stays exclusiv
   assert.ok(!AnswerRequest.safeParse({ kind: "instruct", text: " " }).success);
   assert.ok(!AnswerRequest.safeParse({ kind: "continue", approve: true }).success);
   assert.ok(!AnswerRequest.safeParse({ kind: "other" }).success);
+});
+
+// ---- inline comments ----
+
+const okComment = { id: "c-1", kind: "text", source: { kind: "plan" }, quote: "q", note: "n" };
+
+test("Comments: 30 pass, 31 fail, empty fails", () => {
+  assert.equal(COMMENTS_MAX, 30);
+  assert.equal(Comments.safeParse(Array.from({ length: 30 }, () => okComment)).success, true);
+  assert.equal(Comments.safeParse(Array.from({ length: 31 }, () => okComment)).success, false);
+  assert.equal(Comments.safeParse([]).success, false);
+});
+
+test("Comment: note 1000 passes and 1001 fails; blank note fails; bad id fails", () => {
+  assert.equal(Comment.safeParse({ ...okComment, note: "x".repeat(1000) }).success, true);
+  assert.equal(Comment.safeParse({ ...okComment, note: "x".repeat(1001) }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, note: "   " }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, id: "bad id!" }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, id: "x".repeat(33) }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, extra: 1 }).success, false);
+});
+
+test("Comment: kind text needs a quote, kind region needs a rect", () => {
+  const { quote: _q, ...noQuote } = okComment;
+  assert.equal(Comment.safeParse(noQuote).success, false);
+  const region = { id: "r1", kind: "region", source: { kind: "image", file: "/a.png" }, note: "n" };
+  assert.equal(Comment.safeParse(region).success, false);
+  assert.equal(Comment.safeParse({ ...region, rect: { x: 0, y: 0, w: 1, h: 1 }, mark: "0123456789abcdef" }).success, true);
+  assert.equal(Comment.safeParse({ ...region, rect: { x: 0, y: 0, w: 0, h: 1 } }).success, false);
+  assert.equal(Comment.safeParse({ ...region, rect: { x: 0, y: 0, w: 1, h: 1 }, mark: "XYZ" }).success, false);
+});
+
+test("Comment: a newline in file, selector or tag is rejected", () => {
+  assert.equal(Comment.safeParse({ ...okComment, source: { kind: "page", file: "a\nb.html" } }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, kind: "element", quote: undefined, selector: "button\n.save" }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, kind: "element", quote: undefined, tag: "b\u0000" }).success, false);
+  assert.equal(Comment.safeParse({ ...okComment, source: { kind: "page", file: "/s/ok.html" }, selector: "p" }).success, true);
+});
+
+test("AnswerRequest: comments ride on answers, reject and instruct; approve + comments is rejected", () => {
+  assert.equal(AnswerRequest.safeParse({ answers: { Q: "A" }, comments: [okComment] }).success, true);
+  assert.equal(AnswerRequest.safeParse({ approve: false, comments: [okComment] }).success, true);
+  assert.equal(AnswerRequest.safeParse({ approve: false, reason: "r", comments: [okComment] }).success, true);
+  assert.equal(AnswerRequest.safeParse({ instruct: true, comments: [okComment] }).success, true);
+  assert.equal(AnswerRequest.safeParse({ instruct: true, text: "t" }).success, true);
+  assert.equal(AnswerRequest.safeParse({ approve: true, comments: [okComment] }).success, false);
+});
+
+test("instruct with neither text nor comments is rejected, for the answer and the plan card", () => {
+  assert.equal(AnswerRequest.safeParse({ instruct: true }).success, false);
+  assert.equal(AnswerRequest.safeParse({ instruct: true, text: "  " }).success, false);
+  assert.equal(PlanInstructRequest.safeParse({}).success, false);
+  assert.equal(PlanInstructRequest.safeParse({ comments: [okComment] }).success, true);
+  assert.equal(PlanInstructRequest.safeParse({ text: "x".repeat(4001) }).success, false);
+});
+
+test("parseCannotAnswer judges only the first line: a comment block after a newline is ignored", () => {
+  const block = "The human left 1 comment:\n1. plan, \"A\": \"q\"\n   → n";
+  assert.deepEqual(parseCannotAnswer(`Cannot answer — Undefined terms: foo, bar\n\n${block}`), { reason: "Undefined terms", terms: ["foo", "bar"], text: "foo, bar" });
+  assert.deepEqual(parseCannotAnswer(`Cannot answer — Unclear\n\n${block}`), { reason: "Unclear", terms: [], text: "" });
+  assert.equal(parseCannotAnswer(`A\nCannot answer — Unclear`), null);
 });

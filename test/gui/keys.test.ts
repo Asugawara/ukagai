@@ -1604,7 +1604,7 @@ gui("V4 G-1: the hint is one line in the footer at 1440, 1280 and 1000, and the 
       assert.ok(r.h < r.lh * 1.5, `${w}x${h}: one line ${JSON.stringify(r)}`);
       assert.ok(r.sw <= r.cw + 1, `${w}x${h}: not cut ${JSON.stringify(r)}`);
       assert.equal(r.inDecision || r.inBuild, false);
-      assert.match(ev<string>(`[...document.querySelectorAll("#foot .hint > :not(.hint-type)")].map(e => e.textContent).join("")`), w === "1000" ? /x/ : /Enter\/1-4 Send · \? Terms · e Evidence · v Compare · y Copy · n None · x Can't answer .*←→ Next · Esc$/);
+      assert.match(ev<string>(`[...document.querySelectorAll("#foot .hint > :not(.hint-type)")].map(e => e.textContent).join("")`), w === "1000" ? /x/ : /Enter\/1-4 Send · \? Terms · e Evidence · v Compare · y Copy · m Comment · n None · x Can't answer .*←→ Next · Esc$/);
     }
     ab("set", "viewport", "1440", "900");
     ab("screenshot", join(SHOTS, "V4-hint-1440.png"));

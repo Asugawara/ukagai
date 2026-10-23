@@ -275,7 +275,7 @@ async function api(path, init) {
   }
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
-    throw Object.assign(new Error(j.error ?? `HTTP ${res.status}`), { status: res.status }); // sendPlanInstruct reads status
+    throw Object.assign(new Error(j.error ?? `HTTP ${res.status}`), { status: res.status, body: j }); // sendPlanInstruct reads status; too_long reads body
   }
   return res.status === 204 ? null : res.json();
 }
@@ -311,10 +311,12 @@ function documentImages(container, doc) {
         el("div", { class: "doc-frame-bar" },
           el("span", { class: "doc-frame-name" },
             el("span", { class: "doc-frame-alt", title: alt || name, text: alt || name }), el("span", { class: "chip", title: name, text: name })),
-          // In a narrow frame (container query in app.css) the two buttons show only their icon; the text stays as title / aria-label
+          // In a narrow frame (container query in app.css) the buttons show only their icon; the text stays as title / aria-label
+          framePickButton("doc-frame-pick"),
           el("a", { class: "doc-frame-open", href: tabUrl(src), target: "_blank", rel: "noopener", title: t("frame_newtab"), "aria-label": t("frame_newtab") }, icon("external-link"), el("span", { class: "btn-text", text: t("frame_newtab") })),
           el("button", { class: "doc-frame-full", type: "button", "data-src": src, "data-title": alt || name, title: t("frame_full"), "aria-label": t("frame_full") }, icon("maximize"), el("span", { class: "btn-text", text: t("frame_full") }))),
         el("iframe", { class: "doc-frame-view", ...frameAttrs, src, loading: "lazy", title: alt || name }));
+      frame.querySelector("iframe").addEventListener("load", (ev) => frameLoaded(ev.target));
       img.replaceWith(frame);
       const fp = frame.parentElement;
       if (fp?.tagName === "P" && fp.childNodes.length === 1) fp.replaceWith(frame);
@@ -322,6 +324,7 @@ function documentImages(container, doc) {
     }
     img.setAttribute("src", src);
     img.setAttribute("loading", "lazy");
+    img.setAttribute("draggable", "false"); // a pointer drag draws a region (comments), not the browser's drag ghost
     const fig = el("figure", { class: "doc-img" });
     const open = el("button", { class: "doc-img-open", type: "button", "aria-label": t("image_open", { alt: alt || t("image") }) });
     img.replaceWith(fig);
@@ -1146,6 +1149,8 @@ function dropPlan(name) {
   planData.delete(name);
   planStates.delete(PLAN_ID + name);
   outlines.delete(PLAN_ID + name);
+  dropComments(PLAN_ID + name);
+  drafts.delete(PLAN_ID + name);
 }
 
 function onPlanRemoved(name) {
@@ -1241,7 +1246,7 @@ function renderPlanRight(pd) {
   };
   const actions = el("div", { class: "actions" });
   if (canInstruct) {
-    box = instructCard(dr, (text) => sendPlanInstruct(pd, dr, text));
+    box = instructCard(dr, (text, comments) => sendPlanInstruct(pd, dr, text, comments), pd);
     actions.append(box.card);
   }
   actions.append(el("div", { class: "done-reading", role: "button", tabindex: "-1", onclick: doneReading },
@@ -1259,7 +1264,7 @@ function renderPlanRight(pd) {
 
 function planViewHint(pd, outline, canInstruct) {
   const zone = outline ? `${t(!canInstruct ? "hint_zone_plan_only" : planZone(pd) === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : "";
-  return el("div", { class: "hint" }, zone, verHint(pd), `Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · ` : ""}Tab ${t("hint_next")} · , ${t("hint_settings")}`);
+  return el("div", { class: "hint" }, zone, verHint(pd), `Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · m ${t("hint_comment")} · ` : ""}Tab ${t("hint_next")} · , ${t("hint_settings")}`);
 }
 
 // Esc / the text: mark the plan read (unless it already is), then the next item or the idle screen
@@ -1387,7 +1392,7 @@ function blockerShown(d, it) {
 function draftOf(d) {
   let dr = drafts.get(d.id);
   if (!dr) {
-    drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", instruct: "", cursor: null }));
+    drafts.set(d.id, (dr = { sel: new Map(), free: new Map(), rejecting: false, reason: "", instruct: "", cursor: null, comments: loadComments(d.id) }));
     const kept = restored[d.id]; // typed text kept across a reload for a new build
     if (kept) {
       for (const [qi, f] of Object.entries(kept.free ?? {})) dr.free.set(Number(qi), { on: !!f.on, text: String(f.text ?? "") });
@@ -1452,9 +1457,12 @@ const answeredText = (d, fallbackKey) => (d.response?.instruct ? t("plan_instruc
 
 async function send(d, body) {
   document.querySelectorAll("#decision button").forEach((b) => (b.disabled = true));
+  const comments = draftOf(d).comments;
+  if (d.kind === "answer_question" && comments.length && !body.comments) body = { ...body, comments }; // every way of answering a question carries the comments
   try {
     const updated = await post(`/api/decisions/${d.id}/answer`, body);
     decisions.set(updated.id, updated);
+    dropComments(d.id);
     if (shownId === d.id) {
       toast(answeredText(updated, "sent"));
       advance();
@@ -1462,7 +1470,8 @@ async function send(d, body) {
       refreshItems();
     }
   } catch (e) {
-    if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
+    if (e.message === "too_long" && e.body) showBanner(t("cmt_too_long", { length: e.body.length, max: e.body.max }));
+    else if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
     if (shownId === d.id) renderRight(decisions.get(d.id));
   }
 }
@@ -1652,6 +1661,8 @@ function closeOverlay() {
   overlay.el.remove();
   overlay = null;
   if (!drawerOpen()) setBackgroundInert(false);
+  reanchorSoon(); // comments made in the overlay get their badges (the text ranges are found again too: reanchor cleared them while the overlay was open)
+  syncFrameMarks();
   if (back?.isConnected && back !== document.body && !back.matches("input, textarea")) back.focus({ preventScroll: true });
 }
 function openOverlay(kind, title, body, extra = {}) {
@@ -1673,8 +1684,11 @@ function openLightbox(button) {
   if (!thumb) return;
   const alt = thumb.getAttribute("alt") ?? "";
   button.focus({ preventScroll: true });
-  const full = el("img", { class: "lightbox-img", src: thumb.getAttribute("src"), alt, onclick: closeOverlay });
-  openOverlay("lightbox", alt || t("image"), full);
+  const full = el("img", { class: "lightbox-img", src: thumb.getAttribute("src"), alt, draggable: "false", onclick: closeOverlay });
+  const layer = el("div", { class: "rg-layer" });
+  openOverlay("lightbox", alt || t("image"), el("div", { class: "lightbox-wrap" }, full, layer), { img: full, layer });
+  full.addEventListener("load", paintLightbox);
+  paintLightbox();
 }
 // An embedded HTML page at full size: the shared overlay, asked to be the browser's real full screen (the overlay itself fills the viewport when that is refused).
 // A top bar carries the zoom controls; the frame's helper script (src/serve/frame-helper.ts) does the zooming and reports its size / zoom back
@@ -1690,10 +1704,11 @@ function openFrame(button) {
     btn(t("frame_fit"), () => frameZoom("fit")), btn("100%", () => frameZoom(1)),
     btn(t("frame_zoom_out"), () => frameZoom(overlay.zoom / 1.25)), btn(t("frame_zoom_in"), () => frameZoom(overlay.zoom * 1.25))] : [];
   const head = el("div", { class: "frame-bar" },
-    el("span", { class: "frame-title", text: title }), ...zoomControls,
+    el("span", { class: "frame-title", text: title }), framePickButton("frame-btn frame-pick"), ...zoomControls,
     el("a", { class: "frame-btn", href: tabUrl(src), target: "_blank", rel: "noopener", text: t("frame_newtab") }),
     btn(t("frame_close"), closeOverlay));
   openOverlay("frame", title, frame, { head, frame, zoom: 1, zoomLabel });
+  frame.addEventListener("load", () => frameLoaded(frame));
   overlay.el.requestFullscreen?.()?.catch?.(() => {});
 }
 function frameZoom(v) {
@@ -1702,7 +1717,8 @@ function frameZoom(v) {
   w.postMessage(v === "fit" ? { ukagai: "fit" } : { ukagai: "zoom", value: clampZoom(v) }, "*");
 }
 function frameKey(key) {
-  if (key === "Escape") closeOverlay();
+  if (key === "Escape" && picking()) setPick(picking(), false);
+  else if (key === "Escape") closeOverlay();
   else if (key === "+" || key === "=") frameZoom(overlay.zoom * 1.25);
   else if (key === "-") frameZoom(overlay.zoom / 1.25);
   else if (key === "0") frameZoom(1);
@@ -1715,6 +1731,9 @@ window.addEventListener("message", (e) => {
   const d = e.data;
   if (!d || typeof d !== "object" || !e.source) return;
   const num = (v, lo, hi) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+  const from = overlay?.kind === "frame" && overlay.frame.isConnected && e.source === overlay.frame.contentWindow ? overlay.frame
+    : [...document.querySelectorAll("iframe.doc-frame-view")].find((f) => f.contentWindow && f.contentWindow === e.source);
+  if (from && frameComment(from, d)) return;
   if (overlay?.kind === "frame" && overlay.frame.isConnected && e.source === overlay.frame.contentWindow) {
     if (d.ukagai === "frame" && num(d.zoom, 0.05, 5)) {
       if (!overlay.modeSent) { overlay.modeSent = true; e.source.postMessage({ ukagai: "mode", overlay: true }, "*"); } // zoom, pinch and zoom keys are the helper's only in full screen
@@ -1735,7 +1754,9 @@ document.addEventListener("click", (e) => {
   const b = tgt?.closest("button.doc-img-open");
   if (b) return openLightbox(b);
   const f = tgt?.closest("button.doc-frame-full");
-  if (f) openFrame(f);
+  if (f) return openFrame(f);
+  const pk = tgt?.closest("button.doc-frame-pick, button.frame-pick");
+  if (pk) framePick(pk);
 });
 
 function openTerms(v2) {
@@ -1904,6 +1925,7 @@ function renderRightBody(d) {
         if (!single) box.append(el("div", { class: "header", text: q.header }), el("div", { class: "question", text: q.question }));
         items = q.options.map(isQuiz(d) ? quizItem : rawItem);
       }
+      if (qi === 0 && dr.comments.length && !closed) (single ? top : box).append(commentStrip(d, dr));
       if (single) {
         if (dr.cursor == null) dr.cursor = Math.max(0, items.findIndex((i) => i.pref));
         // For single select, moving = selecting. Pre-select the initial position (the recommended one, else the first)
@@ -2068,12 +2090,14 @@ function renderRightBody(d) {
     if (single) {
       // `c` (copy the command to run, blockers) and `y` (copy a badge) are one hint
       const copyKey = v2?.todoBox?.querySelector("pre") ? "c" : d.explanation && hasExplanation(d) ? "y" : "";
-      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", copyKey, ...(hasOptions(d) ? ["n", "x"] : [])].filter(Boolean);
+      const canComment = !closed && hasExplanation(d);
+      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", copyKey, canComment ? "m" : "", ...(hasOptions(d) ? ["n", "x"] : [])].filter(Boolean);
       const extraHints = [
         v2?.terms.length ? `? ${t("hint_terms")} · ` : "",
         modelFor(d).fnCount ? `e ${t("hint_evidence")} · ` : "",
         v2?.hasExtra ? `v ${t("hint_compare")} · ` : "",
         copyKey ? `${copyKey} ${t("hint_copy")} · ` : "",
+        canComment ? `m ${t("hint_comment")} · ` : "",
         hasOptions(d) ? `n ${t("hint_none")} · ${t("hint_cannot")} · ` : "",
       ].join("");
       const hs = hasHistoryHint(d);
@@ -2153,17 +2177,18 @@ function renderRightBody(d) {
   const outline = planOutline(d);
   const zoneNow = () => (outline ? planState(d, outline).zone : "opts");
   // One press sends, for every plan; unread sections are only shown (the dim line above the options)
-  const approve = el("div", { class: "opt approve-card recommended" + (closed ? " off" : ""), role: "button", "data-card": "approve", onclick: () => { if (!closed) send(d, { approve: true, set_mode_auto: true }); } },
+  const approve = el("div", { class: "opt approve-card recommended" + (closed ? " off" : ""), role: "button", "data-card": "approve", onclick: () => { if (!closed) approvePlan(d, dr); } },
     el("span", { class: "cardkey", text: "1" }),
-    el("div", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("approve_auto") }), el("span", { class: "rec-badge", text: `★ ${t("recommended")}` }))));
+    el("div", { class: "grow" }, el("div", { class: "lab" }, el("span", { text: t("approve_auto") }), el("span", { class: "rec-badge", text: `★ ${t("recommended")}` })),
+      dr.comments.length ? el("div", { class: "confirm-inline", "data-key": "approve", hidden: dr.confirmKey !== "approve", text: count("cmt_discard", dr.comments.length) }) : null));
   const unread = el("div", { class: "plan-unread", hidden: !unreadText(d), text: unreadText(d) });
   const actions = el("div", { class: "actions" });
   // The instruction card is always there: the cursor landing on it focuses the box
-  const box = closed ? null : instructCard(dr, (text) => send(d, { instruct: true, text }));
+  const box = closed ? null : instructCard(dr, (text, comments) => send(d, { instruct: true, ...(text ? { text } : {}), ...(comments ? { comments } : {}) }), d);
   if (box) box.card.prepend(el("span", { class: "cardkey", text: "2" }));
   const confirm = el("button", {
     class: "btn danger", type: "button", text: t("send_rejection"),
-    onclick: () => send(d, dr.reason.trim() ? { approve: false, reason: dr.reason.trim() } : { approve: false }),
+    onclick: () => send(d, { approve: false, ...(dr.reason.trim() ? { reason: dr.reason.trim() } : {}), ...(dr.comments.length ? { comments: dr.comments } : {}) }),
   });
   const input = el("input", {
     type: "text", id: "reason", placeholder: t("reject_placeholder"), value: dr.reason,
@@ -2178,7 +2203,7 @@ function renderRightBody(d) {
   if (box) actions.append(box.card);
   actions.append(reject);
   const hist = el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` });
-  const hintFor = () => el("div", { class: "hint" }, `${outline ? `${t(zoneNow() === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · `}`, verHint(d), `y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, hist, `Tab ${t("hint_next")} · , ${t("hint_settings")}`);
+  const hintFor = () => el("div", { class: "hint" }, `${outline ? `${t(zoneNow() === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · `}`, verHint(d), `y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, closed ? "" : `m ${t("hint_comment")} · `, hist, `Tab ${t("hint_next")} · , ${t("hint_settings")}`);
   setHint(hintFor());
   root.append(actions);
   // Slots: 0 Approve, 1 the instruction card (its box), 2 Reject (its reason box)
@@ -2212,6 +2237,7 @@ function renderRightBody(d) {
     get cursor() { return dr.cursor ?? 0; },
     toggleExpand: () => toggleExpand(dr),
   };
+  if (dr.cursor == null && box && dr.comments.length) dr.cursor = 1; // comments are waiting: the instruction card is where the cursor starts
   if (!closed) ui.setCursor(dr.cursor ?? 0, false);
   if (wasInstruct && box && zoneNow() === "opts") syncTyping(box.ta, true); // a live update keeps the box focused
   if (wasReason && dr.rejecting && !closed && zoneNow() === "opts") { autoFocusing = true; input.focus(); autoFocusing = false; }
@@ -2340,6 +2366,844 @@ function syncNone() {
   document.querySelectorAll("#decision .none-type").forEach((e, k) => e.classList.toggle("cursor", k === none.cursor));
 }
 
+// ---- Inline comments (その場コメント): select text in the left column, write a note in a popover, send the notes with the answer ----
+// A comment is the contract's `Comment` (src/contract.ts). They live in the card's draft (`dr.comments`) and are mirrored to localStorage,
+// so a reload keeps them. Highlights use the CSS Custom Highlight API (the rendered Markdown DOM is never touched); the numbered badges
+// sit in an absolutely positioned layer at the end of #background.
+
+const COMMENTS_MAX = 30;
+const INSTRUCTION_BUDGET = 4000; // the server's limit on the text it composes (existing text + comment block)
+const CMT_PREFIX = "ukagai.comments.";
+const CMT_TTL_MS = 7 * 24 * 3600 * 1000;
+const CMT_SKIP = "button, svg, script, style, textarea, input, select, .cmt-layer, .ver-bar, .ps-mark, .ps-upd, .ps-meta";
+const CMT_BLOCK = "p, li, h1, h2, h3, h4, h5, h6, td, th, tr, pre, summary, blockquote, div, dt, dd, figcaption";
+const CMT_HEAD = "h1, h2, h3, h4, h5, h6, details.plan-sec > summary, details.plan-sub > summary";
+
+function cmtId() {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(10));
+  return Array.from(bytes, (b) => abc[b % abc.length]).join("");
+}
+
+// ---- Storage ----
+
+// The shape the server accepts (src/contract.ts); a stored entry that does not fit is dropped, or its send would be refused
+function validComment(c) {
+  if (!c || typeof c !== "object") return false;
+  if (typeof c.id !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(c.id)) return false;
+  if (!["text", "element", "region"].includes(c.kind)) return false;
+  if (!c.source || typeof c.source !== "object" || !["plan", "explanation", "page", "image"].includes(c.source.kind)) return false;
+  if (typeof c.note !== "string" || c.note.trim() === "" || c.note.trim().length > 1000) return false;
+  if (c.kind === "text" && typeof c.quote !== "string") return false;
+  if (c.kind === "region") {
+    const r = c.rect;
+    if (!(r && [r.x, r.y, r.w, r.h].every(Number.isInteger) && r.x >= 0 && r.y >= 0 && r.w >= 1 && r.h >= 1)) return false;
+  }
+  if (c.mark !== undefined && !(typeof c.mark === "string" && /^[0-9a-f]{16}$/.test(c.mark))) return false;
+  return true;
+}
+function loadComments(id) {
+  try {
+    const v = JSON.parse(localStorage.getItem(CMT_PREFIX + id) ?? "null");
+    if (v && Date.now() - v.at < CMT_TTL_MS && Array.isArray(v.comments)) return v.comments.filter(validComment).slice(0, COMMENTS_MAX);
+  } catch {}
+  return [];
+}
+function saveComments(id, list) {
+  try {
+    if (list.length) localStorage.setItem(CMT_PREFIX + id, JSON.stringify({ at: Date.now(), comments: list }));
+    else localStorage.removeItem(CMT_PREFIX + id);
+  } catch {}
+}
+function dropComments(id) {
+  try { localStorage.removeItem(CMT_PREFIX + id); } catch {}
+  const dr = drafts.get(id);
+  if (dr) dr.comments = [];
+}
+// Drop what is older than 7 days, and (when `keep` is given) what belongs to an item that is no longer pending
+function pruneComments(keep) {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith(CMT_PREFIX)) continue;
+      let old = true;
+      try { old = Date.now() - JSON.parse(localStorage.getItem(key)).at >= CMT_TTL_MS; } catch {}
+      if (old || (keep && !keep(key.slice(CMT_PREFIX.length)))) localStorage.removeItem(key);
+    }
+  } catch {}
+}
+pruneComments();
+
+// ---- Where a comment can be made ----
+
+// The shown item when it can take comments: a pending question with an explanation, a plan decision (not an earlier version),
+// a plan file card that has a session to send to. null otherwise
+// `inOverlay`: the full-screen page and the lightbox take comments too (their own code asks with true)
+function commentTarget(inOverlay = false) {
+  if ((overlay && !(inOverlay && (overlay.kind === "frame" || overlay.kind === "lightbox"))) || drawerOpen()) return null;
+  const d = shownPlanPd() ?? decisions.get(shownId);
+  if (!d || d.status !== "pending") return null;
+  if (d.kind === "answer_question") return hasExplanation(d) ? { d, source: "explanation" } : null;
+  if (d.kind !== "approve_plan") return null;
+  if (d.readonly) return planCanInstruct(d) ? { d, source: "plan" } : null;
+  const view = verView(d);
+  return view && view.idx !== view.last ? null : { d, source: "plan" };
+}
+
+// ---- Text index of the left column ----
+// text = the visible text with whitespace collapsed (U+2060 and GUI decorations left out), "\n" between blocks.
+// segs = [{ node, start, len, raw }]: raw[k] is the offset in node.data of the k-th kept character; node null = a "\n" between blocks
+
+function textIndex(root) {
+  const segs = [];
+  let text = "";
+  let lastBlock = null;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest(CMT_SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    const block = n.parentElement.closest(CMT_BLOCK);
+    const pre = !!n.parentElement.closest("pre");
+    const raw = [];
+    let s = "";
+    let prev = text.at(-1) ?? " "; // the start of the document counts as a space
+    for (let i = 0; i < n.data.length; i++) {
+      let c = n.data[i];
+      if (c === "⁠") continue;
+      if (!pre && /\s/.test(c)) {
+        if (/\s/.test(prev)) continue;
+        c = " ";
+      }
+      raw.push(i);
+      s += c;
+      prev = c;
+    }
+    if (!s) continue;
+    if (lastBlock && block !== lastBlock && !/\s$/.test(text)) {
+      segs.push({ node: null, start: text.length, len: 1, raw: [] });
+      text += "\n";
+    }
+    lastBlock = block;
+    segs.push({ node: n, start: text.length, len: s.length, raw });
+    text += s;
+  }
+  return { text, segs };
+}
+
+// kept characters of seg before the raw offset `off`
+function keptBefore(seg, off) {
+  let lo = 0;
+  let hi = seg.raw.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (seg.raw[mid] < off) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+// The real segment holding index i (a "\n" between blocks moves on to the next text)
+function segAt(idx, i) {
+  for (const seg of idx.segs) if (seg.node && i < seg.start + seg.len && i >= seg.start) return seg;
+  for (const seg of idx.segs) if (seg.node && seg.start >= i) return seg;
+  return null;
+}
+// [s, e) of the text selected by a Range, trimmed; null when it holds no text
+function spanOfRange(idx, range) {
+  let s = -1;
+  let e = -1;
+  for (const seg of idx.segs) {
+    if (!seg.node || !range.intersectsNode(seg.node)) continue;
+    const a = seg.node === range.startContainer ? keptBefore(seg, range.startOffset) : 0;
+    const b = seg.node === range.endContainer ? keptBefore(seg, range.endOffset) : seg.len;
+    if (b <= a) continue;
+    if (s < 0) s = seg.start + a;
+    e = seg.start + b;
+  }
+  if (s < 0) return null;
+  while (s < e && /\s/.test(idx.text[s])) s++;
+  while (e > s && /\s/.test(idx.text[e - 1])) e--;
+  if (e - s > 500) e = s + 500;
+  return e > s ? { s, e } : null;
+}
+// The Range over [s, e) of the index
+function rangeOfSpan(idx, s, e) {
+  const a = segAt(idx, s);
+  if (!a || a.start >= e) return null;
+  let b = null;
+  for (const seg of idx.segs) if (seg.node && seg.start < e && e <= seg.start + seg.len) { b = seg; break; }
+  if (!b) return null;
+  const r = document.createRange();
+  r.setStart(a.node, a.raw[Math.max(0, s - a.start)] ?? 0);
+  r.setEnd(b.node, b.raw[e - b.start - 1] + 1);
+  return r;
+}
+
+// ---- Section (heading path) ----
+
+const headLevel = (h) => /^H(\d)$/.exec(h.tagName)?.[1] * 1 || (h.parentElement.classList.contains("plan-sub") ? 3 : 2);
+const headText = (h) => {
+  const copy = (h.querySelector(":scope > .ps-title") ?? h).cloneNode(true);
+  for (const b of copy.querySelectorAll(".ver-badge")) b.remove(); // the New / Changed badge of a revised plan is not part of the heading
+  return clip((copy.textContent ?? "").replaceAll("⁠", "").replace(/\s+/g, " ").trim(), 120);
+};
+// The headings above `node` (outermost first, at most 6). For a plan the bold step title that starts the node's list item / paragraph comes last
+function sectionPath(heads, node, plan) {
+  const stack = [];
+  for (const h of heads) {
+    if (!(h.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+    const level = headLevel(h);
+    while (stack.length && stack.at(-1).level >= level) stack.pop();
+    stack.push({ level, text: headText(h) });
+  }
+  const path = stack.map((x) => x.text).filter(Boolean);
+  if (plan) {
+    const block = (node.nodeType === 1 ? node : node.parentElement)?.closest("li, p");
+    const first = block?.firstElementChild;
+    if (first && /^(STRONG|B)$/.test(first.tagName) && (block.textContent ?? "").trimStart().startsWith((first.textContent ?? "").trim())) {
+      const step = clip((first.textContent ?? "").replace(/\s+/g, " ").trim(), 120);
+      if (step && path.at(-1) !== step) path.push(step);
+    }
+  }
+  return path.slice(-6);
+}
+const commonTail = (a, b) => { let n = 0; while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++; return n; };
+const commonHead = (a, b) => { let n = 0; while (n < a.length && n < b.length && a[n] === b[n]) n++; return n; };
+
+// Find the span of a text comment in the current text. Candidates are scored by prefix / suffix; one inside the same section wins first
+function findQuote(idx, heads, c, plan) {
+  const q = c.quote;
+  if (!q) return null;
+  const at = [];
+  for (let i = idx.text.indexOf(q); i >= 0 && at.length < 200; i = idx.text.indexOf(q, i + 1)) at.push(i);
+  if (!at.length) return null;
+  const want = (c.section ?? []).join("\n");
+  let best = at[0];
+  let bestScore = -1;
+  for (const i of at) {
+    let score = commonTail(idx.text.slice(Math.max(0, i - 64), i), c.prefix ?? "") + commonHead(idx.text.slice(i + q.length, i + q.length + 64), c.suffix ?? "");
+    if (want && at.length > 1) {
+      const seg = segAt(idx, i);
+      if (seg && sectionPath(heads, seg.node, plan).join("\n") === want) score += 1000;
+    }
+    if (score > bestScore) { best = i; bestScore = score; }
+  }
+  return { s: best, e: best + q.length };
+}
+
+// ---- Highlights and badges ----
+
+const cmtRanges = new Map(); // comment id -> Range (text comments that were found)
+let cmtLayer = null;
+let cmtFrame = 0;
+let cmtFull = false;
+
+// Schedule a repaint (full: find every text comment again first)
+function reanchorSoon(full = true) {
+  cmtFull ||= full;
+  if (cmtFrame) return;
+  cmtFrame = requestAnimationFrame(() => {
+    cmtFrame = 0;
+    const f = cmtFull;
+    cmtFull = false;
+    if (f) reanchor(); else paintComments();
+  });
+}
+// After a left column render has fully finished (the async enhancement too)
+function settleComments(left, d) {
+  reanchorSoon();
+  const waits = [left, d?.kind === "answer_question" ? modelFor(d).enhanced : null].filter(Boolean);
+  if (waits.length) Promise.all(waits).catch(() => {}).then(() => reanchorSoon());
+  watchLeft();
+}
+const leftWatcher = typeof ResizeObserver === "function" ? new ResizeObserver(() => reanchorSoon(false)) : null;
+function watchLeft() {
+  if (!leftWatcher) return;
+  leftWatcher.disconnect();
+  for (const child of $("background").children) if (!child.classList.contains("cmt-layer")) leftWatcher.observe(child);
+}
+window.addEventListener("resize", () => reanchorSoon(false));
+document.addEventListener("toggle", () => reanchorSoon(), true); // a <details> opened or closed
+
+// Find every text comment again. A comment that cannot be found is kept and marked orphan; one found again loses the mark
+function reanchor() {
+  const tgt = commentTarget();
+  cmtRanges.clear();
+  if (!tgt) { paintComments(); return; }
+  const dr = draftOf(tgt.d);
+  const texts = dr.comments.filter((c) => c.kind === "text" && c.source.kind !== "page");
+  let flipped = false;
+  // a comment on a page or an image has no text to find: it is anchored while the frame / image of that file is still on the page
+  for (const c of dr.comments) {
+    if (c.source.kind !== "page" && c.source.kind !== "image") continue;
+    const here = !c.source.file || !!anchorOf(c);
+    if (here && c.orphan) { delete c.orphan; flipped = true; } else if (!here && !c.orphan) { c.orphan = true; flipped = true; }
+  }
+  if (texts.length) {
+    const root = $("background");
+    const idx = textIndex(root);
+    const heads = [...root.querySelectorAll(CMT_HEAD)];
+    for (const c of texts) {
+      const hit = findQuote(idx, heads, c, tgt.source === "plan");
+      const range = hit && rangeOfSpan(idx, hit.s, hit.e);
+      if (range) { cmtRanges.set(c.id, range); if (c.orphan) { delete c.orphan; flipped = true; } }
+      else if (!c.orphan) { c.orphan = true; flipped = true; }
+    }
+  }
+  if (flipped) { saveComments(tgt.d.id, dr.comments); rerenderPlanCard(tgt.d); }
+  paintComments();
+}
+
+function rectOfRange(range) {
+  const r = range.getClientRects()[0];
+  if (r && (r.width || r.height)) return { r, folded: false };
+  // inside a closed <details>: the badge sits at the outermost closed summary
+  let closed = null;
+  for (let p = range.startContainer.parentElement; p && p !== $("background"); p = p.parentElement) if (p.tagName === "DETAILS" && !p.open) closed = p;
+  const s = closed?.firstElementChild?.getBoundingClientRect();
+  return s && (s.width || s.height) ? { r: s, folded: true } : null;
+}
+
+function paintComments() {
+  paintLightbox();
+  const root = $("background");
+  const tgt = commentTarget();
+  const list = tgt ? draftOf(tgt.d).comments : [];
+  if (typeof CSS !== "undefined" && CSS.highlights && typeof Highlight === "function") {
+    const ranges = [...cmtRanges.values()].filter((r) => r.startContainer.isConnected);
+    if (ranges.length) CSS.highlights.set("ukagai-comment", new Highlight(...ranges)); else CSS.highlights.delete("ukagai-comment");
+  }
+  cmtLayer = root.querySelector(":scope > .cmt-layer");
+  if (!list.length) { cmtLayer?.remove(); syncFrameMarks(); return; }
+  if (!cmtLayer) cmtLayer = el("div", { class: "cmt-layer", "aria-hidden": "false" });
+  if (cmtLayer.parentElement !== root || root.lastElementChild !== cmtLayer) root.append(cmtLayer);
+  const box = root.getBoundingClientRect();
+  const badges = [];
+  const perFrame = new Map(); // a frame's badges sit side by side along its top edge
+  list.forEach((c, i) => {
+    if (c.source.kind === "page" || c.source.kind === "image") { paintOther(badges, box, root, c, i, perFrame); return; }
+    const range = cmtRanges.get(c.id);
+    const hit = range && rectOfRange(range);
+    if (!hit) return;
+    badges.push(el("button", {
+      class: "cmt-badge" + (hit.folded ? " folded" : ""), type: "button", tabindex: "-1", "data-id": c.id, "aria-label": `${t("cmt_aria")} ${i + 1}`, text: String(i + 1),
+      style: `left:${Math.round(hit.r.left - box.left + root.scrollLeft - 8)}px;top:${Math.round(hit.r.top - box.top + root.scrollTop - 9)}px`,
+      onclick: () => focusComment(c.id),
+    }));
+  });
+  cmtLayer.replaceChildren(...badges);
+  syncFrameMarks();
+}
+
+// The frame (page comments) or the image (region comments) of a comment's file in the left column, or null
+const fileOfUrl = (url) => {
+  try {
+    const u = new URL(url, location.href);
+    if (u.pathname !== "/api/files") return "";
+    const written = (u.searchParams.get("path") ?? "").replace(/[\u0000-\u001f\u007f]/g, "");
+    if (written.startsWith("/")) return written;
+    const decision = u.searchParams.get("decision");
+    const d = decision ? decisions.get(decision) : null;
+    const doc = (d?.explanation?.path ?? d?.request?.planFilePath ?? "").replace(/#ukagai-explain$/, "");
+    if (!doc.startsWith("/")) return written; // a plan file card: the plans folder is not known here, the written path stays relative
+    const parts = doc.split("/").slice(0, -1);
+    for (const seg of written.split("/")) { if (seg === "..") parts.pop(); else if (seg && seg !== ".") parts.push(seg); }
+    return (parts.join("/") || "/").replace(/[\u0000-\u001f\u007f]/g, "");
+  } catch { return ""; }
+};
+const frameFile = (frame) => fileOfUrl(frame.getAttribute("src") ?? "");
+function anchorOf(c) {
+  const root = $("background");
+  const sel = c.source.kind === "image" ? "figure.doc-img img" : "iframe.doc-frame-view";
+  return [...root.querySelectorAll(sel)].find((x) => (c.source.kind === "image" ? fileOfUrl(x.getAttribute("src") ?? "") : frameFile(x)) === (c.source.file ?? "")) ?? null;
+}
+// Badges (and, for a region, its outline) of a comment on a page or an image, drawn in the same layer
+function paintOther(badges, box, root, c, i, perFrame) {
+  const x = anchorOf(c);
+  if (!x) return;
+  const r = x.getBoundingClientRect();
+  if (!r.width && !r.height) return;
+  const at = (left, top, cls) => el("button", {
+    class: `cmt-badge${cls}`, type: "button", tabindex: "-1", "data-id": c.id, "aria-label": `${t("cmt_aria")} ${i + 1}`, text: String(i + 1),
+    style: `left:${Math.round(left - box.left + root.scrollLeft)}px;top:${Math.round(top - box.top + root.scrollTop)}px`,
+    onclick: () => focusComment(c.id),
+  });
+  if (c.kind === "region" && c.rect && x.naturalWidth) {
+    const k = r.width / x.naturalWidth;
+    const rl = r.left + c.rect.x * k;
+    const rt = r.top + c.rect.y * k;
+    badges.push(el("div", { class: "rg-box", style: `left:${Math.round(rl - box.left + root.scrollLeft)}px;top:${Math.round(rt - box.top + root.scrollTop)}px;width:${Math.max(2, Math.round(c.rect.w * k))}px;height:${Math.max(2, Math.round(c.rect.h * k))}px` }));
+    badges.push(at(rl - 8, rt - 9, ""));
+    return;
+  }
+  const n = perFrame.get(x) ?? 0;
+  perFrame.set(x, n + 1);
+  badges.push(at(r.left + 6 + n * 21, r.top - 9, ""));
+}
+
+// A frame's document (re)loaded: its helper starts with nothing, so the marks and a pick still on (the button shows it) are sent again
+function frameLoaded(frame) {
+  syncFrameMarks(frame, true);
+  if (picking() === frame) frame.contentWindow?.postMessage({ ukagai: "pick", on: true }, "*");
+}
+
+// Tell a frame which elements carry comments (it outlines them). Only a changed list is sent; `force` after the frame (re)loaded
+function syncFrameMarks(only, force = false) {
+  const tgt = commentTarget(true);
+  const list = tgt ? draftOf(tgt.d).comments : [];
+  const frames = only ? [only] : [...document.querySelectorAll("iframe.doc-frame-view, iframe.frame-full")];
+  for (const f of frames) {
+    if (!f.isConnected || !f.contentWindow) continue;
+    const file = frameFile(f);
+    const items = [];
+    list.forEach((c, i) => { if (c.source.kind === "page" && c.selector && (c.source.file ?? "") === file) items.push({ n: i + 1, sel: c.selector }); });
+    const key = JSON.stringify(items);
+    if (!force && f._marks === key) continue;
+    f._marks = key;
+    f.contentWindow.postMessage({ ukagai: "marks", items }, "*");
+  }
+}
+
+// ---- Making a comment from the selection ----
+
+// Build a text comment from the selection in the left column and open the popover for it. true when it did
+function commentFromSelection() {
+  const tgt = commentTarget();
+  if (!tgt) return false;
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+  const range = sel.getRangeAt(0);
+  const root = $("background");
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return false;
+  for (const x of root.querySelectorAll("svg, button, input, textarea, select")) if (!x.closest(".cmt-layer") && range.intersectsNode(x)) return false;
+  const idx = textIndex(root);
+  const span = spanOfRange(idx, range);
+  if (!span) return false;
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) { toast(t("cmt_max", { max: COMMENTS_MAX }), { kind: "lost" }); return true; }
+  const seg = segAt(idx, span.s);
+  const draft = {
+    id: cmtId(), kind: "text", source: { kind: tgt.source },
+    quote: idx.text.slice(span.s, span.e),
+    prefix: idx.text.slice(Math.max(0, span.s - 64), span.s),
+    suffix: idx.text.slice(span.e, span.e + 64),
+    note: "",
+  };
+  const section = seg ? sectionPath([...root.querySelectorAll(CMT_HEAD)], seg.node, tgt.source === "plan") : [];
+  if (section.length) draft.section = section;
+  const rect = range.getBoundingClientRect();
+  sel.removeAllRanges();
+  openCommentPopover(rect, draft, { n: dr.comments.length + 1, onSave: (note) => addComment(tgt, { ...draft, note }) });
+  return true;
+}
+
+// Add a finished comment of any kind (the later pickers call this with their own comment)
+function addComment(tgt, comment) {
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) return;
+  dr.comments.push(comment);
+  if (dr.comments.length === 1 && tgt.d.kind === "approve_plan" && !tgt.d.readonly) dr.cursor = 1; // the instruction card
+  commentsChanged(tgt.d);
+}
+function commentsChanged(d) {
+  saveComments(d.id, draftOf(d).comments);
+  reanchor();
+  rerenderPlanCard(d);
+}
+function removeComment(id) {
+  const tgt = commentTarget();
+  if (!tgt) return;
+  const dr = draftOf(tgt.d);
+  dr.comments = dr.comments.filter((c) => c.id !== id);
+  commentsChanged(tgt.d);
+}
+function editComment(tgt, c, rect) {
+  const dr = draftOf(tgt.d);
+  openCommentPopover(rect, { ...c }, {
+    n: dr.comments.indexOf(c) + 1,
+    onSave: (note) => { c.note = note; commentsChanged(tgt.d); },
+    onDelete: () => removeComment(c.id),
+  });
+}
+
+// Scroll the left column to the comment (unfolding its plan section) and reopen its popover
+function focusComment(id) {
+  const tgt = commentTarget();
+  const c = tgt && draftOf(tgt.d).comments.find((x) => x.id === id);
+  if (!c) return;
+  const range = cmtRanges.get(id);
+  let rect = document.querySelector(`#decision .cmt-row[data-id="${id}"]`)?.getBoundingClientRect() ?? new DOMRect(innerWidth / 2, 80, 1, 1);
+  if (range) {
+    for (let p = range.startContainer.parentElement; p && p !== $("background"); p = p.parentElement) {
+      if (p.tagName !== "DETAILS") continue;
+      if (p.dataset.i != null) planSetOpen(tgt.d, Number(p.dataset.i), true); else p.open = true;
+    }
+    range.startContainer.parentElement.scrollIntoView({ block: "center" });
+    const r = range.getBoundingClientRect();
+    if (r.width || r.height) rect = r;
+    reanchorSoon(false);
+  }
+  editComment(tgt, c, rect);
+}
+
+// `m`: comment on the selection, else move to the comment list
+function commentKey() {
+  if (commentFromSelection()) return;
+  const row = document.querySelector("#decision .cmt-row");
+  if (row) row.focus();
+  else toast(t("cmt_none_hint"));
+}
+
+$("background").addEventListener("mouseup", (ev) => {
+  if (ev.target instanceof Element && ev.target.closest(".cmt-badge")) return;
+  if (pop && pop.ta.value.trim()) return; // a note is half written: keep that popover
+  setTimeout(commentFromSelection, 0);
+});
+
+// ---- Comments on a page in a frame and on a region of an image ----
+
+// A frame element is picked with the frame helper (src/serve/frame-helper.ts): the parent turns picking on, the helper outlines what the pointer is over and reports the click.
+// Text selected inside the page is reported by the helper on mouseup. Without the helper (FRAME_SCRIPTS false) the button comments on the whole page.
+let pickFrame = null; // the iframe that is picking now
+const picking = () => (pickFrame?.isConnected ? pickFrame : null);
+const frameOfButton = (b) => b.closest(".doc-frame")?.querySelector("iframe.doc-frame-view") ?? (overlay?.kind === "frame" ? overlay.frame : null);
+
+function framePickButton(cls) {
+  const label = t(FRAME_SCRIPTS ? "cmt_pick" : "cmt_page");
+  return el("button", { class: cls, type: "button", "aria-pressed": "false", title: label, "aria-label": label }, icon("message-square"), el("span", { class: "btn-text", text: label }));
+}
+function setPick(frame, on, notify = true) {
+  const prev = picking();
+  if (notify && prev && (prev !== frame || !on)) prev.contentWindow?.postMessage({ ukagai: "pick", on: false }, "*");
+  pickFrame = on ? frame : null;
+  if (notify && on) { frame.contentWindow?.postMessage({ ukagai: "pick", on: true }, "*"); toast(t("cmt_pick_on")); }
+  for (const b of document.querySelectorAll("button.doc-frame-pick, button.frame-pick")) {
+    const hot = !!pickFrame && frameOfButton(b) === pickFrame;
+    b.setAttribute("aria-pressed", String(hot));
+    b.classList.toggle("on", hot);
+  }
+}
+function framePick(btn) {
+  const frame = frameOfButton(btn);
+  const tgt = commentTarget(true);
+  if (!frame || !tgt) return;
+  if (!FRAME_SCRIPTS) { pageComment(tgt, frame); return; }
+  setPick(frame, picking() !== frame);
+}
+// Esc ends picking before anything else sees it (the helper does the same when the focus is inside the frame)
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Escape" || !picking() || pop) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  setPick(picking(), false);
+}, true);
+
+const draftFile = (file) => (file && file.length <= 300 ? { file } : {});
+// A comment on the whole page (no frame helper to pick an element with)
+function pageComment(tgt, frame) {
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) { toast(t("cmt_max", { max: COMMENTS_MAX }), { kind: "lost" }); return; }
+  const title = clip(frame.getAttribute("title") ?? "", 120);
+  const draft = { id: cmtId(), kind: "element", source: { kind: "page", ...draftFile(frameFile(frame)) }, ...(title ? { text: title } : {}), note: "" };
+  openCommentPopover(frame.getBoundingClientRect(), draft, { n: dr.comments.length + 1, onSave: (note) => addComment(tgt, { ...draft, note }) });
+}
+
+// A report from the helper of `frame` (`d` is untrusted: every field is checked and clipped here). true when it was one of the comment messages
+function frameComment(frame, d) {
+  if (d.ukagai === "pick-cancel") { if (picking() === frame) setPick(frame, false, false); return true; }
+  const picked = d.ukagai === "picked";
+  if (!picked && d.ukagai !== "selected") return false;
+  if (picked) { if (picking() !== frame) return true; setPick(frame, false, false); } // the helper turns picking off after one pick
+  const cap = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
+  const r = d.rect;
+  if (!r || typeof r !== "object" || !["x", "y", "w", "h"].every((k) => typeof r[k] === "number" && Number.isFinite(r[k]) && Math.abs(r[k]) <= 1e6)) return true;
+  const tgt = commentTarget(true);
+  if (!tgt || (pop && pop.ta.value.trim())) return true;
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) { toast(t("cmt_max", { max: COMMENTS_MAX }), { kind: "lost" }); return true; }
+  const draft = { id: cmtId(), kind: picked ? "element" : "text", source: { kind: "page", ...draftFile(frameFile(frame)) }, note: "" };
+  const sel = cap(d.sel, 200);
+  if (sel && !/[\u0000-\u001f]/.test(sel)) draft.selector = sel;
+  if (picked) {
+    const tag = cap(d.tag, 40);
+    const text = cap(d.text, 120).trim();
+    if (/^[a-z][a-z0-9-]*$/.test(tag)) draft.tag = tag;
+    if (text) draft.text = text;
+  } else {
+    const quote = cap(d.quote, 500).trim();
+    if (!quote) return true;
+    draft.quote = quote;
+    const prefix = cap(d.prefix, 64);
+    const suffix = cap(d.suffix, 64);
+    if (prefix) draft.prefix = prefix;
+    if (suffix) draft.suffix = suffix;
+  }
+  // the helper's rect is in the frame's viewport pixels (getBoundingClientRect already includes the helper's zoom), so the frame's own position is all that is added
+  const fr = frame.getBoundingClientRect();
+  const within = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  const left = within(fr.left + r.x, fr.left, fr.right);
+  const top = within(fr.top + r.y, fr.top, fr.bottom);
+  const anchor = { left, top, right: within(fr.left + r.x + r.w, left, fr.right), bottom: within(fr.top + r.y + r.h, top, fr.bottom) };
+  openCommentPopover(anchor, draft, { n: dr.comments.length + 1, onSave: (note) => addComment(tgt, { ...draft, note }) });
+  return true;
+}
+
+// Regions: a pointer drag of more than 4 px on a document image (inline or in the lightbox) draws a dashed rectangle; a plain click still opens the lightbox
+const DRAG_MIN = 4;
+let drag = null; // { img, x, y, on, box }
+const dragRect = (g, x, y) => {
+  const ir = g.img.getBoundingClientRect();
+  const within = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  const x0 = within(Math.min(g.x, x), ir.left, ir.right);
+  const x1 = within(Math.max(g.x, x), ir.left, ir.right);
+  const y0 = within(Math.min(g.y, y), ir.top, ir.bottom);
+  const y1 = within(Math.max(g.y, y), ir.top, ir.bottom);
+  return { left: x0, top: y0, right: x1, bottom: y1, ir };
+};
+document.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0 || !ev.isPrimary || !(ev.target instanceof Element)) return;
+  const img = ev.target.closest(".doc-img-open img, img.lightbox-img");
+  if (!img || !commentTarget(true)) return;
+  drag = { img, x: ev.clientX, y: ev.clientY, on: false, box: null };
+});
+document.addEventListener("pointermove", (ev) => {
+  if (!drag) return;
+  if (!drag.on && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) <= DRAG_MIN) return;
+  drag.on = true;
+  drag.box ??= document.body.appendChild(el("div", { class: "rg-draw" }));
+  const r = dragRect(drag, ev.clientX, ev.clientY);
+  drag.box.style.cssText = `left:${r.left}px;top:${r.top}px;width:${r.right - r.left}px;height:${r.bottom - r.top}px`;
+});
+document.addEventListener("pointerup", (ev) => {
+  const g = drag;
+  drag = null;
+  g?.box?.remove();
+  if (!g?.on) return;
+  // the click that follows a drag must not open (or close) the lightbox
+  const swallow = (e) => { e.preventDefault(); e.stopPropagation(); };
+  document.addEventListener("click", swallow, { capture: true, once: true });
+  setTimeout(() => document.removeEventListener("click", swallow, true), 0);
+  regionComment(g.img, dragRect(g, ev.clientX, ev.clientY));
+});
+document.addEventListener("pointercancel", () => { drag?.box?.remove(); drag = null; });
+
+// `r`: the dragged rectangle in viewport pixels (+ the image's rect); the comment's rect is in the image's natural pixels
+function regionComment(img, r) {
+  const tgt = commentTarget(true);
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!tgt || !nw || !nh || !r.ir.width || !r.ir.height) return;
+  const dr = draftOf(tgt.d);
+  if (dr.comments.length >= COMMENTS_MAX) { toast(t("cmt_max", { max: COMMENTS_MAX }), { kind: "lost" }); return; }
+  const kx = nw / r.ir.width;
+  const ky = nh / r.ir.height;
+  const x = Math.min(nw - 1, Math.max(0, Math.round((r.left - r.ir.left) * kx)));
+  const y = Math.min(nh - 1, Math.max(0, Math.round((r.top - r.ir.top) * ky)));
+  const rect = { x, y, w: Math.max(1, Math.min(nw - x, Math.round((r.right - r.left) * kx))), h: Math.max(1, Math.min(nh - y, Math.round((r.bottom - r.top) * ky))) };
+  const draft = { id: cmtId(), kind: "region", source: { kind: "image", ...draftFile(fileOfUrl(img.getAttribute("src") ?? "")) }, rect, note: "" };
+  openCommentPopover(r, draft, {
+    n: dr.comments.length + 1, async: true,
+    onSave: async (note) => addComment(tgt, { ...draft, mark: await uploadMark(tgt.d, img, rect), note }),
+  });
+}
+
+// The region plus padding (max(64 px, half the region) per axis, kept inside the image), the region outlined in red, long edge at most 2048: saved by the server, which returns its id
+async function uploadMark(d, img, rect) {
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  const padX = Math.max(64, Math.round(rect.w / 2));
+  const padY = Math.max(64, Math.round(rect.h / 2));
+  const cx = Math.max(0, rect.x - padX);
+  const cy = Math.max(0, rect.y - padY);
+  const cw = Math.min(nw, rect.x + rect.w + padX) - cx;
+  const ch = Math.min(nh, rect.y + rect.h + padY) - cy;
+  const scale = Math.min(1, 2048 / Math.max(cw, ch));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(cw * scale));
+  canvas.height = Math.max(1, Math.round(ch * scale));
+  const g = canvas.getContext("2d");
+  g.drawImage(img, cx, cy, cw, ch, 0, 0, canvas.width, canvas.height);
+  g.strokeStyle = "#dc2626";
+  g.lineWidth = 3;
+  g.strokeRect((rect.x - cx) * scale, (rect.y - cy) * scale, rect.w * scale, rect.h * scale);
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  if (!blob) throw new Error("no image");
+  const url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); });
+  const png = url.slice(url.indexOf(",") + 1);
+  const { id } = await post("/api/marks", isPlanId(d.id) ? { plan: planNameOf(d.id), png } : { decision: d.id, png });
+  return id;
+}
+
+// The regions of the comments on the lightbox's image (outlined with their numbers; percentages, so a resize needs no repaint)
+function paintLightbox() {
+  if (overlay?.kind !== "lightbox") return;
+  const { img, layer } = overlay;
+  const tgt = commentTarget(true);
+  const file = fileOfUrl(img.getAttribute("src") ?? "");
+  const boxes = [];
+  (tgt ? draftOf(tgt.d).comments : []).forEach((c, i) => {
+    if (c.kind !== "region" || !c.rect || c.source.kind !== "image" || (c.source.file ?? "") !== file || !img.naturalWidth) return;
+    const pc = (v, of) => `${(v / of) * 100}%`;
+    boxes.push(el("div", { class: "rg-box", style: `left:${pc(c.rect.x, img.naturalWidth)};top:${pc(c.rect.y, img.naturalHeight)};width:${pc(c.rect.w, img.naturalWidth)};height:${pc(c.rect.h, img.naturalHeight)}` },
+      el("span", { class: "cmt-n", text: String(i + 1) })));
+  });
+  layer.replaceChildren(...boxes);
+}
+
+// ---- The popover ----
+
+let pop = null; // { el, ta, close }
+function closeCommentPopover() {
+  pop?.close();
+}
+
+// Open the comment popover just below `anchorRect` (above when there is no room): a header (number + quote / element / region), a textarea, and Cancel / Add
+// (Save + Delete when editing). `draft` is a Comment (its note may be empty); `n` is its number in the list.
+// Esc and ⌘/Ctrl+Enter never reach the global key handler. Clicking outside closes it when the note is empty and leaves it open otherwise.
+// onSave(note) gets the trimmed note; onDelete (editing only) shows a Delete button
+// `async: true`: onSave returns a promise; the popover waits (buttons and Esc are off), closes when it resolves and shows the error and stays open when it rejects
+function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1, async = false } = {}) {
+  closeCommentPopover();
+  const label = draft.kind === "text" ? `“${clip(draft.quote ?? "", 80)}”`
+    : draft.kind === "element" ? `${draft.selector ? (draft.tag ?? t("cmt_element")) : t("cmt_page_whole")}${draft.text ? ` “${clip(draft.text, 60)}”` : draft.selector ? ` ${clip(draft.selector, 60)}` : ""}`
+    : t("cmt_region", { w: draft.rect?.w ?? 0, h: draft.rect?.h ?? 0, x: draft.rect?.x ?? 0, y: draft.rect?.y ?? 0 });
+  const editing = !!draft.note || !!onDelete;
+  draft = { ...draft, note: draft.note ?? "" };
+  const add = el("button", { class: "btn primary", type: "button", disabled: !draft.note.trim(), onclick: () => save() }, el("span", { text: t(editing ? "cmt_save" : "cmt_add") }), el("kbd", { text: "⌘↵" }));
+  const ta = el("textarea", {
+    class: "cmt-pop-ta", rows: "3", maxlength: "1000", "aria-label": t("cmt_aria"), placeholder: t("cmt_placeholder"),
+    oninput: () => { add.disabled = !ta.value.trim(); },
+  });
+  ta.value = draft.note ?? "";
+  let busy = false;
+  const err = el("div", { class: "cmt-pop-err", role: "alert", hidden: true });
+  const root = el("div", { class: "cmt-pop", role: "dialog", "aria-label": t("cmt_aria") },
+    el("div", { class: "cmt-pop-head" }, el("span", { class: "cmt-n", text: String(n) }), el("span", { class: "cmt-pop-q", title: label, text: label })),
+    ta, err,
+    el("div", { class: "cmt-pop-actions" },
+      onDelete ? el("button", { class: "btn danger", type: "button", onclick: () => { if (busy) return; close(); onDelete(); } }, t("cmt_delete")) : null,
+      el("span", { class: "grow" }),
+      el("button", { class: "btn", type: "button", onclick: () => { if (!busy) close(); } }, el("span", { text: t("cmt_cancel") }), el("kbd", { text: "Esc" })),
+      add));
+  const save = async () => {
+    const note = ta.value.trim().slice(0, 1000);
+    if (!note || busy) return;
+    if (!async) { close(); onSave?.(note); return; }
+    busy = true;
+    err.hidden = true;
+    add.disabled = true;
+    ta.disabled = true;
+    try {
+      await onSave(note);
+      busy = false;
+      close();
+    } catch (e) {
+      busy = false;
+      ta.disabled = false;
+      add.disabled = false;
+      err.textContent = t("cmt_upload_failed", { error: e?.message ?? String(e) });
+      err.hidden = false;
+      ta.focus();
+    }
+  };
+  // In the capture phase on the document: nothing typed while the popover is open reaches the global key handler (Esc on a plan card would move on)
+  const onKey = (ev) => {
+    ev.stopPropagation();
+    if (ev.key === "Escape") { ev.preventDefault(); if (!busy) close(); }
+    else if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && !ev.isComposing) { ev.preventDefault(); save(); }
+    else if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "c" && ev.target === ta && !ta.value && draft.quote) {
+      ev.preventDefault();
+      navigator.clipboard?.writeText(draft.quote).then(() => toast(t("copied")), () => toast(t("copy_failed")));
+    }
+  };
+  const onDown = (ev) => {
+    if (busy || root.contains(ev.target) || ta.value.trim()) return;
+    if (ev.target instanceof Element && ev.target.closest(".cmt-badge")) return; // the badge reopens its own popover after this one closes
+    close();
+  };
+  const close = () => {
+    if (pop?.el !== root) return;
+    document.removeEventListener("keydown", onKey, true);
+    document.removeEventListener("mousedown", onDown, true);
+    window.removeEventListener("resize", place);
+    root.remove();
+    pop = null;
+  };
+  const place = () => {
+    const w = Math.min(340, innerWidth - 16);
+    root.style.width = `${w}px`;
+    const h = root.offsetHeight;
+    const left = Math.max(8, Math.min(innerWidth - w - 8, anchorRect.left));
+    let top = anchorRect.bottom + 8;
+    if (top + h > innerHeight - 8 && anchorRect.top - h - 8 >= 8) top = anchorRect.top - h - 8;
+    root.style.left = `${left}px`;
+    root.style.top = `${Math.max(8, Math.min(innerHeight - h - 8, top))}px`;
+  };
+  (document.fullscreenElement ?? document.body).append(root); // in the browser's full screen only that element and its children are shown
+  pop = { el: root, ta, close };
+  place();
+  document.addEventListener("keydown", onKey, true);
+  document.addEventListener("mousedown", onDown, true);
+  window.addEventListener("resize", place);
+  ta.focus();
+  return pop;
+}
+
+// ---- The right column ----
+
+// "where" of a comment in the list: section › "quote" / the element / the region
+function commentWhere(c) {
+  if (c.kind === "text") return [...(c.section ?? []), `“${clip(c.quote ?? "", 60)}”`].join(" › ");
+  if (c.kind === "element") return `${c.selector ? (c.tag ?? t("cmt_element")) : t("cmt_page_whole")}${c.text ? ` “${clip(c.text, 40)}”` : c.selector ? ` ${clip(c.selector, 40)}` : ""}`;
+  return t("cmt_region", { w: c.rect?.w ?? 0, h: c.rect?.h ?? 0, x: c.rect?.x ?? 0, y: c.rect?.y ?? 0 });
+}
+
+// The comments of a card: number, where, the note; a click goes to the comment (and reopens its popover), ✕ removes it
+function commentList(d, dr) {
+  const list = el("ul", { class: "cmt-list", "aria-label": t("cmt_list_aria") });
+  dr.comments.forEach((c, i) => {
+    const row = el("li", {
+      class: "cmt-row" + (c.orphan ? " orphan" : ""), tabindex: "0", "data-id": c.id,
+      onclick: (ev) => { if (!ev.target.closest(".cmt-del")) focusComment(c.id); },
+      onkeydown: (ev) => {
+        if (ev.target !== row) return;
+        if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); focusComment(c.id); }
+        else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); ev.stopPropagation(); (ev.key === "ArrowDown" ? row.nextElementSibling : row.previousElementSibling)?.focus(); }
+        else if (ev.key === "Delete" || ev.key === "Backspace") { ev.preventDefault(); ev.stopPropagation(); removeComment(c.id); }
+        else if (ev.key === "Escape") { ev.stopPropagation(); row.blur(); }
+      },
+    },
+      el("span", { class: "cmt-n", text: String(i + 1) }),
+      el("div", { class: "cmt-body" },
+        el("div", { class: "cmt-where", title: commentWhere(c), text: commentWhere(c) }),
+        c.orphan ? el("div", { class: "cmt-orphan", text: t(c.kind === "text" && (c.source.kind === "plan" || c.source.kind === "explanation") ? "cmt_orphan" : "cmt_orphan_shown") }) : null,
+        el("div", { class: "cmt-note", text: c.note })),
+      el("button", { class: "cmt-del", type: "button", tabindex: "-1", "aria-label": t("cmt_remove"), title: t("cmt_remove"), text: "✕", onclick: () => removeComment(c.id) }));
+    list.append(row);
+  });
+  return list;
+}
+
+// A question: a strip above the option cards, the list folded inside it
+function commentStrip(d, dr) {
+  return el("details", { class: "cmt-strip" }, el("summary", { text: count("cmt_go_with", dr.comments.length) }), commentList(d, dr));
+}
+
+// Plan Approve: with comments waiting, a second press within the confirm window discards them
+function approvePlan(d, dr) {
+  if (dr.comments.length && dr.confirmKey !== "approve") { armConfirm(d, dr, "approve"); return; }
+  clearConfirm(dr);
+  send(d, { approve: true, set_mode_auto: true });
+}
+
+// A rough count of the characters the server will add (it is authoritative: a 400 too_long says the real numbers)
+function commentsTextLength(list) {
+  let n = `The human left ${list.length} comments:`.length;
+  list.forEach((c, i) => {
+    const what = c.quote ?? c.text ?? c.selector ?? "";
+    const inText = c.kind === "text" && (c.source.kind === "plan" || c.source.kind === "explanation");
+    const orphanNote = inText ? " (no longer in the current text)" : " (no longer shown)";
+    const where = `${i + 1}. ${c.source.kind} ${c.source.file ?? ""}, "${(c.section ?? []).join(" > ")}": ${JSON.stringify(what.length > 160 ? what.slice(0, 160) + "…" : what)}${c.orphan ? orphanNote : ""}`;
+    n += 1 + where.length + 6 + c.note.length + 5 * (c.note.split("\n").length - 1);
+  });
+  return n;
+}
+
 // ---- Instruct: tell the agent to do something before the plan is approved (approval card) or while it is still writing it (plan file card) ----
 
 // The presets as chips (also rebuilt when the settings change). A chip puts its text in the box; the same chip again sends it
@@ -2364,34 +3228,44 @@ function fillChips() {
 // The card: chips above a textarea (Enter sends, Shift+Enter a new line), and a Send button; always shown, like the free-text card of a question.
 // `dr.instruct` keeps the text across a re-render. `onSend(text)` returns a promise; until it settles the box is busy (textarea, Send and chips disabled, a second Enter or click does nothing)
 // A click anywhere on the card (not on a chip / Send) focuses the box. Returns { card, ta }
-function instructCard(dr, onSend) {
+function instructCard(dr, onSend, d) {
+  const n = dr.comments.length;
   const sendText = async (text) => {
-    if (dr.sending || !text) return;
+    if (dr.sending || (!text && !dr.comments.length)) return;
     dr.sending = true;
     setBusy(true);
-    try { await onSend(text); } finally { dr.sending = false; setBusy(false); }
+    try { await onSend(text, dr.comments.length ? dr.comments : undefined); } finally { dr.sending = false; setBusy(false); }
   };
+  const canSend = () => !!ta.value.trim() || !!dr.comments.length;
   const setBusy = (on) => {
     ta.disabled = on;
-    go.disabled = on || !ta.value.trim();
+    go.disabled = on || !canSend();
     for (const c of box.querySelectorAll(".chip")) c.disabled = on;
   };
   const send = () => sendText(ta.value.trim());
-  const go = el("button", { class: "btn primary", type: "button", id: "instruct-send", disabled: !dr.instruct.trim(), text: t("send_instruction"), onclick: send });
+  const go = el("button", { class: "btn primary", type: "button", id: "instruct-send", disabled: !dr.instruct.trim() && !n, text: t("send_instruction"), onclick: send });
+  const budget = n ? el("div", { class: "cmt-budget" }) : null;
+  const showBudget = () => {
+    if (!budget) return;
+    const left = INSTRUCTION_BUDGET - commentsTextLength(dr.comments) - (ta.value.trim() ? ta.value.trim().length + 2 : 0);
+    budget.textContent = left >= 0 ? t("cmt_budget", { n: left }) : t("cmt_over", { n: -left });
+    budget.classList.toggle("over", left < 0);
+  };
   const ta = el("textarea", {
-    id: "instruct", rows: "3", "aria-label": t("instruct_aria"), placeholder: t("instruct_placeholder"),
-    oninput: () => { dr.instruct = ta.value; go.disabled = !ta.value.trim(); },
+    id: "instruct", rows: n ? "2" : "3", "aria-label": t("instruct_aria"), placeholder: t(n ? "cmt_overall_placeholder" : "instruct_placeholder"),
+    oninput: () => { dr.instruct = ta.value; go.disabled = !canSend(); showBudget(); },
     // a focus by hand (a click in the box, a chip) moves the cursor onto the card
     onfocus: () => { if (!autoFocusing) ui?.onInstructFocus?.(); },
     onkeydown: (ev) => {
-      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); if (ta.value.trim()) send(); }
+      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); if (canSend()) send(); }
     },
   });
   ta.value = dr.instruct;
+  showBudget();
   const chips = el("div", { class: "instruct-chips" });
   chips._ctx = { ta, send: sendText };
-  const box = el("div", { class: "instruct-box" }, chips, ta, go);
-  const card = el("div", { class: "opt instruct-card", "data-card": "instruct" }, el("div", { class: "grow" }, el("div", { class: "lab", text: t("instruct") }), box));
+  const box = el("div", { class: "instruct-box" }, n ? commentList(d, dr) : null, chips, ta, budget, go);
+  const card = el("div", { class: "opt instruct-card" + (n ? " has-comments" : ""), "data-card": "instruct" }, el("div", { class: "grow" }, el("div", { class: "lab", text: n ? count("cmt_send", n) : t("instruct") }), box));
   card.addEventListener("click", (ev) => {
     if (ev.target === ta || ev.target.closest("button")) return;
     ui?.openInstruct?.();
@@ -2404,13 +3278,17 @@ function rerenderPlanCard(d) {
   if (isPlanId(d.id)) { const pd = shownPlanPd(); if (pd) renderPlanRight(pd); } else renderRight(d);
 }
 // A plan file card: no decision waits, so the text goes to the session that writes the plan
-async function sendPlanInstruct(pd, dr, text) {
+async function sendPlanInstruct(pd, dr, text, comments) {
   try {
-    const { delivered_via } = await post(`/api/plans/${encodeURIComponent(planNameOf(pd.id))}/instruct`, { text });
+    const { delivered_via } = await post(`/api/plans/${encodeURIComponent(planNameOf(pd.id))}/instruct`, { ...(text ? { text } : {}), ...(comments ? { comments } : {}) });
     dr.instruct = "";
+    dr.comments = [];
+    dropComments(pd.id);
+    reanchor();
     toast(t(delivered_via === "terminal" ? "plan_instruct_typed" : delivered_via === "message" ? "plan_instruct_message" : "plan_instruct_sent"), { kind: "ok" });
   } catch (e) {
     if (e.status === 409) toast(t("plan_instruct_stop_queued"), { kind: "lost", ms: 4000 }); // a stop is queued for the session
+    else if (e.message === "too_long" && e.body) showBanner(t("cmt_too_long", { length: e.body.length, max: e.body.max }));
     else if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
   }
   if (shownId === pd.id) rerenderPlanCard(pd);
@@ -3066,6 +3944,7 @@ function syncPlan(d) {
   }
   $("background").classList.toggle("zone-on", st.zone === "plan");
   $("decision").classList.toggle("zone-on", st.zone === "opts");
+  reanchorSoon(); // folding moves the text
   if (!d.readonly) {
     syncConfirm(draftOf(d));
     const line = document.querySelector("#decision .plan-unread");
@@ -3210,8 +4089,9 @@ const modelFor = (d) => {
 };
 
 function buildModel(d) {
-  const m = { left: null, v2: null };
+  const m = { left: null, v2: null, enhanced: Promise.resolve() }; // enhanced: settles when the async enhancement of every part of the left column is done
   if (d.kind !== "answer_question" || !hasExplanation(d)) return m;
+  const pend = [];
   const { fm, body } = parseFrontMatter(d.explanation.markdown);
   const left = el("div", { class: "md" });
   const fn = extractFootnotes(body);
@@ -3277,7 +4157,7 @@ function buildModel(d) {
           pre.replaceWith(wrap);
           wrap.append(pre, el("button", { class: "copy-btn", type: "button", tabindex: "-1", text: t("copy"), onclick: () => copyCode(pre) }));
         }
-        if (todoBox.children.length) { v2.todoBox = todoBox; enhance(todoBox).catch(() => {}); }
+        if (todoBox.children.length) { v2.todoBox = todoBox; pend.push(enhance(todoBox).catch(() => {})); }
       }
       if (recSec) {
         const recBox = el("div", { class: "md" });
@@ -3286,7 +4166,7 @@ function buildModel(d) {
         recSec.head.remove();
         v2.cond = condSentence(recBox);
         v2.headline = splitHeadline(recBox);
-        if (recBox.children.length) { v2.recBox = recBox; enhance(recBox, v2.ctx.opts).catch(() => {}); }
+        if (recBox.children.length) { v2.recBox = recBox; pend.push(enhance(recBox, v2.ctx.opts).catch(() => {})); }
       }
       // "Why this decision is needed now" (or "Why I stopped") leads the left column
       const whySec = findSection(secs, [...SECTION.why, ...SECTION.blockerWhy], true);
@@ -3294,7 +4174,7 @@ function buildModel(d) {
         const whyBox = el("div", { class: "why md" });
         whySec.head.textContent = t(findSection([whySec], SECTION.blockerWhy, true) ? "sec_blocker_why" : "sec_why");
         for (const n of whySec.nodes) if (n.parentElement === left) whyBox.append(n);
-        if (whyBox.children.length) { v2.whyBox = whyBox; enhance(whyBox, v2.ctx.opts).catch(() => {}); }
+        if (whyBox.children.length) { v2.whyBox = whyBox; pend.push(enhance(whyBox, v2.ctx.opts).catch(() => {})); }
       }
       // Footnote definitions go under What I checked (or at the end); path:line and `cmd` there become copyable badges
       const checkedSec = findSection(secs, SECTION.checked);
@@ -3318,7 +4198,8 @@ function buildModel(d) {
   }
   if (m.v2) keepUnknownSections(left);
   localizeHeads(left, fm.type === "quiz" || d.explanation.type === "quiz");
-  enhance(left, m.v2?.ctx.opts ?? []).catch(() => {});
+  pend.push(enhance(left, m.v2?.ctx.opts ?? []).catch(() => {}));
+  m.enhanced = Promise.all(pend);
   return m;
 }
 
@@ -3413,6 +4294,7 @@ function refreshLeft(keepScroll) {
   syncPlan(d);
   for (const h of document.querySelectorAll("#foot .vh")) h.hidden = !verOf(d);
   p?.then?.(refreshWide);
+  settleComments(p, d);
 }
 // `<` / `>`: the previous / next version. true when the plan has versions (the key is consumed)
 function verStep(d, step) {
@@ -3575,6 +4457,7 @@ function renderLeft(d) {
 function renderAll() {
   document.body.classList.remove("fullwide");
   closeOverlay();
+  closeCommentPopover();
   const pd = shownPlanPd();
   const d = pd ?? decisions.get(shownId);
   $("main").hidden = !d;
@@ -3587,6 +4470,7 @@ function renderAll() {
     renderPlanRight(pd);
     refreshWide();
     left?.then?.(refreshWide);
+    settleComments(left, pd);
     return;
   }
   const left = renderLeft(d);
@@ -3594,6 +4478,7 @@ function renderAll() {
   renderRight(d);
   refreshWide();
   left?.then?.(refreshWide);
+  settleComments(left, d);
 }
 
 // Show an item. A plan whose body is not loaded yet is fetched first (the screen stays as it is meanwhile)
@@ -3672,6 +4557,7 @@ function upsert(d) {
 }
 function upsertDecision(d, prev) {
   decisions.set(d.id, d);
+  if (d.status !== "pending") dropComments(d.id);
   if (d.kind === "approve_plan") queueMicrotask(refreshShownVersions);
   if (!prev && d.status === "pending" && loaded) notifyArrival(d);
   if (isCheckpoint(d) && d.response?.kind !== "continue" && d.response?.delivered_at && d.response.delivered_via !== "noop" && prev && !prev.response?.delivered_at) toast(t("checkpoint_delivered"), { kind: "ok" });
@@ -3718,8 +4604,10 @@ async function loadAll() {
       decisions.delete(d.id); // cannot fetch (404 etc.) = gone
       models.delete(d.id);
       drafts.delete(d.id);
+      dropComments(d.id);
     }
   }));
+  pruneComments((id) => isPlanId(id) || decisions.get(id)?.status === "pending");
   await sessionsReq;
   loaded = true;
   syncIdleNote(decisions.get(shownId)?.session.session_id);
@@ -3852,6 +4740,7 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if (!typing && key === "b" && drawerIds().length) { ev.preventDefault(); setDrawer(true); return; }
+  if (!typing && key === "m" && commentTarget()) { ev.preventDefault(); commentKey(); return; }
   // [ ] cycle through the items
   if (!typing && (key === "[" || key === "]")) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }
   // < / > : the previous / next version of a plan that was rewritten after an instruction

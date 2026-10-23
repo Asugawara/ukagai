@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { slugOfHead } from "../../src/serve/plan-session.js";
+import { formatComments } from "../../src/serve/comments.js";
 import { PLAN_INSTRUCT_PREFIX, DEFAULT_SETTINGS, type Decision, type Settings } from "../../src/contract.js";
 import { start, type ServeHandle } from "../../src/serve/index.js";
 import type { Terminal, TerminalFound, TerminalRef, TerminalStatus } from "../../src/serve/terminal.js";
@@ -306,4 +307,82 @@ test("a plan instruction joined onto a queued reply with no text of its own is w
   assert.equal(got.instruction.text, "add a section");
   assert.equal(got.instruction.about, "plan");
   assert.equal(got.instruction.decision_id, "d-cp");
+});
+
+// ---- inline comments ----
+
+const COMMENT = { id: "c1", kind: "text", source: { kind: "plan", file: "/client/lies.md" }, section: ["Steps"], quote: "cap it", note: "make it 60" };
+
+test("answer { instruct, comments } without text: the text is the block, with the plan file of the decision, and response.comments is kept", async () => {
+  const env = await boot();
+  const d = await planDecision(env);
+  const r = await api(env, `/api/decisions/${d.id}/answer`, { instruct: true, comments: [COMMENT] });
+  assert.equal(r.status, 200);
+  const done = (await r.json()) as Decision;
+  const file = join(env.home, ".claude", "plans", "x.md");
+  assert.equal(done.response?.text, `The human left 1 comment:\n1. plan ${file}, "Steps": "cap it"\n   → make it 60`);
+  assert.deepEqual(done.response?.comments, [COMMENT]);
+});
+
+test("answer { approve: false, reason, comments }: the reason is followed by the block", async () => {
+  const env = await boot();
+  const d = await planDecision(env);
+  const r = await api(env, `/api/decisions/${d.id}/answer`, { approve: false, reason: "narrow it", comments: [COMMENT] });
+  assert.equal(r.status, 200);
+  const done = (await r.json()) as Decision;
+  assert.ok(done.response?.reason?.startsWith("narrow it\n\nThe human left 1 comment:"));
+  assert.equal(done.response?.approve, false);
+});
+
+test("answer { instruct, text } over 4000 once the block is added: 400 too_long, the decision stays pending", async () => {
+  const env = await boot();
+  const d = await planDecision(env);
+  const r = await api(env, `/api/decisions/${d.id}/answer`, { instruct: true, text: "x".repeat(3990), comments: [COMMENT] });
+  assert.equal(r.status, 400);
+  assert.equal(((await r.json()) as { error: string }).error, "too_long");
+  assert.equal(((await (await api(env, `/api/decisions/${d.id}`)).json()) as Decision).status, "pending");
+});
+
+test("plan card instruct with comments only: the queued text is the block and the plan file is the server's", async () => {
+  const env = await boot();
+  plan(env, "swift-otter.md");
+  await event(env, "s-live", transcript(env, "s-live", "swift-otter"), "UserPromptSubmit");
+  const r = await api(env, "/api/plans/swift-otter.md/instruct", { comments: [COMMENT] });
+  assert.equal(r.status, 200);
+  const ins = ((await (await api(env, "/api/sessions/s-live/instruction")).json()) as { instruction: { text: string } }).instruction;
+  assert.equal(ins.text, `The human left 1 comment:\n1. plan ${join(env.home, ".claude", "plans", "swift-otter.md")}, "Steps": "cap it"\n   → make it 60`);
+});
+
+test("plan card instruct: text then the block; over 4000 is 400 too_long and nothing is queued", async () => {
+  const env = await boot();
+  plan(env, "swift-otter.md");
+  await event(env, "s-live", transcript(env, "s-live", "swift-otter"), "UserPromptSubmit");
+  const big = await api(env, "/api/plans/swift-otter.md/instruct", { text: "x".repeat(3990), comments: [COMMENT] });
+  assert.equal(big.status, 400);
+  assert.equal(((await big.json()) as { error: string }).error, "too_long");
+  assert.equal((await api(env, "/api/sessions/s-live/instruction")).status, 404);
+  assert.equal((await api(env, "/api/plans/swift-otter.md/instruct", {})).status, 400);
+  await api(env, "/api/plans/swift-otter.md/instruct", { text: "add rollback", comments: [COMMENT] });
+  const ins = ((await (await api(env, "/api/sessions/s-live/instruction")).json()) as { instruction: { text: string } }).instruction;
+  assert.ok(ins.text.startsWith("add rollback\n\nThe human left 1 comment:"));
+});
+
+test("a queued 600-character instruction joined with a near-limit comment block keeps the block whole", async () => {
+  const env = await boot();
+  plan(env, "swift-otter.md");
+  await event(env, "s-live", transcript(env, "s-live", "swift-otter"), "UserPromptSubmit");
+  assert.equal((await api(env, "/api/plans/swift-otter.md/instruct", { text: "q".repeat(600) })).status, 200);
+  const planFile = join(env.home, ".claude", "plans", "swift-otter.md");
+  const withLast = (last: string) => ["a".repeat(1000), "b".repeat(1000), "c".repeat(1000), last].map((note, i) => ({ ...COMMENT, id: `c${i + 1}`, note }));
+  // the where-lines carry the plan file's absolute path, whose length depends on the OS's tmp dir: size the last note so the block is 3700 characters everywhere
+  const comments = withLast("d".repeat(1 + 3700 - formatComments(withLast("d"), { planFile }).length));
+  const block = formatComments(comments, { planFile });
+  assert.equal(block.length, 3700);
+  const r = await api(env, "/api/plans/swift-otter.md/instruct", { comments });
+  assert.equal(r.status, 200);
+  const ins = ((await (await api(env, "/api/sessions/s-live/instruction")).json()) as { instruction: { text: string } }).instruction;
+  assert.ok(ins.text.length <= 4000, `length ${ins.text.length}`);
+  assert.ok(ins.text.endsWith(block), "the full comment block is at the end");
+  assert.ok(ins.text.startsWith("q"));
+  assert.ok(!ins.text.includes("\n\n\n"), "no empty joiner before the block");
 });

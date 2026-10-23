@@ -2,7 +2,7 @@
 // A real server (temp HOME) and a real browser (agent-browser). Skipped when agent-browser is not on PATH. Keys are sent as KeyboardEvents (eval).
 import { after, before, test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttp } from "node:http";
 import { createServer } from "node:net";
@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { FRAME_POLICY } from "../../src/serve/files.js";
+import { FRAME_HELPER } from "../../src/serve/frame-helper.js";
 import { optInPlanAutoShow } from "../support/plans-auto.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -180,6 +181,7 @@ async function seedDoc(markdown: string): Promise<{ id: string }> {
   });
   assert.ok(d.id, JSON.stringify(d));
   void api(`/api/decisions/${d.id}/wait?timeout_ms=60000`).catch(() => {});
+  lastId = d.id;
   return { id: d.id };
 }
 
@@ -189,6 +191,9 @@ const EXPL = `---\nukagai: 1\n---\n## Why this decision is needed now\n\nCompare
 /** The frame's document fetched as the browser did; its image is then fetched with no cookie (a sandboxed frame sends none): the tag must authorise it */
 const frameImageStatus = () => ev<number | string>(`(async () => { const f = document.querySelector("${BG} iframe.doc-frame-view"); const r = await fetch(f.getAttribute("src")); const html = await r.text(); const m = /<img id="shot" src="([^"]+)"/.exec(html); return m ? (await fetch(m[1].replace(/&amp;/g, "&"), { credentials: "omit" })).status : "no img"; })().then((v) => JSON.stringify(v))`);
 
+/** The id of the decision on screen (the one the test seeded; every test cancels the others first) */
+let lastId = "";
+const shownDecisionId = () => lastId;
 const click = (label: string) => ev(`[...document.querySelectorAll(".overlay.frame .frame-btn")].find((b) => b.textContent === ${JSON.stringify(label)}).click(), "ok"`);
 const zoomShown = () => text(".overlay.frame .frame-zoom");
 /** Chromium's iframe `csp` attribute (CSP Embedded Enforcement); without it the frames have no scripts at all (sandbox="") */
@@ -212,7 +217,7 @@ gui("an explanation shows the page in a sandboxed iframe; the image inside loads
     await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
     assert.equal(ev<string>(`document.querySelector(".overlay.frame iframe").getAttribute("sandbox")`), "");
     assert.equal(count(".overlay.frame .frame-zoom"), 0);
-    assert.equal(count(".overlay.frame .frame-bar button"), 1, "only Close is left");
+    assert.equal(count(".overlay.frame .frame-bar button"), 2, "only Comment on this page and Close are left");
     key("Escape");
     return;
   }
@@ -373,9 +378,23 @@ gui("without iframe csp support the frames are sandbox=\"\": no script, no zoom 
     await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
     assert.equal(attrs(".overlay.frame iframe"), "|false");
     assert.equal(count(".overlay.frame .frame-zoom"), 0);
-    assert.deepEqual(texts(".overlay.frame .frame-bar button, .overlay.frame .frame-bar a"), ["Open in new tab", "Close"], "no zoom / Fit controls");
+    assert.deepEqual(texts(".overlay.frame .frame-bar button, .overlay.frame .frame-bar a"), ["Comment on this page", "Open in new tab", "Close"], "no zoom / Fit controls");
     key("Escape");
     await waitFor("overlay closed", `!document.querySelector(".overlay.frame")`);
+    // no helper to pick an element with: the button comments on the whole page (an element comment without a selector)
+    assert.equal(text(`${BG} .doc-frame-pick .btn-text`), "Comment on this page");
+    ev(`document.querySelector("${BG} .doc-frame-pick").click(), "ok"`);
+    await waitFor("popover", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+    assert.match(text(".cmt-pop .cmt-pop-q"), /^Whole page/);
+    ev(`(() => { const t = document.querySelector(".cmt-pop-ta"); t.value = "tighten the header"; t.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()`);
+    ev(`document.querySelector(".cmt-pop-ta").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })), "ok"`);
+    await waitFor("comment stored", `localStorage.getItem("ukagai.comments.${shownDecisionId()}")`);
+    const whole = ev<any>(`JSON.stringify(JSON.parse(localStorage.getItem("ukagai.comments.${shownDecisionId()}")).comments[0])`);
+    assert.equal(whole.kind, "element");
+    assert.equal(whole.selector, undefined, "whole page: no selector");
+    assert.equal(whole.source.kind, "page");
+    assert.equal(whole.source.file, join(scratch, "ukagai", "compare.html"));
+    assert.equal(whole.note, "tighten the header");
     // the parent sends the frame to a page with no policy: a sandbox="" frame runs no script of it
     ev(`document.querySelector("${BG} iframe.doc-frame-view").src = ${JSON.stringify(`${LAND}/landed?parent`)}, "ok"`);
     await sleep(1500);
@@ -487,4 +506,223 @@ gui("the frame bar never breaks inside a word: two frames side by side in column
   assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("${BG} .doc-frame-open .btn-text")).display !== "none" && getComputedStyle(document.querySelector("${BG} .doc-frame-open svg")).display === "none"`), true);
   assert.deepEqual(bar().broken, []);
   ab("set", "viewport", "1440", "900");
+});
+
+// ---- Comments on an element of a page ----
+// agent-browser's mouse and frame commands do not reach a frame with an opaque origin (sandbox="allow-scripts" without allow-same-origin: no events arrive, `frame` cannot switch into it).
+// So the helper is tested in an ordinary same-origin frame served by a small HTTP server (real mouse events, the real helper text, no CSP), and the parent's handling of its messages is tested
+// in the real GUI by delivering the messages as the frame would (a MessageEvent whose source is the frame's window, which is the only thing the parent checks)
+const PICK_PAGE = '<!doctype html><html><body style="margin:0"><button id="save" class="primary save" style="position:absolute;left:40px;top:60px;width:120px;height:40px;outline:1px dotted red">Save</button><ul style="position:absolute;top:120px;left:300px;margin:0;padding:0;list-style:none"><li class="item" style="height:20px">one</li><li class="item" style="height:20px">two</li></ul><p id="t" style="position:absolute;left:20px;top:200px;margin:0;font:20px sans-serif">Hello inline world</p></body></html>';
+
+test("frame helper: pick, selection, marks and the rects it reports (same-origin frame, real mouse)", { skip: HAS_BROWSER ? false : "agent-browser is not installed" }, async () => {
+  const srv = createHttp((req, res) => {
+    res.setHeader("content-type", "text/html");
+    if (req.url === "/page") res.end(PICK_PAGE.replace("<body", `<body`).replace("</body>", `<script>${FRAME_HELPER}</script></body>`));
+    else res.end('<!doctype html><html><body style="margin:0"><iframe id="f" src="/page" style="width:600px;height:400px;border:0"></iframe><script>window.__m=[];addEventListener("message",function(e){__m.push(e.data)});</script></body></html>');
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(srv.address() as { port: number }).port}/`;
+  const frame = (js: string) => `document.getElementById("f").contentWindow.${js}`;
+  const post = (msg: object) => ev(`${frame("postMessage")}(${JSON.stringify(msg)}, "*"), "ok"`);
+  const last = (kind: string) => ev<any>(`JSON.stringify(window.__m.filter((m) => m.ukagai === ${JSON.stringify(kind)}).at(-1) ?? null)`);
+  const outline = (sel: string) => ev<string>(`(() => { const e = document.getElementById("f").contentDocument.querySelector(${JSON.stringify(sel)}); const c = getComputedStyle(e); return c.outlineStyle + " " + c.outlineColor + " " + c.outlineWidth; })()`);
+  try {
+    ab("set", "viewport", "800", "600");
+    // the page is served by this process, so the open must not block it (ab is synchronous)
+    await new Promise<void>((res, rej) => execFile("agent-browser", ["open", url], { env: { ...process.env, AGENT_BROWSER_SESSION: current }, timeout: 30000 }, (e) => (e ? rej(e) : res())));
+    await waitFor("helper ready", `window.__m.some((m) => m.ukagai === "frame")`);
+    // outlines while picking; the page's own inline outline comes back when the pointer leaves
+    assert.equal(outline("#save"), "dotted rgb(255, 0, 0) 1px");
+    post({ ukagai: "pick", on: true });
+    ab("mouse", "move", "80", "80");
+    await waitFor("outlined", `getComputedStyle(${frame("document.getElementById")}("save")).outlineStyle === "solid"`);
+    assert.equal(outline("#save"), "solid rgb(219, 39, 119) 2px");
+    ab("mouse", "move", "500", "350");
+    await waitFor("restored", `getComputedStyle(${frame("document.getElementById")}("save")).outlineStyle === "dotted"`);
+    assert.equal(outline("#save"), "dotted rgb(255, 0, 0) 1px", "the previous inline outline is back");
+    // a click picks (and the click does not reach the page); picking is then off
+    ab("mouse", "move", "80", "80");
+    ab("mouse", "down");
+    ab("mouse", "up");
+    await waitFor("picked", `window.__m.some((m) => m.ukagai === "picked")`);
+    assert.deepEqual(last("picked"), { ukagai: "picked", sel: "#save", tag: "button", text: "Save", rect: { x: 40, y: 60, w: 120, h: 40 } });
+    ab("mouse", "move", "81", "81");
+    await sleep(200);
+    assert.equal(outline("#save"), "dotted rgb(255, 0, 0) 1px", "picking turned itself off");
+    // zoom: getBoundingClientRect already includes the helper's zoom on <html>, so the rect is in the frame's viewport pixels as it is
+    post({ ukagai: "zoom", value: 2 });
+    await waitFor("zoomed", `window.__m.some((m) => m.ukagai === "frame" && m.zoom === 2)`);
+    post({ ukagai: "pick", on: true });
+    ab("mouse", "move", "200", "150");
+    ab("mouse", "down");
+    ab("mouse", "up");
+    await waitFor("picked again", `window.__m.filter((m) => m.ukagai === "picked").length === 2`);
+    assert.deepEqual(last("picked").rect, { x: 80, y: 120, w: 240, h: 80 });
+    post({ ukagai: "zoom", value: 1 });
+    await waitFor("zoom back", `window.__m.filter((m) => m.ukagai === "frame").at(-1).zoom === 1`);
+    // the second list item: no id, a class shared with its sibling: tag.class:nth-of-type, and the selector finds exactly that element
+    post({ ukagai: "pick", on: true });
+    ab("mouse", "move", "310", "150");
+    ab("mouse", "down");
+    ab("mouse", "up");
+    await waitFor("picked li", `window.__m.filter((m) => m.ukagai === "picked").length === 3`);
+    const li = last("picked");
+    assert.equal(li.tag, "li");
+    assert.equal(li.text, "two");
+    assert.equal(li.sel, "li.item:nth-of-type(2)");
+    assert.equal(ev(`${frame("document.querySelectorAll")}(${JSON.stringify(li.sel)}).length`), 1);
+    // Esc while picking: pick-cancel, no pick
+    post({ ukagai: "pick", on: true });
+    ev(`${frame("dispatchEvent")}(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })), "ok"`);
+    await waitFor("cancelled", `window.__m.some((m) => m.ukagai === "pick-cancel")`);
+    assert.equal(ev<number>(`window.__m.filter((m) => m.ukagai === "picked").length`), 3);
+    // text selected in the page (picking is off): the quote, its surroundings, the element it sits in
+    ab("mouse", "move", "22", "212");
+    ab("mouse", "down");
+    ab("mouse", "move", "150", "212");
+    ab("mouse", "up");
+    await waitFor("selected", `window.__m.some((m) => m.ukagai === "selected")`);
+    const sel = last("selected");
+    assert.match(sel.quote, /^Hello/);
+    assert.equal(sel.sel, "#t");
+    assert.equal(typeof sel.prefix, "string");
+    assert.ok(sel.prefix.length <= 64 && sel.suffix.length <= 64 && sel.quote.length <= 500);
+    assert.deepEqual(Object.keys(sel.rect).sort(), ["h", "w", "x", "y"]);
+    // marks: outlined dashed, replaced by the next message, the page's own outline restored when cleared
+    post({ ukagai: "marks", items: [{ n: 1, sel: "#save" }, { n: 2, sel: "li.item:nth-of-type(2)" }, { n: 3, sel: "no such (" }] });
+    await waitFor("marked", `getComputedStyle(${frame("document.getElementById")}("save")).outlineStyle === "dashed"`);
+    assert.equal(outline("li.item:nth-of-type(2)"), "dashed rgb(219, 39, 119) 2px");
+    post({ ukagai: "marks", items: [{ n: 1, sel: "#t" }] });
+    await waitFor("replaced", `getComputedStyle(${frame("document.getElementById")}("save")).outlineStyle === "dotted"`);
+    assert.equal(outline("li.item:nth-of-type(2)").startsWith("none"), true);
+    assert.equal(outline("#t").startsWith("dashed"), true);
+    post({ ukagai: "marks", items: [] });
+    await waitFor("cleared", `getComputedStyle(${frame("document.getElementById")}("t")).outlineStyle === "none"`);
+  } finally {
+    srv.close();
+    ab("open", base + "/");
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+const writeNote = (note: string) => {
+  ev(`(() => { const t = document.querySelector(".cmt-pop-ta"); t.value = ${JSON.stringify(note)}; t.dispatchEvent(new Event("input", { bubbles: true })); return "ok"; })()`);
+  ev(`document.querySelector(".cmt-pop-ta").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })), "ok"`);
+};
+const stored = (id: string) => ev<any[]>(`JSON.stringify(JSON.parse(localStorage.getItem("ukagai.comments.${id}") ?? '{"comments":[]}').comments)`);
+/** Deliver `msg` to the GUI as if the (inline) frame had posted it: the parent only checks that event.source is the frame's window */
+const fromFrame = (msg: object, sel = `${BG} iframe.doc-frame-view`) => ev(`window.dispatchEvent(new MessageEvent("message", { data: ${JSON.stringify(msg)}, source: document.querySelector(${JSON.stringify(sel)}).contentWindow })), "ok"`);
+
+gui("the toggle in the frame bar picks an element: the helper's report opens the popover, the comment keeps selector, tag, text and the page's file; Esc cancels; a selection of the page is a text comment of the page", async () => {
+  writeFileSync(join(scratch, "ukagai", "pick.html"), PICK_PAGE);
+  ab("open", base + "/");
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  const { id } = await seedDoc(EXPL.replace("compare.html", "pick.html"));
+  await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+  if (!supportsCsp()) return; // no helper: the whole-page button is covered by the no-csp test
+  await waitFor("frame loaded", `document.querySelector("${BG} iframe.doc-frame-view")._marks !== undefined`);
+  const file = join(scratch, "ukagai", "pick.html");
+  const pressed = () => ev<boolean>(`document.querySelector("${BG} .doc-frame-pick").getAttribute("aria-pressed") === "true"`);
+  // a report nobody asked for is ignored
+  fromFrame({ ukagai: "picked", sel: "#save", tag: "button", text: "Save", rect: { x: 1, y: 1, w: 5, h: 5 } });
+  await sleep(200);
+  assert.equal(count(".cmt-pop"), 0, "not picking: a picked message does nothing");
+  // Esc ends picking and does nothing else
+  ev(`document.querySelector("${BG} .doc-frame-pick").click(), "ok"`);
+  assert.equal(pressed(), true);
+  key("Escape");
+  assert.equal(pressed(), false, "Esc ends picking");
+  assert.equal(count(".cmt-pop") + count(".overlay"), 0);
+  // the helper says the user cancelled
+  ev(`document.querySelector("${BG} .doc-frame-pick").click(), "ok"`);
+  fromFrame({ ukagai: "pick-cancel" });
+  assert.equal(pressed(), false);
+  // a pick: malformed fields are dropped, strings clipped, the popover opens at the element
+  ev(`document.querySelector("${BG} .doc-frame-pick").click(), "ok"`);
+  fromFrame({ ukagai: "picked", sel: "#save", tag: "BUTTON<x>", text: "Save", rect: { x: 40, y: 60, w: 120, h: 40 } });
+  await waitFor("popover", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.equal(pressed(), false, "picking is off after one pick");
+  assert.match(text(".cmt-pop .cmt-pop-q"), /^Element “Save”/, "a bad tag is dropped, the label falls back");
+  const box = ev<{ l: number; t: number }>(`JSON.stringify((() => { const r = document.querySelector("${BG} iframe.doc-frame-view").getBoundingClientRect(), p = document.querySelector(".cmt-pop").getBoundingClientRect(); return { l: Math.round(p.left - r.left), t: Math.round(p.top - r.top) }; })())`);
+  assert.ok(box.t >= 100 - 2 && box.l >= 8 - 1, `the popover sits below the element: ${JSON.stringify(box)}`); // below the 60 + 40 px element
+  ev(`document.querySelector(".cmt-pop .btn:not(.primary)").click(), "ok"`);
+  ev(`document.querySelector("${BG} .doc-frame-pick").click(), "ok"`);
+  fromFrame({ ukagai: "picked", sel: "#save", tag: "button", text: "Save", rect: { x: 40, y: 60, w: 120, h: 40 } });
+  await waitFor("popover", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.match(text(".cmt-pop .cmt-pop-q"), /^button “Save”/);
+  writeNote("make this primary");
+  await waitFor("stored", `localStorage.getItem("ukagai.comments.${id}")`);
+  const [c] = stored(id);
+  assert.equal(c.kind, "element");
+  assert.equal(c.selector, "#save");
+  assert.equal(c.tag, "button");
+  assert.equal(c.text, "Save");
+  assert.deepEqual(c.source, { kind: "page", file });
+  assert.equal(c.note, "make this primary");
+  await waitFor("badge and list row", `document.querySelectorAll("${BG} .cmt-badge").length === 1 && document.querySelectorAll("#decision .cmt-row").length === 1`);
+  assert.match(text("#decision .cmt-row .cmt-where"), /button “Save”/);
+  // a selection: a text comment of the page; the left column is never searched for its quote, so it is not an orphan
+  fromFrame({ ukagai: "selected", quote: "Hello inline", prefix: "x".repeat(200), suffix: " world", sel: "#t", rect: { x: 20, y: 200, w: 100, h: 24 } });
+  await waitFor("selection popover", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.match(text(".cmt-pop .cmt-pop-q"), /Hello inline/);
+  writeNote("reword this");
+  await waitFor("two stored", `JSON.parse(localStorage.getItem("ukagai.comments.${id}")).comments.length === 2`);
+  const t2 = stored(id)[1];
+  assert.equal(t2.kind, "text");
+  assert.deepEqual(t2.source, { kind: "page", file });
+  assert.equal(t2.quote, "Hello inline");
+  assert.equal(t2.prefix.length, 64, "clipped to the contract's 64");
+  assert.equal(t2.selector, "#t");
+  await waitFor("settled", `document.querySelectorAll("${BG} .cmt-badge").length === 2`);
+  assert.equal(count("#decision .cmt-row.orphan"), 0, "a page comment is anchored to its frame");
+  // a report with a bad rect is dropped
+  fromFrame({ ukagai: "selected", quote: "x", rect: { x: "1", y: 1, w: 1, h: 1 } });
+  await sleep(200);
+  assert.equal(count(".cmt-pop"), 0);
+  // the frame leaves the page (another explanation): its comments are orphans, not lost
+  ab("screenshot", join(SHOTS, "FRAME-comments.png"));
+});
+
+gui("full screen: picking an element opens the popover and the comment gets its badge and list row; a pick survives the frame loading again", async () => {
+  writeFileSync(join(scratch, "ukagai", "pick.html"), PICK_PAGE);
+  ab("open", base + "/");
+  await waitFor("idle", `document.getElementById("empty") && !document.getElementById("empty").hidden`);
+  const { id } = await seedDoc(EXPL.replace("compare.html", "pick.html"));
+  await waitFor("frame", `document.querySelector("${BG} figure.doc-frame iframe")`, 15000);
+  if (!supportsCsp()) return;
+  await waitFor("frame loaded", `document.querySelector("${BG} iframe.doc-frame-view")._marks !== undefined`);
+  ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
+  await waitFor("overlay", `document.querySelector(".overlay.frame iframe.frame-full")`);
+  const full = ".overlay.frame iframe.frame-full";
+  const pressed = () => ev<boolean>(`document.querySelector(".overlay.frame .frame-pick").getAttribute("aria-pressed") === "true"`);
+  // the toggle of the full-screen bar picks in the full-screen frame; the report of that frame opens the popover inside the overlay
+  ev(`document.querySelector(".overlay.frame .frame-pick").click(), "ok"`);
+  assert.equal(pressed(), true);
+  fromFrame({ ukagai: "picked", sel: "#save", tag: "button", text: "Save", rect: { x: 40, y: 60, w: 120, h: 40 } }, full);
+  await waitFor("popover", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.equal(pressed(), false, "picking is off after one pick");
+  const box = ev<{ l: number; t: number; inside: boolean }>(`JSON.stringify((() => { const r = document.querySelector("${full}").getBoundingClientRect(), p = document.querySelector(".cmt-pop").getBoundingClientRect(); return { l: Math.round(p.left - r.left), t: Math.round(p.top - r.top), inside: p.right <= innerWidth && p.bottom <= innerHeight && p.top >= 0 }; })())`);
+  assert.ok(box.inside && box.t >= 100 - 2, `the popover is on screen below the element: ${JSON.stringify(box)}`);
+  writeNote("full screen note");
+  await waitFor("stored", `localStorage.getItem("ukagai.comments.${id}")`);
+  assert.equal(stored(id)[0].selector, "#save");
+  key("Escape"); // closes the overlay: the badge and the list row are of the left column
+  await waitFor("overlay closed", `!document.querySelector(".overlay.frame")`);
+  await waitFor("badge and list row", `document.querySelectorAll("${BG} .cmt-badge").length === 1 && document.querySelectorAll("#decision .cmt-row").length === 1`);
+  // the frame loads again while the button shows picking: the helper is told again (its pick state starts empty)
+  ev(`document.querySelector("${BG} .doc-frame-full").click(), "ok"`);
+  await waitFor("overlay again", `document.querySelector(".overlay.frame iframe.frame-full")`);
+  ev(`window.__loads = 0, document.querySelector("${full}").addEventListener("load", () => window.__loads++), "ok"`);
+  ev(`document.querySelector(".overlay.frame .frame-pick").click(), "ok"`);
+  ev(`(() => { const f = document.querySelector("${full}"); f.src = f.src; return "ok"; })()`);
+  await waitFor("reloaded", `window.__loads === 1`);
+  assert.equal(pressed(), true);
+  await sleep(500);
+  ab("mouse", "move", "600", "500");
+  ab("mouse", "move", "100", String(40 + 80));
+  ab("mouse", "down");
+  ab("mouse", "up");
+  await waitFor("popover after reload", `document.querySelector(".cmt-pop .cmt-pop-ta")`);
+  assert.equal(pressed(), false);
+  key("Escape");
 });

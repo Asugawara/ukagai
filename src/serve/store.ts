@@ -29,6 +29,7 @@ import {
   canTransition,
   decisionFingerprint,
   parseCannotAnswer,
+  type Comments,
   type CreateDecisionRequest,
   type Decision,
   type DecisionContext,
@@ -41,9 +42,16 @@ import {
   type SessionState,
   type SessionSummary,
 } from "../contract.js";
+import { composeWithComments, type CommentContext } from "./comments.js";
 import { deliveryText, instructionParts } from "./delivery-text.js";
 import { transcriptHasDelivery } from "./history.js";
 import type { SseEventName } from "./sse.js";
+
+/** Joins an older text in front of a newer one within INSTRUCTION_MAX_CHARS: the older text is cut, the newer one stays whole */
+function joinKeepingNewest(older: string, newest: string): string {
+  const head = older.slice(0, Math.max(0, INSTRUCTION_MAX_CHARS - newest.length - 1));
+  return head === "" ? newest : `${head}\n${newest}`;
+}
 
 export class HttpError extends Error {
   constructor(
@@ -96,10 +104,10 @@ type MessageInstruction = {
 export type InboxResult = { http: 200 | 409; status: DecisionStatus } | { http: 404 };
 
 export type AnswerPatch =
-  | { kind: "answers"; answers: Record<string, string> }
+  | { kind: "answers"; answers: Record<string, string>; comments?: Comments }
   | { kind: "approve"; set_mode_auto?: boolean }
-  | { kind: "reject"; reason?: string }
-  | { kind: "instruct_plan"; text: string }
+  | { kind: "reject"; reason?: string; comments?: Comments }
+  | { kind: "instruct_plan"; text?: string; comments?: Comments }
   | { kind: "fallback" }
   | { kind: "checkpoint"; answer: "continue" | "instruct" | "stop"; text?: string };
 
@@ -145,6 +153,13 @@ function stat(values: number[]): { count: number; median_ms: number | null; mean
 function firstQuestion(d: { request: Decision["request"] }): string | undefined {
   const qs = (d.request as { questions?: { question?: string }[] }).questions;
   return qs?.[0]?.question;
+}
+
+/** The answer a comment block is appended to: the first question's, else the first one given */
+function firstQuestionKey(d: { request: Decision["request"] }, answers: Record<string, string>): string | undefined {
+  const q = firstQuestion(d);
+  if (q !== undefined && q in answers) return q;
+  return Object.keys(answers)[0];
 }
 
 /** The text of a plan request, trimmed ("" when there is none) */
@@ -549,7 +564,7 @@ export class Store {
     const ins: Instruction = queued
       ? queued.text.trim() === ""
         ? { ...queued, text: text.slice(0, INSTRUCTION_MAX_CHARS), about: "plan" }
-        : { ...queued, text: `${queued.text}\n${text}`.slice(0, INSTRUCTION_MAX_CHARS) }
+        : { ...queued, text: joinKeepingNewest(queued.text, text) }
       : { decision_id: "", kind: "instruct", text, created_at, about: "plan" };
     this.instructions.set(sessionId, ins);
     if (this.sessions.get(sessionId)?.state === "idle" && !this.hasOpenAsync(sessionId) && this.offerToMod(sessionId)) return "message";
@@ -668,7 +683,8 @@ export class Store {
     this.setStatus(d, to);
   }
 
-  submitAnswer(id: string, patch: AnswerPatch): Decision {
+  /** `fmt` gives the server's own records (plan file, explanation file, marks) for the text of inline comments */
+  submitAnswer(id: string, patch: AnswerPatch, fmt: CommentContext = {}): Decision {
     const d = this.decisions.get(id);
     if (!d) throw new HttpError(404, "decision not found");
     // The store's clock: a plan's grant lasts PLAN_GRANT_TTL_MS from this
@@ -680,9 +696,18 @@ export class Store {
 
     let response: DecisionResponse;
     let to: DecisionStatus = "answer_submitted";
+    // Compose first: a too-long text throws before any state changes
+    let answers: Record<string, string> | undefined;
+    if (patch.kind === "answers") {
+      answers = patch.answers;
+      const key = patch.comments ? firstQuestionKey(d, patch.answers) : undefined;
+      if (patch.comments && key === undefined) throw new HttpError(400, "comments need an answer to attach to");
+      if (patch.comments && key !== undefined) answers = { ...patch.answers, [key]: composeWithComments(patch.answers[key], patch.comments, fmt) };
+    }
     switch (patch.kind) {
       case "answers":
-        response = { via: "gui", answers: patch.answers, decided_at };
+        response = { via: "gui", answers: answers!, decided_at };
+        if (patch.comments) response.comments = patch.comments;
         break;
       case "approve":
         response = { via: "gui", approve: true, decided_at };
@@ -690,10 +715,19 @@ export class Store {
         break;
       case "reject":
         response = { via: "gui", approve: false, decided_at };
-        if (patch.reason) response.reason = patch.reason;
+        if (patch.comments) {
+          response.reason = composeWithComments(patch.reason, patch.comments, fmt);
+          response.comments = patch.comments;
+        } else if (patch.reason) response.reason = patch.reason;
         break;
       case "instruct_plan":
-        response = { via: "gui", instruct: true, text: patch.text, decided_at };
+        response = {
+          via: "gui",
+          instruct: true,
+          text: patch.comments ? composeWithComments(patch.text, patch.comments, fmt) : (patch.text ?? ""),
+          decided_at,
+        };
+        if (patch.comments) response.comments = patch.comments;
         break;
       case "fallback":
         response = { via: "terminal", decided_at };
@@ -703,6 +737,7 @@ export class Store {
     this.transition(d, to);
     d.response = response;
     this.persist(d);
+    // The memo reads the answers as the human gave them, without the comment block
     if (patch.kind === "answers") this.rememberCannotAnswer(d, patch.answers);
     this.emit("decision.updated", d);
     this.notify(d.id);
@@ -1471,7 +1506,8 @@ export class Store {
     }
     // One slot, one prefix: the texts are joined (the prefix of the first one stays); the checkpoints all stay with it
     const ids = [...m.decision_ids, ...(queued?.decision_id ? [queued.decision_id, ...(this.joinedIds.get(queued.decision_id) ?? [])] : [])];
-    const text = [...m.parts.map((x) => x.text), ...(queued ? [queued.text] : [])].join("\n").slice(0, INSTRUCTION_MAX_CHARS);
+    const texts = [...m.parts.map((x) => x.text), ...(queued ? [queued.text] : [])];
+    const text = joinKeepingNewest(texts.slice(0, -1).join("\n"), texts[texts.length - 1] ?? "");
     const about = m.parts[0]?.about;
     this.instructions.set(sid, { decision_id: ids[0] ?? "", kind: "instruct", text, created_at: m.source.created_at, ...(about ? { about } : {}) });
     if (ids[0]) this.joinedIds.set(ids[0], ids.slice(1));

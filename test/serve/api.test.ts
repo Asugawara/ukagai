@@ -781,3 +781,53 @@ test("lease expiry after a hand-off without a re-attach: hook_disconnected as us
   assert.equal(m.a.handoffs, 1);
   assert.equal(m.a.reattached, 0);
 });
+
+// ---- inline comments ----
+
+const PLAN_COMMENT = { id: "c1", kind: "text", source: { kind: "plan", file: "/client/lies.md" }, section: ["Steps"], quote: "cap it", note: "make it 60" };
+const BLOCK = 'The human left 1 comment:\n1. explanation /EXPL, "Steps": "cap it"\n   → make it 60';
+
+test("answers + comments: the block follows the first question's answer, response.comments keeps the list, the explanation file is the server's", async () => {
+  const env = await setup();
+  const path = join(env.dataDir, "explain", "sess-1", "q.md");
+  const d = await register(env, "toolu_cm1", { explanation: { path, markdown: MD, has: { mermaid: false, table: false, diff: false }, match: "question", attached_via: "first_call" } });
+  const comment = { ...PLAN_COMMENT, source: { kind: "explanation", file: "/client/lies.md" } };
+  const r = await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { [CANNOT_Q]: "B" }, comments: [comment] } });
+  assert.equal(r.status, 200);
+  const got = await getDecision(env, d.id);
+  assert.equal(got.response.answers[CANNOT_Q], "B\n\n" + BLOCK.replace("/EXPL", path));
+  assert.deepEqual(got.response.comments, [comment]);
+});
+
+test("Cannot answer + comments: the memo is made from the answer as given, without the block", async () => {
+  const env = await setup();
+  const d = await registerWithExplanation(env, "toolu_cm2");
+  const comment = { ...PLAN_COMMENT, source: { kind: "explanation" } };
+  const r = await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { [CANNOT_Q]: "Cannot answer — Undefined terms: W-T2, FT4" }, comments: [comment] } });
+  assert.equal(r.status, 200);
+  const memo = (await rewrite(env)) as any;
+  assert.deepEqual(memo.terms, ["W-T2", "FT4"]);
+  assert.equal(memo.reason, "Undefined terms");
+  const got = await getDecision(env, d.id);
+  assert.ok(got.response.answers[CANNOT_Q].startsWith("Cannot answer — Undefined terms: W-T2, FT4\n\nThe human left 1 comment:"));
+});
+
+test("a composed answer over 4000 characters is 400 too_long and nothing changes", async () => {
+  const env = await setup();
+  const d = await register(env, "toolu_cm3");
+  const r = await api(env, `/api/decisions/${d.id}/answer`, { body: { answers: { [CANNOT_Q]: "x".repeat(3990) }, comments: [{ ...PLAN_COMMENT, source: { kind: "explanation" } }] } });
+  assert.equal(r.status, 400);
+  const body = (await r.json()) as { error: string; length: number; max: number };
+  assert.equal(body.error, "too_long");
+  assert.equal(body.max, 4000);
+  assert.ok(body.length > 4000);
+  const got = await getDecision(env, d.id);
+  assert.equal(got.status, "pending");
+  assert.equal(got.response, undefined);
+});
+
+test("approve + comments is 400", async () => {
+  const env = await setup();
+  const d = await register(env, "toolu_cm4");
+  assert.equal((await api(env, `/api/decisions/${d.id}/answer`, { body: { approve: true, comments: [PLAN_COMMENT] } })).status, 400);
+});

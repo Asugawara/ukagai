@@ -610,18 +610,20 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .doc-frame-name { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 12ch; }
 .doc-frame-alt { font-weight: 700; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-frame-bar .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; white-space: nowrap; flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open { white-space: nowrap; flex: none; }
+.doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open, .doc-frame-bar .doc-frame-pick { white-space: nowrap; flex: none; }
 .doc-frame-bar svg { display: none; width: 14px; height: 14px; vertical-align: -2px; }
 /* The frame, not the window, decides: a column shows icon-only buttons (the text is the title / aria-label), a wide frame the text buttons */
 .md figure.doc-frame { container-type: inline-size; }
 @container (max-width: 440px) {
   .doc-frame-bar .btn-text { display: none; }
   .doc-frame-bar svg { display: inline-block; }
-  .doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open { padding: 2px 7px; line-height: 1; display: inline-flex; align-items: center; }
+  .doc-frame-bar .doc-frame-full, .doc-frame-bar .doc-frame-open, .doc-frame-bar .doc-frame-pick { padding: 2px 7px; line-height: 1; display: inline-flex; align-items: center; }
 }
-.doc-frame-full, .doc-frame-open, .frame-btn { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+.doc-frame-full, .doc-frame-open, .doc-frame-pick, .frame-btn { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
 .doc-frame-open, .frame-btn { text-decoration: none; }
-.doc-frame-full:hover, .doc-frame-open:hover, .frame-btn:hover { border-color: var(--accent); }
+.doc-frame-full:hover, .doc-frame-open:hover, .doc-frame-pick:hover, .frame-btn:hover { border-color: var(--accent); }
+.doc-frame-pick.on, .frame-pick.on { border-color: var(--accent); background: var(--accent-bg); }
+.frame-pick svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 .doc-frame-view { display: block; width: 100%; height: 480px; border: 0; background: #fff; }
 /* Full screen page: the overlay fills the viewport (also when requestFullscreen is refused); only the iframe scrolls */
 .overlay.frame { padding: 0; align-items: stretch; background: #000; }
@@ -692,3 +694,47 @@ html:has(> body.settings-page) { scrollbar-gutter: stable; }
 .set .set-actions button.danger.armed { font-weight: 600; box-shadow: inset 0 0 0 1px var(--red); }
 .set-unsaved { margin-right: auto; font-size: 12px; color: var(--fg); }
 .set-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); margin-right: 6px; vertical-align: 1px; }
+
+/* Inline comments: the highlight over the commented text, the numbered badges (a layer at the end of #background), the popover, the list in the right column */
+:root { --cmt-hl: #fde68a; --cmt-hl-fg: #1d1d1f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --cmt-hl: rgb(250 204 21 / 0.32); --cmt-hl-fg: #f5f5f7; } }
+:root[data-theme="dark"] { --cmt-hl: rgb(250 204 21 / 0.32); --cmt-hl-fg: #f5f5f7; }
+::highlight(ukagai-comment) { background-color: var(--cmt-hl); color: var(--cmt-hl-fg); }
+#background { position: relative; }
+.cmt-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 5; pointer-events: none; }
+.cmt-badge { position: absolute; min-width: 17px; height: 17px; padding: 0 4px; border: 0; border-radius: 9px; background: var(--accent); color: var(--bg); font: inherit; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; cursor: pointer; pointer-events: auto; }
+.cmt-badge.folded { opacity: 0.55; }
+.cmt-n { display: inline-block; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; flex: none; }
+.cmt-pop { position: fixed; z-index: 80; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgb(0 0 0 / 0.28); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.cmt-pop-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg); min-width: 0; }
+.cmt-pop-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cmt-pop-ta { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; resize: vertical; }
+.cmt-pop-actions { display: flex; align-items: center; gap: 6px; }
+.cmt-pop-actions .grow { flex: 1; }
+.cmt-pop-actions .btn { width: auto; min-height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cmt-pop-actions kbd { font-size: 10px; opacity: 0.75; }
+.cmt-list { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cmt-row { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; font-size: 12px; }
+.cmt-row:hover, .cmt-row:focus-visible { border-color: var(--accent); outline: none; }
+.cmt-body { flex: 1; min-width: 0; }
+.cmt-where { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmt-note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmt-orphan { color: var(--red); font-weight: 600; }
+.cmt-row.orphan { border-style: dashed; }
+.cmt-del { flex: none; border: 0; background: none; color: var(--fg); cursor: pointer; font: inherit; line-height: 1; padding: 2px 4px; }
+.cmt-del:hover { color: var(--red); }
+.cmt-budget { font-size: 12px; color: var(--fg); }
+.cmt-budget.over { color: var(--red); font-weight: 600; }
+.cmt-strip { border: 1px solid var(--accent); background: var(--accent-bg); border-radius: 8px; padding: 6px 8px; margin: 6px 0; }
+.cmt-strip > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.cmt-strip .cmt-list { margin: 6px 0 0; }
+/* Comments on a region of an image: the rectangle while dragging, the outline that stays, the lightbox's own layer */
+.rg-draw { position: fixed; z-index: 85; box-sizing: border-box; border: 2px dashed #dc2626; background: rgb(220 38 38 / 0.12); pointer-events: none; }
+.rg-box { position: absolute; box-sizing: border-box; border: 2px dashed #dc2626; pointer-events: none; }
+.rg-layer { position: absolute; inset: 0; pointer-events: none; }
+.lightbox-wrap { position: relative; display: inline-block; line-height: 0; }
+.rg-layer .cmt-n { position: absolute; left: -2px; top: -20px; }
+.doc-img-open img, .lightbox-img { user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
+.lightbox-img { touch-action: none; }
+.cmt-pop-err { color: var(--red); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.cmt-pop-err[hidden] { display: none; }
