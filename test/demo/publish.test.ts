@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { ALT, parseAttachments, rewriteReadme, sizeProblems, SWITCH } from "../../demo/lib/attachments.js";
+import { ALT, LOGO, parseAttachments, rewriteReadme, sizeProblems } from "../../demo/lib/attachments.js";
 import { MP4_MAX_BYTES, WEBP_MAX_BYTES } from "../../demo/lib/encode.js";
 
 const COMMENT = readFileSync(join(import.meta.dirname, "fixtures", "attach-comment.md"), "utf8");
@@ -12,11 +12,9 @@ const MP4 = "https://github.com/user-attachments/assets/d4c82cf0-30a3-4df1-99f7-
 const NEW = "https://github.com/user-attachments/assets/11111111-2222-4333-8444-555555555555";
 
 const HEAD12 = [
-  "# ukagai",
+  `${LOGO} width="140" alt="ukagai logo"></p>`,
   "",
-  "English | [日本語](README.ja.md)",
-  "",
-  "Agents ask, humans decide.",
+  '<h1 align="center">ukagai</h1>',
 ];
 
 describe("parseAttachments", () => {
@@ -42,15 +40,13 @@ describe("parseAttachments", () => {
 });
 
 describe("rewriteReadme", () => {
-  it("inserts the image after the switch line and its blank line, once", () => {
+  it("inserts the image after the logo line and its blank line, once", () => {
     for (const lang of ["en", "ja"] as const) {
-      const text = HEAD12.map((l) => (l === SWITCH.en ? SWITCH[lang] : l)).join("\n");
-      const once = rewriteReadme(text, lang, WEBP);
+      const once = rewriteReadme(HEAD12.join("\n"), lang, WEBP);
       const lines = once.split("\n");
-      const i = lines.indexOf(SWITCH[lang]);
-      assert.equal(lines[i + 2], `![${ALT[lang]}](${WEBP})`);
-      assert.equal(lines[i + 3], "");
-      assert.equal(lines[i + 4], "Agents ask, humans decide.");
+      assert.equal(lines[2], `![${ALT[lang]}](${WEBP})`);
+      assert.equal(lines[3], "");
+      assert.equal(lines[4], '<h1 align="center">ukagai</h1>');
       // Same bytes when run again with the same URL
       assert.equal(rewriteReadme(once, lang, WEBP), once);
     }
@@ -68,9 +64,9 @@ describe("rewriteReadme", () => {
     assert.equal(out.replace(`![${ALT.en}](${WEBP})\n\n`, ""), text);
   });
 
-  it("throws when the switch line or the blank line after it is missing", () => {
-    assert.throws(() => rewriteReadme("# x\n", "en", WEBP), /switch line is missing/);
-    assert.throws(() => rewriteReadme(`${SWITCH.en}\nno blank\n`, "en", WEBP), /blank line/);
+  it("throws when the logo line or the blank line after it is missing", () => {
+    assert.throws(() => rewriteReadme("# x\n", "en", WEBP), /logo line is missing/);
+    assert.throws(() => rewriteReadme(`${HEAD12[0]}\nno blank\n`, "en", WEBP), /blank line/);
   });
 });
 

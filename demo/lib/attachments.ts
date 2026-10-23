@@ -8,11 +8,8 @@ export const ALT: Record<Lang, string> = {
   ja: "デモ: 2 つの Claude Code と 1 つの Codex のセッションが、質問とプランを ukagai の 1 つの受信箱に送る。エージェントの説明はシーケンス図と推奨つき。人がキーボードで答えると、答えはメッセージとしてエージェントに届く。HTML の 2 案を並べて比べ、直したプランの変更点・diff・ファイル参照の先のコードを見て承認する。どのエージェントも先へ進む",
 };
 
-/** The language switch line of each README; the demo image goes after the blank line that follows it. */
-export const SWITCH: Record<Lang, string> = {
-  en: "English | [日本語](README.ja.md)",
-  ja: "[English](README.md) | 日本語",
-};
+/** The start of the logo line of both READMEs; the demo image goes after the blank line that follows it. */
+export const LOGO = '<p align="center"><img src="docs/images/logo.png"';
 
 export const README: Record<Lang, string> = { en: "README.md", ja: "README.ja.md" };
 
@@ -40,16 +37,16 @@ export function parseAttachments(body: string): Attachments {
 }
 
 /**
- * The README with the demo image line at its place after the language switch. If the line is there, only its URL changes;
+ * The README with the demo image line at its place under the logo. If the line is there, only its URL changes;
  * everything else stays byte for byte. Running it twice with the same URL changes nothing.
  */
 export function rewriteReadme(text: string, lang: Lang, url: string): string {
   const lines = text.split("\n");
-  const at = lines.indexOf(SWITCH[lang]);
-  if (at < 0) throw new Error(`${README[lang]}: the language switch line is missing`);
+  const at = lines.findIndex((l) => l.startsWith(LOGO));
+  if (at < 0) throw new Error(`${README[lang]}: the logo line is missing`);
   const line = `![${ALT[lang]}](${url})`;
   const blank = at + 1;
-  if (lines[blank] !== "") throw new Error(`${README[lang]}: expected a blank line after the language switch`);
+  if (lines[blank] !== "") throw new Error(`${README[lang]}: expected a blank line after the logo`);
   const next = blank + 1;
   if (lines[next]?.startsWith(`![${ALT[lang]}](`)) {
     lines[next] = line;
