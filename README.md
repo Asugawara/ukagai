@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/images/logo.png" width="140" alt="ukagai logo"></p>
 
+![Demo: two Claude Code sessions and a Codex session send their questions and a plan to one ukagai inbox; the agent's explanation shows a sequence diagram and a recommendation; the human answers with the keyboard and the answer reaches the agent as a message; two HTML mockups are compared side by side; a revised plan shows what changed, a diff and the code behind a file reference, and is approved; every agent keeps going](https://github.com/user-attachments/assets/11175d3d-4026-41ff-985a-7129f49b621a)
+
 <h1 align="center">ukagai</h1>
 
 <p align="center"><b>A decision inbox for Claude Code and Codex.</b><br>Agents ask. Humans decide.</p>
