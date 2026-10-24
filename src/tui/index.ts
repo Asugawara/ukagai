@@ -63,6 +63,7 @@ export async function run(argv: string[]): Promise<number> {
   }
   app.fetchHistory = (id) => api.history(id);
   app.fetchPlan = (name) => api.plan(name);
+  app.fetchAside = (sid) => api.aside(sid);
   app.fetchVersions = (sid, current) => api.planVersions(sid, current);
   app.copySupported = spawnSync("sh", ["-c", "command -v pbcopy"], { stdio: "ignore" }).status === 0;
   try {
@@ -97,6 +98,7 @@ export async function run(argv: string[]): Promise<number> {
 
   app.onHistory = schedule;
   app.onPlans = schedule;
+  app.onAside = schedule;
 
   const refetch = async () => {
     try {
@@ -131,6 +133,25 @@ export async function run(argv: string[]): Promise<number> {
         else if (e.type === "read") {
           // Failing to mark a plan read is harmless: it just stays new
           void api.markRead(e.name, e.mtime).catch(() => {});
+        } else if (e.type === "aside_ask") {
+          void api.askAside(e.sid, e.body).then(
+            (entry) => {
+              app.asideAsked(e.sid, entry);
+              schedule();
+            },
+            (err: unknown) => {
+              app.asideFailed(e.sid, err instanceof Error ? err.message : String(err), err instanceof ApiError ? err.status : undefined, Date.now());
+              schedule();
+            },
+          );
+        } else if (e.type === "aside_stop") {
+          void api.stopAside(e.sid).then(
+            (entry) => {
+              if (entry) app.asideUpdated(e.sid, entry);
+              schedule();
+            },
+            () => {},
+          );
         } else if (e.type === "instruct_plan") {
           void api.instructPlan(e.name, e.text).then(
             (via) => {

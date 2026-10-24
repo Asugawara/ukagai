@@ -33,6 +33,7 @@ export async function refetch(api: SyncApi, app: App, now: () => number = Date.n
   const stale = app.replacePending(pending, now());
   const states = api.sessions ? await api.sessions().catch(() => null) : null;
   if (states) app.setSessions(states);
+  await app.reloadAside();
   const settings = api.settings ? await api.settings().catch(() => null) : null;
   if (settings) app.settingsUpdated(settings);
   if (files) app.replacePlans(files, now());
@@ -65,6 +66,7 @@ export async function streamLoop(api: SyncApi, app: App, signal: AbortSignal, o:
         (ev) => {
           if (ev.event === "session.updated") app.sessionUpdated(ev.session);
           else if (ev.event === "plan.updated") app.planUpdated(ev.plan, now());
+          else if (ev.event === "aside.updated") app.asideUpdated(ev.session_id, ev.entry);
           else if (ev.event === "settings.updated") app.settingsUpdated(ev.settings, now());
           else if (ev.event === "plan.removed") app.planRemoved(ev.name, now());
           else app.upsert(ev.decision, now());

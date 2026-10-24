@@ -6,6 +6,7 @@ import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
 import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 import { oneLine, type HistoryItem } from "./history.js";
+import { inputLines, threadLines, type AsideView } from "./aside.js";
 import { planOutline, unreadNames, unreadSections, type PlanState } from "./plan.js";
 import type { DiffLine, PlanDiff, SectionDiff } from "../contract.js";
 import { padEnd, sliceCols, stripAnsi, truncate, width, wrap } from "./width.js";
@@ -51,6 +52,9 @@ export interface View {
   history: { index: number; items: HistoryItem[] } | null;
   /** One instruction shown in full in place of the background column */
   histDetail: HistoryItem | null;
+  /** The side-question thread (`a`) when open; whether `a` can open it for the shown item */
+  aside: AsideView | null;
+  canAsk: boolean;
   /** Position of the card (plus the trailing free text); the button position for a plan */
   cursor: number;
   selected: ReadonlySet<string>;
@@ -128,6 +132,9 @@ export interface Frame {
   footRows: number[];
   /** Scroll positions of each contents row's heading in a long plan (a hidden H3 points at its H2) */
   secRows: number[];
+  /** The side-question thread: how far it can scroll, and the rows of its window */
+  asideMax: number;
+  asideRows: number;
 }
 
 /** The instruction card of a plan, always shown: its label, the numbered presets (pick one with its digit while the box is empty), then the box (typing, kept with Esc, or the placeholder) */
@@ -155,6 +162,9 @@ export const WIDE_COLS = 120;
 
 /** Width of the decision column in the side-by-side layout; the rest goes to the background */
 export const decisionWidth = (cols: number): number => Math.max(44, Math.min(60, Math.round(cols * 0.4)));
+
+/** Width of the side-question thread in the side-by-side layout: half the screen, at least 60, while the background keeps 40 columns */
+export const asideWidth = (cols: number): number => Math.min(Math.max(60, Math.round(cols * 0.5)), cols - 3 - 40);
 
 const CHIP_COLOR: Record<Chip["kind"], string> = { repo: MAGENTA, branch: GREEN, worktree: YELLOW };
 const BADGE_IRREVERSIBLE = "\x1b[41;97m";
@@ -719,12 +729,13 @@ function footer(v: View, cols: number, overflow: boolean, o: { full?: boolean; h
   const lang = v.lang;
   let left: string;
   if (v.notice) return truncate(`${BOLD}${YELLOW}${v.notice}${RESET}`, cols);
-  if (v.list) left = `${t(lang, "footer_list")}`;
+  if (v.aside) left = t(lang, v.aside.running ? "footer_aside_running" : "footer_aside");
+  else if (v.list) left = `${t(lang, "footer_list")}`;
   else if (v.history) left = `${t(lang, "footer_history_list")}`;
   else if (v.histDetail) left = `${t(lang, "footer_history_detail")}`;
   else if (o.full) left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, "footer_full")}`;
   else {
-    left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, v.model?.plan ? "footer_switch_plan" : "footer_switch")}${v.ver ? `  ${t(lang, "footer_versions")}` : ""}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}`;
+    left = `${t(lang, "pending_n", { n: v.pending })}  ${t(lang, v.model?.plan ? "footer_switch_plan" : "footer_switch")}${v.ver ? `  ${t(lang, "footer_versions")}` : ""}${hscrollable ? `  ${t(lang, "footer_hscroll_fig")}` : ""}  ${t(lang, "footer_list_quit")}${v.canAsk ? `  ${t(lang, "footer_ask")}` : ""}${(v.model?.history?.total ?? 0) > 1 ? `  ${t(lang, "footer_history")}` : ""}${overflow ? `  ${t(lang, "footer_overflow")}` : ""}`;
   }
   if (v.conn?.state === "down") left = `${BOLD}${RED}${t(lang, "cannot_connect", { server: v.conn.server })}${RESET}  ${left}`;
   else if (v.conn?.state === "restored") left = `${BOLD}${GREEN}${t(lang, "reconnected")}${RESET}  ${left}`;
@@ -795,6 +806,23 @@ function position(off: number, max: number, size: number, total: number, h?: { o
   return `${off > 0 ? "▲" : " "}${off < max ? "▼" : " "} ${off + 1}-${Math.min(total, off + size)}/${total}${hs}`;
 }
 
+/** The side-question column: the thread window (with a bar when it overflows) over the input rows, `rows` tall in all. max = how far the thread scrolls */
+function asideColumn(a: AsideView, w: number, rows: number): { lines: string[]; max: number; size: number } {
+  const input = inputLines(a, w);
+  const size = Math.max(1, rows - input.length);
+  let thread = threadLines(a, w);
+  let bar = false;
+  if (thread.length > size) {
+    thread = threadLines(a, w - 1);
+    bar = true;
+  }
+  const max = Math.max(0, thread.length - size);
+  const off = a.scroll === null ? max : Math.min(a.scroll, max);
+  const track = bar ? scrollbar(size, thread.length, off, max) : [];
+  const body = window(thread, size, off).map((l, i) => (bar ? `${padEnd(truncate(l, w - 1), w - 1)}${track[i]}` : truncate(l, w)));
+  return { lines: [...body, ...input], max, size };
+}
+
 /** Overlay a window, scrollbar and position indicator on an overflowing column. w is the column width including the bar */
 function scrolled(all: string[], size: number, off: number, w: number, tail: string[], h?: { off: number; figW: number }): string[] {
   const max = all.length - size;
@@ -809,7 +837,7 @@ export function renderFrame(v: View, size: Size): Frame {
   const { cols, rows } = size;
   const m = v.model;
   const fin = (body: string[], head: string[], meta: Partial<Frame> = {}, overflow = false): Frame => {
-    const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false, footRows: [] as number[], secRows: [] as number[] };
+    const base = { scrollMax: 0, wide: false, split: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: Math.max(1, rows - 1), hMax: 0, full: false, figOver: false, footRows: [] as number[], secRows: [] as number[], asideMax: 0, asideRows: 0 };
     const f = { ...base, ...meta };
     const lines = [...head, ...body, footer(v, cols, overflow, { full: f.full, hint: v.fullHint && f.figOver && !f.full, hscrollable: f.hMax > 0 })].map((l) => truncate(l, cols));
     return { text: lines.join("\n"), lines, ...f };
@@ -817,6 +845,11 @@ export function renderFrame(v: View, size: Size): Frame {
 
   if (v.list) return fin(listBody(v, cols, rows - 1), []);
   if (v.history) return fin(historyBody(v, cols, rows - 1), []);
+  // Narrow, the thread takes the whole screen under its header
+  if (v.aside && (cols < WIDE_COLS || !v.model)) {
+    const col = asideColumn(v.aside, cols, Math.max(1, rows - 2));
+    return fin([`${BOLD}${t(v.lang, "aside_header")}${RESET}`, ...col.lines], [], { asideMax: col.max, asideRows: col.size });
+  }
 
   if (!m) {
     const body = new Array<string>(Math.max(0, rows - 1)).fill("");
@@ -837,7 +870,7 @@ export function renderFrame(v: View, size: Size): Frame {
   if (cols >= WIDE_COLS) {
     const SEP = " │ ";
     const full = v.full;
-    const rightW = decisionWidth(cols);
+    const rightW = v.aside ? asideWidth(cols) : decisionWidth(cols);
     const leftW = full ? cols : cols - SEP.length - rightW;
     // Take one row for the heading (the focused column inverted); the rest is the column window
     const winRows = Math.max(1, bodyRows - 1);
@@ -870,6 +903,16 @@ export function renderFrame(v: View, size: Size): Frame {
     if (full) {
       const body = [heading(t(v.lang, "bg_full_title"), cols, true), ...left.map((l) => truncate(l, cols))];
       return fin(body, head, { ...meta, split: cols }, leftOver);
+    }
+
+    // The side-question thread replaces the decision column
+    if (v.aside) {
+      const col = asideColumn(v.aside, rightW, winRows);
+      const body = [
+        `${heading(t(v.lang, "bg_title"), leftW, false)}${DIM}${SEP}${RESET}${heading(t(v.lang, "aside_header"), rightW, true)}`,
+        ...left.map((l, i) => `${padEnd(truncate(l, leftW), leftW)}${DIM}${SEP}${RESET}${truncate(col.lines[i] ?? "", rightW)}`),
+      ];
+      return fin(body, head, { ...meta, split: leftW + SEP.length, asideMax: col.max, asideRows: col.size }, leftOver);
     }
 
     // Right: when it overflows, scroll so the card under the cursor is visible (or to the manually scrolled position). The hint stays on the bottom row
