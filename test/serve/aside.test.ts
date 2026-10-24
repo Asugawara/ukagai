@@ -103,6 +103,7 @@ test("Claude: a read-only, hook-less, unsaved fork of the session; the question 
     assert.equal(done.status, "done");
     assert.equal(done.answer, "PINEAPPLE-42");
     assert.equal(done.usage?.cache_read_tokens, 17808);
+    assert.ok((done.usage?.input_tokens ?? 0) >= 17808, "input_tokens is the total input, cached part included");
     assert.equal(done.usage?.output_tokens, 12);
     assert.ok((done.usage?.cost_usd ?? 0) > 0);
     assert.ok(done.finished_at);
@@ -202,9 +203,9 @@ test("Claude parser: deltas stream, a new message resets them, tool uses are tra
   parseClaudeLine(st, msg);
   assert.equal(st.answer, "");
   parseClaudeLine(st, delta("Answer"));
-  parseClaudeLine(st, JSON.stringify({ type: "result", is_error: false, result: "Final answer", total_cost_usd: 0.5, usage: { input_tokens: 3, output_tokens: 7, cache_read_input_tokens: 100 } }));
+  parseClaudeLine(st, JSON.stringify({ type: "result", is_error: false, result: "Final answer", total_cost_usd: 0.5, usage: { input_tokens: 3, output_tokens: 7, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 } }));
   assert.equal(st.answer, "Final answer");
-  assert.deepEqual(st.usage, { input_tokens: 3, output_tokens: 7, cache_read_tokens: 100, cost_usd: 0.5 });
+  assert.deepEqual(st.usage, { input_tokens: 123, output_tokens: 7, cache_read_tokens: 100, cost_usd: 0.5 });
   parseClaudeLine(st, JSON.stringify({ type: "result", is_error: true, result: "boom" }));
   assert.equal(st.error, "boom");
 });

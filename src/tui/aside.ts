@@ -37,9 +37,9 @@ export function suggestions(lang: Lang, kind: "question" | "plan", label: string
 
 const kTokens = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
-/** `32k tokens · $0.004` (the cost only when the server sent it); cache reads count */
+/** `32k tokens · $0.004` (the cost only when the server sent it); input_tokens is already the total input */
 export function usageText(lang: Lang, u: NonNullable<AsideEntry["usage"]>): string {
-  const total = u.input_tokens + u.output_tokens + (u.cache_read_tokens ?? 0);
+  const total = u.input_tokens + u.output_tokens;
   return [t(lang, "aside_tokens", { n: kTokens(total) }), u.cost_usd !== undefined ? `$${u.cost_usd.toFixed(3)}` : ""].filter(Boolean).join(" · ");
 }
 

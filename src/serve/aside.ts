@@ -154,7 +154,8 @@ export function parseClaudeLine(st: ParseState, line: string): void {
     if (u) {
       const cache = num(u["cache_read_input_tokens"]);
       st.usage = {
-        input_tokens: num(u["input_tokens"]),
+        // the TOTAL input (Claude reports the cached parts separately), like Codex's input_tokens
+        input_tokens: num(u["input_tokens"]) + cache + num(u["cache_creation_input_tokens"]),
         output_tokens: num(u["output_tokens"]),
         ...(cache > 0 ? { cache_read_tokens: cache } : {}),
         ...(typeof ev["total_cost_usd"] === "number" ? { cost_usd: ev["total_cost_usd"] } : {}),

@@ -98,7 +98,7 @@ test("a running entry shows Thinking…, then the trace and the streamed text wi
 test("a done entry shows its usage; cost only when present", () => {
   const app = question();
   press(app, ch("a"));
-  app.asideUpdated("s1", entry({ status: "done", answer: "Because.", usage: { input_tokens: 2, output_tokens: 1000, cache_read_tokens: 31000, cost_usd: 0.004 } }));
+  app.asideUpdated("s1", entry({ status: "done", answer: "Because.", usage: { input_tokens: 31002, output_tokens: 1000, cache_read_tokens: 31000, cost_usd: 0.004 } }));
   const text = draw(app);
   assert.doesNotMatch(text, /Because\. ●/);
   assert.match(text, /32k tokens · \$0\.004/);
@@ -267,7 +267,7 @@ test("PgUp scrolls a long thread up and PgDn follows the bottom again", () => {
 test("render at 140 and 100 columns (for the report)", () => {
   const app = question();
   press(app, down, ch("a"), tab);
-  app.asideUpdated("s1", entry({ id: "e0", status: "done", question: "What is the retry budget?", answer: "Three attempts.\n\n- first, 1 s\n- then 4 s", trace: [{ kind: "read", label: "a" }, { kind: "read", label: "b" }], usage: { input_tokens: 2, output_tokens: 300, cache_read_tokens: 31000, cost_usd: 0.004 } }));
+  app.asideUpdated("s1", entry({ id: "e0", status: "done", question: "What is the retry budget?", answer: "Three attempts.\n\n- first, 1 s\n- then 4 s", trace: [{ kind: "read", label: "a" }, { kind: "read", label: "b" }], usage: { input_tokens: 31002, output_tokens: 300, cache_read_tokens: 31000, cost_usd: 0.004 } }));
   app.asideUpdated("s1", entry({ id: "e1", quote: { source: "option", text: "2 WebSocket" }, question: "Is it two-way?", answer: "Yes, but you do not need it" }));
   type(app, "what about the cost?");
   if (process.env["ASIDE_DUMP"]) writeFileSync(process.env["ASIDE_DUMP"], `=== 140 cols ===\n${draw(app, 140, 24)}\n\n=== 100 cols ===\n${draw(app, 100, 24)}\n`);
