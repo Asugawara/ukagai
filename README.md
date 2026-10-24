@@ -76,6 +76,8 @@ The GUI language starts from your locale (`ja` if `LC_ALL`, `LC_MESSAGES` or `LA
 
 **Point at what to change.** Select a sentence in an explanation or a plan, an element of an embedded HTML page, or a region of an image, and write a comment right there. The comments go to the agent with your answer, instruction or rejection, each saying where it points. [Guide](docs/guide.md#inline-comments)
 
+**Ask a side question before you decide.** While a question or plan waits, ask the agent something on the side, as Claude Code's `/btw` does. Neither the question nor its answer enters the agent's conversation or your answer. Each one uses tokens in proportion to the session's length. [Guide](docs/guide.md#side-questions)
+
 **Check in on idle agents.** When Claude Code writes a session recap (or a Codex session has been quiet for 3 minutes), it becomes a progress check you can answer with an instruction or a stop. [Guide](docs/guide.md#progress-checkpoints)
 
 **Stay in the terminal if you like.** `ukagai tui` shows the same decision screen with vim-style keys. [Guide](docs/guide.md#the-tui)
@@ -112,6 +114,7 @@ The GUI is static HTML and JS with no build step. Mermaid diagrams are drawn by 
 - [Decision screen](docs/guide.md#the-decision-screen): options with the agent's recommendation, keys for everything, the pending list.
 - [Plan approval](docs/guide.md#plan-approval): approve, instruct or reject; code references.
 - [Inline comments](docs/guide.md#inline-comments): comments on selected text, an element of an HTML page or a region of an image.
+- [Side questions](docs/guide.md#side-questions): ask the agent while a question or plan waits, without touching its conversation.
 - [Progress checkpoints](docs/guide.md#progress-checkpoints)
 - [TUI](docs/guide.md#the-tui)
 - [Answers as messages](docs/guide.md#answers-as-messages-the-ukagai-mod)
