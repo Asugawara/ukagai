@@ -1,6 +1,6 @@
 {
   "name": "ukagai",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Agents ask, humans decide. Hooks + GUI that collect Claude Code and Codex CLI questions (AskUserQuestion) and plan approvals in one place, each with the agent's own explanation.",
   "keywords": [
     "claude-code",

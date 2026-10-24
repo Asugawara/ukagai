@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/Asugawara/ukagai/compare/v0.9.0...v0.10.0) (2026-10-24)
+
+
+### Features
+
+* ask the agent side questions from an Ask panel in the GUI ([71c4d73](https://github.com/Asugawara/ukagai/commit/71c4d73abe3df7718540990876bdf831b14ba9ce))
+* ask the agent side questions from the TUI ([a59f7c7](https://github.com/Asugawara/ukagai/commit/a59f7c762b401293f48104561500afedf9563db1))
+* let the server answer side questions from a forked agent session ([44f2d7e](https://github.com/Asugawara/ukagai/commit/44f2d7edf9a6f7aa448380e056746e762a8d2049))
+
+
+### Bug Fixes
+
+* count cached input in the side question token total ([325c2df](https://github.com/Asugawara/ukagai/commit/325c2df6e9578b2ea183afdb3c58a635e4664c89))
+* keep the option cards from spilling over the left column below 900px ([d05b62a](https://github.com/Asugawara/ukagai/commit/d05b62a558f5e7ee71df9407e3a9fae5b786bb55))
+* show a blocker's steps at the top of the left column ([d6a02ee](https://github.com/Asugawara/ukagai/commit/d6a02eee29d774bc36197a27410612496be14553))
+* tell the side-question fork what is waiting on the human's screen ([8598e99](https://github.com/Asugawara/ukagai/commit/8598e99f867588933d5d70387b8e8b594e6cc5d8))
+
 ## [0.9.0](https://github.com/Asugawara/ukagai/compare/v0.8.0...v0.9.0) (2026-10-23)
 
 
