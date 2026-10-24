@@ -1035,3 +1035,73 @@ export type PlanDiff = z.infer<typeof PlanDiff>;
 /** `diffs[i]` is the diff from `versions[i-1]` to `versions[i]` (`diffs[0]` against an empty plan) */
 export const PlanVersionsResponse = z.object({ versions: z.array(PlanVersion), diffs: z.array(PlanDiff) });
 export type PlanVersionsResponse = z.infer<typeof PlanVersionsResponse>;
+
+// ---- aside (side questions to a forked, throwaway run of the agent) ----
+
+export const ASIDE_MAX_ENTRIES = 50;
+
+export const AsideQuote = z.strictObject({
+  source: z.enum(["explanation", "plan", "option"]),
+  text: z.string().min(1).max(1000),
+});
+export type AsideQuote = z.infer<typeof AsideQuote>;
+
+/** What the fork did on the way: a path, a pattern or a command (200 chars at most) */
+export const AsideTrace = z.strictObject({
+  kind: z.enum(["read", "search", "command", "tool"]),
+  label: z.string().max(200),
+});
+export type AsideTrace = z.infer<typeof AsideTrace>;
+
+export const AsideUsage = z.strictObject({
+  input_tokens: z.number().int().nonnegative(),
+  output_tokens: z.number().int().nonnegative(),
+  cache_read_tokens: z.number().int().nonnegative().optional(),
+  cost_usd: z.number().nonnegative().optional(),
+});
+export type AsideUsage = z.infer<typeof AsideUsage>;
+
+export const AsideStatus = z.enum(["running", "done", "error", "cancelled"]);
+export type AsideStatus = z.infer<typeof AsideStatus>;
+
+export const AsideEntry = z.strictObject({
+  id: z.string(),
+  decision_id: z.string(),
+  decision_title: z.string().optional(),
+  question: z.string().min(1).max(4000),
+  quote: AsideQuote.optional(),
+  /** The entry this one re-asks; UIs show only the latest entry of a chain */
+  regenerate_of: z.string().optional(),
+  /** Markdown. Grows while running (Claude streams; Codex arrives at the end) */
+  answer: z.string(),
+  trace: z.array(AsideTrace),
+  status: AsideStatus,
+  error: z.string().optional(),
+  usage: AsideUsage.optional(),
+  created_at: z.string(),
+  finished_at: z.string().optional(),
+});
+export type AsideEntry = z.infer<typeof AsideEntry>;
+
+export const AsideThread = z.strictObject({
+  session_id: z.string(),
+  agent: AgentName,
+  /** false: unknown session, or no cwd / rollout to fork from */
+  available: z.boolean(),
+  unavailable_reason: z.string().optional(),
+  /** Oldest first, at most ASIDE_MAX_ENTRIES kept */
+  entries: z.array(AsideEntry),
+});
+export type AsideThread = z.infer<typeof AsideThread>;
+
+/** POST /api/sessions/:id/aside. With `regenerate_of` the server re-asks that entry's question and quote and ignores the two here */
+export const AsideRequest = z.strictObject({
+  question: z.string().min(1).max(4000),
+  quote: AsideQuote.optional(),
+  decision_id: z.string().min(1),
+  regenerate_of: z.string().optional(),
+});
+export type AsideRequest = z.infer<typeof AsideRequest>;
+
+/** SSE `aside.updated` */
+export type AsideUpdated = { session_id: string; entry: AsideEntry };

@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a16d76-11b5-78c3-ae16-38d0a70960e6"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  user (~/.codex/config.toml): `commit_attribution` is ignored."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  user (~/.codex/config.toml): `commit_attribution` is ignored."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"MANGO-77"}}
+{"type":"turn.completed","usage":{"input_tokens":32312,"cached_input_tokens":15872,"cache_write_input_tokens":0,"output_tokens":13,"reasoning_output_tokens":0}}

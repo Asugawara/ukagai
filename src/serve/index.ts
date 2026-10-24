@@ -12,6 +12,7 @@ import { LEASE_GRACE_MS, plansDir } from "../contract.js";
 import { marksDir, pruneMarks } from "./marks.js";
 import { startCodexBridge, type CodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
+import { createAside } from "./aside.js";
 import { startCheckpointDelivery } from "./deliver.js";
 import { GuiOpener } from "./gui-open.js";
 import { PlanReadStore } from "./plan-read.js";
@@ -58,6 +59,11 @@ export type ServeOptions = {
   terminalPollMs?: number;
   /** The shipped skill text served by GET /api/skill (default: this tree's skills/ukagai-explain/SKILL.md; tests point it elsewhere) */
   skillSource?: string;
+  /** Binaries of the side-question fork (default `claude` / `codex` on PATH; tests point them at fakes) */
+  asideBins?: { claude?: string; codex?: string };
+  /** Time limit of one side question (default 180 s) and SIGTERM-to-SIGKILL grace (default 3 s) */
+  asideTimeoutMs?: number;
+  asideKillGraceMs?: number;
 };
 
 export type ServeHandle = {
@@ -137,7 +143,13 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
     log,
   });
+  const aside = createAside(store, hub, {
+    ...(opts.asideBins ? { bins: opts.asideBins } : {}),
+    ...(opts.asideTimeoutMs !== undefined ? { timeoutMs: opts.asideTimeoutMs } : {}),
+    ...(opts.asideKillGraceMs !== undefined ? { killGraceMs: opts.asideKillGraceMs } : {}),
+  });
   const app = createApp({
+    aside,
     planRead,
     store,
     hub,
@@ -217,6 +229,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
   doClose = () =>
     new Promise<void>((resolve) => {
       codexBridge?.close();
+      aside.close();
       planWatcher.stop();
       clearInterval(sessionPoll);
       recapWatcher.stop();

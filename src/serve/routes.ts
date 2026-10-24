@@ -6,6 +6,7 @@ import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 import {
   AnswerRequest,
+  AsideRequest,
   DEFAULT_SETTINGS,
   CheckpointRequest,
   AckRequest,
@@ -41,6 +42,7 @@ import { injectFrameHelper } from "./frame-helper.js";
 import { readSource } from "./source.js";
 import { PlanError, listPlans, planFingerprint, planSummary, readPlan } from "./plans.js";
 import type { PlanSummary } from "../contract.js";
+import { createAside, type AsideStore } from "./aside.js";
 import { PlanSessions } from "./plan-session.js";
 import { PlanReady } from "./plan-ready.js";
 import { TooLongError, composeWithComments, type CommentContext } from "./comments.js";
@@ -90,6 +92,8 @@ export type AppDeps = {
   planSessions?: PlanSessions;
   /** Computes `ready` of every plan summary; the server owns it so it can re-announce a flip. Defaults to one that broadcasts on `hub` */
   planReady?: PlanReady;
+  /** Side questions to a forked run of the agent. Defaults to one wired to `store` and `hub` */
+  aside?: AsideStore;
 };
 
 const MIME: Record<string, string> = {
@@ -119,6 +123,7 @@ export function createApp(deps: AppDeps): Hono {
   const { store, hub } = deps;
   const app = new Hono();
   const cookies = new Set<string>();
+  const aside = deps.aside ?? createAside(store, hub);
 
   const bearerOk = (c: Context): boolean => {
     const h = c.req.header("authorization") ?? "";
@@ -594,6 +599,28 @@ export function createApp(deps: AppDeps): Hono {
       ...(explanationFile && !(d.kind === "approve_plan") ? { explanationFile } : {}),
     });
     return c.json(store.submitAnswer(id, patch, ctx));
+  });
+
+  // ---- aside: side questions answered by a throwaway fork of the session ----
+
+  app.get("/api/sessions/:id/aside", auth("any"), (c) => {
+    const thread = aside.thread(c.req.param("id"));
+    return thread ? c.json(thread) : c.json({ error: "session not found" }, 404);
+  });
+
+  // The session's cwd, transcript and agent come from the store, never from the body
+  app.post("/api/sessions/:id/aside", auth("any"), jsonOnly, async (c) => {
+    const id = c.req.param("id");
+    const thread = aside.thread(id);
+    if (!thread) return c.json({ error: "session not found" }, 404);
+    const body = await parse(c, AsideRequest);
+    if (!thread.available) return c.json({ error: "unavailable", reason: thread.unavailable_reason }, 400);
+    return c.json({ entry: aside.start(id, body) }, 202);
+  });
+
+  app.delete("/api/sessions/:id/aside/running", auth("any"), (c) => {
+    const entry = aside.cancel(c.req.param("id"));
+    return entry ? c.json({ entry }) : c.json({ error: "nothing running" }, 404);
   });
 
   // ---- events / sessions ----
