@@ -60,6 +60,26 @@ The human left 2 comments:
    → a lighter purple
 ```
 
+## Side questions
+
+Ask the agent a question on the side while a question or a plan waits, as Claude Code's `/btw` does. The question and its answer never enter the agent's conversation, and they are not part of your answer to the pending question or plan.
+
+ukagai forks the agent's session into a throwaway run and sends the question there. For Claude Code the run is `claude -p --resume <id> --fork-session --no-session-persistence` with `Read`, `Grep` and `Glob` allowed, every other tool refused, and hooks turned off. For Codex it is `codex exec fork <id> --ephemeral` in a read-only sandbox with hooks disabled. The run knows what the session knows, including the files it has read, but nothing is saved, and the original transcript or rollout does not change.
+
+- **GUI.** Click **Ask** in the header, or press `a`. The panel opens on the right; below 1200px it covers the options. An empty thread offers three suggested questions. Select text in an explanation or a plan and pick **Ask** in the selection popover to quote it into the question. Enter sends, Shift+Enter starts a new line, and while an answer runs the send button becomes **Stop**. Each answer has **Copy** and **Answer again**, and shows the tokens it used.
+- **TUI.** Press `a` on a question or a plan (not on a progress check). Type the question and press Enter. Tab quotes the option or the plan section under the cursor, and Tab again removes the quote. PgUp / PgDn scroll, Ctrl-R retries a failed answer, Ctrl-X stops the answer, and Esc closes the thread. The answer keeps running after you close it. From 120 columns the thread replaces the decision column; narrower terminals show it full screen.
+
+Limits:
+
+- **Tokens.** Each question runs one turn over the whole session, so it uses your account's usage in proportion to the length of the session. In small test sessions one question cost about $0.003 to $0.006; a long session costs more. The tokens of an answer count its input and output, cache reads included.
+- **One at a time.** A session runs one side question at a time. Sending another while it runs is refused until it ends or you stop it.
+- **Time limit.** An answer still running after 180 seconds is stopped and shown as an error.
+- **Memory.** The thread lives in the server's memory (the last 20 sessions, 50 entries each). Ending the session or restarting the server clears it.
+- **Needs the CLI.** `claude` or `codex` must be on the server's `PATH`.
+- **Codex.** A Codex thread without a saved rollout cannot be forked: its question ends as an error that shows the tail of the CLI's stderr.
+- **Checkpoints** (progress checks) have no Ask.
+- **The wait does not change.** The agent's hook keeps waiting for your answer. If it gives up and asks again, the side-question thread carries on, because it is kept per session.
+
 ## Progress checkpoints
 
 When Claude Code writes a session recap, the server turns it into a non-blocking "Progress check" in the GUI / TUI. If you answer *Give an instruction…* or *Stop here*, a second, cheap `PreToolUse` hook (`hook --checkpoint`, matcher `Bash|Edit|Write|MultiEdit|NotebookEdit|Agent|Task|TodoWrite`, 10 s) hands it to the agent once at its next tool call (as context, or as a deny that asks it to write a short status and end the turn); with nothing pending it is a single 404 and prints nothing. When the agent is idle at the moment you reply, a reply goes to it as a message: through the ukagai mod if one runs in that session (`[ukagai] (ref …) Reply to your progress recap: …`, shown in the transcript as a plugin message, newlines kept), otherwise typed into the agent's herdr pane (see Settings, below).

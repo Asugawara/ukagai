@@ -91,6 +91,10 @@ export class KeyParser {
             keys.push({ name: "ctrl-d" });
         else if (ch === "\x15")
             keys.push({ name: "ctrl-u" });
+        else if (ch === "\x18")
+            keys.push({ name: "ctrl-x" });
+        else if (ch === "\x12")
+            keys.push({ name: "ctrl-r" });
         else if (ch === "\x7f" || ch === "\b")
             keys.push({ name: "backspace" });
         else if (ch === "\t")
@@ -118,6 +122,24 @@ export function interpret(key, ctx) {
                 if (ctx.presets && key.ch >= "1" && key.ch <= "9" && Number(key.ch) <= ctx.presets)
                     return done({ type: "preset", n: Number(key.ch) });
                 return done({ type: "input-char", ch: key.ch });
+            default: return done(null);
+        }
+    }
+    if (ctx.mode === "aside") {
+        switch (key.name) {
+            case "enter": return done({ type: "aside-send" });
+            case "esc": return done({ type: "aside-close" });
+            case "tab": return done({ type: "aside-quote" });
+            case "ctrl-x": return done({ type: "aside-stop" });
+            case "ctrl-r": return done({ type: "aside-retry" });
+            case "backspace": return done({ type: "aside-backspace" });
+            case "pgup":
+            case "ctrl-u": return done({ type: "aside-scroll", delta: -1, unit: "half" });
+            case "pgdn":
+            case "ctrl-d": return done({ type: "aside-scroll", delta: 1, unit: "half" });
+            case "up": return done({ type: "aside-scroll", delta: -1, unit: "line" });
+            case "down": return done({ type: "aside-scroll", delta: 1, unit: "line" });
+            case "char": return done({ type: "aside-char", ch: key.ch });
             default: return done(null);
         }
     }
@@ -186,6 +208,8 @@ export function interpret(key, ctx) {
         return done({ type: "quit" });
     if (ch === "s")
         return done({ type: "history" });
+    if (ch === "a" && ctx.kind !== "checkpoint" && !ctx.histDetail && !ctx.full)
+        return done({ type: "aside" });
     if (ctx.histDetail && key.name === "esc")
         return done({ type: "history-back" });
     if (ctx.kind === "plan" && !ctx.full && (ch === "<" || ch === ">"))

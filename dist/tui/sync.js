@@ -14,6 +14,7 @@ export async function refetch(api, app, now = Date.now, plans = true) {
     const states = api.sessions ? await api.sessions().catch(() => null) : null;
     if (states)
         app.setSessions(states);
+    await app.reloadAside();
     const settings = api.settings ? await api.settings().catch(() => null) : null;
     if (settings)
         app.settingsUpdated(settings);
@@ -42,6 +43,8 @@ export async function streamLoop(api, app, signal, o) {
                     app.sessionUpdated(ev.session);
                 else if (ev.event === "plan.updated")
                     app.planUpdated(ev.plan, now());
+                else if (ev.event === "aside.updated")
+                    app.asideUpdated(ev.session_id, ev.entry);
                 else if (ev.event === "settings.updated")
                     app.settingsUpdated(ev.settings, now());
                 else if (ev.event === "plan.removed")

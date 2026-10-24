@@ -11,6 +11,7 @@ import { LEASE_GRACE_MS, plansDir } from "../contract.js";
 import { marksDir, pruneMarks } from "./marks.js";
 import { startCodexBridge } from "./codex-bridge/index.js";
 import { collectContext } from "./context.js";
+import { createAside } from "./aside.js";
 import { startCheckpointDelivery } from "./deliver.js";
 import { GuiOpener } from "./gui-open.js";
 import { PlanReadStore } from "./plan-read.js";
@@ -92,7 +93,13 @@ export async function start(opts = {}) {
         setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
         log,
     });
+    const aside = createAside(store, hub, {
+        ...(opts.asideBins ? { bins: opts.asideBins } : {}),
+        ...(opts.asideTimeoutMs !== undefined ? { timeoutMs: opts.asideTimeoutMs } : {}),
+        ...(opts.asideKillGraceMs !== undefined ? { killGraceMs: opts.asideKillGraceMs } : {}),
+    });
     const app = createApp({
+        aside,
         planRead,
         store,
         hub,
@@ -169,6 +176,7 @@ export async function start(opts = {}) {
         : undefined;
     doClose = () => new Promise((resolve) => {
         codexBridge?.close();
+        aside.close();
         planWatcher.stop();
         clearInterval(sessionPoll);
         recapWatcher.stop();
