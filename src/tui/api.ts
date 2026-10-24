@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Decision, PlanRemovedEvent, PlanSummary, PlanVersionsResponse, SessionHistory, SessionSummary, Settings, type PlanContent } from "../contract.js";
+import { z } from "zod";
+import { AsideEntry, AsideThread, Decision, PlanRemovedEvent, PlanSummary, PlanVersionsResponse, SessionHistory, SessionSummary, Settings, type PlanContent } from "../contract.js";
 
 // Thin fetch wrapper for the server. Auth is the Bearer token in <data-dir>/token (same as the hook client).
 
@@ -18,7 +19,10 @@ export type StreamEvent =
   | { event: "session.updated"; session: SessionSummary }
   | { event: "plan.updated"; plan: PlanSummary }
   | { event: "plan.removed"; name: string }
-  | { event: "settings.updated"; settings: Settings };
+  | { event: "settings.updated"; settings: Settings }
+  | { event: "aside.updated"; session_id: string; entry: AsideEntry };
+
+const AsideUpdated = z.object({ session_id: z.string(), entry: AsideEntry });
 
 export class TuiApi {
   private token: string | null = null;
@@ -145,6 +149,32 @@ export class TuiApi {
     return ((await res.json()) as { delivered_via?: string }).delivered_via ?? "hook";
   }
 
+  /** The side-question thread of a session. Throws on any failure */
+  async aside(sessionId: string): Promise<AsideThread> {
+    const res = await this.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/aside`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    return AsideThread.parse(await res.json());
+  }
+
+  /** Ask a side question; resolves with the entry (running). 409 = another answer runs; 400 unavailable carries the reason. Throws on any failure */
+  async askAside(sessionId: string, body: Record<string, unknown>): Promise<AsideEntry> {
+    const res = await this.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/aside`, { method: "POST", body, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+      throw new ApiError(j.error === "unavailable" ? (j.reason ?? j.error) : (j.error ?? `HTTP ${res.status}`), res.status);
+    }
+    return AsideEntry.parse(((await res.json()) as { entry?: unknown }).entry);
+  }
+
+  /** Stop the running answer; resolves with the cancelled entry, or null when nothing ran. Throws on any other failure */
+  async stopAside(sessionId: string): Promise<AsideEntry | null> {
+    const res = await this.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/aside/running`, { method: "DELETE", signal: AbortSignal.timeout(5000) });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    const r = AsideEntry.safeParse(((await res.json().catch(() => ({}))) as { entry?: unknown }).entry);
+    return r.success ? r.data : null;
+  }
+
   async answer(id: string, body: Record<string, unknown>): Promise<Decision> {
     const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}/answer`, {
       method: "POST",
@@ -180,7 +210,7 @@ export class TuiApi {
   }
 }
 
-const HANDLED = new Set(["decision.created", "decision.updated", "session.updated", "plan.updated", "plan.removed", "settings.updated"]);
+const HANDLED = new Set(["decision.created", "decision.updated", "session.updated", "plan.updated", "plan.removed", "settings.updated", "aside.updated"]);
 
 /** Text of one event: decision.created / decision.updated, session.updated, plan.updated and plan.removed; others (heartbeats) are dropped without parsing */
 export function parseSse(block: string): StreamEvent | null {
@@ -204,6 +234,10 @@ export function parseSse(block: string): StreamEvent | null {
     if (event === "plan.updated") {
       const r = PlanSummary.safeParse(j);
       return r.success ? { event, plan: r.data } : null;
+    }
+    if (event === "aside.updated") {
+      const r = AsideUpdated.safeParse(j);
+      return r.success ? { event, session_id: r.data.session_id, entry: r.data.entry } : null;
     }
     if (event === "settings.updated") {
       const r = Settings.safeParse(j);

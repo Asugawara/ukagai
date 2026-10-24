@@ -2,7 +2,7 @@
 
 export type Key =
   | { name: "char"; ch: string }
-  | { name: "up" | "down" | "left" | "right" | "enter" | "esc" | "backspace" | "tab" | "ctrl-c" | "ctrl-d" | "ctrl-u" | "pgup" | "pgdn" | "home" | "end" }
+  | { name: "up" | "down" | "left" | "right" | "enter" | "esc" | "backspace" | "tab" | "ctrl-c" | "ctrl-d" | "ctrl-u" | "ctrl-x" | "ctrl-r" | "pgup" | "pgdn" | "home" | "end" }
   /** Horizontal wheel (SGR button 66 = left, 67 = right) */
   | { name: "hwheel"; dir: "left" | "right" }
   /** Mouse wheel (SGR report). x / y are 1-based terminal coordinates */
@@ -100,6 +100,8 @@ export class KeyParser {
     else if (ch === "\x03") keys.push({ name: "ctrl-c" });
     else if (ch === "\x04") keys.push({ name: "ctrl-d" });
     else if (ch === "\x15") keys.push({ name: "ctrl-u" });
+    else if (ch === "\x18") keys.push({ name: "ctrl-x" });
+    else if (ch === "\x12") keys.push({ name: "ctrl-r" });
     else if (ch === "\x7f" || ch === "\b") keys.push({ name: "backspace" });
     else if (ch === "\t") keys.push({ name: "tab" });
     else if (cp >= 0x20) keys.push({ name: "char", ch });
@@ -109,7 +111,7 @@ export class KeyParser {
 
 // ---- Actions ----
 
-export type Mode = "normal" | "input" | "list" | "none" | "cannot" | "history";
+export type Mode = "normal" | "input" | "list" | "none" | "cannot" | "history" | "aside";
 export type Kind = "question" | "plan" | "checkpoint";
 /** The column that arrows and j/k act on. background = the left explanation, decision = the right-hand decision */
 export type Focus = "background" | "decision";
@@ -180,6 +182,16 @@ export type Action =
   | { type: "history-pick" }
   | { type: "history-close" }
   | { type: "history-back" }
+  /** `a`: the side-question thread of the shown item's session; in it: close, send, toggle the quote, scroll, stop the running answer, type */
+  | { type: "aside" }
+  | { type: "aside-close" }
+  | { type: "aside-send" }
+  | { type: "aside-quote" }
+  | { type: "aside-scroll"; delta: 1 | -1; unit: "half" | "line" }
+  | { type: "aside-stop" }
+  | { type: "aside-retry" }
+  | { type: "aside-char"; ch: string }
+  | { type: "aside-backspace" }
   /** A plan file on its own (no decision): Esc = Done reading */
   | { type: "plan-done" }
   /** `<` / `>` on a plan: the previous / next version (a plan that was rewritten after an instruction) */
@@ -234,6 +246,23 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
     }
   }
 
+  if (ctx.mode === "aside") {
+    switch (key.name) {
+      case "enter": return done({ type: "aside-send" });
+      case "esc": return done({ type: "aside-close" });
+      case "tab": return done({ type: "aside-quote" });
+      case "ctrl-x": return done({ type: "aside-stop" });
+      case "ctrl-r": return done({ type: "aside-retry" });
+      case "backspace": return done({ type: "aside-backspace" });
+      case "pgup": case "ctrl-u": return done({ type: "aside-scroll", delta: -1, unit: "half" });
+      case "pgdn": case "ctrl-d": return done({ type: "aside-scroll", delta: 1, unit: "half" });
+      case "up": return done({ type: "aside-scroll", delta: -1, unit: "line" });
+      case "down": return done({ type: "aside-scroll", delta: 1, unit: "line" });
+      case "char": return done({ type: "aside-char", ch: key.ch });
+      default: return done(null);
+    }
+  }
+
   const down = key.name === "down" || (key.name === "char" && key.ch === "j");
   const up = key.name === "up" || (key.name === "char" && key.ch === "k");
 
@@ -279,6 +308,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   const ch = key.name === "char" ? key.ch : null;
   if (ch === "q") return done({ type: "quit" });
   if (ch === "s") return done({ type: "history" });
+  if (ch === "a" && ctx.kind !== "checkpoint" && !ctx.histDetail && !ctx.full) return done({ type: "aside" });
   if (ctx.histDetail && key.name === "esc") return done({ type: "history-back" });
   if (ctx.kind === "plan" && !ctx.full && (ch === "<" || ch === ">")) return done({ type: "ver", delta: ch === ">" ? 1 : -1 });
   if (ctx.planOnly && !ctx.full && key.name === "esc") return done({ type: "plan-done" });

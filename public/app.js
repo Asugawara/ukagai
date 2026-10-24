@@ -3,6 +3,7 @@
 import { t, applyStatic, currentLang } from "./i18n.js";
 import { sanitize } from "./sanitize.js";
 import { icon } from "./icons.js";
+import { createAside } from "./aside.js";
 
 const MULTI_SELECT_SEPARATOR = ", "; // same value as src/contract.ts
 const FOLD_LINES = 9;
@@ -754,6 +755,32 @@ function notifyBackground(prev, d) {
   else if (d.status === "answered") toast(isCheckpoint(d) ? (d.response?.kind === "continue" ? t("delivered_title", { title }) : t("checkpoint_sent")) : t("delivered_title", { title }), { kind: "soft" });
 }
 
+// ---- Ask panel (public/aside.js): what it needs to know about the shown item ----
+
+// null while nothing is shown. A plan file card carries its session in `session_id`, a decision in `session.session_id`; sessionId null = nothing to ask (checkpoints are not asked about)
+function asideContext() {
+  const d = isPlanId(shownId) ? shownPlanPd() : decisions.get(shownId);
+  if (!d || d.status !== "pending") return null;
+  if (isCheckpoint(d)) return null;
+  const plan = d.kind === "approve_plan";
+  const sid = (d.readonly ? d.session_id : d.session?.session_id) || null;
+  let options = [];
+  let recommended = null;
+  if (!plan) {
+    options = (d.request.questions[0]?.options ?? []).map((o) => o.label);
+    try { recommended = modelFor(d).v2?.cards.find((c) => c.recommended)?.option.label ?? null; } catch {}
+    recommended ??= options.find((o) => SUFFIX_RE.test(o)) ?? null;
+  }
+  const repo = d.readonly ? (sessions.get(sid)?.cwd ? cwdName(sessions.get(sid).cwd) : t("aside_agent")) : repoOf(d);
+  return { sessionId: sid, decisionId: d.id, title: titleOf(d), kind: plan ? "plan" : "question", repo, options, recommended };
+}
+const cwdName = (cwd) => WT_RE.exec(cwd)?.[1] ?? (cwd.split("/").filter(Boolean).pop() || cwd);
+const aside = createAside({
+  t, el, icon, api, toast, lang: currentLang,
+  context: asideContext,
+  setMarkdown: (container, md) => setMarkdown(container, md),
+});
+
 // ---- Pending button / title ----
 
 // Pending button: at the right end of the header's first row. Park it in body before #head is rebuilt so it is not destroyed
@@ -762,11 +789,13 @@ const pendingCount = $("pending-count");
 
 // The Settings link sits in the same slot after it (floating at the top right while there is no header)
 const settingsLink = $("settings-link");
+const askBtn = $("ask-btn");
 settingsLink.addEventListener("click", () => stashDrafts()); // typed text survives the page change (restored like after a rebuild reload)
 function stashPending() {
   if (pendingBtn.parentElement !== document.body) document.body.prepend(pendingBtn);
   if (settingsLink.parentElement !== document.body) document.body.prepend(settingsLink);
   settingsLink.classList.add("floating");
+  askBtn.hidden = true; // floating at the top right there is no room for it, and there is no item to ask about
 }
 function placePending() {
   const slot = document.querySelector("#head .hd-meta");
@@ -774,6 +803,7 @@ function placePending() {
     if (pendingBtn.parentElement !== slot) slot.append(pendingBtn);
     if (settingsLink.parentElement !== slot || settingsLink.previousElementSibling !== pendingBtn) slot.append(settingsLink);
     settingsLink.classList.remove("floating");
+    if (askBtn.parentElement !== slot || askBtn.nextElementSibling !== settingsLink) slot.insertBefore(askBtn, settingsLink);
   } else stashPending();
 }
 
@@ -1264,7 +1294,7 @@ function renderPlanRight(pd) {
 
 function planViewHint(pd, outline, canInstruct) {
   const zone = outline ? `${t(!canInstruct ? "hint_zone_plan_only" : planZone(pd) === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : "";
-  return el("div", { class: "hint" }, zone, verHint(pd), `Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · m ${t("hint_comment")} · ` : ""}Tab ${t("hint_next")} · , ${t("hint_settings")}`);
+  return el("div", { class: "hint" }, zone, verHint(pd), `Esc ${t("plan_done_reading")} · ${canInstruct ? `i ${t("hint_instruct_box")} · m ${t("hint_comment")} · ` : ""}Tab ${t("hint_next")} · a ${t("hint_ask")} · , ${t("hint_settings")}`);
 }
 
 // Esc / the text: mark the plan read (unless it already is), then the next item or the idle screen
@@ -2110,7 +2140,7 @@ function renderRightBody(d) {
       const sendFull = needSubmit ? `Enter ${t("hint_answer")}` : t("hint_send");
       const sendShort = needSubmit ? `Enter ${t("hint_short_answer")}` : t("hint_short_send");
       const full = `↑↓ ${t("hint_move")} · ${qs[0].multiSelect ? `Space ${t("hint_toggle")} · ` : ""}${sendFull} · ${extraHints}`;
-      const fullTail = `←→ ${t("hint_next")} · , ${t("hint_settings")} · Esc`;
+      const fullTail = `←→ ${t("hint_next")} · a ${t("hint_ask")} · , ${t("hint_settings")} · Esc`;
       const short = `↑↓ ${t("hint_short_move")} · ${qs[0].multiSelect ? `Space ${t("hint_short_toggle")} · ` : ""}${sendShort} · ${letters.join(" ")}`;
       const shortTail = ` ${t("hint_short_more")} · ←→ ${t("hint_short_next")} · Esc`;
       setHint(el("div", { class: "hint" },
@@ -2208,7 +2238,7 @@ function renderRightBody(d) {
   if (box) actions.append(box.card);
   actions.append(reject);
   const hist = el("span", { class: "hs", hidden: !hasHistoryHint(d), text: `${t("hint_history")} · ` });
-  const hintFor = () => el("div", { class: "hint" }, `${outline ? `${t(zoneNow() === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · `}`, verHint(d), `y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, closed ? "" : `m ${t("hint_comment")} · `, hist, `Tab ${t("hint_next")} · , ${t("hint_settings")}`);
+  const hintFor = () => el("div", { class: "hint" }, `${outline ? `${t(zoneNow() === "plan" ? "hint_zone_plan" : "hint_zone_opts")} · ` : `↑↓ ${t("hint_pick")} · Enter ${t("hint_decide")} · `}`, verHint(d), `y ${t("approve")} · n ${t("reject")} · i ${t("hint_instruct_box")} · `, closed ? "" : `m ${t("hint_comment")} · `, hist, `Tab ${t("hint_next")} · a ${t("hint_ask")} · , ${t("hint_settings")}`);
   setHint(hintFor());
   root.append(actions);
   // Slots: 0 Approve, 1 the instruction card (its box), 2 Reject (its reason box)
@@ -2793,7 +2823,8 @@ function commentFromSelection() {
   if (section.length) draft.section = section;
   const rect = range.getBoundingClientRect();
   sel.removeAllRanges();
-  openCommentPopover(rect, draft, { n: dr.comments.length + 1, onSave: (note) => addComment(tgt, { ...draft, note }) });
+  const asking = aside.canAsk() ? () => aside.ask({ source: tgt.source, text: draft.quote }) : undefined; // the same selection, as a side question
+  openCommentPopover(rect, draft, { n: dr.comments.length + 1, onSave: (note) => addComment(tgt, { ...draft, note }), onAsk: asking });
   return true;
 }
 
@@ -3062,7 +3093,7 @@ function closeCommentPopover() {
 // Esc and ⌘/Ctrl+Enter never reach the global key handler. Clicking outside closes it when the note is empty and leaves it open otherwise.
 // onSave(note) gets the trimmed note; onDelete (editing only) shows a Delete button
 // `async: true`: onSave returns a promise; the popover waits (buttons and Esc are off), closes when it resolves and shows the error and stays open when it rejects
-function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1, async = false } = {}) {
+function openCommentPopover(anchorRect, draft, { onSave, onDelete, onAsk, n = 1, async = false } = {}) {
   closeCommentPopover();
   const label = draft.kind === "text" ? `“${clip(draft.quote ?? "", 80)}”`
     : draft.kind === "element" ? `${draft.selector ? (draft.tag ?? t("cmt_element")) : t("cmt_page_whole")}${draft.text ? ` “${clip(draft.text, 60)}”` : draft.selector ? ` ${clip(draft.selector, 60)}` : ""}`
@@ -3083,6 +3114,7 @@ function openCommentPopover(anchorRect, draft, { onSave, onDelete, n = 1, async 
     el("div", { class: "cmt-pop-actions" },
       onDelete ? el("button", { class: "btn danger", type: "button", onclick: () => { if (busy) return; close(); onDelete(); } }, t("cmt_delete")) : null,
       el("span", { class: "grow" }),
+      onAsk ? el("button", { class: "btn cmt-ask", type: "button", onclick: () => { if (busy) return; close(); onAsk(); } }, el("span", { text: t("aside_btn") })) : null,
       el("button", { class: "btn", type: "button", onclick: () => { if (!busy) close(); } }, el("span", { text: t("cmt_cancel") }), el("kbd", { text: "Esc" })),
       add));
   const save = async () => {
@@ -4499,6 +4531,7 @@ function renderAll() {
     refreshWide();
     left?.then?.(refreshWide);
     settleComments(left, pd);
+    aside.sync();
     return;
   }
   const left = renderLeft(d);
@@ -4507,6 +4540,7 @@ function renderAll() {
   refreshWide();
   left?.then?.(refreshWide);
   settleComments(left, d);
+  aside.sync();
 }
 
 // Show an item. A plan whose body is not loaded yet is fetched first (the screen stays as it is meanwhile)
@@ -4660,6 +4694,7 @@ function connect() {
   es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("session.updated", (e) => { const x = JSON.parse(e.data); sessions.set(x.session_id, x); syncIdleNote(x.session_id); syncPlanInstruct(x.session_id); });
+  es.addEventListener("aside.updated", (e) => aside.onUpdated(JSON.parse(e.data)));
   es.addEventListener("settings.updated", (e) => applySettings(JSON.parse(e.data)));
   es.addEventListener("plan.updated", (e) => onPlanUpdated(JSON.parse(e.data)));
   es.addEventListener("plan.removed", (e) => onPlanRemoved(JSON.parse(e.data).name));
@@ -4668,6 +4703,7 @@ function connect() {
     if (connDown) setConnDown(false);
     else $("banner").hidden = true;
     checkBuild();
+    aside.resync();
     settingsReq().finally(() => loadAll().catch(() => {}));
   });
   es.addEventListener("error", () => {
@@ -4768,6 +4804,8 @@ document.addEventListener("keydown", (ev) => {
     return;
   }
   if (!typing && key === "b" && drawerIds().length) { ev.preventDefault(); setDrawer(true); return; }
+  if (!typing && key === "a" && aside.canAsk()) { ev.preventDefault(); aside.toggle(); return; }
+  if (!typing && key === "Escape" && aside.isOpen()) { ev.preventDefault(); aside.close(); return; }
   if (!typing && key === "m" && commentTarget()) { ev.preventDefault(); commentKey(); return; }
   // [ ] cycle through the items
   if (!typing && (key === "[" || key === "]")) { ev.preventDefault(); cycle(key === "]" ? 1 : -1); return; }

@@ -35,9 +35,11 @@ test("Space / Enter / i / h / l / b / q", () => {
   assert.equal(type({ name: "ctrl-c" }), "quit");
 });
 
-test("y a n work for a plan and do nothing for a question", () => {
+test("y n work for a plan and do nothing for a question; a opens the Ask thread for both", () => {
   assert.equal(type(ch("y"), { kind: "plan" }), "approve");
-  assert.equal(type(ch("a"), { kind: "plan" }), null);
+  assert.equal(type(ch("a"), { kind: "plan" }), "aside");
+  assert.equal(type(ch("a")), "aside");
+  assert.equal(type(ch("a"), { kind: "checkpoint" }), null);
   assert.equal(type(ch("n"), { kind: "plan" }), "reject");
   assert.equal(type(ch("y")), null);
 });

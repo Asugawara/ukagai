@@ -1,4 +1,4 @@
-import { MULTI_SELECT_SEPARATOR, type Decision, type PlanContent, type PlanSummary, type PlanVersionsResponse, type SessionHistory, type SessionSummary, type Settings } from "../contract.js";
+import { MULTI_SELECT_SEPARATOR, type AsideEntry, type AsideQuote, type AsideThread, type Decision, type PlanContent, type PlanSummary, type PlanVersionsResponse, type SessionHistory, type SessionSummary, type Settings } from "../contract.js";
 import { interpret, type Action, type Focus, type Key, type Mode } from "./keys.js";
 import { buildModel, buildPlanFileModel, hasExplanation, isBlocker, planKeyOf, planNameOf, titleOf, chipsOf, type ScreenModel } from "./model.js";
 import type { Frame, ListItem, View, VersionView } from "./render.js";
@@ -8,6 +8,7 @@ import { t, type MessageKey } from "./i18n.js";
 import { NONE_TYPES, noneAnswer } from "./none.js";
 import { cannotAnswer, cannotRows, defaultCannotReason } from "./cannot.js";
 import { historyItems, type HistoryItem } from "./history.js";
+import { suggestions, visibleEntries, type AsideView } from "./aside.js";
 import { initialPlanState, remapState, setOpen, toggleAll, type PlanOutline, type PlanState } from "./plan.js";
 
 // State transitions (no I/O). Given a key, returns the Effects for the caller to run.
@@ -19,6 +20,9 @@ export type Effect =
   | { type: "read"; name: string; mtime: string }
   /** Tell the agent that is writing a plan file something (POST /api/plans/:name/instruct) */
   | { type: "instruct_plan"; name: string; text: string }
+  /** Ask a side question (POST /api/sessions/:id/aside), and stop the running answer (DELETE .../aside/running) */
+  | { type: "aside_ask"; sid: string; body: Record<string, unknown> }
+  | { type: "aside_stop"; sid: string }
   | { type: "quit" };
 
 interface Draft {
@@ -99,8 +103,8 @@ export class App {
   /** Show the background at full width (hides the decision column) */
   full = false;
   /** Dimensions of the last drawn screen (used for scroll amounts and ranges) */
-  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax" | "footRows" | "secRows"> = {
-    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0, footRows: [], secRows: [],
+  private frame: Pick<Frame, "wide" | "split" | "scrollMax" | "rightMax" | "rightOff" | "off" | "bodyRows" | "hMax" | "footRows" | "secRows" | "asideMax" | "asideRows"> = {
+    wide: false, split: 0, scrollMax: 0, rightMax: 0, rightOff: 0, off: 0, bodyRows: 20, hMax: 0, footRows: [], secRows: [], asideMax: 0, asideRows: 5,
   };
   /** The "f for full width" hint is shown once per decision: which decisions have had it, and until when */
   private hinted = new Set<string>();
@@ -153,6 +157,13 @@ export class App {
   private revealNear = false;
   private listIndex = 0;
   private lastG = 0;
+  /** The side-question threads by session (GET /api/sessions/:id/aside, `aside.updated`) */
+  private asides = new Map<string, { entries: AsideEntry[]; available: boolean; reason?: string }>();
+  /** The open thread (mode "aside"): its session, the decision it is asked from, the text typed, the quote attached and the scroll (null follows the bottom) */
+  private aside: { sid: string; decisionId: string; text: string; quote: AsideQuote | null; scroll: number | null; sending: "text" | "retry" | null } | null = null;
+  /** Fetches a session's thread (set by index.ts; absent in tests that do not need it) and is told when a screen should be redrawn */
+  fetchAside: ((sessionId: string) => Promise<AsideThread>) | null = null;
+  onAside: () => void = () => {};
   /** Decisions showing a long recommendation in full */
   private recFull = new Set<string>();
   private toast: { text: string; until: number } | null = null;
@@ -448,7 +459,8 @@ export class App {
     this.footIdx = -1;
     this.reveal = null;
     this.histDetail = null;
-    if (this.mode === "input" || this.mode === "none" || this.mode === "cannot" || this.mode === "history" || this.mode === "list") this.mode = "normal";
+    this.aside = null;
+    if (this.mode === "input" || this.mode === "aside" || this.mode === "none" || this.mode === "cannot" || this.mode === "history" || this.mode === "list") this.mode = "normal";
   }
 
   /** Lazily fetch the session's instructions the first time a decision of that session is shown. Failures are ignored */
@@ -666,6 +678,8 @@ export class App {
       conn: this.down ? { state: "down", server: this.server } : this.restoredUntil > now ? { state: "restored" } : null,
       list,
       history: this.mode === "history" ? { index: this.hist.index, items: this.items() } : null,
+      aside: this.asideView(m),
+      canAsk: !!m && this.asideTarget(m) !== null,
       histDetail: this.histDetail === null ? null : (this.items()[this.histDetail] ?? null),
       idle: m?.checkpoint ? this.idle(this.decisions.get(m.id)) : false,
       terminal: m?.checkpoint ? this.hasTerminal(this.decisions.get(m.id)) : false,
@@ -842,6 +856,25 @@ export class App {
         return [];
       case "history-close": this.mode = "normal"; return [];
       case "plan-done": return this.planDone(now);
+      case "aside": return this.openAside(m);
+      case "aside-close": this.aside = null; this.mode = "normal"; return [];
+      case "aside-send": return this.asideSend(null, now);
+      case "aside-quote": return this.asideQuote(m, now);
+      case "aside-stop": return this.asideStop();
+      case "aside-retry": {
+        const last = this.aside ? visibleEntries(this.asides.get(this.aside.sid)?.entries ?? []).at(-1) : undefined;
+        return last?.status === "error" ? this.asideSend(last, now) : [];
+      }
+      case "aside-backspace": if (this.aside) this.aside.text = Array.from(this.aside.text).slice(0, -1).join(""); return [];
+      case "aside-char": return this.asideChar(a.ch, m, now);
+      case "aside-scroll": {
+        const x = this.aside;
+        if (!x) return [];
+        const n = a.unit === "half" ? Math.max(1, Math.floor(this.frame.asideRows / 2)) : 1;
+        const to = (x.scroll ?? this.frame.asideMax) + a.delta * n;
+        x.scroll = to >= this.frame.asideMax ? null : Math.max(0, to);
+        return [];
+      }
       case "ver": this.verStep(a.delta); return [];
       case "history-back": {
         this.histDetail = null;
@@ -1013,6 +1046,162 @@ export class App {
       }
       default: return [];
     }
+  }
+
+  // ---- Side questions ("Ask") ----
+
+  /** The session and decision a side question is asked from; null for what has no session (a checkpoint, a plan file the session of which is unknown) */
+  private asideTarget(m: ScreenModel): { sid: string; decisionId: string } | null {
+    if (m.readonly) {
+      const sid = this.files.get(m.readonly.name)?.session_id;
+      return sid ? { sid, decisionId: planKeyOf(m.readonly.name) } : null;
+    }
+    const d = this.decisions.get(m.id);
+    return d && d.kind !== "checkpoint" ? { sid: d.session.session_id, decisionId: d.id } : null;
+  }
+
+  private asideRunning(sid: string): boolean {
+    return !!this.asides.get(sid)?.entries.some((e) => e.status === "running");
+  }
+
+  private openAside(m: ScreenModel | null): Effect[] {
+    const target = m && this.asideTarget(m);
+    if (!target) return [];
+    this.aside = { ...target, text: "", quote: null, scroll: null, sending: null };
+    this.mode = "aside";
+    void this.loadAside(target.sid);
+    return [];
+  }
+
+  private async loadAside(sid: string): Promise<void> {
+    if (!this.fetchAside) return;
+    try {
+      const th = await this.fetchAside(sid);
+      const have = this.asides.get(sid)?.entries ?? [];
+      // An update that arrived while the fetch ran is newer than the fetch for its own entry
+      const entries = th.entries.map((e) => have.find((x) => x.id === e.id && x.finished_at && !e.finished_at) ?? e);
+      this.asides.set(sid, { entries, available: th.available, ...(th.unavailable_reason ? { reason: th.unavailable_reason } : {}) });
+      this.onAside();
+    } catch {
+      // The thread stays as it is; reopening or the next reconnect tries again
+    }
+  }
+
+  /** After a reconnect: fetch the open thread again (updates may have been missed) */
+  async reloadAside(): Promise<void> {
+    if (this.aside) await this.loadAside(this.aside.sid);
+  }
+
+  /** `aside.updated`: replace the entry with the same id, or add it */
+  asideUpdated(sid: string, entry: AsideEntry): void {
+    const th = this.asides.get(sid) ?? { entries: [], available: true };
+    const i = th.entries.findIndex((e) => e.id === entry.id);
+    this.asides.set(sid, { ...th, entries: i >= 0 ? th.entries.map((e, k) => (k === i ? entry : e)) : [...th.entries, entry] });
+    this.onAside();
+  }
+
+  /** The server took the question (202): the typed text and the quote are spent, the thread follows the bottom */
+  asideAsked(sid: string, entry: AsideEntry): void {
+    const x = this.aside;
+    if (x && x.sid === sid) {
+      if (x.sending === "text") {
+        x.text = "";
+        x.quote = null;
+      }
+      x.sending = null;
+      x.scroll = null;
+    }
+    this.asideUpdated(sid, entry);
+  }
+
+  /** 409 = an answer is still running; anything else shows the server's reason. The typed text stays */
+  asideFailed(sid: string, message: string, status: number | undefined, now: number): void {
+    if (this.aside?.sid === sid) this.aside.sending = null;
+    this.showToast(status === 409 ? t(this.lang, "aside_running_notice") : message, now);
+  }
+
+  private asideView(m: ScreenModel | null): AsideView | null {
+    const x = this.aside;
+    if (!x || this.mode !== "aside" || !m) return null;
+    const th = this.asides.get(x.sid);
+    const label = m.question?.cards.find((c) => !c.recommended)?.label ?? m.question?.cards[0]?.label ?? "";
+    return {
+      lang: this.lang,
+      entries: visibleEntries(th?.entries ?? []),
+      available: th?.available ?? true,
+      ...(th?.reason ? { reason: th.reason } : {}),
+      suggestions: suggestions(this.lang, m.kind === "plan" ? "plan" : "question", label),
+      running: this.asideRunning(x.sid),
+      text: x.text,
+      quote: x.quote,
+      scroll: x.scroll,
+    };
+  }
+
+  private asideChar(ch: string, m: ScreenModel | null, now: number): Effect[] {
+    const x = this.aside;
+    if (!x) return [];
+    if (x.text === "") {
+      const th = this.asides.get(x.sid);
+      const shown = visibleEntries(th?.entries ?? []);
+      // An empty thread: a digit asks that suggestion
+      if (!shown.length && th?.available !== false && ch >= "1" && ch <= "3" && m) {
+        const label = m.question?.cards.find((c) => !c.recommended)?.label ?? m.question?.cards[0]?.label ?? "";
+        const pick = suggestions(this.lang, m.kind === "plan" ? "plan" : "question", label)[Number(ch) - 1];
+        return pick ? this.asideSend(pick, now) : [];
+      }
+    }
+    x.text += ch;
+    return [];
+  }
+
+  /** Enter: send the typed text with the quote (nothing when empty or while an answer runs). `again`: a suggestion's text, or the entry to ask again */
+  private asideSend(again: string | AsideEntry | null, now: number): Effect[] {
+    const x = this.aside;
+    if (!x || x.sending || this.asideRunning(x.sid)) {
+      if (x && this.asideRunning(x.sid) && (again !== null || x.text.trim())) this.showToast(t(this.lang, "aside_running_notice"), now);
+      return [];
+    }
+    if (typeof again === "object" && again) {
+      x.sending = "retry";
+      return [{ type: "aside_ask", sid: x.sid, body: { question: again.question, ...(again.quote ? { quote: again.quote } : {}), decision_id: again.decision_id, regenerate_of: again.id } }];
+    }
+    const question = (again ?? x.text).trim();
+    if (!question) return [];
+    if (again !== null) x.text = again;
+    x.sending = "text";
+    return [{ type: "aside_ask", sid: x.sid, body: { question, ...(x.quote ? { quote: x.quote } : {}), decision_id: x.decisionId } }];
+  }
+
+  private asideStop(): Effect[] {
+    const x = this.aside;
+    return x && this.asideRunning(x.sid) ? [{ type: "aside_stop", sid: x.sid }] : [];
+  }
+
+  /** Tab: attach / remove the quote: the option card under the cursor (question) or the plan section under the contents cursor (plan) */
+  private asideQuote(m: ScreenModel | null, now: number): Effect[] {
+    const x = this.aside;
+    if (!x || !m) return [];
+    if (x.quote) {
+      x.quote = null;
+      return [];
+    }
+    let quote: AsideQuote | null = null;
+    if (m.kind === "plan" && m.plan) {
+      const entries = m.plan.outline.entries;
+      const e = entries[this.planState(m).cur];
+      if (e) {
+        const parent = e.level === 3 ? entries.slice(0, e.i).reverse().find((p) => p.level === 2) : undefined;
+        quote = { source: "plan", text: (parent ? `${parent.plain} > ${e.plain}` : e.plain).slice(0, 1000) };
+      }
+    } else if (m.kind === "question" && m.question) {
+      const i = this.draft(m).cursor;
+      const card = m.question.cards[i];
+      if (card) quote = { source: "option", text: `${i + 1} ${card.fixed ? t(this.lang, `fixed_${card.fixed}`) : card.label}`.slice(0, 1000) };
+    }
+    if (quote) x.quote = quote;
+    else this.showToast(t(this.lang, "aside_no_quote"), now);
+    return [];
   }
 
   // ---- Items ----
