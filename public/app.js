@@ -1910,7 +1910,12 @@ function renderRightBody(d) {
       if (single && isApproval(d)) top.append(el("div", { class: "approval-q" }, ...q.question.split(/(`[^`]+`)/).filter(Boolean).map((p) => (/^`[^`]+`$/.test(p) ? el("code", { class: "approval-cmd", text: p.slice(1, -1) }) : p))));
       let items;
       if (v2) {
-        if (v2.todoBox) top.append(el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), v2.todoBox));
+        // The blocker's steps sit at the top of the left column on a wide window (renderLeft); here only a pointer, or the steps themselves in one column
+        if (v2.todoEl) {
+          v2.todoPointer = el("div", { class: "todo-pointer", text: t("todo_on_left"), hidden: narrowMq.matches });
+          top.append(v2.todoPointer);
+          if (narrowMq.matches) top.prepend(v2.todoEl);
+        }
         items = [
           ...v2.cards.map((c) => ({ label: c.label, value: c.option.label, lines: c.lines, badge: c.recommended, pref: c.recommended, color: c.color, risk: c.risk, preview: previewOf(c.option) })),
           ...v2.extras.map(rawItem),
@@ -4157,7 +4162,11 @@ function buildModel(d) {
           pre.replaceWith(wrap);
           wrap.append(pre, el("button", { class: "copy-btn", type: "button", tabindex: "-1", text: t("copy"), onclick: () => copyCode(pre) }));
         }
-        if (todoBox.children.length) { v2.todoBox = todoBox; pend.push(enhance(todoBox).catch(() => {})); }
+        if (todoBox.children.length) {
+          v2.todoBox = todoBox;
+          v2.todoEl = el("div", { class: "todo" }, el("div", { class: "todo-cap", text: v2.todoCap }), todoBox);
+          pend.push(enhance(todoBox).catch(() => {}));
+        }
       }
       if (recSec) {
         const recBox = el("div", { class: "md" });
@@ -4409,6 +4418,24 @@ async function renderOldPlan(container, d, view) {
 
 // ---- Left column: background ----
 
+// Below 900px the columns become one page with the decision first: the blocker's steps move from the left column to the top of the choice.
+// The same node moves, so typed free text and the left column's scroll position stay
+const narrowMq = matchMedia("(max-width: 899px)");
+narrowMq.addEventListener("change", () => {
+  const d = decisions.get(shownId);
+  const v2 = d && hasExplanation(d) ? modelFor(d).v2 : null;
+  if (!v2?.todoEl || !v2.todoPointer?.isConnected) return;
+  if (narrowMq.matches) $("decision").querySelector(".q-top")?.prepend(v2.todoEl);
+  else {
+    // Back under the goal row / headline that renderBodyTop put at the top, as on a fresh render
+    const bg = $("background");
+    const above = [...bg.querySelectorAll(":scope > .hd-goal, :scope > .cp-optional, :scope > .headline, :scope > .hd-cond")].pop();
+    if (above) above.after(v2.todoEl);
+    else bg.prepend(v2.todoEl);
+  }
+  v2.todoPointer.hidden = narrowMq.matches;
+});
+
 function renderLeft(d) {
   const root = $("background");
   root.replaceChildren();
@@ -4441,6 +4468,7 @@ function renderLeft(d) {
   if (hasExplanation(d)) {
     const m = modelFor(d);
     const lead = m.v2 ? [m.v2.whyBox ?? null, recBox(m.v2), unknownsRow(m.v2), againstBox(m.v2), assumptionsBox(m.v2)].filter(Boolean) : [];
+    if (m.v2?.todoEl && !narrowMq.matches) root.append(m.v2.todoEl);
     if (lead.length) root.append(el("div", { class: "lead" }, ...lead));
     root.append(m.left);
     const aff = m.v2 ? affectsRow(m.v2) : null;

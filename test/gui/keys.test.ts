@@ -113,9 +113,10 @@ async function seedQuestion(s: Seed = {}): Promise<{ id: string; title: string }
 }
 
 /** Seed a blocker (waiting for human work). The explanation is test/explain-fixtures/pass-blocker.md; option labels come from its table's first column */
-async function seedBlocker(): Promise<{ id: string; title: string; labels: string[]; whyHeading: string; todoHeading: string }> {
+async function seedBlocker(edit?: (md: string) => string): Promise<{ id: string; title: string; labels: string[]; whyHeading: string; todoHeading: string }> {
   const n = ++seq;
-  const markdown = readFileSync(new URL("../explain-fixtures/pass-blocker.md", import.meta.url), "utf8");
+  const base = readFileSync(new URL("../explain-fixtures/pass-blocker.md", import.meta.url), "utf8");
+  const markdown = edit ? edit(base) : base;
   const fm = (k: string) => new RegExp(`^${k}: (.+)$`, "m").exec(markdown)![1]!;
   const question = fm("question");
   const title = fm("title");
@@ -440,10 +441,10 @@ gui("arrows: the hint line says ↑↓ and not j/k; there is no key badge anywhe
   assert.ok(planHint.includes("y Approve") && planHint.includes("n Reject") && planHint.includes("i Instruct box"), planHint);
 });
 
-gui("blocker: the orange band and the what-you-need-to-do section are in the right column, and Enter alone sends the \"Done. Continue\" option", async () => {
+gui("blocker: the orange band is in the header, the what-you-need-to-do section leads the left column (a pointer in the right one), and Enter alone sends the \"Done. Continue\" option", async () => {
   const { id, title, labels: blockerLabels, whyHeading: blockerWhyHeading, todoHeading: blockerTodoHeading } = await seedBlocker();
   await reopen();
-  const right = (sel: string) => ev<boolean>(`!!document.querySelector("#decision ${sel}")`);
+  const left = (sel: string) => ev<boolean>(`!!document.querySelector("#background ${sel}")`);
   assert.equal(ev<boolean>(`!!document.querySelector("#head.blocker .hd-ctx .blocker-band")`), true); // the orange band is the background of the header's context row
   assert.equal(ev<string>(`getComputedStyle(document.querySelector("#head .hd-ctx")).backgroundColor`) !== "rgba(0, 0, 0, 0)", true);
   assert.equal(ev<string>(`document.querySelector("#head .blocker-band").textContent`), "Waiting for you");
@@ -451,17 +452,69 @@ gui("blocker: the orange band and the what-you-need-to-do section are in the rig
   assert.equal(ev<boolean>(`document.querySelector("#head .hd-ctx").firstElementChild.classList.contains("blocker-band")`), true);
   assert.equal(ev<boolean>(`getComputedStyle(document.querySelector("#head .hd-title")).backgroundColor === "rgba(0, 0, 0, 0)"`), true);
   assert.equal(ev<string>(`document.querySelector("#head .v2-title").textContent`), title);
-  assert.equal(ev<string>(`document.querySelector("#decision .todo-cap").textContent`), blockerTodoHeading);
-  assert.equal(ev<boolean>(`document.querySelector("#decision .todo").textContent.includes("gcloud auth login")`), true);
-  assert.equal(right(".todo .copy-btn"), true);
-  assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes(${JSON.stringify(blockerTodoHeading)})`), false); // not in the left column
+  assert.equal(ev<string>(`document.querySelector("#background .todo-cap").textContent`), blockerTodoHeading);
+  assert.equal(ev<boolean>(`document.querySelector("#background .todo").textContent.includes("gcloud auth login")`), true);
+  assert.equal(left(".todo .copy-btn"), true);
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo")`), false); // not in the right column
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo-pointer")`), true);
+  assert.equal(ev<string>(`document.querySelector("#decision .todo-pointer").textContent`), "← Do \"What you need to do\" on the left, then choose");
+  // the steps come before "Why I stopped"
+  assert.equal(ev<boolean>(`(() => { const t = document.querySelector("#background .todo"); const w = document.querySelector("#background .why"); return !!w && !!(t.compareDocumentPosition(w) & Node.DOCUMENT_POSITION_FOLLOWING); })()`), true);
   assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes(${JSON.stringify(blockerWhyHeading)})`), true);
-  assert.equal(right(".rec-cap"), false); // no recommendation section, so no box either
+  assert.equal(ev<boolean>(`!!document.querySelector("#decision .rec-cap")`), false); // no recommendation section, so no box either
   assert.equal(ev<string>(`document.title`), "(1) ukagai · Waiting for you");
   assert.equal(view().cursor, 0);
   press("Enter");
   const d = await waitStatus(id, "answer_submitted");
   assert.equal(Object.values(d.response.answers)[0], `${blockerLabels[0]} (Recommended)`);
+});
+
+gui("blocker: with six long steps and commands the cards neither scroll nor leave the viewport at 1280x800 and 1000x700", async () => {
+  const cmd = "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/bigquery";
+  await seedBlocker((md) => md.replace(/## What you need to do[\s\S]*?(?=\n## Options)/, () =>
+    `## What you need to do\n\n${[1, 2, 3, 4, 5, 6].map((i) => `${i}. Step ${i}: run the command below in a terminal and finish the browser login.`).join("\n")}\n\n\`\`\`sh\n${[1, 2, 3, 4, 5, 6].map((i) => `${cmd} --project=project-${i}`).join("\n")}\n\`\`\`\n`));
+  try {
+    for (const [w, h] of [["1280", "800"], ["1000", "700"]]) {
+      ab("set", "viewport", w, h);
+      await reopen();
+      assert.equal(ev<boolean>(`(c => c.scrollHeight <= c.clientHeight)(document.querySelector("#decision .q-cards"))`), true, `${w}x${h}: .q-cards scrolls`);
+      assert.equal(ev<number>(`document.querySelectorAll("#decision .q-cards .opt").length`) >= 4, true);
+      for (let i = 0; i < 4; i++) {
+        const r = ev<{ top: number; bottom: number; vh: number }>(`JSON.stringify((r => ({ top: r.top, bottom: r.bottom, vh: innerHeight }))(document.querySelectorAll("#decision .q-cards .opt")[${i}].getBoundingClientRect()))`);
+        assert.equal(r.top >= 0 && r.bottom <= r.vh, true, `${w}x${h}: card ${i} ${JSON.stringify(r)}`);
+      }
+      assert.equal(visible("#decision .opt.free"), true, `${w}x${h}: free text card`);
+    }
+  } finally {
+    ab("set", "viewport", "1440", "900");
+  }
+});
+
+gui("blocker: in one column the steps are above the cards, and crossing 900px moves them without losing typed text", async () => {
+  await seedBlocker();
+  try {
+    ab("set", "viewport", "800", "900");
+    await reopen();
+    assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo")`), true);
+    assert.equal(ev<boolean>(`!!document.querySelector("#background .todo")`), false);
+    assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo-pointer:not([hidden])")`), false);
+    assert.equal(ev<boolean>(`(t => { const c = document.querySelector("#decision .q-cards"); return !!(t.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING); })(document.querySelector("#decision .todo"))`), true);
+    // the cards end above the left column that follows them (fails when .q-cards keeps its 0 flex basis: it stays 150px tall and the cards spill over)
+    assert.equal(ev<boolean>(`document.querySelector("#decision .opt.free").getBoundingClientRect().bottom <= document.querySelector("#background").getBoundingClientRect().top + 1`), true);
+    ev(`(i => { i.focus(); i.value = "typed text"; i.dispatchEvent(new Event("input", { bubbles: true })); })(document.querySelector(".free-text")), "ok"`);
+    ab("set", "viewport", "1100", "900");
+    await waitFor("the steps moved to the left column", `document.querySelector("#background .todo")`);
+    assert.equal(ev<boolean>(`!!document.querySelector("#background .todo") && !document.querySelector("#decision .todo")`), true);
+    assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo-pointer:not([hidden])")`), true);
+    assert.equal(ev<string>(`document.querySelector(".free-text").value`), "typed text");
+    ab("set", "viewport", "800", "900");
+    await waitFor("the steps moved back above the cards", `document.querySelector("#decision .todo")`);
+    assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo") && !document.querySelector("#background .todo")`), true);
+    assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo-pointer:not([hidden])")`), false);
+    assert.equal(ev<string>(`document.querySelector(".free-text").value`), "typed text");
+  } finally {
+    ab("set", "viewport", "1440", "900");
+  }
 });
 
 gui("a long headline folds at 2 lines with a Show all button, the cards and Answer stay on screen, and `.` shows the full text; the rest of the recommendation is on the left", async () => {
@@ -815,7 +868,7 @@ gui("ja: blocker band, title and badges follow the display language", async () =
   try {
     await setLang("ja", `document.querySelector("#head .blocker-band")?.textContent === "人の作業待ち"`);
     assert.equal(ev<string>(`document.title`), "(1) ukagai · 作業待ち");
-    assert.equal(ev<boolean>(`document.querySelector("#decision .todo .copy-btn").textContent === "コピー"`), true);
+    assert.equal(ev<boolean>(`document.querySelector("#background .todo .copy-btn").textContent === "コピー"`), true);
   } finally {
     ev(`document.documentElement.dataset.lang = "en", "ok"`);
   }
@@ -2054,7 +2107,7 @@ gui("blocker: after a click on the copy button, Enter sends the option under the
   const { id } = await seedBlocker();
   await reopen();
   ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; })(), "ok"`);
-  ab("click", "#decision .todo .copy-btn");
+  ab("click", "#background .todo .copy-btn");
   await sleep(200);
   press("Enter");
   await waitStatus(id, "answer_submitted", 2000);
@@ -2090,7 +2143,7 @@ gui("blocker: after the copy button, a click on the left column gives Enter back
   const { id } = await seedBlocker();
   await reopen();
   ev(`(() => { window.__clip = []; navigator.clipboard.writeText = async (s) => { window.__clip.push(s); }; })(), "ok"`);
-  ab("click", "#decision .todo .copy-btn");
+  ab("click", "#background .todo .copy-btn");
   await sleep(200);
   ab("click", "#background");
   await sleep(200);

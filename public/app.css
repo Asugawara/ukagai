@@ -272,6 +272,8 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--fg); }
 /* Blocker (waiting for human work) */
 .todo { border: 2px solid var(--blocker); background: color-mix(in srgb, var(--blocker) 8%, transparent); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 .todo-cap { font-size: 12px; font-weight: 700; color: var(--fg); }
+#background > .todo { margin-bottom: 16px; }
+.todo-pointer { font-size: 12px; color: var(--fg); margin-bottom: 8px; }
 .codewrap { position: relative; }
 .codewrap > pre { padding-right: 64px; } /* wrapped lines stay clear of the copy button */
 .copy-btn { position: absolute; top: 12px; right: 6px; font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }
@@ -387,7 +389,7 @@ pre code.hljs { background: none; padding: 0; }
 @media (max-width: 899px) {
   #decision.split { overflow: visible; }
   .q-top { max-height: none; overflow: visible; }
-  .q-cards { overflow: visible; }
+  .q-cards { overflow: visible; flex: none; } /* a 0 basis would keep it at min-height and the cards would spill over the left column below */
 }
 @media (max-height: 820px) {
   .q-top { max-height: 58vh; }
