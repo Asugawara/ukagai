@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import {
   ASIDE_MAX_ENTRIES,
+  AskUserQuestionInput,
+  ExitPlanModeInput,
   type AgentName,
   type AsideEntry,
   type AsideQuote,
@@ -11,6 +13,7 @@ import {
   type AsideTrace,
   type AsideUpdated,
   type AsideUsage,
+  type Decision,
 } from "../contract.js";
 import type { SseHub } from "./sse.js";
 import { HttpError, type Store } from "./store.js";
@@ -25,12 +28,14 @@ const HISTORY_ENTRIES = 6;
 const HISTORY_CHARS = 8000;
 const TRANSCRIPT_TAIL = 1024 * 1024;
 const CODEX_NOISE = "Custom tool call output is missing for call id";
+const SCREEN_PLAN_CAP = 12000;
+const SCREEN_QUESTION_CAP = 4000;
 
 /** What the store knows of a session, as far as a fork needs it */
 export type AsideSession = { cwd: string; transcript_path?: string; agent: AgentName; title?: string };
 
-/** What is on screen while the human asks: the pending decision's kind and title */
-export type AsidePending = { kind: "question" | "plan"; title?: string };
+/** What is on screen while the human asks: the pending decision's kind and title, the tool that waits for it and what it shows */
+export type AsidePending = { kind: "question" | "plan"; title?: string; tool?: string; content?: string };
 
 export type AsideOptions = {
   /** The session behind an id, or undefined for an unknown one */
@@ -71,6 +76,9 @@ export function buildPrompt(input: AsidePromptInput): string {
     "Answer from this conversation. You may read files; change nothing and ask nothing back.",
     `This exchange is not part of your main conversation; the human answers the pending ${what} separately.`,
   ];
+  if (input.pending?.tool) lines.push(`You already called ${input.pending.tool} for it; that call waits for the human's answer in ukagai and may be missing from the conversation above.`);
+  else if (input.pending?.kind === "plan" && input.pending.content) lines.push("You already proposed this plan; it waits for the human's approval in ukagai.");
+  if (input.pending?.content) lines.push(`What the human sees now:\n${input.pending.content}`);
   const past = latestOfChains(input.history).slice(-HISTORY_ENTRIES);
   const blocks = past.map((e) => `Q: ${e.question}\nA: ${e.answer}`);
   while (blocks.length > 0 && blocks.join("\n\n").length > HISTORY_CHARS) blocks.shift();
@@ -476,6 +484,36 @@ export class AsideStore {
 }
 
 /** The store of threads wired to the decision store (session lookup, titles) and the SSE hub */
+function cap(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+/** The tool that waits for a decision and what it shows, as the fork's prompt tells the agent (skipped when a field is missing) */
+export function screenOf(d: Decision): { tool?: string; content?: string } {
+  const codex = d.session.agent === "codex";
+  if (d.kind === "approve_plan") {
+    const req = ExitPlanModeInput.safeParse(d.request);
+    // Codex proposes a plan without a tool call, so the prompt says "proposed" instead
+    return {
+      ...(codex ? {} : { tool: "ExitPlanMode" }),
+      ...(req.success ? { content: cap(req.data.plan, SCREEN_PLAN_CAP) } : {}),
+    };
+  }
+  if (d.kind === "answer_question") {
+    const req = AskUserQuestionInput.safeParse(d.request);
+    const content = req.success
+      ? cap(
+          req.data.questions
+            .map((q) => [q.question, ...q.options.map((o) => (o.description ? `- ${o.label}: ${o.description}` : `- ${o.label}`))].join("\n"))
+            .join("\n\n"),
+          SCREEN_QUESTION_CAP,
+        )
+      : undefined;
+    return { tool: codex ? "request_user_input" : "AskUserQuestion", ...(content !== undefined ? { content } : {}) };
+  }
+  return {};
+}
+
 export function createAside(store: Store, hub: SseHub, extra: Pick<AsideOptions, "bins" | "timeoutMs" | "killGraceMs" | "env"> = {}): AsideStore {
   return new AsideStore({
     ...extra,
@@ -495,7 +533,7 @@ export function createAside(store: Store, hub: SseHub, extra: Pick<AsideOptions,
       const d = store.get(decisionId);
       if (!d) return undefined;
       const title = d.explanation?.title;
-      return { kind: d.kind === "approve_plan" ? "plan" : "question", ...(title ? { title } : {}) };
+      return { kind: d.kind === "approve_plan" ? "plan" : "question", ...(title ? { title } : {}), ...screenOf(d) };
     },
     broadcast: (event, data) => hub.broadcast(event, data),
   });

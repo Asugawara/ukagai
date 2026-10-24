@@ -73,6 +73,12 @@ async function settled(env: Env, sid = "s1"): Promise<AsideEntry> {
   throw new Error("still running");
 }
 const read = (env: Env, file: string) => readFileSync(join(env.out, file), "utf8");
+/** Creates a decision through the API and returns its id */
+async function decide(env: Env, body: Record<string, unknown>): Promise<string> {
+  const r = await api(env, "/api/decisions", body);
+  assert.equal(r.status, 201, JSON.stringify(await r.clone().json()));
+  return ((await r.json()) as { id: string }).id;
+}
 
 /** A Codex session: a decision carries the agent (the event stream does not) */
 async function codexSession(env: Env, sid: string, transcript_path: string): Promise<void> {
@@ -378,6 +384,70 @@ test("a regenerated entry re-asks the question and quote of the first, and the h
   const stdin = read(env, "claude.stdin");
   assert.equal(stdin.match(/Q: original\?/g)?.length, 1, "one Q&A for the chain");
   assert.equal((await ask(env, "x", { regenerate_of: "nope" })).status, 400);
+});
+
+test("prompt: a decision names the tool that waits for the human and what is on screen", () => {
+  const p = buildPrompt({
+    pending: { kind: "plan", title: "P", tool: "ExitPlanMode", content: "# Plan\n\nstep 1" },
+    question: "what does this mean?",
+    history: [],
+  });
+  assert.match(p, /\nYou already called ExitPlanMode for it; that call waits for the human's answer in ukagai and may be missing from the conversation above\.\nWhat the human sees now:\n# Plan\n\nstep 1\nQuestion: what does this mean\?\n$/);
+  const codexPlan = buildPrompt({ pending: { kind: "plan", content: "# Plan" }, question: "x", history: [] });
+  assert.ok(codexPlan.includes("\nYou already proposed this plan; it waits for the human's approval in ukagai.\nWhat the human sees now:\n# Plan\n"));
+  assert.ok(!codexPlan.includes("You already called"));
+  const bare = buildPrompt({ question: "x", history: [] });
+  assert.ok(!bare.includes("You already called") && !bare.includes("What the human sees now"));
+});
+
+test("a decision on screen: the fork is told the tool that waits and the plan or the questions with their options", async () => {
+  const env = await boot(CLAUDE_OK);
+  // A Claude decision's transcript must sit under <home>/.claude/projects (the home is the test root, the parent of cwd)
+  const session = { session_id: "s1", cwd: env.cwd, transcript_path: join(env.cwd, "..", ".claude", "projects", "p", "s1.jsonl") };
+  const plan = await decide(env, { tool_use_id: "tp", kind: "approve_plan", session, request: { plan: "# Plan\n\nstep one", planFilePath: join(env.cwd, "plan.md") } });
+  await ask(env, "what does this mean?", { decision_id: plan });
+  await settled(env);
+  const planStdin = read(env, "claude.stdin");
+  assert.ok(planStdin.includes("You already called ExitPlanMode for it;"));
+  assert.ok(planStdin.includes("What the human sees now:\n# Plan\n\nstep one\n"));
+
+  const question = await decide(env, {
+    tool_use_id: "tq",
+    kind: "answer_question",
+    session,
+    request: { questions: [{ question: "Which way?", header: "Way", options: [{ label: "Left", description: "go left" }, { label: "Right" }], multiSelect: false }] },
+  });
+  await ask(env, "and this?", { decision_id: question });
+  await settled(env);
+  const questionStdin = read(env, "claude.stdin");
+  assert.ok(questionStdin.includes("You already called AskUserQuestion for it;"));
+  assert.match(questionStdin, /What the human sees now:\nWhich way\?\n- Left: go left\n- Right\n/);
+
+  // Codex decisions carry "" (the bridge has no transcript; see codexSession)
+  const codex = { session_id: "c1", cwd: env.cwd, transcript_path: "", agent: "codex" };
+  const cq = await decide(env, {
+    tool_use_id: "tc",
+    kind: "answer_question",
+    session: codex,
+    request: { questions: [{ question: "Pick?", header: "Pick", options: [{ label: "A" }], multiSelect: false }] },
+  });
+  await ask(env, "why?", { decision_id: cq }, "c1");
+  await settled(env, "c1");
+  const codexStdin = read(env, "codex.stdin");
+  assert.ok(codexStdin.includes("You already called request_user_input for it;"));
+  assert.ok(codexStdin.includes("Pick?\n- A\n"));
+
+  const long = await decide(env, { tool_use_id: "tl", kind: "approve_plan", session, request: { plan: "x".repeat(13000), planFilePath: join(env.cwd, "long.md") } });
+  await ask(env, "how long?", { decision_id: long });
+  await settled(env);
+  const longStdin = read(env, "claude.stdin");
+  assert.ok(longStdin.includes("x".repeat(12000) + "…"));
+  assert.ok(!longStdin.includes("x".repeat(12001)));
+
+  await ask(env, "about the file?", { decision_id: "plan.md" });
+  await settled(env);
+  const fileStdin = read(env, "claude.stdin");
+  assert.ok(!fileStdin.includes("You already called") && !fileStdin.includes("What the human sees now"));
 });
 
 test("the thread survives the decision: separators come from decision_id / title; entries are kept oldest first", async () => {
