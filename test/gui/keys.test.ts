@@ -499,14 +499,16 @@ gui("blocker: in one column the steps are above the cards, and crossing 900px mo
     assert.equal(ev<boolean>(`!!document.querySelector("#background .todo")`), false);
     assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo-pointer:not([hidden])")`), false);
     assert.equal(ev<boolean>(`(t => { const c = document.querySelector("#decision .q-cards"); return !!(t.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING); })(document.querySelector("#decision .todo"))`), true);
+    // the cards end above the left column that follows them (fails when .q-cards keeps its 0 flex basis: it stays 150px tall and the cards spill over)
+    assert.equal(ev<boolean>(`document.querySelector("#decision .opt.free").getBoundingClientRect().bottom <= document.querySelector("#background").getBoundingClientRect().top + 1`), true);
     ev(`(i => { i.focus(); i.value = "typed text"; i.dispatchEvent(new Event("input", { bubbles: true })); })(document.querySelector(".free-text")), "ok"`);
     ab("set", "viewport", "1100", "900");
-    await sleep(300);
+    await waitFor("the steps moved to the left column", `document.querySelector("#background .todo")`);
     assert.equal(ev<boolean>(`!!document.querySelector("#background .todo") && !document.querySelector("#decision .todo")`), true);
     assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo-pointer:not([hidden])")`), true);
     assert.equal(ev<string>(`document.querySelector(".free-text").value`), "typed text");
     ab("set", "viewport", "800", "900");
-    await sleep(300);
+    await waitFor("the steps moved back above the cards", `document.querySelector("#decision .todo")`);
     assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo") && !document.querySelector("#background .todo")`), true);
     assert.equal(ev<boolean>(`!!document.querySelector("#decision .todo-pointer:not([hidden])")`), false);
     assert.equal(ev<string>(`document.querySelector(".free-text").value`), "typed text");

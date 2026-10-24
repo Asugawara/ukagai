@@ -389,7 +389,7 @@ pre code.hljs { background: none; padding: 0; }
 @media (max-width: 899px) {
   #decision.split { overflow: visible; }
   .q-top { max-height: none; overflow: visible; }
-  .q-cards { overflow: visible; }
+  .q-cards { overflow: visible; flex: none; } /* a 0 basis would keep it at min-height and the cards would spill over the left column below */
 }
 @media (max-height: 820px) {
   .q-top { max-height: 58vh; }
