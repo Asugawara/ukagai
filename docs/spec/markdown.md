@@ -6,6 +6,8 @@ Status: contract between the hook (what the agent is told), the GUI (`public/`) 
 
 GitHub-flavoured Markdown as parsed by `marked` in the GUI and by `src/tui/markdown.ts` in the TUI: headings (`##`, `###`; `#` is reserved for the title), paragraphs, emphasis, inline code, fenced code with a language, links, ordered and unordered lists, nested lists, GFM tables with alignment, horizontal rules, blockquotes, footnotes (`[^1]` with `[^1]: …` definitions anywhere in the body).
 
+GUI: a link opens in a new tab (`target=_blank`, `rel=noopener noreferrer`) so the decision stays open; an in-page `#` link and a `mailto:` link open in place.
+
 Raw HTML is **not** part of the dialect: the GUI sanitizer drops every tag except the ones listed in §2.3, the TUI prints tags as text. Scripts, styles, iframes, forms and event attributes never render.
 
 ## 2. Constructs
