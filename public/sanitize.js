@@ -34,6 +34,8 @@ function allowTags(html) {
         } else if (!ALLOWED_ATTRS.has(a.name) || (a.name.startsWith("data-") && !(tag === "sup" || (tag === "pre" && a.name === "data-title")))) n.removeAttribute(a.name);
       }
       if (tag === "a" && n.hasAttribute("href") && !safeHref(n.getAttribute("href"))) n.removeAttribute("href");
+      // A link opens in a new tab so the decision and its drafts stay open; an in-page `#` link and mailto: stay in place
+      if (tag === "a" && n.hasAttribute("href") && !/^\s*(?:#|mailto:)/i.test(n.getAttribute("href"))) { n.setAttribute("target", "_blank"); n.setAttribute("rel", "noopener noreferrer"); }
       if (tag === "input") n.setAttribute("disabled", "");
     }
   };

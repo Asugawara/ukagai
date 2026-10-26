@@ -182,7 +182,7 @@ pie title Split
 <a href="java
 script:window.__x=4">x4</a>
 
-[fine](https://example.com/page) and [rel](docs/spec.md)
+[fine](https://example.com/page) and [rel](docs/spec.md) and [anchor](#options) and [mail](mailto:someone@example.com)
 
 ## Options
 
