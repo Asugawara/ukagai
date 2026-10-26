@@ -542,6 +542,14 @@ gui("raw HTML: scripts, iframes, forms, event attributes and unknown tags are dr
   // ordinary links keep their href
   assert.equal(ev<string>(`[...document.querySelectorAll("${BG} a")].find((x) => x.textContent === "fine").getAttribute("href")`), "https://example.com/page");
   assert.equal(ev<string>(`[...document.querySelectorAll("${BG} a")].find((x) => x.textContent === "rel").getAttribute("href")`), "docs/spec.md");
+  // a link opens in a new tab; an in-page # link and mailto: stay in place
+  for (const label of ["fine", "rel"]) {
+    assert.equal(ev<string>(`[...document.querySelectorAll("${BG} a")].find((x) => x.textContent === ${JSON.stringify(label)}).getAttribute("target")`), "_blank", label);
+    assert.equal(ev<string>(`[...document.querySelectorAll("${BG} a")].find((x) => x.textContent === ${JSON.stringify(label)}).getAttribute("rel")`), "noopener noreferrer", label);
+  }
+  for (const label of ["anchor", "mail"]) {
+    assert.equal(ev<boolean>(`[...document.querySelectorAll("${BG} a")].find((x) => x.textContent === ${JSON.stringify(label)}).hasAttribute("target")`), false, label);
+  }
 });
 
 const EDGE_MD = `---
