@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/Asugawara/ukagai/compare/v0.11.0...v0.11.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* show each piece of content once on the decision screens ([3c999cb](https://github.com/Asugawara/ukagai/commit/3c999cba534cec81a722950f54fd083827969cbd))
+
 ## [0.11.0](https://github.com/Asugawara/ukagai/compare/v0.10.0...v0.11.0) (2026-10-26)
 
 
