@@ -278,14 +278,9 @@ details > summary { cursor: pointer; font-size: 13px; color: var(--fg); }
 .codewrap > pre { padding-right: 64px; } /* wrapped lines stay clear of the copy button */
 .copy-btn { position: absolute; top: 12px; right: 6px; font: inherit; font-size: 11px; line-height: 16px; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }
 
-/* Folding of long text (`.` or the header's "Show all" expands everything): the headline and the card bodies 2 lines (the card under the cursor is whole), the plan's scope 8 */
-.impact { position: relative; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
-.impact-cap { font-size: 11px; font-weight: 700; color: var(--fg); }
-.impact-body { max-height: calc(8 * 1.6em); overflow: hidden; }
-.impact.has-more .impact-body { -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+/* Folding of long text (`.` or the header's "Show all" expands everything): the headline and the card bodies 2 lines (the card under the cursor is whole) */
 .rec-callouts blockquote.callout, .rec-body blockquote.callout { margin: 8px 0 0; }
 .opt .desc.clampable, .headline.clampable { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
-.expanded .impact-body { max-height: none; -webkit-mask-image: none; mask-image: none; }
 .expanded .opt .desc.clampable, .opt.cursor .desc.clampable, .expanded .headline.clampable { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
 .more-chip { font: inherit; font-size: 12px; line-height: 18px; padding: 0 4px; border: 0; background: none; color: var(--fg); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
 

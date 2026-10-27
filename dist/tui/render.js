@@ -6,7 +6,7 @@ import { CANNOT_REASONS, CANNOT_TERMS, cannotRows } from "./cannot.js";
 import { t } from "./i18n.js";
 import { oneLine } from "./history.js";
 import { inputLines, threadLines } from "./aside.js";
-import { planOutline, unreadNames, unreadSections } from "./plan.js";
+import { plainMd, planOutline, unreadNames, unreadSections } from "./plan.js";
 import { padEnd, sliceCols, stripAnsi, truncate, width, wrap } from "./width.js";
 /** The instruction card of a plan, always shown: its label, the numbered presets (pick one with its digit while the box is empty), then the box (typing, kept with Esc, or the placeholder) */
 function instructCard(v, w, lang, on, key = "i") {
@@ -142,8 +142,6 @@ function rightColumn(v, m, w, rows) {
         return { lines, focus, hint: t(lang, "hint_unsupported") };
     }
     if (m.kind === "plan") {
-        if (m.impact)
-            lines.push(...recBox(m.impact, w, { rows, full: v.recFull, lang, title: t(lang, "impact_title"), always: true }), "");
         const ro = !!m.readonly;
         const long = m.plan && v.plan ? { p: m.plan, st: v.plan } : null;
         // A long plan has two zones; the options take the arrows only in the options zone (a short plan is always there)
@@ -423,6 +421,13 @@ function verHeader(ver, cols) {
     const sum = `${BOLD}${ver.head}${RESET} ${ver.body}${ver.ins ? ` · ${BOLD}${ver.ins.label}${RESET}${ver.ins.text.trim() ? ` ${ver.ins.text.replace(/\s+/g, " ")}` : ""}` : ""}`;
     return [truncate(tabs, cols), truncate(sum, cols), ...(ver.note ? [truncate(`${BOLD}${ver.note}${RESET}`, cols)] : [])];
 }
+/** The plan's first `# H1` line is dropped when its text is the header title (the title is drawn there already); any other H1 is kept */
+function dropTitleLine(lines, title) {
+    const i = lines.findIndex((l) => /^#[ \t]+(.+?)[ \t]*$/.test(l));
+    if (i < 0 || plainMd(/^#[ \t]+(.+?)[ \t]*$/.exec(lines[i])[1]) !== plainMd(title))
+        return lines;
+    return lines.filter((_, k) => k !== i);
+}
 /** A long plan: the text before the first section, then one `▸ ☐ Heading (n lines)` row per H2 / H3 with its body under it while open */
 function planLeft(v, m, w, lang, fullHint) {
     const { outline: o, text, extra } = m.plan;
@@ -458,7 +463,7 @@ function planLeft(v, m, w, lang, fullHint) {
         out.lines.push("");
         out.wide.push(null);
     };
-    add(-1, src.slice(0, o.entries[0]?.at ?? src.length).join("\n"), w, "");
+    add(-1, dropTitleLine(src.slice(0, o.entries[0]?.at ?? src.length), m.title).join("\n"), w, "");
     let parentRow = 0;
     let parentOpen = true;
     o.entries.forEach((e, k) => {
@@ -514,7 +519,7 @@ function planFlatMarked(v, m, w, lang, fullHint) {
         out.wide.push(null);
     };
     const md = (s, width) => renderMarkdownRich(s, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS });
-    const pre = src.slice(0, h2[0]?.at ?? src.length).join("\n");
+    const pre = dropTitleLine(src.slice(0, h2[0]?.at ?? src.length), m.title).join("\n");
     if (pre.trim())
         push(md(pre, w), "  ");
     h2.forEach((e, k) => {
@@ -572,7 +577,8 @@ function leftBody(v, m, w, lang, fullHint, rows) {
             wrap(inline(a, { marks: textMarks }), Math.max(8, w - 2)).forEach((l, k) => front.push((k === 0 ? `${GREEN}☐${RESET} ` : "  ") + l));
         front.push(`${t(lang, "assumptions_note")}`, "");
     }
-    const rest = { secRows: [], ...(m.background ? renderMarkdownRich(m.background, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] }) };
+    const restText = m.kind === "plan" && m.background ? dropTitleLine(m.background.split("\n"), m.title).join("\n") : m.background;
+    const rest = { secRows: [], ...(restText ? renderMarkdownRich(restText, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] }) };
     const back = m.affects.length ? wrap(`${t(lang, "affects_title")} ${affectsText(m).slice(2)}`, w) : [];
     const tailLines = back.length ? ["", ...back] : [];
     if (!front.length && !tailLines.length)

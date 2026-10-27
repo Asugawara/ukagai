@@ -193,17 +193,8 @@ function rawCard(o, recommended) {
         ...(preview ? { preview } : {}),
     });
 }
-/** Extract the body of the "Scope and reversibility" section from a plan (exact match first, then partial); null if absent */
 /** The `ScreenModel.planKey` / id of a plan file: `plan:<file name>` */
 export const planKeyOf = (name) => `plan:${name}`;
-export function impactOf(plan) {
-    const body = toLines(plan);
-    const { inFence } = scanFences(body);
-    const sec = findSection(scanHeadings(body, inFence), body.length, SECTION.impact);
-    if (!sec)
-        return null;
-    return body.slice(sec.start + 1, sec.end).join("\n").trim() || null;
-}
 /** Split off the first sentence (`。` `!` `?`, or a `.` followed by whitespace / the end) */
 /** The last sentence of the recommendation's prose (callouts and code excluded) when it holds a condition word and is not the headline itself */
 export function condOf(recommendation) {
@@ -267,7 +258,7 @@ export function buildModel(d, lang = "en", history = null) {
         }
         const outline = planOutline(plan);
         const name = planNameOf(d);
-        return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, impact: impactOf(plan), plan: outline.long ? { outline, text: plan, extra } : null, ...(name ? { planKey: planKeyOf(name) } : {}) };
+        return { ...base, ...NO_RICH, kind: "plan", background, recommendation: null, plan: outline.long ? { outline, text: plan, extra } : null, ...(name ? { planKey: planKeyOf(name) } : {}) };
     }
     const qs = questionsOf(d);
     const q = qs[0];
@@ -431,6 +422,16 @@ export function buildModel(d, lang = "en", history = null) {
     const kept = body.filter((_, i) => !hide.has(i));
     const cards = [...parsed.cards, ...parsed.extras].map((c) => (plainQuestion.approval && DENY_RE.test(c.label) ? { ...c, heavy: false } : c));
     const split = recommendation ? splitHeadline(recommendation) : null;
+    const cond = recommendation ? condOf(recommendation) : null;
+    // The condition sentence is drawn on its own line (`cond`), so it leaves the recommendation box
+    let rest = split?.rest ?? "";
+    if (cond && rest) {
+        // the last occurrence: a callout or other text may follow the condition sentence
+        const flat = cond.replace(/\s+/g, " ");
+        const at = rest.lastIndexOf(flat);
+        if (at >= 0)
+            rest = `${rest.slice(0, at).trimEnd()} ${rest.slice(at + flat.length).trimStart()}`.trim();
+    }
     const fns = parseFootnotes(body.join("\n"));
     return {
         ...base,
@@ -438,9 +439,9 @@ export function buildModel(d, lang = "en", history = null) {
         background: kept.join("\n").trim(),
         recommendation,
         why,
-        cond: recommendation ? condOf(recommendation) : null,
+        cond,
         headline: split?.headline ?? null,
-        recRest: split?.rest || null,
+        recRest: rest || null,
         unknowns,
         assumptions,
         against,
@@ -471,7 +472,6 @@ export function buildPlanFileModel(name, title, markdown, mtime) {
         createdAt: mtime,
         background: markdown,
         recommendation: null,
-        impact: null,
         plan: outline.long ? { outline, text: markdown, extra: "" } : null,
         readonly: { name },
         blocker: false,

@@ -964,7 +964,7 @@ function renderBodyTop(d) {
   else if (d.kind === "approve_plan") headline = el("div", { class: "headline plain clampable", text: t("plan_question") });
   else if (d.request.questions.length === 1 && isQuiz(d)) headline = el("div", { class: "headline plain quiz-q", text: lastParagraph(d.request.questions[0].question) });
   else if (d.request.questions.length === 1 && modelFor(d).v2) headline = modelFor(d).v2.headline ?? null;
-  else if (d.request.questions.length === 1 && title !== d.request.questions[0].question) headline = el("div", { class: "headline plain clampable", text: d.request.questions[0].question });
+  else if (!isApproval(d) && d.request.questions.length === 1 && title !== d.request.questions[0].question) headline = el("div", { class: "headline plain clampable", text: d.request.questions[0].question });
   if (headline) headline.onclick = () => toggleExpand(dr);
   const cond = d.kind === "answer_question" && d.request.questions.length === 1 ? modelFor(d).v2?.cond : null;
   for (const e of root.querySelectorAll(":scope > .hd-goal, :scope > .cp-optional, :scope > .headline, :scope > .hd-cond")) e.remove();
@@ -1534,7 +1534,7 @@ function revealCard(card) {
   else if (c.bottom > b.bottom - 2) box.scrollTop += c.bottom - b.bottom + 4;
 }
 
-// Folding of long text: the headline and the card bodies are 2 lines (the card under the cursor shows everything), the plan's scope section 8.
+// Folding of long text: the headline and the card bodies are 2 lines (the card under the cursor shows everything).
 // One text button in the header (shown only when something is folded) and `.` toggle everything; the state is per decision
 function setExpanded(dr) {
   for (const root of [$("decision"), $("head"), $("background")]) root.classList.toggle("expanded", !!dr.expanded);
@@ -1555,7 +1555,6 @@ function updateMore(dr) {
   chip.hidden = ![...document.querySelectorAll("#head .clampable, #background .clampable, #decision .clampable")].some((c) => c.scrollHeight > c.clientHeight + 1);
 }
 function markClamps(root, dr) {
-  for (const c of root.querySelectorAll(".impact .clampable")) c.parentElement.classList.toggle("has-more", c.scrollHeight > c.clientHeight + 1);
   setExpanded(dr);
   updateMore(dr);
 }
@@ -1564,20 +1563,6 @@ function renderRight(d) {
   document.body.append(toastBox); // park it so replaceChildren does not remove it
   renderRightBody(d);
   placeToasts();
-}
-
-// Show the "Scope and reversibility" section (matched by name, either language) of the plan body in the right column. null when absent.
-// The caption is the heading as written in the file
-function impactBox(d) {
-  const tmp = el("div", { class: "md" });
-  setMarkdown(tmp, d.request.plan, d);
-  const sec = findSection(sectionsOf(tmp), SECTION.impact);
-  const nodes = sec?.nodes.slice(1) ?? [];
-  if (!nodes.some((n) => (n.textContent ?? "").trim())) return null;
-  const body = el("div", { class: "clampable impact-body md" }, ...nodes);
-  callouts(body);
-  softHyphens(body);
-  return el("div", { class: "impact" }, el("div", { class: "impact-cap", text: t("sec_impact") }), body);
 }
 
 window.addEventListener("resize", () => {
@@ -2206,8 +2191,6 @@ function renderRightBody(d) {
 
   // approve_plan: the plan column (left) and one option list (right): Approve (auto) / Instruct / Reject
   const qsBox = el("div", { class: "qs" });
-  const impact = impactBox(d);
-  if (impact) qsBox.append(impact);
   root.append(qsBox);
   const outline = planOutline(d);
   const zoneNow = () => (outline ? planState(d, outline).zone : "opts");
@@ -3763,6 +3746,32 @@ function splitHeadline(box) {
   return head;
 }
 
+// Remove the condition sentence (shown on its own line as v2.cond) from the end of the paragraph that holds it; the paragraph goes when nothing is left
+function cutCondition(box, cond) {
+  const p = [...box.children].filter((n) => n.tagName === "P").findLast((n) => (n.textContent ?? "").includes(cond));
+  if (!p) return;
+  const start = (p.textContent ?? "").lastIndexOf(cond);
+  const texts = [];
+  const w = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+  let acc = 0;
+  const range = document.createRange();
+  let began = false;
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    texts.push(n);
+    const len = n.textContent.length;
+    if (!began && acc + len > start) { range.setStart(n, start - acc); began = true; }
+    acc += len;
+  }
+  if (!began) return;
+  range.setEnd(p, p.childNodes.length);
+  range.deleteContents();
+  for (let i = texts.length - 1; i >= 0; i--) {
+    texts[i].textContent = texts[i].textContent.replace(/\s+$/, "");
+    if (texts[i].textContent) break;
+  }
+  if (!(p.textContent ?? "").trim() && !p.querySelector("img")) p.remove();
+}
+
 // Apply pre folding, diff and mermaid together (safe to call repeatedly)
 async function enhance(container, opts = []) {
   callouts(container);
@@ -3941,13 +3950,14 @@ function remapPlanState(from, to, st) {
 }
 
 // Per-decision state: which sections are open, which have been opened at least once (read), the selected section, the zone (plan | opts).
-// The first H2 is open (and counts as read); the scope section is on screen in the right column, so it counts as read
+// The first H2 and the scope section (wherever it is in the plan) are open and count as read
 function planState(d, o) {
   const key = planKey(d);
   let st = planStates.get(key);
   if (!st) {
     const first = o.entries.find((e) => e.level === 2);
-    planStates.set(key, (st = { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), upd: new Set(), cur: first?.i ?? 0, zone: "plan" }));
+    const opened = [...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)];
+    planStates.set(key, (st = { open: new Set(opened), read: new Set(opened), upd: new Set(), cur: first?.i ?? 0, zone: "plan" }));
   }
   return st;
 }
@@ -4101,6 +4111,10 @@ async function renderPlanMarkdown(container, d, view) {
   setMarkdown(container, d.request.plan, d);
   const o = planOutline(d);
   if (o && foldPlanSections(container, o, d)) container.classList.add("plan-long");
+  // The plan's H1 is the header title (the same text): hidden, not drawn twice (it stays in the DOM for sectionPath). A different H1 stays visible
+  const h1 = container.querySelector(":scope > h1");
+  const norm = (s) => s.replace(/\s+/g, " ").trim();
+  if (h1 && norm(h1.textContent ?? "") === norm(plainMd(titleOf(d)))) h1.hidden = true;
   pathBadges(container, d);
   await enhance(container);
   pathBadges(container, d);
@@ -4207,6 +4221,7 @@ function buildModel(d) {
         recSec.head.remove();
         v2.cond = condSentence(recBox);
         v2.headline = splitHeadline(recBox);
+        if (v2.cond) cutCondition(recBox, v2.cond);
         if (recBox.children.length) { v2.recBox = recBox; pend.push(enhance(recBox, v2.ctx.opts).catch(() => {})); }
       }
       // "Why this decision is needed now" (or "Why I stopped") leads the left column

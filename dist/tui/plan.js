@@ -13,7 +13,7 @@ export function pathOf(code) {
         return null;
     return s.includes("/") || /\.[a-z][a-z0-9]{0,5}$/i.test(s) ? s : null;
 }
-const plainMd = (s) => s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+export const plainMd = (s) => s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
 const IMPACT = SECTION.impact.map(normalizeHeading);
 const isImpactTitle = (title) => IMPACT.some((n) => normalizeHeading(plainMd(title)).includes(n));
 export function planOutline(md) {
@@ -46,10 +46,11 @@ export function planOutline(md) {
     const h2 = entries.filter((e) => e.level === 2).length;
     return { lines: lines.length, entries, h2, files: filesIn(0, lines.length).size, long: h2 > PLAN_SHORT_H2 && lines.length > PLAN_SHORT_LINES };
 }
-/** The first H2 is open and counts as read; the scope section is on screen in the decision column, so it counts as read too */
+/** The first H2 and the scope section (wherever it is in the plan) start open and count as read */
 export function initialPlanState(o) {
     const first = o.entries.find((e) => e.level === 2);
-    return { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), updated: new Set(), cur: first?.i ?? 0, zone: "plan" };
+    const opened = [...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)];
+    return { open: new Set(opened), read: new Set(opened), updated: new Set(), cur: first?.i ?? 0, zone: "plan" };
 }
 /** `level:title` per outline entry: how a changed section is matched with its earlier self */
 export const headings = (o) => o.entries.map((e) => `${e.level}:${e.title}`);
@@ -96,7 +97,7 @@ export function remapState(o, prev) {
     st.cur = cur ?? Math.max(0, Math.min(prev.st.cur, o.entries.length - 1));
     return st;
 }
-/** The H2 sections never opened (the scope section excluded), in order */
+/** The H2 sections never opened (the scope section excluded: it starts read), in order */
 export const unreadSections = (o, st) => o.entries.filter((e) => e.level === 2 && !st.read.has(e.i));
 export const parentOf = (o, e) => (e.level === 3 ? [...o.entries].reverse().find((x) => x.level === 2 && x.at < e.at) : undefined);
 /** Open a section (and its H2), marking both read; or close it */
