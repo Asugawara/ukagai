@@ -510,7 +510,7 @@ export class App {
     }
     let old = vs.rec.models.get(vs.idx);
     // An earlier version is a flat read-only document (the folding state belongs to the version being decided); the id stays so the typed text does too
-    if (!old) vs.rec.models.set(vs.idx, (old = { ...m, background: vs.rec.data.versions[vs.idx]!.plan, plan: null, impact: null }));
+    if (!old) vs.rec.models.set(vs.idx, (old = { ...m, background: vs.rec.data.versions[vs.idx]!.plan, plan: null }));
     return old;
   }
 

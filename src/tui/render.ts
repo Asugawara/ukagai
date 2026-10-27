@@ -7,7 +7,7 @@ import type { Lang } from "../settings/config.js";
 import { t } from "./i18n.js";
 import { oneLine, type HistoryItem } from "./history.js";
 import { inputLines, threadLines, type AsideView } from "./aside.js";
-import { planOutline, unreadNames, unreadSections, type PlanState } from "./plan.js";
+import { plainMd, planOutline, unreadNames, unreadSections, type PlanState } from "./plan.js";
 import type { DiffLine, PlanDiff, SectionDiff } from "../contract.js";
 import { padEnd, sliceCols, stripAnsi, truncate, width, wrap } from "./width.js";
 
@@ -298,7 +298,6 @@ function rightColumn(v: View, m: ScreenModel, w: number, rows: number): Column {
   }
 
   if (m.kind === "plan") {
-    if (m.impact) lines.push(...recBox(m.impact, w, { rows, full: v.recFull, lang, title: t(lang, "impact_title"), always: true }), "");
     const ro = !!m.readonly;
     const long = m.plan && v.plan ? { p: m.plan, st: v.plan } : null;
     // A long plan has two zones; the options take the arrows only in the options zone (a short plan is always there)
@@ -559,6 +558,13 @@ function verHeader(ver: VersionView, cols: number): string[] {
   return [truncate(tabs, cols), truncate(sum, cols), ...(ver.note ? [truncate(`${BOLD}${ver.note}${RESET}`, cols)] : [])];
 }
 
+/** The plan's first `# H1` line is dropped when its text is the header title (the title is drawn there already); any other H1 is kept */
+function dropTitleLine(lines: string[], title: string): string[] {
+  const i = lines.findIndex((l) => /^#[ \t]+(.+?)[ \t]*$/.test(l));
+  if (i < 0 || plainMd(/^#[ \t]+(.+?)[ \t]*$/.exec(lines[i]!)![1]!) !== plainMd(title)) return lines;
+  return lines.filter((_, k) => k !== i);
+}
+
 /** A long plan: the text before the first section, then one `▸ ☐ Heading (n lines)` row per H2 / H3 with its body under it while open */
 function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: boolean): Left {
   const { outline: o, text, extra } = m.plan!;
@@ -592,7 +598,7 @@ function planLeft(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     out.lines.push("");
     out.wide.push(null);
   };
-  add(-1, src.slice(0, o.entries[0]?.at ?? src.length).join("\n"), w, "");
+  add(-1, dropTitleLine(src.slice(0, o.entries[0]?.at ?? src.length), m.title).join("\n"), w, "");
   let parentRow = 0;
   let parentOpen = true;
   o.entries.forEach((e, k) => {
@@ -647,7 +653,7 @@ function planFlatMarked(v: View, m: ScreenModel, w: number, lang: Lang, fullHint
     out.wide.push(null);
   };
   const md = (s: string, width: number) => renderMarkdownRich(s, width, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS });
-  const pre = src.slice(0, h2[0]?.at ?? src.length).join("\n");
+  const pre = dropTitleLine(src.slice(0, h2[0]?.at ?? src.length), m.title).join("\n");
   if (pre.trim()) push(md(pre, w), "  ");
   h2.forEach((e, k) => {
     const sec = secs.get(e.i);
@@ -696,7 +702,8 @@ function leftBody(v: View, m: ScreenModel, w: number, lang: Lang, fullHint: bool
     for (const a of m.assumptions) wrap(inline(a, { marks: textMarks }), Math.max(8, w - 2)).forEach((l, k) => front.push((k === 0 ? `${GREEN}☐${RESET} ` : "  ") + l));
     front.push(`${t(lang, "assumptions_note")}`, "");
   }
-  const rest: Left = { secRows: [], ...(m.background ? renderMarkdownRich(m.background, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] }) };
+  const restText = m.kind === "plan" && m.background ? dropTitleLine(m.background.split("\n"), m.title).join("\n") : m.background;
+  const rest: Left = { secRows: [], ...(restText ? renderMarkdownRich(restText, w, { fullHint, lang, marks: tm, termsHeadings: TERMS_HEADINGS }) : { lines: [], wide: [], footnotes: [] }) };
   const back = m.affects.length ? wrap(`${t(lang, "affects_title")} ${affectsText(m).slice(2)}`, w) : [];
   const tailLines = back.length ? ["", ...back] : [];
   if (!front.length && !tailLines.length) return rest;

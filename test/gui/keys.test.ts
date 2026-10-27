@@ -670,12 +670,12 @@ gui("cancelling a decision that is not shown gives a red toast (at most 3, above
   assert.ok(r.t <= r.b, `toasts do not overlap the actions row: ${JSON.stringify(r)}`);
 });
 
-gui("plan: the heading is plain text and \"Scope and reversibility\" is in the right column (absent when missing)", async () => {
+gui("plan: the heading is plain text; the right column has no scope box and the scope section text is in the left column (no box when the plan has none)", async () => {
   await seedPlan("# Fix `src/foo.ts` **now** plan\n\n## Work\n\n1. a\n\n## Scope and reversibility\n\nInside one file. Revert with git.\n");
   await reopen("document.querySelector('#decision .btn')");
   assert.equal(ev<string>(`document.querySelector("#head .v2-title").textContent`), "Fix src/foo.ts now plan");
-  assert.equal(ev<boolean>(`document.querySelector("#decision .impact").textContent.includes("Revert with git")`), true);
-  assert.equal(ev<string>(`document.querySelector("#decision .impact-cap").textContent`), "Scope and reversibility");
+  assert.equal(ev<boolean>(`!document.querySelector("#decision .impact")`), true);
+  assert.equal(ev<boolean>(`document.querySelector("#background").textContent.includes("Revert with git")`), true);
   await cancelAll();
   await seedPlan("# Plan\n\n## Work\n\n1. a\n");
   await reopen("document.querySelector('#decision .btn')");
@@ -948,8 +948,8 @@ gui("layers: the header has the title, the headline and the chips; the right col
   for (const sel of [".rec", ".unknowns", ".assumptions", ".against", ".affects", ".headline", ".optrow", ".keys", ".meta-line", ".v2-title"]) assert.equal(count(`#decision ${sel}`), 0, sel);
   assert.equal(count("#decision .opt"), 4);
   // the left column starts with the lead: Why, the rest of the recommendation, You decide, Against, Assumptions, then the 60-second layer
-  assert.equal(q1("#background .rec-body").startsWith("It also fits"), true);
-  const lead = ev<string[]>(`JSON.stringify([...document.querySelector("#background .lead").children].map(e => e.className.split(" ")[0]))`);
+  assert.equal(q1("#background .rec-body"), "It also fits the 12 MB of data we have today.");
+  const lead =ev<string[]>(`JSON.stringify([...document.querySelector("#background .lead").children].map(e => e.className.split(" ")[0]))`);
   assert.deepEqual(lead, ["why", "rec", "unknowns", "against", "assumptions"]); // X1: Why, recommendation, You decide, Against, Assumptions
   assert.equal(ev<boolean>(`document.querySelector("#background .lead").previousElementSibling.classList.contains("hd-cond")`), true);
   assert.equal(q1("#background .unknowns").startsWith("You decide:"), true);
@@ -1374,7 +1374,7 @@ gui("Q5-05: the headline is moved out of the Recommendation box (once on the scr
   const head = q1("#background .headline");
   assert.equal(head, "I recommend Sqlite because it keeps reads fast without a server.");
   assert.equal(q1("#background .rec-body").includes("I recommend Sqlite"), false);
-  assert.equal(q1("#background .rec-body").startsWith("It also fits"), true);
+  assert.equal(q1("#background .rec-body"), "It also fits the 12 MB of data we have today.");
   assert.equal(ev<number>(`document.body.textContent.split(${JSON.stringify(head)}).length - 1`), 1);
   await cancelAll();
   await seedQuestion(); // "I recommend B because this is only a check."
@@ -1382,6 +1382,28 @@ gui("Q5-05: the headline is moved out of the Recommendation box (once on the scr
   assert.equal(q1("#background .headline"), "I recommend B because this is only a check.");
   assert.equal(count("#background .rec-cap"), 0);
   assert.equal(ev<number>(`document.body.textContent.split("only a check").length - 1`), 1);
+});
+
+gui("Q5-06: a two-sentence recommendation whose second sentence has a condition word: the condition is the .hd-cond line and the recommendation box is gone", async () => {
+  const n = ++seq;
+  const title = `Cond two ${n}`;
+  const question = `Cond two question ${n}: A, B or C?`;
+  const md = v2md(question, title, ROWS, "", "I recommend B because it is the simplest path. Another option is right if the team already runs a database server.");
+  await seedQuestion({ title, question, markdown: md });
+  await reopen("document.querySelector('#background .hd-cond')");
+  assert.equal(q1("#background .headline"), "I recommend B because it is the simplest path.");
+  assert.match(q1("#background .hd-cond"), /Another option is right if the team already runs a database server\.$/);
+  assert.equal(count("#background .rec"), 0, "no recommendation box: the headline and the condition are the whole recommendation");
+});
+
+gui("Q5-07: an approval has no headline row in the left column; the question stays in the right column", async () => {
+  await seedQuestion({
+    header: "Approval", title: "Allow `curl -sI https://example.com`?", question: "Run a request to the site.\n\n`curl -sI https://example.com`", explain: false,
+    options: [{ label: "Allow", description: "Runs the command" }, { label: "Deny", description: "Skips it" }],
+  });
+  await reopen();
+  assert.equal(count("#background .headline"), 0);
+  assert.equal(q1("#decision .approval-q").includes("Run a request to the site."), true);
 });
 
 gui("Q5-06: known headings follow the display language whichever language the file uses; unknown ones stay as written", async () => {

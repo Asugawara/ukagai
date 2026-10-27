@@ -21,7 +21,7 @@ export interface PlanEntry {
   files: Set<string>;
   /** First 12 hex of the sha256 of the section's lines joined with "\n": what a live update matches a section by */
   hash: string;
-  /** The "Scope and reversibility" section: shown in the right column, so it counts as read */
+  /** The "Scope and reversibility" section, wherever it is: it starts open and counts as read */
   scope: boolean;
 }
 
@@ -45,7 +45,7 @@ export function pathOf(code: string): string | null {
   return s.includes("/") || /\.[a-z][a-z0-9]{0,5}$/i.test(s) ? s : null;
 }
 
-const plainMd = (s: string): string => s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+export const plainMd = (s: string): string => s.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^[ \t]*#+[ \t]*/, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
 const IMPACT = SECTION.impact.map(normalizeHeading);
 const isImpactTitle = (title: string): boolean => IMPACT.some((n) => normalizeHeading(plainMd(title)).includes(n));
 
@@ -88,10 +88,11 @@ export interface PlanState {
   zone: "plan" | "opts";
 }
 
-/** The first H2 is open and counts as read; the scope section is on screen in the decision column, so it counts as read too */
+/** The first H2 and the scope section (wherever it is in the plan) start open and count as read */
 export function initialPlanState(o: PlanOutline): PlanState {
   const first = o.entries.find((e) => e.level === 2);
-  return { open: new Set(first ? [first.i] : []), read: new Set([...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)]), updated: new Set(), cur: first?.i ?? 0, zone: "plan" };
+  const opened = [...(first ? [first.i] : []), ...o.entries.filter((e) => e.scope).map((e) => e.i)];
+  return { open: new Set(opened), read: new Set(opened), updated: new Set(), cur: first?.i ?? 0, zone: "plan" };
 }
 
 /** `level:title` per outline entry: how a changed section is matched with its earlier self */
@@ -133,7 +134,7 @@ export function remapState(o: PlanOutline, prev: { st: PlanState; outline: PlanO
   return st;
 }
 
-/** The H2 sections never opened (the scope section excluded), in order */
+/** The H2 sections never opened (the scope section excluded: it starts read), in order */
 export const unreadSections = (o: PlanOutline, st: PlanState): PlanEntry[] => o.entries.filter((e) => e.level === 2 && !st.read.has(e.i));
 
 export const parentOf = (o: PlanOutline, e: PlanEntry): PlanEntry | undefined => (e.level === 3 ? [...o.entries].reverse().find((x) => x.level === 2 && x.at < e.at) : undefined);

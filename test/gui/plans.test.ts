@@ -215,14 +215,14 @@ async function seedPlanDecision(file: string, plan: string): Promise<{ id: strin
   return { id: d.id };
 }
 
-gui("a new plan shows itself within 2 s: read-only, 9 sections with only the first open, no buttons; y a n do nothing", async () => {
+gui("a new plan shows itself within 2 s: read-only, 9 sections with the first and the scope section open, no buttons; y a n do nothing", async () => {
   await reopen(IDLE);
   await spyPosts();
   const t0 = Date.now();
   writePlan("auto.md", LONG);
   await waitFor("plan screen", `document.querySelectorAll("#background details.plan-sec").length === 9`, 2000);
   assert.ok(Date.now() - t0 < 2500);
-  assert.equal(ev(openCount), 1);
+  assert.equal(ev(openCount), 2);
   assert.equal(ev(`document.querySelector("#background details.plan-sec").open`), true);
   assert.equal(ev(`document.querySelector("#head .v2-title").textContent`), "Plan: add retry to the export job");
   assert.equal(ev(`document.querySelectorAll("#head > *").length`), 2); // title row + context row
@@ -240,7 +240,7 @@ gui("a new plan shows itself within 2 s: read-only, 9 sections with only the fir
   assert.ok(ev<string>(`document.title`).startsWith("(1)"));
   for (const k of ["y", "a", "n", "p"]) key(k);
   assert.deepEqual(posts(), []);
-  assert.equal(ev(openCount), 1);
+  assert.equal(ev(openCount), 2);
 });
 
 gui("Esc is Done reading: POST read, then the plain idle screen with no plan on it; a reload stays idle", async () => {

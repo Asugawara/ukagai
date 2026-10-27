@@ -75,7 +75,7 @@ test("a new plan arriving on the idle screen comes up by itself: header, folded 
   assert.ok(!/read only/i.test(text));
   const heads = foldedRows(text);
   assert.equal(heads.length, 9, "the H3 rows of folded sections are hidden");
-  assert.equal(heads.filter((h) => h.trim().startsWith("▾")).length, 1, "the first H2 is open");
+  assert.equal(heads.filter((h) => h.trim().startsWith("▾")).length, 2, "the first H2 and the scope section are open");
   const toc = text.split("\n").map((l) => l.split(" │ ")[1] ?? "").filter((l) => /[☐☑]/.test(l));
   assert.equal(toc.length, 0, "there is no contents list in the decision column");
   assert.equal(app.view(clock).plan!.zone, "plan", "a long plan starts in the plan zone");

@@ -170,12 +170,12 @@ const cards = () => ev<string[]>(`JSON.stringify([...document.querySelectorAll("
 const cardCursor = () => ev<string>(`document.querySelector("#decision .opt.cursor")?.dataset.card ?? ""`);
 const hint = () => ev<string>(`document.querySelector("#foot .hint").textContent`);
 
-gui("a long plan folds into one <details> per H2 (only the first open), there is no contents list, the header counts 9 sections · 200 lines · 12 files", async () => {
+gui("a long plan folds into one <details> per H2 (the first and the scope section open), there is no contents list, the header counts 9 sections · 200 lines · 12 files", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   assert.equal(ev(`document.querySelectorAll("#background details.plan-sec").length`), 9);
   assert.equal(ev(`document.querySelectorAll("#background details.plan-sub").length`), 6);
-  assert.equal(ev(openCount), 1);
+  assert.equal(ev(openCount), 2);
   assert.equal(ev(`document.querySelector("#background details.plan-sec").open`), true);
   assert.equal(ev(`document.querySelector("#background details.plan-sec > summary .ps-title").textContent`), "Context");
   assert.equal(ev(`document.querySelectorAll("#decision .toc-row, #decision .plan-toc").length`), 0);
@@ -184,11 +184,23 @@ gui("a long plan folds into one <details> per H2 (only the first open), there is
   assert.equal(ev(`document.querySelector("#head .plan-file").title`), "/Users/someone/.claude/plans/export-retry.md");
   // the summary says lines and files; the Context section has 16 lines and 2 files in its prose
   assert.equal(ev(`document.querySelector("#background details.plan-sec > summary .ps-meta").textContent`), "16 lines · 2 files");
-  // the scope section is folded on the left (it is in the right column) and the right column still shows it
-  assert.equal(ev(`${secOf("Scope and reversibility")}.open`), false);
-  assert.equal(ev(`document.querySelector("#decision .impact-cap").textContent`), "Scope and reversibility");
+  // the scope section is open on the left wherever it is, and the right column has no box for it
+  assert.equal(ev(`${secOf("Scope and reversibility")}.open`), true);
+  assert.equal(ev(`!document.querySelector("#decision .impact")`), true);
   // a closed section's body is not visible
   assert.equal(ev(`${secOf("Rollout")}.querySelector("p").checkVisibility()`), false);
+});
+
+gui("the plan's # H1 is not drawn in the left column when it says the header title; a different H1 stays", async () => {
+  await seedPlan("# Export retry\n\n## Context\n\nThe export job fails.\n\n## Steps\n\n- [ ] add retry\n");
+  await reopen("document.querySelector('#decision .btn')");
+  assert.equal(ev(`document.querySelector("#background h1").hidden`), true, "the H1 equal to the title is hidden");
+  assert.equal(ev(`document.querySelector("#background h1").checkVisibility()`), false, "and not visible");
+  await cancelAll();
+  await seedPlan("# Export retry\n\n## Context\n\nThe export job fails.\n\n## Steps\n\n- [ ] add retry\n", { path: "", title: "Drop the store", reversibility: "reversible", scope: "file", markdown: "", has: { mermaid: false, table: false, diff: false }, match: "recency", attached_via: "first_call" });
+  await reopen("document.querySelector('#background h1')");
+  assert.equal(ev<string>(`document.querySelector("#background h1").textContent`), "Export retry");
+  assert.equal(ev(`document.querySelector("#background h1").checkVisibility()`), true, "a different H1 is visible");
 });
 
 gui("ja: the summary, hint and header use Japanese words", async () => {
@@ -228,7 +240,7 @@ gui("clicking a section's summary folds and unfolds it, and a section opened onc
   await reopen("document.querySelector('#background details.plan-sec')");
   ev(`${secOf("Rollout")}.querySelector("summary").click(), "ok"`);
   await waitFor("Rollout open", `${secOf("Rollout")}.open`);
-  assert.equal(ev(openCount), 2);
+  assert.equal(ev(openCount), 3);
   ev(`${secOf("Rollout")}.querySelector("summary").click(), "ok"`);
   await waitFor("Rollout closed", `!${secOf("Rollout")}.open`);
   assert.equal(mark("Rollout"), "☑");
