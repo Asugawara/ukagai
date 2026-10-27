@@ -69,12 +69,13 @@ test("plan: headings in code fences and non-path code spans are not counted", ()
   assert.deepEqual([...o.entries[0]!.files].sort(), ["src/a.ts", "x.js"]);
 });
 
-test("plan (long): every H2 is folded to one row except the first, there is no contents list, and the plan zone starts on the first section", () => {
+test("plan (long): every H2 is folded to one row except the first and the scope section, there is no contents list, and the plan zone starts on the first section", () => {
   const app = open();
   const { text, frame } = draw(app);
   const hs = headings(text);
-  assert.equal(hs.filter((h) => h.startsWith("▾")).length, 1, hs.join("\n"));
+  assert.equal(hs.filter((h) => h.startsWith("▾")).length, 2, hs.join("\n"));
   assert.match(hs[0]!, /^▾ ☑ Context \(\d+ lines\)/);
+  assert.match(hs.find((h) => h.includes("Scope and reversibility"))!, /^▾ ☑ Scope and reversibility/);
   assert.match(hs[1]!, /^▸ ☐ Steps \(/);
   assert.ok(!text.includes("Contents"), "no contents list");
   assert.equal(text.split("\n").map((l) => l.split(" │ ")[1] ?? "").filter((l) => /[☐☑] .+ \d+ lines/.test(l)).length, 0, "no contents rows in the decision column");
