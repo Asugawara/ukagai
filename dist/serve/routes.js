@@ -4,7 +4,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import { AnswerRequest, AsideRequest, DEFAULT_SETTINGS, CheckpointRequest, AckRequest, ConsumePlanGrantRequest, DecisionAckRequest, PlanReadRequest, PlanInstructRequest, PollRequest, ReleaseRequest, Settings, SkillPut, CreateDecisionRequest, DecisionStatus, EventInput, POLL_TIMEOUT_MS, PLAN_BLOCK_SUFFIX, isAllowedExplanationPath, isPlanFile, plansDir, isAllowedTranscriptPath, } from "../contract.js";
+import { AnswerRequest, AsideRequest, DEFAULT_SETTINGS, CheckpointRequest, AckRequest, ConsumePlanGrantRequest, DecisionAckRequest, PlanReadRequest, PlanInstructRequest, PollRequest, ReleaseRequest, Settings, SkillPut, CreateDecisionRequest, DecisionStatus, EventInput, POLL_TIMEOUT_MS, PLAN_BLOCK_SUFFIX, isAllowedExplanationPath, isPlanFile, plansDir, isAllowedTranscriptPath, DecisionKind, } from "../contract.js";
 import { VERSION } from "../version.js";
 import { collectGuarded } from "./context.js";
 import { collectHistory } from "./history.js";
@@ -48,6 +48,23 @@ function safeEqual(a, b) {
 const MarkRequest = z
     .strictObject({ decision: z.string().optional(), plan: z.string().optional(), png: z.string().min(1) })
     .refine((b) => (b.decision === undefined) !== (b.plan === undefined), { message: "exactly one of decision / plan", path: ["decision"] });
+const GUI_LOG_BODY_LIMIT = 4096;
+const Ms = z.number().int().min(0).max(2_147_483_647);
+// One diagnostic line from the GUI (POST /api/gui/log), written to serve.log as `gui_<event>`
+const GuiLogRequest = z.strictObject({
+    event: z.enum(["sse_open", "sse_error", "decision_seen", "decision_shown", "visible", "resume", "error"]),
+    tab: z.string().regex(/^[0-9a-z]{1,16}$/),
+    hidden: z.union([z.literal(0), z.literal(1)]).optional(),
+    build: z.string().max(16).optional(),
+    decision: z.string().regex(/^[0-9a-f-]{1,64}$/).optional(),
+    kind: DecisionKind.optional(),
+    via: z.enum(["sse", "resync", "load"]).optional(),
+    lag_ms: Ms.optional(),
+    down_ms: Ms.optional(),
+    hidden_ms: Ms.optional(),
+    frozen_ms: Ms.optional(),
+    message: z.string().max(300).optional(),
+});
 export function createApp(deps) {
     const { store, hub } = deps;
     const app = new Hono();
@@ -649,6 +666,12 @@ export function createApp(deps) {
     // ---- metrics / stream ----
     app.get("/api/metrics", auth("any"), (c) => c.json(store.metrics()));
     app.post("/api/gui/open", auth("bearer"), jsonOnly, (c) => c.json({ result: deps.guiOpener?.request() ?? "opened_today" }));
+    // Diagnostics from a GUI tab (a dropped stream, a question that arrived late): one serve.log line each, nothing else happens
+    app.post("/api/gui/log", auth("any"), jsonOnly, bodyLimit({ maxSize: GUI_LOG_BODY_LIMIT, onError: (c) => c.json({ error: "payload too large" }, 413) }), async (c) => {
+        const { event, ...fields } = await parse(c, GuiLogRequest);
+        deps.log?.(`gui_${event}`, fields);
+        return c.body(null, 204);
+    });
     app.post("/api/shutdown", auth("bearer"), jsonOnly, (c) => {
         if (!deps.shutdown)
             return c.json({ error: "shutdown is not available" }, 501);
