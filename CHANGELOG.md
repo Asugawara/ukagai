@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/Asugawara/ukagai/compare/v0.11.1...v0.12.0) (2026-10-28)
+
+
+### Features
+
+* log GUI connection and question arrival timings to serve.log ([0656070](https://github.com/Asugawara/ukagai/commit/0656070fe66616301f7882341bfa66e71077f505))
+
 ## [0.11.1](https://github.com/Asugawara/ukagai/compare/v0.11.0...v0.11.1) (2026-10-27)
 
 
