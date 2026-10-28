@@ -831,3 +831,27 @@ test("approve + comments is 400", async () => {
   const d = await register(env, "toolu_cm4");
   assert.equal((await api(env, `/api/decisions/${d.id}/answer`, { body: { approve: true, comments: [PLAN_COMMENT] } })).status, 400);
 });
+
+test("POST /api/gui/log writes one gui_<event> line to serve.log; a bad body is refused", async () => {
+  const env = await setup();
+  const home = await fetch(env.url + "/");
+  const cookie = (home.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const post = (body: unknown) =>
+    fetch(env.url + "/api/gui/log", { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const id = "f2d371d9-470a-4daa-a61c-3cbf42352b11";
+  assert.equal((await post({ event: "decision_seen", tab: "abc123", hidden: 1, decision: id, kind: "answer_question", via: "resync", lag_ms: 61234 })).status, 204);
+  const lines = readFileSync(join(env.dataDir, "serve.log"), "utf8").trim().split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l));
+  const line = lines.find((l) => l.event === "gui_decision_seen");
+  assert.ok(line, JSON.stringify(lines));
+  assert.equal(line.tab, "abc123");
+  assert.equal(line.decision, id);
+  assert.equal(line.via, "resync");
+  assert.equal(line.lag_ms, 61234);
+  assert.equal(line.hidden, 1);
+  assert.equal((await post({ event: "nope", tab: "abc123" })).status, 400);
+  assert.equal((await post({ event: "sse_open", tab: "abc123", extra: 1 })).status, 400);
+  assert.equal((await post({ event: "sse_open", tab: "ABC" })).status, 400);
+  assert.equal((await post({ event: "error", tab: "abc123", message: "x".repeat(5000) })).status, 413);
+  const anon = await fetch(env.url + "/api/gui/log", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event: "sse_open", tab: "abc123" }) });
+  assert.equal(anon.status, 401);
+});

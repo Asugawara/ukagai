@@ -283,6 +283,49 @@ async function api(path, init) {
 
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
+// Diagnostics for serve.log (POST /api/gui/log): never throws, never shows anything. TAB tells this page's lines from another tab's
+const TAB = Math.random().toString(36).slice(2, 10);
+function guiLog(event, fields = {}) {
+  try {
+    fetch("/api/gui/log", {
+      method: "POST",
+      credentials: "same-origin",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event, tab: TAB, hidden: document.hidden ? 1 : 0, ...fields }),
+    }).catch(() => {});
+  } catch {}
+}
+const lagOf = (d) => Math.max(0, Date.now() - Date.parse(d.created_at)) || 0;
+// The first arrival of each pending decision in this page, and the first time it is put on screen
+const seenLogged = new Set();
+const shownLogged = new Set();
+function logSeen(d, via) {
+  if (d?.status !== "pending" || seenLogged.has(d.id)) return;
+  seenLogged.add(d.id);
+  guiLog("decision_seen", { decision: d.id, kind: d.kind, via, lag_ms: lagOf(d) });
+}
+function logShown(d) {
+  if (d?.status !== "pending" || shownLogged.has(d.id)) return;
+  shownLogged.add(d.id);
+  guiLog("decision_shown", { decision: d.id, kind: d.kind, lag_ms: lagOf(d) });
+}
+let errorsLogged = 0;
+const logError = (message) => { if (errorsLogged++ < 20) guiLog("error", { message: String(message ?? "").slice(0, 300) }); };
+window.addEventListener("error", (e) => logError(e.message));
+window.addEventListener("unhandledrejection", (e) => logError(e.reason?.message ?? e.reason));
+// A tab back after 30 s or more out of sight, and a tab the browser froze and resumed
+let hiddenSince = document.hidden ? Date.now() : null;
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { hiddenSince = Date.now(); return; }
+  const ms = hiddenSince === null ? 0 : Date.now() - hiddenSince;
+  hiddenSince = null;
+  if (ms >= 30000) guiLog("visible", { hidden_ms: ms });
+});
+let frozenAt = null;
+document.addEventListener("freeze", () => { frozenAt = Date.now(); });
+document.addEventListener("resume", () => { guiLog("resume", frozenAt === null ? {} : { frozen_ms: Date.now() - frozenAt }); frozenAt = null; });
+
 // The URL of a document image: local files go through GET /api/files (decision=<id> or plan=<name>, path as written); everything else (http, data:, file:, ...) is dropped
 function imageUrl(src, doc) {
   if (!doc?.id || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) return null;
@@ -4535,6 +4578,7 @@ function renderAll() {
   closeCommentPopover();
   const pd = shownPlanPd();
   const d = pd ?? decisions.get(shownId);
+  if (!pd && d) logShown(d);
   $("main").hidden = !d;
   $("empty").hidden = !!d;
   renderHeader();
@@ -4670,6 +4714,7 @@ async function loadAll() {
   const seen = new Set();
   for (const d of ds) {
     seen.add(d.id);
+    if (!decisions.has(d.id)) logSeen(d, loaded ? "resync" : "load");
     if ((decisions.has(d.id) && decisions.get(d.id).status !== d.status) || (!decisions.has(d.id) && isPlanId(shownId))) upsert(d);
     else decisions.set(d.id, d);
   }
@@ -4702,11 +4747,12 @@ async function loadAll() {
 let es = null;
 let retryMs = 2000;
 let retryTimer = null;
+let downSince = null; // when the stream dropped (null: it is up)
 function connect() {
   clearTimeout(retryTimer);
   es?.close();
   es = new EventSource("/api/stream");
-  es.addEventListener("decision.created", (e) => upsert(JSON.parse(e.data)));
+  es.addEventListener("decision.created", (e) => { const d = JSON.parse(e.data); logSeen(d, "sse"); upsert(d); });
   es.addEventListener("decision.updated", (e) => upsert(JSON.parse(e.data)));
   es.addEventListener("session.updated", (e) => { const x = JSON.parse(e.data); sessions.set(x.session_id, x); syncIdleNote(x.session_id); syncPlanInstruct(x.session_id); });
   es.addEventListener("aside.updated", (e) => aside.onUpdated(JSON.parse(e.data)));
@@ -4714,6 +4760,7 @@ function connect() {
   es.addEventListener("plan.updated", (e) => onPlanUpdated(JSON.parse(e.data)));
   es.addEventListener("plan.removed", (e) => onPlanRemoved(JSON.parse(e.data).name));
   es.addEventListener("open", () => {
+    guiLog("sse_open", { build: BUILD, ...(downSince === null ? {} : { down_ms: Date.now() - downSince }) }); downSince = null;
     retryMs = 2000;
     if (connDown) setConnDown(false);
     else $("banner").hidden = true;
@@ -4722,6 +4769,7 @@ function connect() {
     settingsReq().finally(() => loadAll().catch(() => {}));
   });
   es.addEventListener("error", () => {
+    if (downSince === null) { downSince = Date.now(); guiLog("sse_error"); }
     es.close();
     setConnDown(true);
     const wait = retryMs;
