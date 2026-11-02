@@ -209,7 +209,7 @@ test("ack: 409 while another live owner holds the claim, for a decision that clo
 
 // ---- the ref (re F1): a prompt that starts with the ref is a record, not a delivery ----
 
-test("a ref prompt is recorded but neither answers the decision nor counts as the human: pending cards stay, a typed prompt cancels them", () => {
+test("a ref prompt is recorded but neither answers the decision nor counts as the human: pending cards stay, a typed prompt keeps them and marks human_prompt_at", () => {
   const h = setup();
   const d = claimed(h);
   const other = h.ask("toolu_other");
@@ -221,7 +221,8 @@ test("a ref prompt is recorded but neither answers the decision nor counts as th
   assert.match(readFileSync(join(h.dir, "events.jsonl"), "utf8"), /"delivered_ref":"[0-9a-f]{8}"/);
 
   h.event("UserPromptSubmit", { delivered_ref: "deadbeef" }); // no decision has this ref: a person typed it
-  assert.equal(get(h, other).status, "cancelled");
+  assert.equal(get(h, other).status, "pending", "a live mod keeps the pending question");
+  assert.ok(get(h, other).human_prompt_at, "and marks the human's prompt");
 });
 
 test("ref, then release with a drop: the item is handed out again; five drops give up with `undeliverable`", () => {
@@ -368,11 +369,12 @@ test("a release without a drop that finds nothing in the transcript counts as an
   assert.equal(get(h, d).status_reason, "undeliverable");
 });
 
-test("a typed prompt registered in the same millisecond is cancelled (created_at == received_at)", () => {
+test("a typed prompt registered in the same millisecond is kept and marked (created_at == received_at)", () => {
   const h = setup();
   const d = h.ask();
   h.event("UserPromptSubmit", { received_at: new Date(h.now()).toISOString() });
-  assert.equal(get(h, d).status, "cancelled");
+  assert.equal(get(h, d).status, "pending");
+  assert.ok(get(h, d).human_prompt_at);
 });
 
 test("after a reload the SessionEnd needs no owner: a decision of a mod that is gone closes, and polling under a new session id (/clear) does not keep the old one", () => {
@@ -416,15 +418,36 @@ test("an answer held by a claim, or typed over by the human, does not hold the t
   assert.ok(h.poll(A, true), "and the answer is still handed out");
 });
 
-test("a typed prompt cancels a pending question but not one registered after the prompt was built", () => {
+test("a typed prompt marks a pending question but not one registered after the prompt was built", () => {
   const h = setup();
   const before = h.ask("before");
+  h.advance(5);
   const after = h.ask("after");
-  h.event("UserPromptSubmit", { received_at: new Date(h.now() - 1).toISOString() });
-  assert.equal(get(h, before).status, "pending", "created at the prompt's time or later");
+  // the prompt was built 2 ms after `before` and 3 ms before `after`
+  h.event("UserPromptSubmit", { received_at: new Date(h.now() - 3).toISOString() });
+  assert.equal(get(h, before).status, "pending", "a live mod: kept, not cancelled");
+  assert.ok(get(h, before).human_prompt_at, "registered before the prompt: marked");
   assert.equal(get(h, after).status, "pending");
+  assert.equal(get(h, after).human_prompt_at, undefined, "registered after the prompt: not marked");
+});
+
+test("a typed prompt does not cancel a pending message-delivery question while a mod is live; the tools run and the answer is still delivered", () => {
+  const h = setup();
+  const d = h.ask();
   h.event("UserPromptSubmit");
-  assert.equal(get(h, before).status, "cancelled");
+  assert.equal(get(h, d).status, "pending");
+  assert.ok(get(h, d).human_prompt_at);
+  assert.equal(h.store.waitingFor(SID), undefined, "their turn is not held back");
+  h.answer(d);
+  assert.ok(h.poll(A, true), "the answer is handed out");
+});
+
+test("without a live mod a typed prompt still cancels a pending question", () => {
+  const h = setup();
+  const d = h.ask();
+  h.advance(MOD_FRESH_MS + 1);
+  h.event("UserPromptSubmit");
+  assert.equal(get(h, d).status, "cancelled");
 });
 
 test("a typed prompt with no mod to deliver closes an answered decision as typed_in_terminal", () => {

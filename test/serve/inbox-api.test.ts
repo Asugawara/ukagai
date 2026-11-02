@@ -264,7 +264,7 @@ test("instruction?main=1 answers `waiting` while a live mod owes an answer, and 
 
 // ---- a typed prompt (m8) ----
 
-test("a typed prompt cancels the pending message decision of its turn but not one registered after the prompt was built", async () => {
+test("a typed prompt keeps the pending message decision of its turn (marked human_prompt_at) but not one registered after the prompt was built", async () => {
   const env = await setup();
   const d = await asyncDecision(env, "toolu_old");
   const built = new Date(Date.now() - 60_000).toISOString(); // an event that reaches the server late
@@ -276,7 +276,9 @@ test("a typed prompt cancels the pending message decision of its turn but not on
   assert.equal((await getDecision(env, newer.id)).status, "pending");
   appendFileSync(env.transcript, "");
   await ev(new Date(Date.now() + 1000).toISOString());
-  assert.equal((await getDecision(env, d.id)).status, "cancelled");
+  const kept = await getDecision(env, d.id);
+  assert.equal(kept.status, "pending", "a live mod keeps the message-delivery question");
+  assert.ok(kept.human_prompt_at, "and marks the human's prompt");
 });
 
 test("poll for a session the server has never heard of is 204 (never 404) and still counts as seen: the first poll comes before any decision", async () => {
