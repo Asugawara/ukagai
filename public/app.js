@@ -2436,7 +2436,7 @@ const COMMENTS_MAX = 30;
 const INSTRUCTION_BUDGET = 4000; // the server's limit on the text it composes (existing text + comment block)
 const CMT_PREFIX = "ukagai.comments.";
 const CMT_TTL_MS = 7 * 24 * 3600 * 1000;
-const CMT_SKIP = "button, svg, script, style, textarea, input, select, .cmt-layer, .ver-bar, .ps-mark, .ps-upd, .ps-meta";
+const CMT_SKIP = "button, svg, script, style, textarea, input, select, .cmt-layer, .ver-bar, .ps-mark, .ps-upd, .ps-meta, .plan-crumb";
 const CMT_BLOCK = "p, li, h1, h2, h3, h4, h5, h6, td, th, tr, pre, summary, blockquote, div, dt, dd, figcaption";
 const CMT_HEAD = "h1, h2, h3, h4, h5, h6, details.plan-sec > summary, details.plan-sub > summary";
 
@@ -4035,6 +4035,7 @@ function syncPlan(d) {
   $("background").classList.toggle("zone-on", st.zone === "plan");
   $("decision").classList.toggle("zone-on", st.zone === "opts");
   reanchorSoon(); // folding moves the text
+  syncCrumb();
   if (!d.readonly) {
     syncConfirm(draftOf(d));
     const line = document.querySelector("#decision .plan-unread");
@@ -4149,11 +4150,53 @@ function pathBadges(container, doc) {
   }
 }
 
+// The breadcrumb row (one line, see .plan-crumb): clicking a part brings its heading to the top and opens it
+function crumbBar(d) {
+  const nav = el("nav", { class: "plan-crumb", "aria-label": t("plan_crumb") }, el("div", { class: "pc-bar", hidden: true }));
+  nav.addEventListener("click", (ev) => {
+    const seg = ev.target instanceof Element ? ev.target.closest(".pc-seg") : null;
+    if (seg) planReveal(d, Number(seg.dataset.i));
+  });
+  return nav;
+}
+
+// Show "section › sub-section" once their headings have scrolled above the top of the left column and their text is still below it.
+// Only the open ## section (and the open ### inside it) can match; the bar is hidden when none does
+function syncCrumb() {
+  const bg = $("background");
+  const bar = bg.querySelector(":scope > .plan-crumb > .pc-bar");
+  if (!bar) return;
+  const edge = narrowMq.matches ? 0 : bg.getBoundingClientRect().top;
+  const under = edge + 32; // --sum-h: the bar's height
+  const sec = [...bg.querySelectorAll(".plan-long > details[open]")].filter((det) => {
+    const s = det.querySelector(":scope > summary").getBoundingClientRect();
+    return s.top < edge - 0.5 && det.getBoundingClientRect().bottom > under;
+  }).pop();
+  if (!sec) { bar.hidden = true; return; }
+  const subs = [...sec.querySelectorAll(":scope > details.plan-sub[open]")].filter((det) => {
+    const s = det.querySelector(":scope > summary").getBoundingClientRect();
+    return s.top < under - 0.5 && det.getBoundingClientRect().bottom > under;
+  }).slice(-1);
+  const parts = [sec, ...subs];
+  const key = parts.map((det) => det.dataset.i).join(",");
+  bar.hidden = false;
+  if (bar.dataset.key === key) return;
+  bar.dataset.key = key;
+  bar.replaceChildren(...parts.flatMap((det, k) => {
+    const title = det.querySelector(":scope > summary > .ps-title").textContent ?? "";
+    const seg = el("button", { type: "button", class: k ? "pc-seg sub" : "pc-seg", "data-i": det.dataset.i, title, text: title });
+    return k ? [el("span", { class: "pc-sep", text: "›" }), seg] : [seg];
+  }));
+}
+
 // The plan body into the left column: long plans fold into sections, short ones stay one document
 async function renderPlanMarkdown(container, d, view) {
   setMarkdown(container, d.request.plan, d);
   const o = planOutline(d);
-  if (o && foldPlanSections(container, o, d)) container.classList.add("plan-long");
+  if (o && foldPlanSections(container, o, d)) {
+    container.classList.add("plan-long");
+    container.before(crumbBar(d));
+  }
   // The plan's H1 is the header title (the same text): hidden, not drawn twice (it stays in the DOM for sectionPath). A different H1 stays visible
   const h1 = container.querySelector(":scope > h1");
   const norm = (s) => s.replace(/\s+/g, " ").trim();
@@ -4162,6 +4205,7 @@ async function renderPlanMarkdown(container, d, view) {
   await enhance(container);
   pathBadges(container, d);
   if (view && view.v.plan === d.request.plan) markVersion(container, view, o);
+  syncCrumb();
 }
 
 // The line next to "Approve this plan?": 9 sections · 219 lines · 14 files, and the plan file's name (full path on hover)
@@ -4511,6 +4555,11 @@ async function renderOldPlan(container, d, view) {
 // Below 900px the columns become one page with the decision first: the blocker's steps move from the left column to the top of the choice.
 // The same node moves, so typed free text and the left column's scroll position stay
 const narrowMq = matchMedia("(max-width: 899px)");
+// The breadcrumb follows scrolling and resizing, at most once per frame
+let crumbFrame = 0;
+const crumbSoon = () => { if (!crumbFrame) crumbFrame = requestAnimationFrame(() => { crumbFrame = 0; syncCrumb(); }); };
+document.addEventListener("scroll", crumbSoon, { capture: true, passive: true });
+window.addEventListener("resize", crumbSoon);
 narrowMq.addEventListener("change", () => {
   const d = decisions.get(shownId);
   const v2 = d && hasExplanation(d) ? modelFor(d).v2 : null;

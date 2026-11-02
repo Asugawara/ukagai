@@ -1074,11 +1074,16 @@ export class Store {
     }
     /**
      * The human spoke next in the terminal = the pending decision is no longer being waited for. Only decisions registered no later than the
-     * prompt count: the prompt's event is built when the hook runs and may reach the server late, after the same turn registered a new one
+     * prompt count: the prompt's event is built when the hook runs and may reach the server late, after the same turn registered a new one.
+     * While a mod is live, a pending message-delivery question is kept (humanPrompted marks it instead)
      */
     cancelPending(sessionId, receivedAt) {
+        const live = this.liveOwner(sessionId, MOD_FRESH_MS, this.clock());
         for (const d of this.decisions.values()) {
             if (d.session.session_id !== sessionId || d.status !== "pending" || Date.parse(d.created_at) > receivedAt)
+                continue;
+            // The agent ended its turn to wait for this answer; a prompt about something else does not withdraw it (humanPrompted marks it)
+            if (live && d.delivery === "message" && d.kind === "answer_question")
                 continue;
             this.transition(d, "cancelled");
             if (d.kind === "checkpoint")
@@ -1172,18 +1177,24 @@ export class Store {
         d.ref_seen_at = at;
         this.persist(d);
     }
-    /** The human typed in the terminal: an answer waiting for delivery is either delivered after their turn (a mod is there) or dropped */
+    /**
+     * The human typed in the terminal: with a live mod, a pending question or a submitted answer is marked `human_prompt_at` (the tools are no longer held back,
+     * and the answer is still delivered later). Without a live mod, a submitted answer waiting for delivery is dropped (a pending one was cancelled by cancelPending)
+     */
     humanPrompted(sessionId, receivedAt, receivedIso) {
         const live = this.liveOwner(sessionId, MOD_FRESH_MS, this.clock());
         for (const d of this.asyncOf(sessionId)) {
-            if (d.status !== "answer_submitted" || Date.parse(d.created_at) > receivedAt)
+            const pendingQuestion = d.status === "pending" && d.kind === "answer_question";
+            if (!pendingQuestion && d.status !== "answer_submitted")
+                continue;
+            if (Date.parse(d.created_at) > receivedAt)
                 continue;
             if (live) {
                 d.human_prompt_at = receivedIso;
                 this.persist(d);
                 this.emit("decision.updated", d);
             }
-            else
+            else if (d.status === "answer_submitted")
                 this.closeUndelivered(d, "typed_in_terminal");
         }
     }
@@ -1192,7 +1203,7 @@ export class Store {
         if (!this.liveOwner(sessionId, MOD_FRESH_MS, this.clock()))
             return undefined;
         for (const d of this.asyncOf(sessionId)) {
-            const holds = d.status === "pending" || (d.status === "answer_submitted" && !d.claim && !d.human_prompt_at);
+            const holds = !d.human_prompt_at && (d.status === "pending" || (d.status === "answer_submitted" && !d.claim));
             if (holds && (d.kind === "answer_question" || d.kind === "approve_plan"))
                 return { decision_id: d.id, kind: d.kind };
         }
