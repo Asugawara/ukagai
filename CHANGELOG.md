@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/Asugawara/ukagai/compare/v0.12.0...v0.13.0) (2026-11-02)
+
+
+### Features
+
+* replace pinned plan headings with a one-line section breadcrumb ([55c4e70](https://github.com/Asugawara/ukagai/commit/55c4e70b10edc1104337d4f62755d237f32fc9bc))
+
+
+### Bug Fixes
+
+* keep a pending question when the human types about something else ([9e80995](https://github.com/Asugawara/ukagai/commit/9e80995497d2a31b3e2d4e2f0665a9bd1fe3dbd5))
+
 ## [0.12.0](https://github.com/Asugawara/ukagai/compare/v0.11.1...v0.12.0) (2026-10-28)
 
 
