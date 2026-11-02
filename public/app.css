@@ -117,7 +117,7 @@ code .nb { white-space: nowrap; } /* Words containing `-` are not broken in the 
 /* main */
 main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); min-height: 0; }
 #background, #decision { overflow: auto; min-width: 0; min-height: 0; padding: 14px 18px; }
-#background { border-right: 1px solid var(--line); }
+#background { border-right: 1px solid var(--line); --sum-h: 32px; --pad-top: 14px; }
 #decision { max-width: 520px; width: 100%; justify-self: start; display: flex; flex-direction: column; padding-bottom: 0; }
 @media (min-width: 900px) {
   main { grid-template-columns: minmax(0, 3fr) minmax(340px, 520px); }
@@ -130,6 +130,7 @@ main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(340px, 2fr); 
   #decision { order: -1; max-width: none; }
   #background, #decision { overflow: visible; }
   #background { border-right: 0; }
+  #background { --pad-top: 0px; }
 }
 .bg-note { color: var(--fg); font-size: 13px; margin-bottom: 10px; }
 
@@ -430,13 +431,12 @@ pre code.hljs { background: none; padding: 0; }
 .v2-title .approval-cmd { font-size: 13px; }
 
 /* Long plans: one folding block per ## section, ### inside it; the contents in the right column */
-/* --pad-top is #background's top padding: a sticky summary is placed below it, so it is pulled back up by that much */
-.md { --sum-h: 32px; --pad-top: 14px; }
+/* Headings scroll with the text. Only the breadcrumb (.plan-crumb, a sibling above .md in #background) is pinned: --sum-h is its height, --pad-top is #background's top padding that it is pulled up over */
 .md details.plan-sec, .md details.plan-sub { margin: 0; border-top: 1px solid var(--line); }
 .md details.plan-sub { border-top-style: dashed; scroll-margin-top: var(--sum-h); }
-.md details.plan-sec > summary, .md details.plan-sub > summary { display: flex; align-items: baseline; gap: 8px; min-height: var(--sum-h); box-sizing: border-box; padding: 6px 0; list-style: none; cursor: pointer; background: var(--bg); color: var(--fg); font-size: 13px; font-weight: 700; line-height: 1.4; position: sticky; z-index: 2; }
-.md details.plan-sec > summary { top: calc(-1 * var(--pad-top)); z-index: 3; }
-.md details.plan-sub > summary { top: calc(var(--sum-h) - var(--pad-top)); font-weight: 600; padding-left: 14px; }
+.md details.plan-sub > summary { scroll-margin-top: var(--sum-h); }
+.md details.plan-sec > summary, .md details.plan-sub > summary { display: flex; align-items: baseline; gap: 8px; min-height: var(--sum-h); box-sizing: border-box; padding: 6px 0; list-style: none; cursor: pointer; background: var(--bg); color: var(--fg); font-size: 13px; font-weight: 700; line-height: 1.4; }
+.md details.plan-sub > summary { font-weight: 600; padding-left: 14px; }
 .md details.plan-sec > summary::-webkit-details-marker, .md details.plan-sub > summary::-webkit-details-marker { display: none; }
 .md details.plan-sec > summary::before, .md details.plan-sub > summary::before { content: "▸"; color: var(--fg); flex: none; width: 10px; }
 .md details.plan-sec[open] > summary::before, .md details.plan-sub[open] > summary::before { content: "▾"; }
@@ -449,6 +449,13 @@ pre code.hljs { background: none; padding: 0; }
 #background.zone-on { box-shadow: inset 2px 0 0 var(--accent); }
 #background.zone-on .md details > summary.sel { box-shadow: inset 3px 0 0 var(--accent); }
 #decision.zone-on { box-shadow: inset -2px 0 0 var(--accent); }
+/* Breadcrumb of the open sections whose headings have scrolled above the top: a 0-height sticky row, the bar hangs below it (no layout shift) */
+.plan-crumb { position: sticky; top: calc(-1 * var(--pad-top)); height: 0; z-index: 4; }
+.plan-crumb > .pc-bar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: baseline; gap: 6px; min-height: var(--sum-h); box-sizing: border-box; padding: 6px 0; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.4; user-select: none; }
+.pc-seg { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; font-weight: 700; color: var(--fg); background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+.pc-seg.sub { font-weight: 600; }
+.pc-seg:hover { text-decoration: underline; }
+.pc-sep { flex: none; color: var(--fg); }
 .opt.approve-card { border-color: var(--accent); background: var(--accent-bg); }
 .opt.approve-card .lab, .opt.reject-card .lab { margin-bottom: 0; }
 .opt.reject-card .lab { color: var(--red); }
