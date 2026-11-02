@@ -258,18 +258,23 @@ gui("o opens everything and o again folds everything", async () => {
   assert.equal(mark("Rollout"), "☑", "read marks stay");
 });
 
-gui("an open section's heading row sticks to the top of the left column while its body scrolls, and an open H3's under it", async () => {
+gui("an open section's heading scrolls away with its body; the breadcrumb at the top of the left column names the section and the open H3 being read", async () => {
   await seedPlan(LONG);
   await reopen("document.querySelector('#background details.plan-sec')");
   key("o");
   await waitFor("all open", `document.querySelectorAll("#background details[open]").length === 15`);
   // scroll into the middle of Steps (55 lines with its H3 children open)
   ev(`document.getElementById("background").scrollTop = ${secOf("Steps")}.offsetTop + 200, "ok"`);
-  const top = (sel: string) => ev<number>(`${sel}.getBoundingClientRect().top - document.getElementById("background").getBoundingClientRect().top`);
-  const h2 = top(`${secOf("Steps")}.querySelector(":scope > summary")`);
-  assert.ok(Math.abs(h2) <= 2, `the H2 summary is at the top (${h2})`);
-  const sub = ev<string>(`(() => { const bg = document.getElementById("background").getBoundingClientRect().top; const s = [...document.querySelectorAll("#background details.plan-sub[open] > summary")].find(x => { const r = x.getBoundingClientRect(); return r.top - bg > 0 && r.top - bg < 40; }); return s ? s.textContent : ""; })()`);
-  assert.ok(sub.includes("Backend usecase") || sub.includes("HTTP handler") || sub.includes("Worker"), `an H3 summary sits under the H2 summary: ${sub}`);
+  await waitFor("the breadcrumb shows", `!${crumbBar}.hidden`);
+  const rel = (sel: string) => ev<number>(`${sel}.getBoundingClientRect().top - document.getElementById("background").getBoundingClientRect().top`);
+  const stepsSum = `${secOf("Steps")}.querySelector(":scope > summary")`;
+  assert.ok(rel(stepsSum) < 0, `the H2 summary has scrolled away (${rel(stepsSum)})`);
+  assert.equal(ev(`getComputedStyle(${stepsSum}).position`), "static", "headings are not pinned");
+  assert.ok(Math.abs(rel(crumbBar)) <= 2, `the breadcrumb is at the top of the column (${rel(crumbBar)})`);
+  const parts = await crumbParts();
+  assert.equal(parts.find((p) => p.cls === "pc-seg")?.text, "Steps");
+  const sub = parts.find((p) => p.cls === "pc-seg sub")?.text ?? "";
+  assert.ok(sub.includes("Backend usecase") || sub.includes("HTTP handler") || sub.includes("Worker"), `the open H3 is named in the breadcrumb: ${sub}`);
 });
 
 gui("j / k / ↑ / ↓ move the section selection, Home End gg G jump, Enter and Space fold the section under it", async () => {
@@ -631,6 +636,59 @@ gui("backticked paths in the plan are click-to-copy badges, and clicking one ins
   ev(`${secOf("Verification")}.querySelector("summary").click(), "ok"`);
   await waitFor("Verification open", `${secOf("Verification")}.open`);
   assert.equal(ev(`[...document.querySelectorAll("#background code.cbadge")].some(c => c.textContent === "npm test")`), false);
+});
+
+const crumbBar = `document.querySelector("#background > .plan-crumb > .pc-bar")`;
+const crumbParts = () => ev<{ text: string; cls: string }[]>(`JSON.stringify([...${crumbBar}.children].map(c => ({ text: c.textContent, cls: c.className })))`);
+/** Scroll the left column (or, below 900 px, the window) so that a heading's top sits `px` above the top edge */
+const scrollHeadingAbove = (summary: string, px: number) => ev(`(() => { const s = ${summary}; const bg = document.getElementById("background"); if (window.matchMedia("(max-width: 899px)").matches) window.scrollTo(0, window.scrollY + s.getBoundingClientRect().top + ${px}); else bg.scrollTop += s.getBoundingClientRect().top - bg.getBoundingClientRect().top + ${px}; return "ok"; })()`);
+
+gui("the breadcrumb: hidden at the top, shows the section path once its heading has scrolled away, a click brings the heading back", async () => {
+  await seedPlan(LONG);
+  await reopen("document.querySelector('#background details.plan-sec')");
+  assert.equal(selTitle(), "Context");
+  assert.equal(ev(`${crumbBar}.hidden`), true, "no path while the headings are on screen");
+  assert.equal(ev(`getComputedStyle(${secOf("Context")}.querySelector(":scope > summary")).position`), "static", "headings are not pinned");
+  scrollHeadingAbove(`${secOf("Context")}.querySelector(":scope > summary")`, 40);
+  await waitFor("the breadcrumb shows Context", `!${crumbBar}.hidden`);
+  assert.deepEqual((await crumbParts()).map((p) => p.text), ["Context"]);
+  assert.ok(ev<string>(`getComputedStyle(${crumbBar}).backgroundColor`).startsWith("rgb("), "opaque background, no alpha");
+  assert.equal(ev(`getComputedStyle(${crumbBar}).borderBottomWidth`), "1px");
+  ev(`document.documentElement.dataset.theme = "light", "ok"`); // the machine's appearance may be dark
+  await sleep(300);
+  ab("screenshot", join(SHOTS, "PL1-plan-crumb.png"));
+  goTo("Steps");
+  key("Enter");
+  await waitFor("Steps open", `${secOf("Steps")}.open`);
+  ev(`${secOf("1. Backend usecase")}.querySelector(":scope > summary").click(), "ok"`);
+  await waitFor("Backend usecase open", `${secOf("1. Backend usecase")}.open`);
+  scrollHeadingAbove(`${secOf("1. Backend usecase")}.querySelector(":scope > summary")`, 40);
+  await waitFor("the breadcrumb shows Steps › Backend usecase", `!${crumbBar}.hidden && ${crumbBar}.children.length === 3`);
+  const parts = await crumbParts();
+  assert.equal(parts[0].text, "Steps");
+  assert.equal(parts[1].cls, "pc-sep");
+  assert.equal(parts[1].text, "›");
+  assert.equal(parts[2].cls, "pc-seg sub");
+  assert.ok(parts[2].text.startsWith("1. Backend usecase"), parts[2].text);
+  ev(`document.documentElement.dataset.theme = "dark", "ok"`);
+  await sleep(300);
+  ab("screenshot", join(SHOTS, "PL1-plan-crumb-dark.png"));
+  ev(`delete document.documentElement.dataset.theme, "ok"`);
+  ev(`${crumbBar}.parentElement.querySelector(".pc-seg").click(), "ok"`);
+  await waitFor("Steps heading at the top", `Math.abs(${secOf("Steps")}.querySelector(":scope > summary").getBoundingClientRect().top - document.getElementById("background").getBoundingClientRect().top) <= 1`);
+  assert.equal(selTitle(), "Steps");
+  await waitFor("the breadcrumb hides again", `${crumbBar}.hidden`);
+});
+
+gui("the breadcrumb below 900px: pinned to the window top", async () => {
+  await seedPlan(LONG);
+  ab("set", "viewport", "800", "900");
+  await reopen("document.querySelector('#background details.plan-sec')");
+  scrollHeadingAbove(`${secOf("Context")}.querySelector(":scope > summary")`, 40);
+  await waitFor("the breadcrumb shows", `!${crumbBar}.hidden`);
+  const top = ev<number>(`${crumbBar}.getBoundingClientRect().top`);
+  assert.ok(Math.abs(top) <= 1, `the bar is at the window top (${top})`);
+  ab("screenshot", join(SHOTS, "PL1-plan-crumb-narrow.png"));
 });
 
 gui("screenshots: 1440x900 folded, and with one section open", async () => {
