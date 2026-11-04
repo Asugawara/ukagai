@@ -13,13 +13,14 @@ interface Dollar {
   env: { get(name: string): Promise<string | undefined>; set(name: string, value: string | undefined): unknown };
   plugin: { root: string };
   clock: { every(ms: number, fn: () => void): { cancel(): void } };
-  /** Absent on a Claude Code without the pane API: the mod then shows nothing */
-  ui?: {
+  /** Absent on a Claude Code without the pane API: every call is in a try/catch, so the mod then shows nothing. It is never read as a value (the engine refuses that) */
+  ui: {
     open(pane: { id: string; title?: string; closeOnEscape?: true; rows?: number }): Promise<{ isPlaced: boolean }>;
     close(pane: { id: string }): Promise<void>;
     panes(): Promise<ReadonlyArray<{ id: string; isPlaced: boolean }>>;
     resolve(e: unknown): { Box: unknown; Text: unknown };
     toast(text: string): void;
+    invalidate(event: "ui.render"): void;
   };
 }
 type Next<E> = (e: E) => Promise<unknown>;
@@ -29,7 +30,6 @@ type On = {
   (event: "session.end", hook: ($: Dollar, e: { reason?: string }, next: Next<unknown>) => Promise<unknown>): void;
   (event: "ui.render", match: { component: "Pane"; requestId: string }, hook: ($: Dollar, e: unknown, next: Next<unknown>) => Promise<unknown>): void;
   (event: "ui.close", hook: ($: Dollar, e: { id: string; origin: { kind: "plugin" | "person" | "unload" } }, next: Next<unknown>) => Promise<unknown>): void;
-  (event: "tool.call", match: { tool: string }, hook: ($: Dollar, e: unknown, next: Next<unknown>) => Promise<unknown>): void;
 };
 
 const PANE_ID = "ukagai-waiting";
@@ -52,33 +52,81 @@ const TEXT = {
 type H = (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]) => unknown;
 const hyper = (): H => (globalThis as unknown as { h: H }).h;
 
-export const register = (on: On): void => {
-  let session: ModSession | undefined;
-  let timer: { cancel(): void } | undefined;
-  /** What a new ModSession needs again after a /clear: the process goes on, but no session.start follows */
-  let rebuild: (() => Promise<void>) | undefined;
-  /** The question the pane shows (undefined: none) and the language it is drawn in */
-  let waiting: PollWaiting | undefined;
-  let lang: Lang = "en";
-  let dataDir: string | undefined;
-  let reloadCheck = false;
+/*
+ * The engine's static check on a hooks module (seen as "failed to load" in `claude --debug`, text in the engine's error):
+ *  - `$` is spelled `$.noun.method(...)` at every use; `$.ui` is never read as a value (`!$.ui`, `$.ui ?`, `$.ui?.`);
+ *  - `$` may be passed only to a function declared at the top level of the module (a function declaration, or a const bound
+ *    to one) or imported from a file of the module's own. A function nested inside `register` is refused.
+ * So the helpers taking `$` are top-level declarations, their state is module-level, and a Claude Code without `$.ui`
+ * is handled by try/catch around the `$.ui.*` calls (the call then throws a TypeError), which keeps the mod fail-open.
+ */
+let session: ModSession | undefined;
+let timer: { cancel(): void } | undefined;
+/** What a new ModSession needs again after a /clear: the process goes on, but no session.start follows */
+let rebuild: (() => Promise<void>) | undefined;
+/** The question the pane shows (undefined: none) and the language it is drawn in */
+let waiting: PollWaiting | undefined;
+let lang: Lang = "en";
+let dataDir: string | undefined;
+let reloadCheck = false;
 
-  const readLang = async ($: Dollar): Promise<Lang> => {
-    if (dataDir === undefined) return "en";
-    try {
-      const o = JSON.parse(await $.fs.read(`${dataDir.replace(/[\\/]+$/, "")}/config.json`)) as { lang?: unknown };
-      return o.lang === "ja" ? "ja" : "en";
-    } catch {
-      return "en";
-    }
-  };
-  const openPane = async ($: Dollar, w: PollWaiting): Promise<void> => {
-    if (!$.ui) return;
+async function readLang($: Dollar): Promise<Lang> {
+  if (dataDir === undefined) return "en";
+  try {
+    const o = JSON.parse(await $.fs.read(`${dataDir.replace(/[\\/]+$/, "")}/config.json`)) as { lang?: unknown };
+    return o.lang === "ja" ? "ja" : "en";
+  } catch {
+    return "en";
+  }
+}
+async function isOpen($: Dollar): Promise<boolean> {
+  try {
+    return (await $.ui.panes()).some((p) => p.id === PANE_ID);
+  } catch {
+    return false;
+  }
+}
+/**
+ * Shows `w` in the pane: opens it if it is not up, then always asks for a redraw. The terminal reuses its settled evaluation of
+ * a pane id (debug log: "terminal reuses its settled evaluation"), also for a pane closed and opened again, so without the
+ * invalidate a second question would be drawn with the first one's text and language.
+ */
+async function openPane($: Dollar, w: PollWaiting): Promise<void> {
+  try {
     waiting = w;
     lang = await readLang($);
-    await $.ui.open({ id: PANE_ID, title: "ukagai", closeOnEscape: true, rows: 2 });
-  };
-  const isOpen = async ($: Dollar): Promise<boolean> => ($.ui ? (await $.ui.panes()).some((p) => p.id === PANE_ID) : false);
+    if (!(await isOpen($))) await $.ui.open({ id: PANE_ID, title: "ukagai", closeOnEscape: true, rows: 2 });
+    $.ui.invalidate("ui.render");
+  } catch {
+    // no pane API: show nothing
+  }
+}
+async function closePane($: Dollar): Promise<void> {
+  try {
+    if (await isOpen($)) await $.ui.close({ id: PANE_ID });
+  } catch {
+    // fail open
+  }
+}
+async function showWaiting($: Dollar, w: PollWaiting | undefined): Promise<void> {
+  reloadCheck = false;
+  if (w !== undefined) return openPane($, w);
+  waiting = undefined;
+  return closePane($);
+}
+function toast($: Dollar, text: string): void {
+  try {
+    $.ui.toast(text);
+  } catch {
+    // no pane API
+  }
+}
+
+export const register = (on: On): void => {
+  // a register call starts from nothing (tests register more than once in a process)
+  session = timer = rebuild = waiting = dataDir = undefined;
+  lang = "en";
+  reloadCheck = false;
 
   on("session.start", async ($, e, next) => {
     try {
@@ -101,13 +149,7 @@ export const register = (on: On): void => {
           readFile: read,
           getEnv: (name) => (name === "UKAGAI_DISABLE" ? $.env.get("UKAGAI_DISABLE") : name === "UKAGAI_MOD" ? $.env.get("UKAGAI_MOD") : $.env.get("HOME")),
           setEnv: async (_name, value) => void (await $.env.set("UKAGAI_MOD_OWNER", value)),
-          showWaiting: async (w) => {
-            if (!$.ui) return;
-            reloadCheck = false;
-            if (w !== undefined) return openPane($, w);
-            waiting = undefined;
-            if (await isOpen($)) await $.ui.close({ id: PANE_ID });
-          },
+          showWaiting: (w) => showWaiting($, w),
         };
         dataDir = config.dataDir;
         const begin = async (): Promise<void> => {
@@ -115,12 +157,12 @@ export const register = (on: On): void => {
           session = s;
           await s.start();
           // after a reload the pane may still be up: the first poll decides whether it stays
-          reloadCheck = (await isOpen($).catch(() => false)) && waiting === undefined;
+          reloadCheck = (await isOpen($)) && waiting === undefined;
           if (reloadCheck) {
             await s.refresh();
             if (reloadCheck) {
               reloadCheck = false;
-              await $.ui?.close({ id: PANE_ID });
+              await closePane($);
             }
           }
           timer = $.clock.every(MOD_POLL_MS, () => void s.tick().catch(() => undefined));
@@ -157,11 +199,16 @@ export const register = (on: On): void => {
 
   on("ui.render", { component: "Pane", requestId: PANE_ID }, async ($, e, next) => {
     try {
-      if (!$.ui) return next(e);
       const { Box, Text } = $.ui.resolve(e);
       const t = TEXT[lang];
       const h = hyper();
-      return h(Box, { flexDirection: "column" }, h(Text, null, t.line(waiting?.question || t.fallback)), h(Text, { dimColor: true }, t.hint));
+      // one row each: a long question must not push the hint (the Esc instruction) out of the two-row pane
+      return h(
+        Box,
+        { flexDirection: "column" },
+        h(Text, { wrap: "truncate-end" }, t.line(waiting?.question || t.fallback)),
+        h(Text, { dimColor: true, wrap: "truncate-end" }, t.hint),
+      );
     } catch {
       return next(e);
     }
@@ -173,28 +220,12 @@ export const register = (on: On): void => {
         const id = waiting.decision_id;
         waiting = undefined;
         const r = await session.withdraw(id);
-        if (r === "failed") $.ui?.toast(TEXT[lang].failed);
+        if (r === "failed") toast($, TEXT[lang].failed);
       }
     } catch {
       // fail open
     }
     // never keep the pane open
     return next(e);
-  });
-
-  // Kept only if the real-terminal check shows it helps: an open made inside the person's prompt chain counts as "asked",
-  // so the pane is drawn below 144 columns too. The poll timer opens it "unasked" first.
-  on("tool.call", { tool: "AskUserQuestion" }, async ($, e, next) => {
-    const r = await next(e);
-    try {
-      await session?.refresh();
-      if (waiting !== undefined && $.ui) {
-        const p = (await $.ui.panes()).find((x) => x.id === PANE_ID);
-        if (p === undefined || !p.isPlaced) await openPane($, waiting);
-      }
-    } catch {
-      // fail open
-    }
-    return r;
   });
 };

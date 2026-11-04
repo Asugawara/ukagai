@@ -18,6 +18,7 @@ function setup(env: Record<string, string> = {}, opts: { noUi?: boolean; lang?: 
   const opened: Array<Record<string, unknown>> = [];
   const closed: string[] = [];
   const toasts: string[] = [];
+  const invalidated: string[] = [];
   const open = new Map<string, { id: string; isPlaced: boolean }>();
   const ui = {
     open: async (a: { id: string }) => {
@@ -29,6 +30,7 @@ function setup(env: Record<string, string> = {}, opts: { noUi?: boolean; lang?: 
     panes: async () => [...open.values()],
     resolve: () => ({ Box: "Box", Text: "Text" }),
     toast: (t: string) => void toasts.push(t),
+    invalidate: (e: string) => void invalidated.push(e),
   };
   const $ = {
     ...(opts.noUi ? {} : { ui }),
@@ -81,6 +83,7 @@ function setup(env: Record<string, string> = {}, opts: { noUi?: boolean; lang?: 
     opened,
     closed,
     toasts,
+    invalidated,
     open,
     next,
     live,
@@ -210,17 +213,19 @@ test("ui.render: two lines, en by default and ja with lang in config.json", asyn
   }
 });
 
-test("tool.call AskUserQuestion: returns what next returned, refreshes, and opens a pane that is not placed", async () => {
+test("a second question redraws the pane (open is not repeated while it is up); an open also asks for a redraw", async () => {
   const m = setup();
   await m.start();
   m.state.poll = WAIT;
-  const r = await m.hooks["tool.call"]!(m.$, { tool: "AskUserQuestion" }, async () => "result");
-  assert.equal(r, "result");
-  assert.ok(m.opened.length >= 1);
-  m.open.get("ukagai-waiting")!.isPlaced = false;
-  const before = m.opened.length;
-  await m.hooks["tool.call"]!(m.$, { tool: "AskUserQuestion" }, async () => "result");
-  assert.equal(m.opened.length, before + 1, "opened again with this hook's $");
+  await m.tick();
+  assert.equal(m.opened.length, 1);
+  assert.deepEqual(m.invalidated, ["ui.render"], "a redraw is asked for after the open too (the terminal caches per pane id)");
+  m.state.poll = { status: 200, text: JSON.stringify({ waiting: { decision_id: "d2", question: "Second?" } }) };
+  await m.tick();
+  assert.equal(m.opened.length, 1, "same pane id: not opened again");
+  assert.deepEqual(m.invalidated, ["ui.render", "ui.render"]);
+  const out = await withH(() => m.hooks["ui.render"]!(m.$, { component: "Pane", requestId: "ukagai-waiting" }, m.next));
+  assert.ok(flat(out).includes("Second?"), flat(out));
 });
 
 test("a reload that finds the pane open with nothing waiting closes it", async () => {
@@ -236,6 +241,5 @@ test("without $.ui: no error and no pane", async () => {
   m.state.poll = WAIT;
   await m.tick();
   await m.hooks["ui.close"]!(m.$, { id: "ukagai-waiting", origin: { kind: "person" } }, m.next);
-  assert.equal((await m.hooks["tool.call"]!(m.$, { tool: "AskUserQuestion" }, async () => 1)), 1);
   assert.equal(m.opened.length, 0);
 });
