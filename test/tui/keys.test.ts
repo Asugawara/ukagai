@@ -157,3 +157,8 @@ test("long plan: h / l and ← → are the zone keys, j k move the sections in t
   assert.equal(type(ch("h"), { kind: "plan" }), "prev");
   assert.equal(type(ch("l"), { kind: "plan" }), "next");
 });
+
+test("w in question mode maps to withdraw", () => {
+  const ctx = { mode: "normal", kind: "question", focus: "options", zone: undefined, inputEmpty: true, histDetail: false, wide: false, full: false, hscrollable: false, toc: false, planOnly: false, lastG: 0, now: 0, presets: 0 } as unknown as Parameters<typeof interpret>[1];
+  assert.deepEqual(interpret({ name: "char", ch: "w" }, ctx).action, { type: "withdraw" });
+});

@@ -188,6 +188,20 @@ export class TuiApi {
     return Decision.parse(await res.json());
   }
 
+  /** Withdraw a pending message-delivery question without an answer (POST /api/decisions/:id/withdraw) */
+  async withdraw(id: string): Promise<Decision> {
+    const res = await this.fetch(`/api/decisions/${encodeURIComponent(id)}/withdraw`, {
+      method: "POST",
+      body: {},
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(j.error ?? `HTTP ${res.status}`, res.status);
+    }
+    return Decision.parse(await res.json());
+  }
+
   /** Subscribe to SSE. Calls onOpen once connected and returns when the stream ends (including a clean end). Throws on connection failure */
   async stream(onEvent: (e: StreamEvent) => void, signal: AbortSignal, onOpen?: () => void): Promise<void> {
     const res = await this.fetch("/api/stream", { signal });

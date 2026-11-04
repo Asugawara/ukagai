@@ -491,3 +491,46 @@ test("an answer a newer plan or the re-call time limit kept from the agent (supe
   cancelled.upsert({ ...p2, status: "cancelled", status_reason: "superseded" }, (t += 4000));
   assert.notEqual(cancelled.view(t).toast, EN);
 });
+
+test("w twice withdraws a withdrawable question; the first press only arms it, and other questions and plans do nothing", () => {
+  const app = new App();
+  app.upsert(decision({ delivery: "message", status: "pending" }), (t += 10));
+  assert.deepEqual(press(app, ch("w")), []);
+  assert.deepEqual(press(app, ch("w")), [{ type: "withdraw", id: "d1" }]);
+
+  const late = new App();
+  late.upsert(decision({ delivery: "message", status: "pending" }), (t += 10));
+  assert.deepEqual(press(late, ch("w")), []);
+  t += 4000;
+  assert.deepEqual(press(late, ch("w")), []);
+
+  const ordinary = new App();
+  ordinary.upsert(decision({ status: "pending" }), (t += 10));
+  assert.deepEqual(press(ordinary, ch("w"), ch("w")), []);
+
+  const plan = new App();
+  plan.upsert({ ...decision(), id: "p1", kind: "approve_plan" as const, delivery: "message" as const, status: "pending" }, (t += 10));
+  assert.deepEqual(press(plan, ch("w"), ch("w")), []);
+});
+
+test("a withdrawn message-delivery question is toasted as lost_withdrawn in en and ja", () => {
+  for (const [lang, text] of [["en", "Q: withdrawn without an answer"], ["ja", "Q: 答えずに取り下げました"]] as const) {
+    const app = new App();
+    app.lang = lang;
+    const base = decision({ delivery: "message" });
+    const q = { ...base, session: { ...base.session, title: "Q" } };
+    app.upsert({ ...q, status: "pending" }, (t += 10));
+    // index.ts hands the withdraw response to answered(), which shows the status toast
+    app.answered({ ...q, status: "cancelled", status_reason: "withdrawn" }, (t += 10));
+    assert.equal(app.view(t).toast, text, lang);
+  }
+});
+
+test("the question hint lists w only for a withdrawable question", () => {
+  const w = new App();
+  w.upsert(decision({ delivery: "message", status: "pending" }), (t += 10));
+  assert.match(stripAnsi(redraw(w).text), /w Withdraw/);
+  const ordinary = new App();
+  ordinary.upsert(decision({ status: "pending" }), (t += 10));
+  assert.doesNotMatch(stripAnsi(redraw(ordinary).text), /w Withdraw/);
+});

@@ -125,6 +125,8 @@ export interface ScreenModel {
   todo: string | null;
   /** Contents of the code blocks in the todo (`c` copies the first) */
   todoCode: string[];
+  /** A message-delivery question still waiting for its answer: `w` (twice) withdraws it */
+  withdrawable?: boolean;
   /** For a single question */
   question?: {
     text: string;
@@ -380,6 +382,7 @@ export function buildModel(d: Decision, lang: Lang = "en", history: SessionHisto
     blocker: isBlocker(d, fm),
     todo: null as string | null,
     todoCode: [] as string[],
+    ...(d.delivery === "message" && d.kind === "answer_question" && d.status === "pending" ? { withdrawable: true } : {}),
   };
   const coinedTerms =
     d.kind === "answer_question" && explained && questionsOf(d).length === 1
