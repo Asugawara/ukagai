@@ -16,17 +16,19 @@ interface Fake {
   submit: { result: () => Promise<{ ok: true } | { drop: string }> };
   files: Record<string, string>;
   sid: { id: string };
+  waits: Array<{ decision_id: string; question: string } | undefined>;
 }
 function fake(): Fake {
   const f = {
     calls: [] as Call[],
     env: {} as Record<string, string>,
     clock: { now: 1000 },
-    replies: { poll: [], ack: [], release: [] } as Fake["replies"],
+    replies: { poll: [], ack: [], release: [], withdraw: [] } as Fake["replies"],
     submits: [] as string[],
     submit: { result: async () => ({ ok: true as const }) },
     files: { "/data/token": "tok-1\n" } as Record<string, string>,
     sid: { id: "sess-1" },
+    waits: [] as Fake["waits"],
   };
   const host: Host = {
     async fetch(url, init) {
@@ -36,7 +38,7 @@ function fake(): Fake {
       const r = f.replies[action]!.shift();
       if (r === "throw") throw new Error("down");
       if (r) return { status: r.status, text: r.text ?? "" };
-      return action === "poll" ? { status: 204, text: "" } : { status: 200, text: '{"status":"answered"}' };
+      return action === "poll" ? { status: 204, text: "" } : action === "withdraw" ? { status: 200, text: "{}" } : { status: 200, text: '{"status":"answered"}' };
     },
     submit: (text) => {
       f.submits.push(text);
@@ -47,6 +49,7 @@ function fake(): Fake {
     readFile: (p) => f.files[p],
     getEnv: () => undefined,
     setEnv: (name, value) => void (f.env[name] = value),
+    showWaiting: (w) => void f.waits.push(w),
   };
   return Object.assign(f, { host });
 }
@@ -347,4 +350,75 @@ test("end() while a poll is in flight: the item it returns is not submitted and 
   const releases = f.calls.filter((c) => c.url.endsWith("/release"));
   assert.equal(releases.length, 1);
   assert.deepEqual(releases[0]!.body, { owner: "o".repeat(16), item_id: "it-1" });
+});
+
+const waiting = (id: string, question = "Q?") => ({ status: 200, text: JSON.stringify({ waiting: { decision_id: id, question } }) });
+
+test("waiting: shown once per decision id, cleared on 204 or a 200 without it, untouched by a transport failure", async () => {
+  const f = fake();
+  const s = createSession(f.host, CONFIG, () => "o".repeat(16));
+  await s.start();
+  f.replies["poll"]!.push(waiting("d1"), waiting("d1"), "throw", waiting("d1"), { status: 204 }, waiting("d2"), { status: 200, text: "{}" });
+  await tick(f, s);
+  assert.deepEqual(f.waits, [{ decision_id: "d1", question: "Q?" }]);
+  await tick(f, s);
+  assert.equal(f.waits.length, 1, "same id again: no call");
+  await tick(f, s); // transport failure
+  await tick(f, s);
+  assert.equal(f.waits.length, 1, "a transport failure changes nothing");
+  await tick(f, s); // 204
+  assert.deepEqual(f.waits.at(-1), undefined);
+  assert.equal(f.waits.length, 2);
+  await tick(f, s);
+  assert.equal(f.waits.at(-1)?.decision_id, "d2");
+  await tick(f, s); // 200 without waiting
+  assert.equal(f.waits.length, 4);
+  assert.equal(f.waits.at(-1), undefined);
+});
+
+test("withdraw: 200 withdrawn, 404 / 409 gone, 500 / throw failed; Bearer token and {} body", async () => {
+  const f = fake();
+  const s = createSession(f.host, CONFIG, () => "o".repeat(16));
+  await s.start();
+  f.replies["withdraw"]!.push({ status: 200 }, { status: 404 }, { status: 409 }, { status: 500 }, "throw");
+  const got: string[] = [];
+  for (const id of ["a", "b", "c", "d", "e"]) got.push(await s.withdraw(id));
+  assert.deepEqual(got, ["withdrawn", "gone", "gone", "failed", "failed"]);
+  const c = f.calls[0]!;
+  assert.equal(c.url, "http://127.0.0.1:4818/api/decisions/a/withdraw");
+  assert.equal(c.method, "POST");
+  assert.equal(c.headers["Authorization"], "Bearer tok-1");
+  assert.deepEqual(c.body, {});
+});
+
+test("a withdrawn id is not shown again; a failed one is", async () => {
+  const f = fake();
+  const s = createSession(f.host, CONFIG, () => "o".repeat(16));
+  await s.start();
+  f.replies["poll"]!.push(waiting("d1"), waiting("d1"), waiting("d1"));
+  await tick(f, s);
+  assert.equal(f.waits.length, 1);
+  f.replies["withdraw"]!.push({ status: 500 });
+  assert.equal(await s.withdraw("d1"), "failed");
+  await tick(f, s);
+  assert.equal(f.waits.length, 2, "failed: shown again");
+  assert.equal(f.waits.at(-1)?.decision_id, "d1");
+  assert.equal(await s.withdraw("d1"), "withdrawn");
+  await tick(f, s);
+  assert.equal(f.waits.length, 2, "withdrawn: not shown again");
+});
+
+test("refresh polls once outside the timer, and does nothing after end()", async () => {
+  const f = fake();
+  const s = createSession(f.host, CONFIG, () => "o".repeat(16));
+  await s.start();
+  f.replies["poll"]!.push(waiting("d1"));
+  await s.refresh();
+  assert.deepEqual(actions(f), ["poll"]);
+  assert.equal(f.waits.length, 1);
+  s.end();
+  assert.deepEqual(f.waits.at(-1), undefined, "end clears the pane");
+  const n = f.calls.length;
+  await s.refresh();
+  assert.equal(f.calls.length, n);
 });

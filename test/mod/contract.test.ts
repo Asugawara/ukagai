@@ -36,6 +36,7 @@ async function setup() {
   writeFileSync(join(dataDir, "token"), h.token);
   const url = `http://127.0.0.1:${h.port}`;
   const submits: string[] = [];
+  const waits: Array<string | undefined> = [];
   const result: { next: () => { ok: true } | { drop: string } } = { next: () => ({ ok: true }) };
   const host: Host = {
     // the real fetch: only the Host-level shape is faked
@@ -52,6 +53,7 @@ async function setup() {
     readFile: (p) => (p === join(dataDir, "token") ? h.token : undefined),
     getEnv: () => undefined,
     setEnv: () => undefined,
+    showWaiting: (w) => void waits.push(w?.decision_id),
   };
   const mod = createSession(host, { server: url, dataDir }, () => OWNER);
   await mod.start();
@@ -81,7 +83,7 @@ async function setup() {
   const inbox = (action: string, body: object) => api(`/api/sessions/${SESSION}/inbox/${action}`, body);
   const event = (extra: Record<string, unknown>) =>
     api("/api/events", { ...session, hook_event_name: "UserPromptSubmit", received_at: new Date().toISOString(), ...extra });
-  return { mod, tick, ask, decision, inbox, event, api, submits, result, session };
+  return { waits, mod, tick, ask, decision, inbox, event, api, submits, result, session };
 }
 
 test("poll -> register -> answer -> poll -> submit -> ref event -> ack", async () => {
@@ -175,4 +177,32 @@ test("a checkpoint reply: poll -> submit as a plugin message -> ack -> delivered
   assert.equal((await e.decision(cp.id)).response?.delivered_via, "message");
   await e.tick();
   assert.equal(e.submits.length, 1, "delivered once");
+});
+
+test("a waiting question reaches showWaiting; withdraw closes it as withdrawn and the next tick clears it", async () => {
+  const e = await setup();
+  await e.tick();
+  assert.deepEqual(e.waits, []);
+  const d = await e.ask("toolu_w");
+  await e.tick();
+  assert.deepEqual(e.waits, [d.id]);
+  assert.equal(await e.mod.withdraw(d.id), "withdrawn");
+  const got = (await (await e.api(`/api/decisions/${d.id}`)).json()) as { status: string; status_reason?: string };
+  assert.equal(got.status, "cancelled");
+  assert.equal(got.status_reason, "withdrawn");
+  await e.tick();
+  assert.deepEqual(e.waits, [d.id], "dismissed: no second call");
+  assert.equal(await e.mod.withdraw(d.id), "gone");
+  assert.equal(await e.mod.withdraw("nope"), "gone");
+});
+
+test("a question answered in the GUI stops waiting: showWaiting(undefined)", async () => {
+  const e = await setup();
+  await e.tick();
+  const d = await e.ask("toolu_x");
+  await e.tick();
+  assert.deepEqual(e.waits, [d.id]);
+  await e.api(`/api/decisions/${d.id}/answer`, { answers: { [QUESTION]: "A" } });
+  await e.tick();
+  assert.deepEqual(e.waits, [d.id, undefined]);
 });

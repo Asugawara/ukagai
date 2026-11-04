@@ -152,6 +152,8 @@ export type Action =
   | { type: "none-cancel" }
   /** "Can't answer this…": open the picker, move, tick a term, add a note, send at once, close */
   | { type: "cannot" }
+  /** `w`: withdraw a message-delivery question without an answer; the second press (within 3 s) sends it */
+  | { type: "withdraw" }
   /** `1`-`9`: send that card at once (single select) */
   | { type: "pick"; n: number }
   | { type: "cannot-move"; delta: 1 | -1 }
@@ -400,6 +402,7 @@ export function interpret(key: Key, ctx: KeyContext): { action: Action | null; l
   if (ch !== null && ch >= "1" && ch <= "9") return done({ type: "pick", n: Number(ch) });
   if (ch === "n") return done({ type: "none" });
   if (ch === "x") return done({ type: "cannot" });
+  if (ch === "w") return done({ type: "withdraw" });
   if (ch === "g") {
     return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "top" }) : done(null, ctx.now);
   }

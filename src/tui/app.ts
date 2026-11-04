@@ -15,6 +15,8 @@ import { initialPlanState, remapState, setOpen, toggleAll, type PlanOutline, typ
 
 export type Effect =
   | { type: "answer"; id: string; body: Record<string, unknown> }
+  /** Withdraw a message-delivery question without an answer (POST /api/decisions/:id/withdraw) */
+  | { type: "withdraw"; id: string }
   | { type: "copy"; text: string }
   /** Mark a plan read at the mtime the human read (POST /api/plans/:name/read) */
   | { type: "read"; name: string; mtime: string }
@@ -63,7 +65,12 @@ const MESSAGE_STATUS_KEY: Record<string, MessageKey> = {
   fallback: "status_fallback_message",
 };
 // `superseded` only for an answer that was not delivered (a newer plan, or the re-call time limit); a pending plan a newer one replaced is just cancelled
-const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded"];
+const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded", "withdrawn"];
+
+/** A message-delivery question still waiting for its answer: the human may withdraw it (`w` twice) */
+function withdrawable(d: Decision | undefined): boolean {
+  return !!d && d.delivery === "message" && d.kind === "answer_question" && d.status === "pending";
+}
 
 /** The toast text for a decision that left `pending` (undefined: none) */
 function statusToast(d: Decision, lang: Lang): string | undefined {
@@ -157,6 +164,8 @@ export class App {
   private revealNear = false;
   private listIndex = 0;
   private lastG = 0;
+  /** The first `w` on a withdrawable question: the second `w` for the same id within CONFIRM_MS sends it */
+  private withdrawArm: { id: string; at: number } | null = null;
   /** The side-question threads by session (GET /api/sessions/:id/aside, `aside.updated`) */
   private asides = new Map<string, { entries: AsideEntry[]; available: boolean; reason?: string }>();
   /** The open thread (mode "aside"): its session, the decision it is asked from, the text typed, the quote attached and the scroll (null follows the bottom) */
@@ -814,7 +823,21 @@ export class App {
     }
     const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(m), zone: m?.plan ? this.planState(m).zone : undefined, inputEmpty: this.input?.text === "", histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now, presets: this.mode === "input" && this.input?.kind === "instruct" && this.input.text === "" ? Math.min(9, this.presets.length) : 0 });
     this.lastG = lastG;
+    if (action?.type !== "withdraw") this.withdrawArm = null; // any other key cancels a pending withdraw
     return action ? this.apply(action, m, now) : [];
+  }
+
+  /** Withdraw a message-delivery question: the first press arms it and shows the confirm text, the second one (same question, within CONFIRM_MS) sends */
+  private withdraw(m: ScreenModel | null, now: number): Effect[] {
+    if (!m || !withdrawable(this.decisions.get(m.id))) return [];
+    const arm = this.withdrawArm;
+    if (arm?.id === m.id && now - arm.at < CONFIRM_MS) {
+      this.withdrawArm = null;
+      return [{ type: "withdraw", id: m.id }];
+    }
+    this.withdrawArm = { id: m.id, at: now };
+    this.note(t(this.lang, "withdraw_confirm"), now);
+    return [];
   }
 
   private apply(a: Action, m: ScreenModel | null, now: number): Effect[] {
@@ -940,6 +963,7 @@ export class App {
         return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id)!)]: noneAnswer(n.index, n.text) } });
       }
       case "cannot": return this.openCannot(m, dr);
+      case "withdraw": return this.withdraw(m, now);
       case "pick": return this.pick(m, dr, a.n - 1, now);
       case "cannot-move": return this.cannotMove(a.delta);
       case "cannot-cancel": this.cannot = null; this.mode = "normal"; return [];

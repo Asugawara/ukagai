@@ -565,8 +565,13 @@ export type EventInput = z.infer<typeof EventInput>;
 
 export const PollRequest = z.object({ owner: z.string().regex(MOD_OWNER_RE), idle: z.boolean() });
 export type PollRequest = z.infer<typeof PollRequest>;
-/** 200 from poll: `held` = this owner is delivering that item already; `item` = one was handed over. 204 (no body) when there is nothing */
-export type PollResponse = { held: { item_id: string } } | { item: { item_id: string; text: string } };
+/** A message-delivery question waiting for the human: the oldest pending one of the session. `question` is its first question, cut to 120 characters */
+export type PollWaiting = { decision_id: string; question: string };
+/**
+ * 200 from poll: `held` = this owner is delivering that item already; `item` = one was handed over. `waiting` rides along on every 200 while a
+ * message-delivery question is pending. 204 (no body) when there is nothing else to say
+ */
+export type PollResponse = ({ held: { item_id: string } } | { item: { item_id: string; text: string } } | Record<never, never>) & { waiting?: PollWaiting };
 
 export const AckRequest = z.object({ owner: z.string().regex(MOD_OWNER_RE), item_id: z.string().min(1).max(100) });
 export type AckRequest = z.infer<typeof AckRequest>;

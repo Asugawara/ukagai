@@ -96,7 +96,7 @@ GUI の言語は最初はロケールで決まり（`LC_ALL`、`LC_MESSAGES`、`
 | 動作確認したバージョン | 2.1.304 | 0.159.3 |
 
 - **エージェントが先に説明を書きます。** 質問やプランの最初の呼び出しは、エージェントが説明を書き終えるまで保留されます。そのぶんエージェントの時間とトークンがかかります。書き方はスキルと短い文脈の一文で教えます。
-- **回答をメッセージで届ける（Claude Code）。** 対話のターミナルでは、エージェントは待たずにターンを終え、手が空いたところで回答がメッセージとして届きます。`claude -p`、Agent SDK、Desktop、VS Code のチャット、サブエージェント、Codex では、hook が回答を待ちます。既定でオンで、オフにする方法は 3 つあります。[ガイド](docs/guide.md#answers-as-messages-the-ukagai-mod)
+- **回答をメッセージで届ける（Claude Code）。** 対話のターミナルでは、エージェントは待たずにターンを終え、手が空いたところで回答がメッセージとして届きます。不要になった質問は、ターミナルの `Esc` か「取り下げ」ボタンで取り下げられます。`claude -p`、Agent SDK、Desktop、VS Code のチャット、サブエージェント、Codex では、hook が回答を待ちます。既定でオンで、オフにする方法は 3 つあります。[ガイド](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **サーバーに届かないとき**は、hook は何も出力せず、エージェントは通常の端末のプロンプトに戻ります。
 - **Codex のプラン承認**には、サーバーが Codex のローカル app-server につながっている必要があります。Codex の起動後、つながるまでに最大 30 秒ほどかかります。Codex の Default モードで質問を受けるには、Codex の `config.toml` に `features.default_mode_request_user_input = true` が必要です（ukagai は書き込みません）。[ガイド](docs/guide.md#codex-cli)
 - **ローカルのみ。** サーバーは `127.0.0.1:4818` で待ち受けます。ユーザーガイドは英語です。

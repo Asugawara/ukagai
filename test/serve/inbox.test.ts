@@ -29,14 +29,14 @@ const A = "a".repeat(16);
 const B = "b".repeat(16);
 const SID = "sess-inbox";
 
-function setup(opts: { dir?: string; messageDelivery?: () => boolean; start?: number } = {}) {
+function setup(opts: { dir?: string; messageDelivery?: () => boolean; start?: number; broadcast?: (event: string) => void } = {}) {
   const dir = opts.dir ?? mkdtempSync(join(tmpdir(), "ukagai-inbox-"));
   if (!opts.dir) roots.push(dir);
   const transcript = join(dir, "t.jsonl");
   if (!opts.dir) writeFileSync(transcript, "");
   let t = opts.start ?? Date.parse("2026-01-01T00:00:00.000Z");
   const logs: string[] = [];
-  const store = new Store({ dir, leaseGraceMs: 60_000, now: () => t, messageDelivery: opts.messageDelivery, log: (e) => logs.push(e), broadcast: () => {} });
+  const store = new Store({ dir, leaseGraceMs: 60_000, now: () => t, messageDelivery: opts.messageDelivery, log: (e) => logs.push(e), broadcast: (event) => opts.broadcast?.(event) });
   store.load();
   stores.push(store);
   const h = {
@@ -140,9 +140,9 @@ test("not for another session's owner, a missing or malformed owner, a subagent,
 test("poll hands an answer out only when idle, claims it for the polling owner, and answers `held` while it holds it", () => {
   const h = setup();
   const d = h.ask();
-  assert.equal(h.poll(A, true), undefined, "nothing answered yet");
+  assert.equal(h.poll(A, true)?.waiting?.decision_id, d.id, "nothing to hand over yet, but the question is waiting");
   h.answer(d);
-  assert.equal(h.poll(A, false), undefined, "not idle");
+  assert.equal(h.poll(A, false), undefined, "not idle, and no question waits any more");
   const item = h.poll(A, true);
   assert.ok(item && "item" in item);
   assert.equal(item.item.item_id, d.id);
@@ -921,4 +921,85 @@ test("instruction: the bypass after five failures ends by itself after MOD_GONE_
   h.advance(2000);
   h.poll(A, false);
   assert.equal(h.store.hasLiveMod(SID), true, "the mod gets another chance");
+});
+
+// ---- withdraw ----
+
+test("withdraw closes a pending message-delivery question as withdrawn, sends decision.updated and releases the hold-back", () => {
+  const events: string[] = [];
+  const h = setup({ broadcast: (e) => events.push(e) });
+  const d = h.ask();
+  assert.equal(h.store.waitingFor(SID)?.decision_id, d.id, "held back while it is pending");
+  events.length = 0;
+  const w = h.store.withdraw(d.id);
+  assert.equal(w.status, "cancelled");
+  assert.equal(get(h, d).status_reason, "withdrawn");
+  assert.ok(events.includes("decision.updated"), "decision.updated was sent");
+  assert.equal(h.store.waitingFor(SID), undefined, "the hold-back is released");
+});
+
+test("withdraw answers 409 for an ordinary decision, an answer that is already submitted, an answered one and a pending approve_plan", () => {
+  const h = setup();
+  const classic = h.store.create({ ...h.req("t-classic"), mod_owner: undefined }, {}).decision;
+  assert.equal(classic.delivery, undefined, "no owner polled yet: an ordinary decision");
+  assert.throws(() => h.store.withdraw(classic.id), { status: 409 });
+
+  const done = h.ask("t-done");
+  h.answer(done);
+  assert.equal(h.poll(A, true)?.item?.item_id, done.id);
+  assert.deepEqual(h.store.inboxAck(SID, A, done.id), { http: 200, status: "answered" });
+  assert.throws(() => h.store.withdraw(done.id), { status: 409 });
+
+  const sub = h.ask("t-sub");
+  h.answer(sub);
+  assert.equal(get(h, sub).status, "answer_submitted");
+  assert.throws(() => h.store.withdraw(sub.id), { status: 409 });
+
+  const plan = h.store.create({ ...h.req("t-plan"), kind: "approve_plan", request: { plan: "# Plan\n- step", planFilePath: "/p.md" } }, {}).decision;
+  assert.equal(plan.delivery, "message", "precondition: the plan is a message-delivery decision");
+  assert.throws(() => h.store.withdraw(plan.id), { status: 409 });
+});
+
+test("withdraw answers 404 for an unknown id", () => {
+  const h = setup();
+  assert.throws(() => h.store.withdraw("no-such-decision"), { status: 404 });
+});
+
+// ---- poll: waiting ----
+
+test("poll answers `waiting` while a message-delivery question is pending, idle or not, with or without a human prompt; nothing once it is withdrawn", () => {
+  const h = setup();
+  const d = h.ask();
+  const waiting = { decision_id: d.id, question: `Which database should the cache use (toolu_1)?` };
+  assert.deepEqual(h.poll(A, false), { waiting }, "not idle");
+  assert.deepEqual(h.poll(A, true), { waiting }, "idle, nothing to hand over");
+  h.event("UserPromptSubmit"); // the human types in the terminal
+  assert.ok(get(h, d).human_prompt_at, "marked as typed over");
+  assert.deepEqual(h.poll(A, true), { waiting }, "still waiting after a human prompt");
+  h.store.withdraw(d.id);
+  assert.equal(h.poll(A, true), undefined, "withdrawn: nothing to say");
+});
+
+test("poll's `waiting` names the oldest pending question and cuts its text to 120 characters", () => {
+  const h = setup();
+  const long = "q".repeat(200);
+  const first = h.ask("t-first", { request: { questions: [{ question: long, header: "H", options: [{ label: "a" }, { label: "b" }], multiSelect: false }] } });
+  h.ask("t-second");
+  const w = h.poll(A, false)?.waiting;
+  assert.equal(w?.decision_id, first.id);
+  assert.equal(w?.question.length, 120);
+  assert.equal(w?.question, "q".repeat(120));
+});
+
+test("poll's `item` and `held` answers carry `waiting` too, and the answer is not the question", () => {
+  const h = setup();
+  const answered = h.ask("t-answered");
+  h.answer(answered);
+  const pending = h.ask("t-pending");
+  const item = h.poll(A, true);
+  assert.ok(item && "item" in item && item.item.item_id === answered.id, "the answer is handed out");
+  assert.equal(item.waiting?.decision_id, pending.id, "the pending question rides along");
+  const held = h.poll(A, true);
+  assert.ok(held && "held" in held, "still holding the answer");
+  assert.equal(held.waiting?.decision_id, pending.id, "held carries waiting as well");
 });

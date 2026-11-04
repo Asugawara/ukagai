@@ -21,7 +21,12 @@ export interface Host {
   readFile(path: string): Maybe<string | undefined>;
   getEnv(name: "UKAGAI_DISABLE" | "UKAGAI_MOD" | "HOME"): Maybe<string | undefined>;
   setEnv(name: "UKAGAI_MOD_OWNER", value: string): Maybe<void>;
+  /** The message-delivery question that waits for the human (undefined: none). Called only when the shown question changes */
+  showWaiting(w: PollWaiting | undefined): Maybe<void>;
 }
+
+/** Copy of PollWaiting in src/contract.ts */
+export type PollWaiting = { decision_id: string; question: string };
 
 export interface Config {
   server: string;
@@ -65,6 +70,10 @@ export interface ModSession {
   turnStart(agentId?: string): void;
   turnComplete(agentId?: string): void;
   end(): void;
+  /** Withdraws a waiting question; the id is not shown again unless the withdrawal failed */
+  withdraw(decisionId: string): Promise<"withdrawn" | "gone" | "failed">;
+  /** One poll now, outside the timer */
+  refresh(): Promise<void>;
 }
 
 export function createSession(host: Host, config: Config, newOwner: () => string = randomOwner): ModSession {
@@ -77,6 +86,9 @@ export function createSession(host: Host, config: Config, newOwner: () => string
   let failures = 0;
   let nextAt = 0;
   const records = new Map<string, Record_>();
+  let shown: PollWaiting | undefined;
+  const dismissed = new Set<string>();
+  let ended = false;
 
   async function readToken(): Promise<string | undefined> {
     if (config.dataDir === undefined) return undefined;
@@ -86,11 +98,11 @@ export function createSession(host: Host, config: Config, newOwner: () => string
   }
 
   /** undefined: no token or a transport failure. A 401 forgets the token so the next request reads it again */
-  async function post(session: string, action: "poll" | "ack" | "release", body: object): Promise<{ status: number; text: string } | undefined> {
+  async function request(path: string, body: object): Promise<{ status: number; text: string } | undefined> {
     try {
       token ??= await readToken();
       if (token === undefined) return undefined;
-      const res = await host.fetch(`${config.server}/api/sessions/${encodeURIComponent(session)}/inbox/${action}`, {
+      const res = await host.fetch(`${config.server}${path}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -99,6 +111,21 @@ export function createSession(host: Host, config: Config, newOwner: () => string
       return res;
     } catch {
       return undefined;
+    }
+  }
+
+  const post = (session: string, action: "poll" | "ack" | "release", body: object) =>
+    request(`/api/sessions/${encodeURIComponent(session)}/inbox/${action}`, body);
+
+  /** Tells the host only when the shown question changes; an id the person dismissed counts as none */
+  function setWaiting(w: PollWaiting | undefined): void {
+    const next = w !== undefined && !dismissed.has(w.decision_id) ? w : undefined;
+    if (next?.decision_id === shown?.decision_id) return;
+    shown = next;
+    try {
+      void Promise.resolve(host.showWaiting(next)).catch(() => undefined);
+    } catch {
+      // fail open
     }
   }
 
@@ -144,15 +171,22 @@ export function createSession(host: Host, config: Config, newOwner: () => string
     const res = await post(session, "poll", { owner, idle });
     if (res === undefined) return true;
     if (res.status === 401) return false;
-    if (res.status === 204) return false;
+    if (res.status === 204) {
+      if (!stopped) setWaiting(undefined);
+      return false;
+    }
     if (res.status !== 200) return true;
-    let json: { held?: { item_id?: unknown }; item?: { item_id?: unknown; text?: unknown } };
+    let json: { held?: { item_id?: unknown }; item?: { item_id?: unknown; text?: unknown }; waiting?: { decision_id?: unknown; question?: unknown } };
     try {
       json = JSON.parse(res.text) as typeof json;
     } catch {
       return true;
     }
     const held = json.held?.item_id;
+    if (!stopped) {
+      const w = json.waiting;
+      setWaiting(w !== undefined && w !== null && typeof w.decision_id === "string" && typeof w.question === "string" ? { decision_id: w.decision_id, question: w.question } : undefined);
+    }
     if (stopped) {
       // end() came while this request was in flight: nothing is submitted any more
       const gone = json.item?.item_id;
@@ -206,8 +240,38 @@ export function createSession(host: Host, config: Config, newOwner: () => string
       busy = false;
       waitForTurnComplete = false;
     },
+    async withdraw(decisionId) {
+      // the person closed the pane: it is gone, whatever the server says
+      dismissed.add(decisionId);
+      if (shown?.decision_id === decisionId) shown = undefined;
+      const res = await request(`/api/decisions/${encodeURIComponent(decisionId)}/withdraw`, {});
+      if (res?.status === 200) return "withdrawn";
+      if (res?.status === 404 || res?.status === 409) return "gone";
+      dismissed.delete(decisionId); // the next poll may show it again
+      return "failed";
+    },
+    async refresh() {
+      if (stopped || ticking) return;
+      ticking = true;
+      try {
+        await poll();
+      } catch {
+        // fail open
+      } finally {
+        ticking = false;
+      }
+    },
     end() {
       stopped = true;
+      if (!ended) {
+        ended = true;
+        shown = undefined;
+        try {
+          void Promise.resolve(host.showWaiting(undefined)).catch(() => undefined);
+        } catch {
+          // fail open
+        }
+      }
       if (token === undefined) return;
       // one last ack, not awaited; no release: the server closes what is left on SessionEnd
       for (const [id, rec] of records) {
