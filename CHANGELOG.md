@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0](https://github.com/Asugawara/ukagai/compare/v0.13.0...v0.14.0) (2026-11-04)
+
+
+### Features
+
+* show a waiting question in the terminal and withdraw it on Esc ([9f9858a](https://github.com/Asugawara/ukagai/commit/9f9858a9e8505dee6863d419da976011adebd83e))
+* withdraw a pending message-delivery question and report it on the inbox poll ([d4e4ed7](https://github.com/Asugawara/ukagai/commit/d4e4ed7da93ef3e8ded1e43a19e030bb004df7d4))
+* withdraw a waiting message-delivery question from the GUI and the TUI ([7eae2fc](https://github.com/Asugawara/ukagai/commit/7eae2fcfd077e777f59b8fa4099df0437f4139fd))
+
+
+### Bug Fixes
+
+* keep an approved plan read when the agent edits it outside plan mode ([60ebeab](https://github.com/Asugawara/ukagai/commit/60ebeab384a09dc1b9f41f48537c61ee71346ea1))
+
 ## [0.13.0](https://github.com/Asugawara/ukagai/compare/v0.12.0...v0.13.0) (2026-11-02)
 
 
