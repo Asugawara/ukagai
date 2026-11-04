@@ -141,6 +141,81 @@ test("the mark is at the current mtime; a later rewrite makes the plan unread ag
   assert.equal((await plans(env))[0]!.read, false);
 });
 
+function postToolUse(env: Env, session: string, tool: string, filePath: string, permissionMode?: string) {
+  return call(env, "/api/events", {
+    session_id: session,
+    transcript_path: join(env.home, ".claude", "projects", "p", "none.jsonl"),
+    cwd: env.home,
+    hook_event_name: "PostToolUse",
+    tool_name: tool,
+    tool_use_id: `toolu_x_${++env.seq}`,
+    tool_input: { file_path: filePath },
+    ...(permissionMode === undefined ? {} : { permission_mode: permissionMode }),
+    received_at: new Date().toISOString(),
+  });
+}
+
+test("an edit of the plan outside plan mode (PostToolUse Edit, permission_mode auto) keeps it read", async () => {
+  const env = await setup();
+  const p = join(env.dir, "x.md");
+  writeFileSync(p, "# X\n");
+  const { id, session } = await approval(env, p);
+  await call(env, `/api/decisions/${id}/answer`, { approve: true });
+  await expectMarked(env, "x.md", 0);
+  utimesSync(p, new Date(), new Date(Date.now() + 5000)); // the agent rewrites it during implementation
+  assert.equal((await plans(env)).find((x) => x.name === "x.md")!.read, false);
+  const before = readUpdates(env, "x.md").length;
+  const r = await postToolUse(env, session, "Edit", p, "auto");
+  assert.equal(r.status, 204);
+  await expectMarked(env, "x.md", before);
+});
+
+test("a Write outside plan mode marks the plan read even without an approval", async () => {
+  const env = await setup();
+  const p = join(env.dir, "w.md");
+  writeFileSync(p, "# W\n");
+  const before = readUpdates(env, "w.md").length;
+  const r = await postToolUse(env, `00000000-0000-0000-0008-${String(++env.seq).padStart(12, "0")}`, "Write", p, "acceptEdits");
+  assert.equal(r.status, 204);
+  await expectMarked(env, "w.md", before);
+});
+
+test("a PostToolUse with permission_mode plan leaves the plan unread", async () => {
+  const env = await setup();
+  const p = join(env.dir, "pl.md");
+  writeFileSync(p, "# PL\n");
+  const before = readUpdates(env, "pl.md").length;
+  const r = await postToolUse(env, `00000000-0000-0000-0009-${String(++env.seq).padStart(12, "0")}`, "Edit", p, "plan");
+  assert.equal(r.status, 204);
+  await sleep(300);
+  assert.equal((await plans(env)).find((x) => x.name === "pl.md")!.read, false);
+  assert.equal(readUpdates(env, "pl.md").length, before);
+});
+
+test("a PostToolUse without permission_mode leaves the plan unread", async () => {
+  const env = await setup();
+  const p = join(env.dir, "nm.md");
+  writeFileSync(p, "# NM\n");
+  const before = readUpdates(env, "nm.md").length;
+  const r = await postToolUse(env, `00000000-0000-0000-0010-${String(++env.seq).padStart(12, "0")}`, "Edit", p);
+  assert.equal(r.status, 204);
+  await sleep(300);
+  assert.equal((await plans(env)).find((x) => x.name === "nm.md")!.read, false);
+  assert.equal(readUpdates(env, "nm.md").length, before);
+});
+
+test("a PostToolUse on a file outside the plans dir marks nothing", async () => {
+  const env = await setup({ files: { "keep.md": "# Keep\n" } });
+  const outside = join(env.home, "other.md");
+  writeFileSync(outside, "# Other\n");
+  const before = readUpdates(env, "other.md").length;
+  const r = await postToolUse(env, `00000000-0000-0000-0011-${String(++env.seq).padStart(12, "0")}`, "Edit", outside, "auto");
+  assert.equal(r.status, 204);
+  await sleep(300);
+  assert.equal(readUpdates(env, "other.md").length, before);
+  assert.equal(readUpdates(env, "keep.md").length, 0);
+});
+
 test("a planFilePath outside the plans dir, a subdirectory, a missing file or a symlink out: nothing is marked, no error", async () => {
   const env = await setup({ files: { "keep.md": "# Keep\n" } });
   const outside = join(env.home, "elsewhere.md");
