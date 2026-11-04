@@ -103,6 +103,7 @@ Typing goes to the terminal whatever is in the agent's composer: an unsent draft
 - `j`/`k` move, `Space` multi-select, `Enter` submit; `h`/`l` switch pending decisions (on a long plan `h`/`l` are the zone keys and `[` `]` switch pending decisions; `←`/`→` still scroll a too-wide diagram sideways).
 - `i` free text (the cursor landing on the free-text card or a checkpoint's instruction card opens the box by itself; `Esc` leaves it and keeps the text, `↑`/`↓` in an empty box move on). Free text sends with one `Enter` on a single select.
 - `b` list, `n` none of these (pick a reason), `x` can't answer (undefined terms / unclear / too much at once; sent at once; suspicious codes are underlined in red and pre-ticked).
+- `w` withdraw a question that waits for a message-delivery answer, without answering it (press twice within 3 seconds; other questions ignore it). The GUI has the same: a Withdraw button on the card, or `w` twice.
 - `e` jump to a footnote, `s` the session's instructions (the first one is shown as `Goal:` at the top of the background; `s` lists them, `Enter` shows one in full, `Esc` goes back), `q` quit.
 
 **Keys for plans**
@@ -194,6 +195,8 @@ The hook waits in one-hour legs: at the end of a leg it asks the agent to call t
 ### Answers as messages (the ukagai mod)
 
 In an interactive Claude Code terminal (2.1.304 or later) ukagai can stop making the agent wait. The hook registers the decision and tells the agent to end its turn; your answer then arrives as a message that starts with `[ukagai]`, sent by the ukagai mod once the agent is idle. The card shows "Will reach the agent as a message when it is idle" and then "Delivered as a message". Plans work the same way: the agent stays in plan mode and ends its turn, your decision arrives as a message, and after an approval the agent calls ExitPlanMode again with the same plan, which goes through once (within 12 hours of your approval, for that session and that exact plan; a newer plan from the session replaces it). It is on by default. Everywhere else (`claude -p`, the Agent SDK, Desktop, the VS Code chat, subagents, Codex, a managed policy that blocks mods) the hook waits as described above.
+
+While a question waits for your answer, the mod shows a two-line pane in the Claude Code terminal. Pressing `Esc` at an empty prompt withdraws the question (the agent is not told; type your next prompt as usual). Claude Code draws a pane that a plugin opens by itself only when the terminal is at least 144 columns wide (docked beside the transcript); below that nothing is shown and `Esc` does nothing, so use the Withdraw button on the GUI card, or `w` in the TUI (press twice).
 
 The mod is a small plugin that carries no hooks. With the marketplace plugin it comes with `ukagai@ukagai`; with `install.sh` / `ukagai install` it is placed at `~/.claude/skills/ukagai-mod/` (Claude Code loads it every session as `ukagai-mod@skills-dir`; `ukagai uninstall` removes it and `ukagai doctor` reports it). Three ways to turn it off:
 

@@ -238,6 +238,7 @@ export function buildModel(d, lang = "en", history = null) {
         blocker: isBlocker(d, fm),
         todo: null,
         todoCode: [],
+        ...(d.delivery === "message" && d.kind === "answer_question" && d.status === "pending" ? { withdrawable: true } : {}),
     };
     const coinedTerms = d.kind === "answer_question" && explained && questionsOf(d).length === 1
         ? findCoinedTerms(md, questionsOf(d)[0].options.map((o) => stripSuffix(o.label)))

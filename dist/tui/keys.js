@@ -353,6 +353,8 @@ export function interpret(key, ctx) {
         return done({ type: "none" });
     if (ch === "x")
         return done({ type: "cannot" });
+    if (ch === "w")
+        return done({ type: "withdraw" });
     if (ch === "g") {
         return ctx.lastG && ctx.now - ctx.lastG < GG_WINDOW_MS ? done({ type: "top" }) : done(null, ctx.now);
     }

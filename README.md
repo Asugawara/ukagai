@@ -96,7 +96,7 @@ The GUI language starts from your locale (`ja` if `LC_ALL`, `LC_MESSAGES` or `LA
 | Verified on | 2.1.304 | 0.159.3 |
 
 - **The agent writes an explanation first.** The first call to a question or a plan is held until the agent has written it, which costs the agent a little time and tokens. The skill and a short context sentence teach it how.
-- **Answers as messages (Claude Code).** In an interactive terminal the agent ends its turn instead of waiting, and your answer arrives as a message once it is idle. In `claude -p`, the Agent SDK, Desktop, the VS Code chat, subagents and Codex, the hook waits for your answer instead. It is on by default and has three ways to turn it off. [Guide](docs/guide.md#answers-as-messages-the-ukagai-mod)
+- **Answers as messages (Claude Code).** In an interactive terminal the agent ends its turn instead of waiting, and your answer arrives as a message once it is idle. A question you no longer need can be withdrawn with `Esc` in the terminal or the Withdraw button. In `claude -p`, the Agent SDK, Desktop, the VS Code chat, subagents and Codex, the hook waits for your answer instead. It is on by default and has three ways to turn it off. [Guide](docs/guide.md#answers-as-messages-the-ukagai-mod)
 - **If the server cannot be reached**, the hook prints nothing and the agent falls back to its normal terminal prompt.
 - **Codex plan approval** needs the server to attach to Codex's local app-server, which can take up to about 30 seconds after Codex starts. Questions in Codex's Default mode need `features.default_mode_request_user_input = true` in its `config.toml` (ukagai does not write it). [Guide](docs/guide.md#codex-cli)
 - **Local only.** The server listens on `127.0.0.1:4818`. The user guide is in English.

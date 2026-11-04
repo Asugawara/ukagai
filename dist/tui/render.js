@@ -317,6 +317,7 @@ function rightColumn(v, m, w, rows) {
                 : fitHint([
                     t(lang, q.multi ? "hint_main_multi" : "hint_main") + (m.todoCode.length ? ` ${t(lang, v.copy ? "hint_copy" : "hint_copy_unsupported")}` : ""),
                     ...(q.cards.length && !q.approval ? [t(lang, "hint_cannot"), t(lang, "hint_none")] : []),
+                    ...(m.withdrawable ? [t(lang, "hint_withdraw")] : []),
                     ...(q.multi ? [] : [t(lang, "hint_numbers")]),
                     t(lang, "hint_free"),
                     ...(m.footnotes.length ? [t(lang, "hint_evidence")] : []),

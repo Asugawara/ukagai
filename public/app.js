@@ -41,6 +41,8 @@ const RECOMMEND_COND =
   /なら(?!ない|ず)|なければ(?!なら)|場合|とき(?!どき)|であれば|際[はに]|\bif\b|\bwhen\b|\bunless\b|\botherwise\b|\bin case\b/i;
 // Codex approvals arrive as a question headed "Approval" with Allow / Deny: the command in backticks is shown in monospace, and Deny is never "cannot be undone"
 const isApproval = (d) => d.kind === "answer_question" && d.request.questions.length === 1 && /^approval$/i.test((d.request.questions[0].header ?? "").trim());
+// A message-delivery question still waiting for its answer: the human may withdraw it without answering (POST .../withdraw)
+const withdrawable = (d) => !!d && d.delivery === "message" && d.kind === "answer_question" && d.status === "pending";
 const isDenyLabel = (s) => /^(deny|denied|reject|拒否|却下)\b|^(拒否|却下)/i.test(normLabel(s ?? ""));
 // Table column detection (header cell text). The first column is always the option label.
 const COLUMN_HAPPENS = /happens|outcome|起きること/i;
@@ -784,7 +786,7 @@ const clip = (s, n = 40) => (s.length > n ? s.slice(0, n) + "…" : s);
 const LOST_KEYS = { answer_lost: "lost_answer_lost", hook_disconnected: "lost_hook_disconnected", cancelled: "lost_cancelled", fallback: "lost_fallback" };
 // A decision whose answer comes as a message from the ukagai mod (delivery "message"): its own words for what happened to it.
 // `superseded` only for an answer that was not delivered (a newer plan, or the re-call time limit); a pending plan a newer one replaced is just cancelled
-const MSG_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded"];
+const MSG_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded", "withdrawn"];
 const msgLostKey = (d) =>
   d.delivery === "message" && (d.status === "answer_lost" || (d.status === "cancelled" && d.status_reason !== "superseded")) && MSG_LOST_REASONS.includes(d.status_reason) ? `lost_${d.status_reason}` : null;
 // When the status of a decision that is not shown changes
@@ -1643,6 +1645,25 @@ function attempt(d, dr, key, body, weighty) {
 
 const confirmBar = (dr) => el("div", { class: "confirm-bar", hidden: !dr.confirmKey, text: t("confirm_again") });
 
+// Withdraw a message-delivery question without an answer: the first press arms, the second one within CONFIRM_MS sends
+function withdraw(d, dr) {
+  if (dr.confirmKey !== "withdraw") { armConfirm(d, dr, "withdraw"); return; }
+  clearConfirm(dr);
+  sendWithdraw(d);
+}
+async function sendWithdraw(d) {
+  try {
+    const updated = await post(`/api/decisions/${d.id}/withdraw`, {});
+    decisions.set(updated.id, updated);
+    dropComments(d.id);
+    if (shownId === d.id) advance();
+    else refreshItems();
+  } catch (e) {
+    if (e.message !== "unauthorized") showBanner(t("send_failed", { message: e.message }));
+    if (shownId === d.id) renderRight(decisions.get(d.id));
+  }
+}
+
 // ---- Tooltips (terms and footnotes), evidence jump, badge copy ----
 
 const tip = el("div", { class: "tip", role: "tooltip", hidden: true });
@@ -2149,12 +2170,15 @@ function renderRightBody(d) {
       onclick: () => { const { answers, weighty } = collect(); attempt(d, dr, "submit", { answers }, weighty); },
     }, el("span", { text: t("answer") })) : null;
     function updateSubmit() { if (submit) submit.disabled = closed || !complete(); }
-    const actions = el("div", { class: "actions" }, needSubmit ? confirmBar(dr) : null, submit);
+    const canWithdraw = withdrawable(d);
+    const withdrawBtn = canWithdraw ? el("button", { class: "btn", type: "button", id: "withdraw", onclick: () => withdraw(d, dr), text: t("withdraw") }) : null;
+    const withdrawConfirm = canWithdraw ? el("div", { class: "confirm-inline", "data-key": "withdraw", hidden: dr.confirmKey !== "withdraw", text: t("withdraw_confirm") }) : null;
+    const actions = el("div", { class: "actions" }, needSubmit ? confirmBar(dr) : null, withdrawConfirm, withdrawBtn, submit);
     if (single) {
       // `c` (copy the command to run, blockers) and `y` (copy a badge) are one hint
       const copyKey = v2?.todoBox?.querySelector("pre") ? "c" : d.explanation && hasExplanation(d) ? "y" : "";
       const canComment = !closed && hasExplanation(d);
-      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", copyKey, canComment ? "m" : "", ...(hasOptions(d) ? ["n", "x"] : [])].filter(Boolean);
+      const letters = [v2?.terms.length ? "?" : "", modelFor(d).fnCount ? "e" : "", v2?.hasExtra ? "v" : "", copyKey, canComment ? "m" : "", ...(hasOptions(d) ? ["n", "x"] : []), canWithdraw ? "w" : ""].filter(Boolean);
       const extraHints = [
         v2?.terms.length ? `? ${t("hint_terms")} · ` : "",
         modelFor(d).fnCount ? `e ${t("hint_evidence")} · ` : "",
@@ -2162,6 +2186,7 @@ function renderRightBody(d) {
         copyKey ? `${copyKey} ${t("hint_copy")} · ` : "",
         canComment ? `m ${t("hint_comment")} · ` : "",
         hasOptions(d) ? `n ${t("hint_none")} · ${t("hint_cannot")} · ` : "",
+        canWithdraw ? `w ${t("hint_withdraw")} · ` : "",
       ].join("");
       const hs = hasHistoryHint(d);
       // The full line (one line from 900px up), and a short one that CSS swaps in below 900px
@@ -5067,6 +5092,11 @@ document.addEventListener("keydown", (ev) => {
       if (!ui.single) return;
       ev.preventDefault();
       openCannot(decisions.get(shownId));
+    } else if (key === "w" && !typing) {
+      const wd = decisions.get(shownId);
+      if (!withdrawable(wd)) return;
+      ev.preventDefault();
+      withdraw(wd, draftOf(wd));
     } else if (key === "i") {
       if (!ui.freeText) return;
       ev.preventDefault();

@@ -66,6 +66,14 @@ export async function start(opts = {}) {
             const session_id = planSessions.cached(d.plan_name);
             planReady?.announce({ ...summary, read: true, ...(session_id ? { session_id } : {}) });
         },
+        onPlanWrittenOutsidePlanMode: (name) => {
+            const summary = planSummarySync(dir, name, planRead.isRead);
+            if (!summary || summary.read)
+                return;
+            planRead.mark(name, summary.mtime);
+            const session_id = planSessions.cached(name);
+            planReady?.announce({ ...summary, read: true, ...(session_id ? { session_id } : {}) });
+        },
     });
     store.load();
     // Old marked copies of images: the data-dir folder and the folder of every session a stored decision knows

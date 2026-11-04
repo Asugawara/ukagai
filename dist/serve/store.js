@@ -747,6 +747,20 @@ export class Store {
         this.notify(d.id);
         return d;
     }
+    /** The human withdraws a message-delivery question that is still pending: it closes as `withdrawn`, and the session's next question may be offered */
+    withdraw(id) {
+        const d = this.decisions.get(id);
+        if (!d)
+            throw new HttpError(404, "decision not found");
+        if (!(d.delivery === "message" && d.kind === "answer_question" && d.status === "pending")) {
+            throw new HttpError(409, "only a pending message-delivery question can be withdrawn");
+        }
+        this.closeUndelivered(d, "withdrawn");
+        const sid = d.session.session_id;
+        if (this.sessions.get(sid)?.state === "idle" && !this.hasOpenAsync(sid))
+            this.offerToMod(sid);
+        return d;
+    }
     /**
      * The waiting hook (or the Codex bridge) took the answer. A Claude plan approval's grant is used by the hook's own allow, unless the hook
      * hands an "approve and auto" grant of the main agent to the PermissionRequest of the same ExitPlanMode (`keepPlanGrant`), the only place
@@ -971,6 +985,18 @@ export class Store {
         // ExitPlanMode went through without using the grant (Claude Code's own dialog, or no PermissionRequest): the session is out of plan mode, so no grant of it is wanted any more
         if (live && ev.hook_event_name === "PostToolUse" && ev.tool_name === "ExitPlanMode" && !ev.agent_id && !ev.observe) {
             this.planExited(ev.session_id);
+        }
+        // An approved plan edited during implementation (permission_mode is not "plan") must not come back as new: it is read at its new mtime
+        if (live && ev.hook_event_name === "PostToolUse") {
+            const raw = ev;
+            const toolInput = raw.tool_input;
+            const filePath = toolInput?.file_path;
+            const writeTool = raw.tool_name === "Write" || raw.tool_name === "Edit" || raw.tool_name === "MultiEdit";
+            if (writeTool && typeof raw.permission_mode === "string" && raw.permission_mode !== "plan" && typeof filePath === "string") {
+                const name = this.opts.planNameOf?.(filePath);
+                if (name)
+                    this.opts.onPlanWrittenOutsidePlanMode?.(name);
+            }
         }
         // The main agent's session is out of plan mode after the human decided (they left it by hand, or the plan went through some other way):
         // an approval of that time lets nothing through any more. A late event built before the decision does not count
@@ -1343,8 +1369,31 @@ export class Store {
         const d = this.decisions.get(itemId);
         return d && d.session.session_id === sessionId && d.kind !== "checkpoint" ? d : undefined;
     }
-    /** The mod asks for work. `held`: it is delivering one already. `item`: one answer, claimed for this owner. undefined: nothing (204) */
+    /**
+     * The mod asks for work. `held`: it is delivering one already. `item`: one answer, claimed for this owner. `waiting` is added to every answer
+     * when a message-delivery question is pending. undefined: nothing (204)
+     */
     inboxPoll(sessionId, owner, idle) {
+        const r = this.pollNext(sessionId, owner, idle);
+        const waiting = this.waitingQuestion(sessionId);
+        if (!waiting)
+            return r;
+        return { ...(r ?? {}), waiting };
+    }
+    /** The oldest pending message-delivery question of the session, whether or not the human is typing a prompt; undefined when there is none */
+    waitingQuestion(sessionId) {
+        let oldest;
+        for (const d of this.decisions.values()) {
+            if (d.session.session_id !== sessionId || d.delivery !== "message" || d.kind !== "answer_question" || d.status !== "pending")
+                continue;
+            if (!oldest || d.created_at < oldest.created_at)
+                oldest = d;
+        }
+        if (!oldest)
+            return undefined;
+        return { decision_id: oldest.id, question: (firstQuestion(oldest) ?? "").slice(0, 120) };
+    }
+    pollNext(sessionId, owner, idle) {
         const now = this.clock();
         this.markSeen(sessionId, owner);
         const open = this.asyncOf(sessionId).filter((d) => d.status === "answer_submitted");
@@ -1366,7 +1415,7 @@ export class Store {
             // An instruction that waited behind it in the hook queue may go now (as when a delivery completes)
             if (this.sessions.get(sessionId)?.state === "idle" && !this.hasOpenAsync(sessionId))
                 this.offerToMod(sessionId);
-            return this.inboxPoll(sessionId, owner, idle);
+            return this.pollNext(sessionId, owner, idle);
         }
         next.mod_owner = owner;
         next.claim = { owner, at: new Date(now).toISOString(), offset: this.transcriptSize(next) };

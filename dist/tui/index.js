@@ -170,6 +170,15 @@ export async function run(argv) {
                     p.stdin.on("error", () => { });
                     p.stdin.end(e.text);
                 }
+                else if (e.type === "withdraw") {
+                    void api.withdraw(e.id).then((d) => {
+                        app.answered(d, Date.now()); // the status toast shows lost_withdrawn
+                        schedule();
+                    }, (err) => {
+                        app.failed(e.id, err instanceof Error ? err.message : String(err), Date.now());
+                        schedule();
+                    });
+                }
                 else {
                     void api.answer(e.id, e.body).then((d) => {
                         app.answered(d, Date.now());

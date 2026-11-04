@@ -36,7 +36,11 @@ const MESSAGE_STATUS_KEY = {
     fallback: "status_fallback_message",
 };
 // `superseded` only for an answer that was not delivered (a newer plan, or the re-call time limit); a pending plan a newer one replaced is just cancelled
-const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded"];
+const MESSAGE_LOST_REASONS = ["session_end", "expired", "undeliverable", "typed_in_terminal", "superseded", "withdrawn"];
+/** A message-delivery question still waiting for its answer: the human may withdraw it (`w` twice) */
+function withdrawable(d) {
+    return !!d && d.delivery === "message" && d.kind === "answer_question" && d.status === "pending";
+}
 /** The toast text for a decision that left `pending` (undefined: none) */
 function statusToast(d, lang) {
     if (d.kind === "checkpoint" && d.status === "answered" && d.response?.kind !== "continue")
@@ -130,6 +134,8 @@ export class App {
     revealNear = false;
     listIndex = 0;
     lastG = 0;
+    /** The first `w` on a withdrawable question: the second `w` for the same id within CONFIRM_MS sends it */
+    withdrawArm = null;
     /** The side-question threads by session (GET /api/sessions/:id/aside, `aside.updated`) */
     asides = new Map();
     /** The open thread (mode "aside"): its session, the decision it is asked from, the text typed, the quote attached and the scroll (null follows the bottom) */
@@ -782,7 +788,22 @@ export class App {
         }
         const { action, lastG } = interpret(key, { mode: this.mode, kind: m?.kind ?? "question", focus: this.effectiveFocus(m), zone: m?.plan ? this.planState(m).zone : undefined, inputEmpty: this.input?.text === "", histDetail: this.histDetail !== null, wide: this.frame.wide, full: this.full, hscrollable: this.frame.hMax > 0, toc: !!m?.plan, planOnly: !!m?.readonly, lastG: this.lastG, now, presets: this.mode === "input" && this.input?.kind === "instruct" && this.input.text === "" ? Math.min(9, this.presets.length) : 0 });
         this.lastG = lastG;
+        if (action?.type !== "withdraw")
+            this.withdrawArm = null; // any other key cancels a pending withdraw
         return action ? this.apply(action, m, now) : [];
+    }
+    /** Withdraw a message-delivery question: the first press arms it and shows the confirm text, the second one (same question, within CONFIRM_MS) sends */
+    withdraw(m, now) {
+        if (!m || !withdrawable(this.decisions.get(m.id)))
+            return [];
+        const arm = this.withdrawArm;
+        if (arm?.id === m.id && now - arm.at < CONFIRM_MS) {
+            this.withdrawArm = null;
+            return [{ type: "withdraw", id: m.id }];
+        }
+        this.withdrawArm = { id: m.id, at: now };
+        this.note(t(this.lang, "withdraw_confirm"), now);
+        return [];
     }
     apply(a, m, now) {
         switch (a.type) {
@@ -967,6 +988,7 @@ export class App {
                 return this.emit(m.id, { answers: { [questionText(this.decisions.get(m.id))]: noneAnswer(n.index, n.text) } });
             }
             case "cannot": return this.openCannot(m, dr);
+            case "withdraw": return this.withdraw(m, now);
             case "pick": return this.pick(m, dr, a.n - 1, now);
             case "cannot-move": return this.cannotMove(a.delta);
             case "cannot-cancel":
