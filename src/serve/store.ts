@@ -73,6 +73,8 @@ export type StoreOptions = {
   onTransition?: (d: Decision, from: DecisionStatus, to: DecisionStatus) => void;
   /** Basename of the plan file a path points at inside the plans directory, or null (resolved once when an approve_plan decision is created) */
   planNameOf?: (filePath: string) => string | null;
+  /** A live PostToolUse of Write / Edit / MultiEdit outside plan mode wrote this plan (its basename): the plan is read at its new mtime */
+  onPlanWrittenOutsidePlanMode?: (planName: string) => void;
   /** One line to serve.log (plan_instruction_dropped, message_to_classic) */
   log?: (event: string, fields?: Record<string, string | number | undefined>) => void;
   /** Settings `claude.message_delivery`, read when a decision is registered (default: on) */
@@ -1012,6 +1014,17 @@ export class Store {
     // ExitPlanMode went through without using the grant (Claude Code's own dialog, or no PermissionRequest): the session is out of plan mode, so no grant of it is wanted any more
     if (live && ev.hook_event_name === "PostToolUse" && (ev as Record<string, unknown>).tool_name === "ExitPlanMode" && !ev.agent_id && !ev.observe) {
       this.planExited(ev.session_id);
+    }
+    // An approved plan edited during implementation (permission_mode is not "plan") must not come back as new: it is read at its new mtime
+    if (live && ev.hook_event_name === "PostToolUse") {
+      const raw = ev as Record<string, unknown>;
+      const toolInput = raw.tool_input as Record<string, unknown> | undefined;
+      const filePath = toolInput?.file_path;
+      const writeTool = raw.tool_name === "Write" || raw.tool_name === "Edit" || raw.tool_name === "MultiEdit";
+      if (writeTool && typeof raw.permission_mode === "string" && raw.permission_mode !== "plan" && typeof filePath === "string") {
+        const name = this.opts.planNameOf?.(filePath);
+        if (name) this.opts.onPlanWrittenOutsidePlanMode?.(name);
+      }
     }
     // The main agent's session is out of plan mode after the human decided (they left it by hand, or the plan went through some other way):
     // an approval of that time lets nothing through any more. A late event built before the decision does not count
