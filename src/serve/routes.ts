@@ -595,6 +595,9 @@ export function createApp(deps: AppDeps): Hono {
     return c.json(store.cancel(c.req.param("id")));
   });
 
+  // The human withdraws a message-delivery question that is still pending (GUI, TUI, or the mod when Esc is pressed on its pane)
+  app.post("/api/decisions/:id/withdraw", auth("any"), jsonOnly, (c) => c.json(store.withdraw(c.req.param("id"))));
+
   app.post("/api/decisions/:id/answer", auth("any"), jsonOnly, async (c) => {
     const id = c.req.param("id");
     const d = store.get(id);

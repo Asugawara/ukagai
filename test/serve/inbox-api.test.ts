@@ -112,7 +112,9 @@ test("message delivery end to end: register -> answer -> poll(item) -> ref event
   assert.equal(d.status, "pending");
   assert.equal(d.lease_until, undefined);
 
-  assert.equal((await inbox(env, "poll", { owner: OWNER, idle: true })).status, 204, "nothing answered yet");
+  const w = await inbox(env, "poll", { owner: OWNER, idle: true });
+  assert.equal(w.status, 200, "nothing answered yet: the question waits, 200 instead of 204");
+  assert.deepEqual(await w.json(), { waiting: { decision_id: d.id, question: QUESTION } });
   assert.equal((await answer(env, d.id)).status, 200);
   assert.equal((await inbox(env, "poll", { owner: OWNER, idle: false })).status, 204, "not idle");
 
@@ -289,4 +291,50 @@ test("poll for a session the server has never heard of is 204 (never 404) and st
   assert.equal(((await r.json()) as { delivery?: string }).delivery, "message", "the poll made the owner seen on that session");
   // ack / release 404 only when the session has no such id
   assert.equal((await inbox(env, "ack", { owner: OWNER, item_id: "nope" }, fresh)).status, 404);
+});
+
+// ---- withdraw ----
+
+test("withdraw: 200 with Bearer closes a pending message question as withdrawn; 415 without JSON; 409 for an ordinary decision; 404 for an unknown id", async () => {
+  const env = await setup();
+  const d = await asyncDecision(env, "toolu_w1");
+  const noJson = await api(env, `/api/decisions/${d.id}/withdraw`, { body: {}, contentType: "text/plain" });
+  assert.equal(noJson.status, 415);
+  const ok = await api(env, `/api/decisions/${d.id}/withdraw`, { body: {} });
+  assert.equal(ok.status, 200);
+  const body = (await ok.json()) as { status: string; status_reason?: string };
+  assert.equal(body.status, "cancelled");
+  assert.equal(body.status_reason, "withdrawn");
+  assert.equal((await getDecision(env, d.id)).status, "cancelled");
+  assert.equal((await api(env, `/api/decisions/${d.id}/withdraw`, { body: {} })).status, 409, "already closed");
+  assert.equal((await api(env, "/api/decisions/no-such-id/withdraw", { body: {} })).status, 404);
+
+  const classic = await register(env, "toolu_w2", { mod_owner: undefined });
+  assert.equal(classic.delivery, undefined, "a decision of an owner never polled is ordinary");
+  assert.equal((await api(env, `/api/decisions/${classic.id}/withdraw`, { body: {} })).status, 409);
+});
+
+test("withdraw: 200 with the GUI cookie as well (issued by GET /)", async () => {
+  const env = await setup();
+  const d = await asyncDecision(env, "toolu_w3");
+  const page = await fetch(env.url + "/");
+  const cookie = (page.headers.get("set-cookie") ?? "").split(";")[0]!;
+  assert.match(cookie, /ukagai_session=/);
+  const r = await fetch(`${env.url}/api/decisions/${d.id}/withdraw`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(r.status, 200);
+  assert.equal(((await r.json()) as { status_reason?: string }).status_reason, "withdrawn");
+});
+
+test("poll over HTTP: 200 `{ waiting }` while the question is pending, 204 once it is withdrawn", async () => {
+  const env = await setup();
+  const d = await asyncDecision(env, "toolu_w4");
+  const p = await inbox(env, "poll", { owner: OWNER, idle: false });
+  assert.equal(p.status, 200);
+  assert.deepEqual(await p.json(), { waiting: { decision_id: d.id, question: QUESTION } });
+  assert.equal((await api(env, `/api/decisions/${d.id}/withdraw`, { body: {} })).status, 200);
+  assert.equal((await inbox(env, "poll", { owner: OWNER, idle: false })).status, 204);
 });

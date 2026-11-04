@@ -18,6 +18,7 @@ import {
   deliveryRef,
   type PlanGrant,
   type PollResponse,
+  type PollWaiting,
   type Waiting,
   checkpointFingerprint,
   type DeliveredVia,
@@ -804,6 +805,19 @@ export class Store {
     return d;
   }
 
+  /** The human withdraws a message-delivery question that is still pending: it closes as `withdrawn`, and the session's next question may be offered */
+  withdraw(id: string): Decision {
+    const d = this.decisions.get(id);
+    if (!d) throw new HttpError(404, "decision not found");
+    if (!(d.delivery === "message" && d.kind === "answer_question" && d.status === "pending")) {
+      throw new HttpError(409, "only a pending message-delivery question can be withdrawn");
+    }
+    this.closeUndelivered(d, "withdrawn");
+    const sid = d.session.session_id;
+    if (this.sessions.get(sid)?.state === "idle" && !this.hasOpenAsync(sid)) this.offerToMod(sid);
+    return d;
+  }
+
   /**
    * The waiting hook (or the Codex bridge) took the answer. A Claude plan approval's grant is used by the hook's own allow, unless the hook
    * hands an "approve and auto" grant of the main agent to the PermissionRequest of the same ExitPlanMode (`keepPlanGrant`), the only place
@@ -1364,8 +1378,29 @@ export class Store {
     return d && d.session.session_id === sessionId && d.kind !== "checkpoint" ? d : undefined;
   }
 
-  /** The mod asks for work. `held`: it is delivering one already. `item`: one answer, claimed for this owner. undefined: nothing (204) */
+  /**
+   * The mod asks for work. `held`: it is delivering one already. `item`: one answer, claimed for this owner. `waiting` is added to every answer
+   * when a message-delivery question is pending. undefined: nothing (204)
+   */
   inboxPoll(sessionId: string, owner: string, idle: boolean): PollResponse | undefined {
+    const r = this.pollNext(sessionId, owner, idle);
+    const waiting = this.waitingQuestion(sessionId);
+    if (!waiting) return r;
+    return { ...(r ?? {}), waiting } as PollResponse;
+  }
+
+  /** The oldest pending message-delivery question of the session, whether or not the human is typing a prompt; undefined when there is none */
+  private waitingQuestion(sessionId: string): PollWaiting | undefined {
+    let oldest: Decision | undefined;
+    for (const d of this.decisions.values()) {
+      if (d.session.session_id !== sessionId || d.delivery !== "message" || d.kind !== "answer_question" || d.status !== "pending") continue;
+      if (!oldest || d.created_at < oldest.created_at) oldest = d;
+    }
+    if (!oldest) return undefined;
+    return { decision_id: oldest.id, question: (firstQuestion(oldest) ?? "").slice(0, 120) };
+  }
+
+  private pollNext(sessionId: string, owner: string, idle: boolean): PollResponse | undefined {
     const now = this.clock();
     this.markSeen(sessionId, owner);
     const open = this.asyncOf(sessionId).filter((d) => d.status === "answer_submitted");
@@ -1384,7 +1419,7 @@ export class Store {
       this.closeUndelivered(next, "superseded");
       // An instruction that waited behind it in the hook queue may go now (as when a delivery completes)
       if (this.sessions.get(sessionId)?.state === "idle" && !this.hasOpenAsync(sessionId)) this.offerToMod(sessionId);
-      return this.inboxPoll(sessionId, owner, idle);
+      return this.pollNext(sessionId, owner, idle);
     }
     next.mod_owner = owner;
     next.claim = { owner, at: new Date(now).toISOString(), offset: this.transcriptSize(next) };
