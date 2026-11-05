@@ -9,6 +9,9 @@ export class SseHub {
   private clients = new Set<Client>();
   private encoder = new TextEncoder();
   private heartbeat: NodeJS.Timeout | undefined;
+  private lastBrowserGoneAt = -Infinity;
+
+  constructor(private readonly now: () => number = Date.now) {}
 
   get size(): number {
     return this.clients.size;
@@ -21,11 +24,16 @@ export class SseHub {
     return n;
   }
 
+  /** A GUI tab is connected, or the last one left less than `ms` ago (a reload or a reconnect) */
+  browsersRecently(ms: number): boolean {
+    return this.browsers > 0 || this.now() - this.lastBrowserGoneAt < ms;
+  }
+
   /** Return a Response for a new connection. `browser` marks a GUI tab (counted by `browsers`) */
   connect(signal?: AbortSignal, browser = false): Response {
     let client: Client | undefined;
     const remove = () => {
-      if (client) this.clients.delete(client);
+      if (client && this.clients.delete(client) && client.browser) this.lastBrowserGoneAt = this.now();
       if (this.clients.size === 0 && this.heartbeat) {
         clearInterval(this.heartbeat);
         this.heartbeat = undefined;
@@ -63,7 +71,7 @@ export class SseHub {
       try {
         c.controller.enqueue(bytes);
       } catch {
-        this.clients.delete(c);
+        if (this.clients.delete(c) && c.browser) this.lastBrowserGoneAt = this.now();
       }
     }
   }

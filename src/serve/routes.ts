@@ -4,6 +4,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
+import { GRACE_MS } from "./gui-open.js";
 import {
   AnswerRequest,
   AsideRequest,
@@ -68,6 +69,8 @@ export type AppDeps = {
   dataDir?: string;
   store: Store;
   hub: SseHub;
+  /** How long a GUI tab that left still counts as open for the inbox poll's `waiting`. Defaults to GRACE_MS */
+  guiGraceMs?: number;
   token: string;
   publicDir: string;
   home: string;
@@ -681,7 +684,8 @@ export function createApp(deps: AppDeps): Hono {
   const inboxReply = (c: Context, r: ReturnType<Store["inboxAck"]>) => (r.http === 404 ? c.json({ error: "no such item" }, 404) : c.json({ status: r.status }, r.http));
   app.post("/api/sessions/:id/inbox/poll", auth("bearer"), jsonOnly, async (c) => {
     const body = await parse(c, PollRequest);
-    const r = store.inboxPoll(c.req.param("id"), body.owner, body.idle);
+    // no `waiting` while a GUI tab is open: the mod's terminal pane is for when nobody looks at the GUI
+    const r = store.inboxPoll(c.req.param("id"), body.owner, body.idle, !hub.browsersRecently(deps.guiGraceMs ?? GRACE_MS));
     return r ? c.json(r) : c.body(null, 204);
   });
   app.post("/api/sessions/:id/inbox/ack", auth("bearer"), jsonOnly, async (c) => {

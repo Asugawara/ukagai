@@ -26,10 +26,10 @@ const SID = "sess-1";
 
 type Env = { h: ServeHandle; home: string; dataDir: string; url: string; transcript: string };
 
-async function setup(): Promise<Env> {
+async function setup(opts: Partial<Parameters<typeof start>[0]> = {}): Promise<Env> {
   const home = tmp();
   const dataDir = tmp();
-  const h = await start({ port: 0, dataDir, home });
+  const h = await start({ port: 0, dataDir, home, ...opts });
   handles.push(h);
   const transcript = join(home, ".claude", "projects", "p", `${SID}.jsonl`);
   mkdirSync(join(home, ".claude", "projects", "p"), { recursive: true });
@@ -330,6 +330,7 @@ test("withdraw: 200 with the GUI cookie as well (issued by GET /)", async () => 
 });
 
 test("poll over HTTP: 200 `{ waiting }` while the question is pending, 204 once it is withdrawn", async () => {
+  // no GUI tab is connected here: a connected one hides `waiting` (next test)
   const env = await setup();
   const d = await asyncDecision(env, "toolu_w4");
   const p = await inbox(env, "poll", { owner: OWNER, idle: false });
@@ -337,4 +338,23 @@ test("poll over HTTP: 200 `{ waiting }` while the question is pending, 204 once 
   assert.deepEqual(await p.json(), { waiting: { decision_id: d.id, question: QUESTION } });
   assert.equal((await api(env, `/api/decisions/${d.id}/withdraw`, { body: {} })).status, 200);
   assert.equal((await inbox(env, "poll", { owner: OWNER, idle: false })).status, 204);
+});
+
+test("poll over HTTP: no `waiting` while a GUI tab is connected; it comes back once the tab is gone", async () => {
+  const env = await setup({ guiGraceMs: 0 });
+  const d = await asyncDecision(env, "toolu_w5");
+  const page = await fetch(env.url + "/");
+  const cookie = (page.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const ac = new AbortController();
+  const stream = await fetch(env.url + "/api/stream", { headers: { cookie }, signal: ac.signal });
+  assert.equal(stream.status, 200);
+  assert.equal((await inbox(env, "poll", { owner: OWNER, idle: false })).status, 204);
+  ac.abort();
+  let res = await inbox(env, "poll", { owner: OWNER, idle: false });
+  for (let i = 0; i < 20 && res.status !== 200; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    res = await inbox(env, "poll", { owner: OWNER, idle: false });
+  }
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { waiting: { decision_id: d.id, question: QUESTION } });
 });

@@ -34,6 +34,8 @@ export type ServeOptions = {
   port?: number;
   dataDir?: string;
   leaseGraceMs?: number;
+  /** How long a GUI tab that left still hides the inbox poll's `waiting` (default GRACE_MS; tests shorten it) */
+  guiGraceMs?: number;
   /** Lease after a hand-off: how long the agent has to call the tool again (default 120 s) */
   handoffGraceMs?: number;
   /** Base of the allowed range for transcript / explanation paths. Defaults to os.homedir() */
@@ -168,6 +170,7 @@ export async function start(opts: ServeOptions = {}): Promise<ServeHandle> {
     lang,
     settings,
     ...(opts.skillSource !== undefined ? { skillSource: opts.skillSource } : {}),
+    ...(opts.guiGraceMs !== undefined ? { guiGraceMs: opts.guiGraceMs } : {}),
     publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
     getPort: () => port,
     cliPath: ((p) => (existsSync(p) ? p : undefined))(opts.cliPath ?? fileURLToPath(new URL("../cli.js", import.meta.url))),

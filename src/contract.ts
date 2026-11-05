@@ -569,7 +569,7 @@ export type PollRequest = z.infer<typeof PollRequest>;
 export type PollWaiting = { decision_id: string; question: string };
 /**
  * 200 from poll: `held` = this owner is delivering that item already; `item` = one was handed over. `waiting` rides along on every 200 while a
- * message-delivery question is pending. 204 (no body) when there is nothing else to say
+ * message-delivery question is pending (not while a GUI tab is connected, or for GRACE_MS after the last one left). 204 (no body) when there is nothing else to say
  */
 export type PollResponse = ({ held: { item_id: string } } | { item: { item_id: string; text: string } } | Record<never, never>) & { waiting?: PollWaiting };
 
