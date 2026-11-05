@@ -144,6 +144,25 @@ test("SseHub.browsers counts only flagged clients and drops them on abort", () =
   hub.closeAll();
 });
 
+test("SseHub.browsersRecently: a GUI tab, or one that left within the window", () => {
+  let t = 1000;
+  const hub = new SseHub(() => t);
+  assert.equal(hub.browsersRecently(8000), false);
+  const bearer = new AbortController();
+  hub.connect(bearer.signal);
+  bearer.abort();
+  assert.equal(hub.browsersRecently(8000), false);
+  const gui = new AbortController();
+  hub.connect(gui.signal, true);
+  assert.equal(hub.browsersRecently(8000), true);
+  gui.abort();
+  t = 1000 + 7999;
+  assert.equal(hub.browsersRecently(8000), true);
+  t = 1000 + 8000;
+  assert.equal(hub.browsersRecently(8000), false);
+  hub.closeAll();
+});
+
 test("never throws when the data dir is unusable", () => {
   const s = setup();
   const bad = new GuiOpener({ ...(s.opener as any).deps, dataDir: join(s.marker, "x") });
