@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/Asugawara/ukagai/compare/v0.14.0...v0.14.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* hide the waiting pane while a GUI tab is open ([581cc19](https://github.com/Asugawara/ukagai/commit/581cc194f6ec656dbaf1ca3e059d6c3aa95cdd5c))
+
 ## [0.14.0](https://github.com/Asugawara/ukagai/compare/v0.13.0...v0.14.0) (2026-11-04)
 
 
