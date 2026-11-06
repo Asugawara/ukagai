@@ -4,6 +4,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
+import { GRACE_MS } from "./gui-open.js";
 import { AnswerRequest, AsideRequest, DEFAULT_SETTINGS, CheckpointRequest, AckRequest, ConsumePlanGrantRequest, DecisionAckRequest, PlanReadRequest, PlanInstructRequest, PollRequest, ReleaseRequest, Settings, SkillPut, CreateDecisionRequest, DecisionStatus, EventInput, POLL_TIMEOUT_MS, PLAN_BLOCK_SUFFIX, isAllowedExplanationPath, isPlanFile, plansDir, isAllowedTranscriptPath, DecisionKind, } from "../contract.js";
 import { VERSION } from "../version.js";
 import { collectGuarded } from "./context.js";
@@ -630,7 +631,8 @@ export function createApp(deps) {
     const inboxReply = (c, r) => (r.http === 404 ? c.json({ error: "no such item" }, 404) : c.json({ status: r.status }, r.http));
     app.post("/api/sessions/:id/inbox/poll", auth("bearer"), jsonOnly, async (c) => {
         const body = await parse(c, PollRequest);
-        const r = store.inboxPoll(c.req.param("id"), body.owner, body.idle);
+        // no `waiting` while a GUI tab is open: the mod's terminal pane is for when nobody looks at the GUI
+        const r = store.inboxPoll(c.req.param("id"), body.owner, body.idle, !hub.browsersRecently(deps.guiGraceMs ?? GRACE_MS));
         return r ? c.json(r) : c.body(null, 204);
     });
     app.post("/api/sessions/:id/inbox/ack", auth("bearer"), jsonOnly, async (c) => {

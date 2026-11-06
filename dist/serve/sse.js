@@ -1,9 +1,14 @@
 const HEARTBEAT_MS = 15000;
 /** SSE connection management and broadcast */
 export class SseHub {
+    now;
     clients = new Set();
     encoder = new TextEncoder();
     heartbeat;
+    lastBrowserGoneAt = -Infinity;
+    constructor(now = Date.now) {
+        this.now = now;
+    }
     get size() {
         return this.clients.size;
     }
@@ -15,12 +20,16 @@ export class SseHub {
                 n++;
         return n;
     }
+    /** A GUI tab is connected, or the last one left less than `ms` ago (a reload or a reconnect) */
+    browsersRecently(ms) {
+        return this.browsers > 0 || this.now() - this.lastBrowserGoneAt < ms;
+    }
     /** Return a Response for a new connection. `browser` marks a GUI tab (counted by `browsers`) */
     connect(signal, browser = false) {
         let client;
         const remove = () => {
-            if (client)
-                this.clients.delete(client);
+            if (client && this.clients.delete(client) && client.browser)
+                this.lastBrowserGoneAt = this.now();
             if (this.clients.size === 0 && this.heartbeat) {
                 clearInterval(this.heartbeat);
                 this.heartbeat = undefined;
@@ -57,7 +66,8 @@ export class SseHub {
                 c.controller.enqueue(bytes);
             }
             catch {
-                this.clients.delete(c);
+                if (this.clients.delete(c) && c.browser)
+                    this.lastBrowserGoneAt = this.now();
             }
         }
     }

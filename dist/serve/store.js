@@ -1371,10 +1371,13 @@ export class Store {
     }
     /**
      * The mod asks for work. `held`: it is delivering one already. `item`: one answer, claimed for this owner. `waiting` is added to every answer
-     * when a message-delivery question is pending. undefined: nothing (204)
+     * when a message-delivery question is pending. undefined: nothing (204).
+     * `withWaiting` false (a GUI tab is open): no `waiting`
      */
-    inboxPoll(sessionId, owner, idle) {
+    inboxPoll(sessionId, owner, idle, withWaiting = true) {
         const r = this.pollNext(sessionId, owner, idle);
+        if (!withWaiting)
+            return r;
         const waiting = this.waitingQuestion(sessionId);
         if (!waiting)
             return r;

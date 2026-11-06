@@ -119,6 +119,7 @@ export async function start(opts = {}) {
         lang,
         settings,
         ...(opts.skillSource !== undefined ? { skillSource: opts.skillSource } : {}),
+        ...(opts.guiGraceMs !== undefined ? { guiGraceMs: opts.guiGraceMs } : {}),
         publicDir: fileURLToPath(new URL("../../public/", import.meta.url)),
         getPort: () => port,
         cliPath: ((p) => (existsSync(p) ? p : undefined))(opts.cliPath ?? fileURLToPath(new URL("../cli.js", import.meta.url))),
