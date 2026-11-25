@@ -61,6 +61,7 @@ sequenceDiagram
 ```
 
 GUI: rendered by [pele](https://github.com/obsidianmd/pele) (flowchart, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, gantt, pie, mindmap, timeline, gitGraph, journey, quadrantChart, xychart-beta, block-beta); the layout differs from mermaid.js, links and images inside a diagram are disabled, and HTML labels are not supported; a render error shows the error text and the source. TUI: ASCII for flowchart, stateDiagram-v2, sequenceDiagram, classDiagram, erDiagram and xychart (via `beautiful-mermaid`); other types show a boxed `diagram: <type>` line followed by the source as a code block.
+Syntax: in a sequenceDiagram message `;` ends the statement and breaks the diagram; write `#59;` or use a comma. The hook parses each block with the same pele (`explain.md` §10).
 Use: flowchart for structure and data flow, sequenceDiagram for who-calls-whom, stateDiagram for lifecycles, gantt / timeline for rollout order, pie for a split, quadrantChart for risk × effort. `explain.md` requires one diagram for anything not reversible or scope machine / external.
 
 ### 2.5 Code with a title

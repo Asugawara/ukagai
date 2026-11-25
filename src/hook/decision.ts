@@ -31,6 +31,7 @@ import {
   type FoundExplanation,
   markUsed,
   MISSING_LABELS,
+  mermaidLabel,
   coinedTermLabel,
   findCoinedTerms,
   parseFrontMatter,
@@ -253,7 +254,9 @@ async function explainQuestion(c: Ctx, data: AskUserQuestionInput): Promise<Expl
           ? fileUsedLabel(used)
           : c === "coined_term" && found
             ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0)
-            : MISSING_LABELS[c],
+            : c === "mermaid" && found
+              ? mermaidLabel(found.markdown)
+              : MISSING_LABELS[c],
       ),
       ...rewriteIssues.map((i) => i.text),
     ],
@@ -288,7 +291,7 @@ async function explainPlan(c: Ctx, plan: string): Promise<Explained> {
     };
   }
   if (prior.length > 0) return { explanation: noExplanation("loop_guard") };
-  const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => MISSING_LABELS[m]), agent: input.agent, ...skillRefParam(c) });
+  const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => (m === "mermaid" ? mermaidLabel(plan) : MISSING_LABELS[m])), agent: input.agent, ...skillRefParam(c) });
   return { out: await denyAndRecord(c, { line: planDenyLine(), context: reason }, v.missing) };
 }
 

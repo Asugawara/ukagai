@@ -18,6 +18,7 @@ import {
   SECTION,
   validateExplanation,
   validatePlan,
+  mermaidLabel,
   parseBullets,
   parseFootnotes,
   parseTerms,
@@ -35,8 +36,8 @@ import { tmpDir, writeFile } from "./helpers.js";
 const fixDir = fileURLToPath(new URL("../explain-fixtures/", import.meta.url));
 const mdFiles = readdirSync(fixDir).filter((f) => f.endsWith(".md"));
 
-test("there are 42 fixtures", () => {
-  assert.equal(mdFiles.length, 42);
+test("there are 43 fixtures", () => {
+  assert.equal(mdFiles.length, 43);
 });
 
 for (const f of mdFiles) {
@@ -50,6 +51,20 @@ for (const f of mdFiles) {
     assert.deepEqual(actual, expected);
   });
 }
+
+test("validatePlan flags a Mermaid block pele cannot parse, and not the valid version", () => {
+  const plan = (diagram: string) => `## Scope and reversibility\nReversibility: reversible\nScope: file\n\n\`\`\`mermaid\n${diagram}\n\`\`\`\n`;
+  assert.ok(validatePlan(plan("sequenceDiagram\n  A->>B: BEGIN; COMMIT")).missing.includes("mermaid"));
+  assert.ok(!validatePlan(plan("sequenceDiagram\n  A->>B: BEGIN#59; COMMIT")).missing.includes("mermaid"));
+});
+
+test("mermaidLabel gives the fence line of the broken block and the #59; hint", () => {
+  const md = "# t\n\nText\n\n```mermaid\nsequenceDiagram\n  A->>B: BEGIN; COMMIT\n```\n";
+  const label = mermaidLabel(md);
+  assert.match(label, /block at line 5:/);
+  assert.match(label, /#59;/);
+  assert.equal(mermaidLabel("# t\n\n```mermaid\nflowchart TD\n  A --> B\n```\n"), MISSING_LABELS.mermaid);
+});
 
 const GOOD = `---
 ukagai: 1
@@ -405,11 +420,11 @@ test("diagram_trivial: a flowchart with 4 or fewer nodes is trivial (rule: node 
 });
 
 test("diagram_trivial: at least half of the node labels equal option labels (rule: option-label share)", () => {
-  const src = "flowchart LR\n  s[start] --> a[A (Recommended)]\n  s --> b[b]\n  s --> x[other] --> y[more] --> z[last]";
+  const src = 'flowchart LR\n  s[start] --> a["A (Recommended)"]\n  s --> b[b]\n  s --> x[other] --> y[more] --> z[last]';
   // 6 nodes: A and B are option labels = 2 of 6, not trivial
   assert.deepEqual(validateExplanation(withDiagram(src)).missing, []);
   // 6 nodes, 3 of them option labels (case-folded, (Recommended) stripped) = trivial
-  const half = "flowchart LR\n  s[start] --> a[a (Recommended)]\n  s --> b[B]\n  s --> x[other] --> y[more] --> z[a]";
+  const half = 'flowchart LR\n  s[start] --> a["a (Recommended)"]\n  s --> b[B]\n  s --> x[other] --> y[more] --> z[a]';
   assert.deepEqual(validateExplanation(withDiagram(half)).missing, ["diagram_trivial"]);
 });
 

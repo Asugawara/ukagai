@@ -4,6 +4,7 @@ import { skillName } from "./skill-name.js";
 import { RECENCY_WINDOW_MS, bodyHash, type PendingRewrite } from "../contract.js";
 import type { DenyTemplate } from "./options.js";
 import { DENY_LINE_MAX, denyLine, type DenyText } from "./deny.js";
+import { mermaidIssues } from "./mermaid-check.js";
 
 // Implements the rules in docs/spec/explain.md.
 
@@ -72,6 +73,7 @@ export type MissingCode =
   | "why_long"
   | "diagram"
   | "diagram_trivial"
+  | "mermaid"
   | "checked"
   | "footnote"
   | "impact"
@@ -126,6 +128,8 @@ export const MISSING_LABELS: Record<MissingCode, string> = {
     'a Mermaid diagram (in any section) that shows a sequence of 3+ steps between 2+ actors, a state machine with 4+ states, or a data flow between 3+ components (if none does, write one line under Options: "No diagram: <your reason>")',
   diagram_trivial:
     "remove the diagram: it only branches into the options or has 4 or fewer nodes, and the Options table already says it (draw only what the table cannot: a sequence between actors, a state machine, a data flow)",
+  mermaid:
+    "a Mermaid block the GUI cannot render; fix its syntax (in sequenceDiagram text `;` ends the statement: write `#59;` or a comma)",
   checked: 'the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes)',
   footnote: 'a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked")',
   impact: 'the "Scope and reversibility" section',
@@ -545,6 +549,13 @@ function trivialDiagram(blocks: FenceBlock[], lines: string[], optionLabels: str
   return null;
 }
 
+/** The source of every mermaid block; `line` is the 1-based line of its opening fence in the whole file (`offset`: lines before `lines[0]`) */
+function mermaidSources(lines: string[], blocks: FenceBlock[], offset = 0): { line: number; source: string }[] {
+  return blocks
+    .filter((b) => b.lang === "mermaid")
+    .map((b) => ({ line: b.start + 1 + offset, source: lines.slice(b.start + 1, b.end).join("\n") }));
+}
+
 function hasOf(lines: string[], inFence: boolean[], blocks: FenceBlock[]): Has {
   return {
     mermaid: blocks.some((b) => b.lang === "mermaid"),
@@ -913,6 +924,7 @@ export function validateExplanation(
 
   if (f["type"] === "quiz") {
     missing.push(...quizMissing(lines, inFence, headings, labels));
+    if (mermaidIssues(mermaidSources(lines, blocks, fm.bodyStart)).length > 0) missing.push("mermaid");
     return {
       valid: missing.length === 0,
       missing,
@@ -975,6 +987,7 @@ export function validateExplanation(
     if (!blocks.some((b) => b.lang === "mermaid") && !noted) missing.push("diagram");
   }
   if (trivial !== null) missing.push("diagram_trivial");
+  if (mermaidIssues(mermaidSources(lines, blocks, fm.bodyStart)).length > 0) missing.push("mermaid");
 
   if (!blocker) {
     // Required unless reversible + file
@@ -1032,7 +1045,21 @@ export function validatePlan(plan: string): Validation {
   const headings = scanHeadings(lines, inFence);
   const sec = findSection(headings, lines.length, SECTION.impact);
   const missing: MissingCode[] = !sec || !hasContent(lines, sec) ? ["impact"] : [];
+  if (mermaidIssues(mermaidSources(lines, blocks)).length > 0) missing.push("mermaid");
   return { valid: missing.length === 0, missing, has: hasOf(lines, inFence, blocks), question: null };
+}
+
+/** The `missing` text for a `mermaid` code: the first parse errors with their block line (the whole markdown) */
+export function mermaidLabel(markdown: string): string {
+  const lines = toLines(markdown);
+  const { blocks } = scanFences(lines);
+  const issues = mermaidIssues(mermaidSources(lines, blocks));
+  if (issues.length === 0) return MISSING_LABELS.mermaid;
+  const shown = issues
+    .slice(0, 3)
+    .map((i) => `block at line ${i.line}: ${i.message.replace(/\n/g, " / ")}`)
+    .join("; ");
+  return `a Mermaid block the GUI cannot render; fix its syntax: ${shown} (in sequenceDiagram text \`;\` ends the statement: write \`#59;\` or a comma)`;
 }
 
 // ---- lookup ----

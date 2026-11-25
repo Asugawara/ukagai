@@ -234,7 +234,7 @@ The only content that may be missing from a screen is what `ALLOWED_DROPS` in `t
 
 ## 4. Check result
 
-The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter`, `language`, `question` … `recommended`, then for `type: quiz` only `quiz_recommended`, `quiz_why`, `quiz_premise`, `quiz_leak` (nothing after them is evaluated), else `why`, `why_long`, `options`, `table`, `cell_long`, `coined_term`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `recommend_name`, `against_weak`, `assumptions_long`, `diagram`, `diagram_trivial`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
+The check lists the following `missing` codes **in this order** (the table is by group; the actual order is: `front_matter`, `language`, `question` … `recommended`, then for `type: quiz` only `quiz_recommended`, `quiz_why`, `quiz_premise`, `quiz_leak`, then `mermaid` (nothing else after them is evaluated), else `why`, `why_long`, `options`, `table`, `cell_long`, `coined_term`, `undo`, `todo` / `recommend`, `recommend_long`, `recommend_cond`, `recommend_name`, `against_weak`, `assumptions_long`, `diagram`, `diagram_trivial`, `mermaid`, `checked`, `footnote`). When `missing` is empty, `valid: true`.
 
 | Code | Condition (added when it is not satisfied) | Name in the deny reason |
 |---|---|---|
@@ -268,6 +268,7 @@ The check lists the following `missing` codes **in this order** (the table is by
 | `assumptions_long` | (not a blocker) The "Assumptions" section has 4 or more **top-level** bullets (`-` / `*` / `+` / `1.` only those at the shallowest indentation of the section count; deeper-indented children and fenced lines are not counted; right after `against_weak`) | at most 3 Assumptions: keep only premises you did not verify and that would change the pick |
 | `diagram` | (not evaluated for a blocker) A diagram is required (3.2) but there is no ` ```mermaid ` block anywhere in the body and no valid `No diagram:` line under Options | a Mermaid diagram (in any section) that shows a sequence of 3+ steps between 2+ actors, a state machine with 4+ states, or a data flow between 3+ components (if none does, write one line under Options: "No diagram: <your reason>") |
 | `diagram_trivial` | (not evaluated for a blocker) A Mermaid flowchart / graph in the file is trivial (see 3.2); when it is, `diagram` is not reported | remove the diagram: it only branches into the options or has 4 or fewer nodes, and the Options table already says it |
+| `mermaid` | A ` ```mermaid ` block fails to parse with pele, the renderer the GUI uses (also unknown diagram types and empty blocks). Skipped when pele cannot be loaded | fix the syntax; in sequenceDiagram text `;` ends the statement: write `#59;` or a comma |
 | `checked` | (not evaluated for a blocker) Not (`reversibility: reversible` and `scope: file`), and the "What I checked" section is absent or empty (right after `diagram`) | the "What I checked" section (required unless reversible + file; commands run, files read, evidence as footnotes) |
 | `footnote` | (not evaluated for a blocker) The body has a `[^id]` reference with no `[^id]: …` definition (3.7; right after `checked`) | a footnote definition for every `[^n]` in the body (write `[^n]: evidence` in "What I checked") |
 | `impact` | (plans only, section 9) The "Scope and reversibility" section is absent or empty | the "Scope and reversibility" section |
@@ -466,7 +467,7 @@ The settings page can save an edited copy of `skills/ukagai-explain/SKILL.md` (`
 ## 9. ExitPlanMode
 
 - No separate file is required. `tool_input.plan` (the plan body) is checked.
-- Check: by the matching rules of 3.1, there is a heading matching "Scope and reversibility" (影響範囲と可逆性), and the section has at least one non-empty line. The heading level does not matter. Otherwise `missing: ["impact"]`.
+- Check: by the matching rules of 3.1, there is a heading matching "Scope and reversibility" (影響範囲と可逆性), and the section has at least one non-empty line. The heading level does not matter. Otherwise `missing: ["impact"]`. The Mermaid blocks of the plan are checked too (section 10): a block that pele cannot parse gives `missing: ["mermaid"]`.
 - Mermaid is **recommended** and not required. Without it `has.mermaid: false` is counted in (d).
 - A deny for a defect happens **at most once per session (`session_id`)**. From the second time it does not deny and registers (`attached_via: none`, `none_reason: loop_guard`).
 - When it passes, `attached_via` is `first_call` (`after_deny` if denied before). `explanation.markdown` holds the plan body.
@@ -484,7 +485,7 @@ The settings page can save an edited copy of `skills/ukagai-explain/SKILL.md` (`
 
 ## 10. Handling of Mermaid
 
-The hook does not check Mermaid syntax (it only checks whether the code block exists). When rendering fails, the GUI shows the code as it is with an error attached.
+The hook parses every Mermaid block with pele (the GUI's renderer, `public/vendor/pele.global.js`) and reports `mermaid` on a parse error; when pele cannot be loaded the check is skipped (fail-open). When rendering fails in the GUI anyway, the GUI shows the code as it is with an error attached.
 
 ## 11. Fixtures
 
