@@ -51,7 +51,7 @@ Optional H2s: Counterargument, Affected, Terms, Diagram, Related diff; no others
 | `cell_long` `undo` | 160 characters per cell (aim for 2 sentences); each risk cell says how to undo (`Undo: <how>`), or that it cannot be |
 | `why_long` `assumptions_long` `against_weak` | 600 characters; at most 3; Counterargument must not repeat the Recommendation |
 | `checked` `footnote` `coined_term` | What I checked unless `reversible` + `file`; each `[^n]` defined; `W-T2` / `Phase 2` need a Terms entry |
-| `diagram` `diagram_trivial` `language` `multi` `todo` `impact` `quiz_*` | see Diagram rule and the reference |
+| `diagram` `diagram_trivial` `mermaid` `language` `multi` `todo` `impact` `quiz_*` | see Diagram rule and the reference |
 
 Read [reference/checks.md](reference/checks.md) (under this skill's directory) when a deny code is unclear or before writing Japanese headings.
 

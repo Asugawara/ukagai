@@ -1,5 +1,5 @@
 import { AskUserQuestionInput, DENY_LINK_WINDOW_MS, decisionFingerprint, ExitPlanModeInput, MOD_OWNER_RE, PLAN_BLOCK_SUFFIX, stripExplainBlocks, } from "../contract.js";
-import { asyncDeny, checkRewrite, denyReason, handoffReason, handoffLine, multiDenyReason, multiDenyLine, explainDenyLine, planDenyLine, explainDir, findExplanation, findUsedExplanation, fileUsedLabel, markUsed, MISSING_LABELS, coinedTermLabel, findCoinedTerms, parseFrontMatter, parsePlanImpact, toLines, validateExplanation, validatePlan, } from "./explain.js";
+import { asyncDeny, checkRewrite, denyReason, handoffReason, handoffLine, multiDenyReason, multiDenyLine, explainDenyLine, planDenyLine, explainDir, findExplanation, findUsedExplanation, fileUsedLabel, markUsed, MISSING_LABELS, mermaidLabel, coinedTermLabel, findCoinedTerms, parseFrontMatter, parsePlanImpact, toLines, validateExplanation, validatePlan, } from "./explain.js";
 import { denyLine, denyOutput } from "./deny.js";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -174,7 +174,9 @@ async function explainQuestion(c, data) {
                 ? fileUsedLabel(used)
                 : c === "coined_term" && found
                     ? coinedTermLabel(findCoinedTerms(found.markdown, labels), rewriteIssues.length === 0)
-                    : MISSING_LABELS[c]),
+                    : c === "mermaid" && found
+                        ? mermaidLabel(found.markdown)
+                        : MISSING_LABELS[c]),
             ...rewriteIssues.map((i) => i.text),
         ],
         codes,
@@ -208,7 +210,7 @@ async function explainPlan(c, plan) {
     }
     if (prior.length > 0)
         return { explanation: noExplanation("loop_guard") };
-    const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => MISSING_LABELS[m]), agent: input.agent, ...skillRefParam(c) });
+    const reason = denyReason(opts.denyTemplate, { missing: v.missing.map((m) => (m === "mermaid" ? mermaidLabel(plan) : MISSING_LABELS[m])), agent: input.agent, ...skillRefParam(c) });
     return { out: await denyAndRecord(c, { line: planDenyLine(), context: reason }, v.missing) };
 }
 /** First sight of a question: validate its explanation (deny when it is missing or unfit) and register the decision */

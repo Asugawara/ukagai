@@ -33,6 +33,7 @@ Three English opening lines for a README, explained in Japanese:
 ## Diagrams
 
 - Draw only structures and flows that exist. For an assumption or proposal, write "(proposal)" right before the diagram.
+- In a sequenceDiagram message `;` ends the statement and breaks the diagram; write `#59;` or use a comma.
 - Bad (the options as nodes; denied as `diagram_trivial`):
 
 ```mermaid
