@@ -33,6 +33,7 @@ Copied from `src/hook/explain.ts`. Rows follow the order the hook reports them (
 | `assumptions_long` | More than 3 Assumptions |
 | `diagram` | Required (not `reversible`, or scope machine / external) but no Mermaid block anywhere in the body and no `No diagram:` line (a copied `<why>` does not count) |
 | `diagram_trivial` | Flowchart / graph with 4 or fewer distinct nodes, or half the labels equal option labels |
+| `mermaid` | A Mermaid block does not parse in the GUI's renderer (pele): in sequenceDiagram text `;` ends the statement, write `#59;` or a comma |
 | `checked` | "What I checked" is required unless `reversible` + `file` |
 | `footnote` | A `[^n]` in the body without a `[^n]:` definition |
 | `impact` | Plan only: "Scope and reversibility" with its 2 first lines |
