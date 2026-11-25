@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/Asugawara/ukagai/compare/v0.14.1...v0.15.0) (2026-11-25)
+
+
+### Features
+
+* check Mermaid syntax in the hook with the GUI's renderer ([0128103](https://github.com/Asugawara/ukagai/commit/0128103dae5bb394e61f818c90f9d630e7d539d6))
+
 ## [0.14.1](https://github.com/Asugawara/ukagai/compare/v0.14.0...v0.14.1) (2026-11-05)
 
 
